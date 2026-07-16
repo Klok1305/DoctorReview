@@ -1,6 +1,6 @@
 {
   "name": "doctor-performance-app",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Локальное приложение «Пульс клиники» для аналитики врачей и отделений",
   "main": "desktop/main.cjs",
   "author": "Nikita",
