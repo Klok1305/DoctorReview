@@ -52,6 +52,11 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /clinic-tree/);
   assert.match(actual, /selectSettingsStructure/);
   assert.match(actual, /openDoctorGoalSettings/);
+  assert.match(actual, /draggable="true"/);
+  assert.match(actual, /startDoctorStructureDrag/);
+  assert.match(actual, /dropDoctorOnStructure/);
+  assert.match(actual, /Перетащите карточку врача/);
+  assert.match(actual, /clinic-tree-direct/);
   assert.match(actual, /Нормативы настраиваются только на уровне специализации/);
   assert.match(actual, /Векторы и веса специализации/);
   assert.match(actual, /Цели отделения/);

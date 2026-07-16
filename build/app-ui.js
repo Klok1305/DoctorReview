@@ -2444,6 +2444,74 @@ function selectSettingsStructure(departmentName, specializationName = "") {
   renderSettings();
 }
 
+function doctorStructureDragCard(doctorId) {
+  const personalGoal = DB.doctors[doctorId] && DB.doctors[doctorId].metricSettings ? " 🎯" : "";
+  return `<span class="doctor-drag-card" draggable="true"
+    ondragstart="startDoctorStructureDrag(event, ${esc(JSON.stringify(doctorId))})"
+    ondragend="finishDoctorStructureDrag(event)"
+    title="Перетащите врача в нужную специализацию">⠿ ${esc(doctorName(doctorId))}${personalGoal}</span>`;
+}
+
+function doctorStructureDragList(doctorIds, emptyText = "Перетащите врача сюда") {
+  return `<div class="clinic-tree-doctors ${doctorIds.length ? "" : "empty"}">${doctorIds.length
+    ? doctorIds.map(doctorStructureDragCard).join("")
+    : `<span class="clinic-drop-hint">${esc(emptyText)}</span>`}</div>`;
+}
+
+function startDoctorStructureDrag(event, doctorId) {
+  if (!DB.doctors[doctorId]) return;
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", doctorId);
+  event.currentTarget.classList.add("dragging");
+  document.body.classList.add("doctor-structure-dragging");
+}
+
+function finishDoctorStructureDrag(event) {
+  if (event && event.currentTarget) event.currentTarget.classList.remove("dragging");
+  document.body.classList.remove("doctor-structure-dragging");
+  document.querySelectorAll(".clinic-drop-zone.drag-over").forEach(el => el.classList.remove("drag-over"));
+}
+
+function allowDoctorStructureDrop(event) {
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "move";
+  event.currentTarget.classList.add("drag-over");
+}
+
+function leaveDoctorStructureDrop(event) {
+  if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.classList.remove("drag-over");
+}
+
+function dropDoctorOnStructure(event, departmentName, specializationName = "") {
+  event.preventDefault();
+  event.stopPropagation();
+  const doctorId = event.dataTransfer.getData("text/plain");
+  const groups = departmentGroups();
+  const targetSpecializations = groups[departmentName] || [];
+  if (!DB.doctors[doctorId] || !groups[departmentName]) { finishDoctorStructureDrag(); return; }
+  if (specializationName && (!departmentUsesSpecializations(departmentName) || !targetSpecializations.includes(specializationName))) {
+    finishDoctorStructureDrag();
+    toast("Эта специализация недоступна", true);
+    return;
+  }
+  const doctor = DB.doctors[doctorId];
+  doctor.department = departmentName;
+  doctor.specialization = specializationName || null;
+  doctor.structureManual = true;
+  doctor.dept = null;
+  const targetProfile = specializationName ? DB.settings.depts[specializationName] : departmentProfile(departmentName);
+  if (!(targetProfile.subdivisions || []).includes(doctor.subdept)) doctor.subdept = null;
+  UI.setDepartment = departmentName;
+  UI.setSpecialization = specializationName || "";
+  UI.setDoctor = doctorId;
+  finishDoctorStructureDrag();
+  saveLocal();
+  toast(specializationName
+    ? `${doctorName(doctorId)} → ${departmentName} / ${specializationName}`
+    : `${doctorName(doctorId)} → ${departmentName} / Без специализации`);
+  renderAll();
+}
+
 function openDoctorGoalSettings(doctorId) {
   if (!doctorId || !DB.doctors[doctorId]) return;
   UI.setDoctor = doctorId;
@@ -2496,12 +2564,18 @@ function renderSettings() {
     const specRows = specs.map(specName => {
       const doctors = depDoctors.filter(id => resolvedSpecializationName(id) === specName);
       const selected = depName === departmentName && specName === specializationName;
-      return `<div class="clinic-tree-spec ${selected ? "selected" : ""}">
-        <div><b>↳ ${esc(specName)}</b><span class="badge mut">${doctors.length}</span><div class="small muted">${doctors.length ? doctors.map(id => esc(doctorName(id))).join(", ") : "врачи пока не назначены"}</div></div>
+      return `<div class="clinic-tree-spec clinic-drop-zone ${selected ? "selected" : ""}"
+        ondragover="allowDoctorStructureDrop(event)" ondragleave="leaveDoctorStructureDrop(event)"
+        ondrop="dropDoctorOnStructure(event, ${esc(JSON.stringify(depName))}, ${esc(JSON.stringify(specName))})">
+        <div class="clinic-tree-spec-content"><b>↳ ${esc(specName)}</b><span class="badge mut">${doctors.length}</span>${doctorStructureDragList(doctors)}</div>
         <button class="btn mini" onclick="selectSettingsStructure(${esc(JSON.stringify(depName))}, ${esc(JSON.stringify(specName))})">Настроить</button>
       </div>`;
     }).join("");
-    const directRow = directDoctors.length ? `<div class="clinic-tree-spec"><div><b>↳ Без специализации</b><span class="badge warn">${directDoctors.length}</span><div class="small muted">${directDoctors.map(id => esc(doctorName(id))).join(", ")}</div></div></div>` : "";
+    const directRow = `<div class="clinic-tree-spec clinic-drop-zone clinic-tree-direct"
+      ondragover="allowDoctorStructureDrop(event)" ondragleave="leaveDoctorStructureDrop(event)"
+      ondrop="dropDoctorOnStructure(event, ${esc(JSON.stringify(depName))}, &quot;&quot;)">
+      <div class="clinic-tree-spec-content"><b>↳ Без специализации</b><span class="badge ${directDoctors.length ? "warn" : "mut"}">${directDoctors.length}</span>${doctorStructureDragList(directDoctors)}</div>
+    </div>`;
     return `<div class="clinic-tree-department ${depName === departmentName && !specializationName ? "selected" : ""}">
       <div class="clinic-tree-head"><div><b>${esc(depName)}</b><span class="badge info">${depDoctors.length} врачей</span></div><button class="btn mini" onclick="selectSettingsStructure(${esc(JSON.stringify(depName))}, &quot;&quot;)">Настроить отделение</button></div>
       ${specRows}${directRow}
@@ -2509,7 +2583,7 @@ function renderSettings() {
   }).join("");
   const unassignedDoctors = allDoctorIds.filter(id => !departmentGroups()[resolvedDepartmentName(id)]);
   if (unassignedDoctors.length) {
-    structureTree += `<div class="clinic-tree-department"><div class="clinic-tree-head"><div><b>Не распределено</b><span class="badge warn">${unassignedDoctors.length}</span><div class="small muted">${unassignedDoctors.map(id => esc(doctorName(id))).join(", ")}</div></div></div></div>`;
+    structureTree += `<div class="clinic-tree-department clinic-tree-unassigned"><div class="clinic-tree-head"><div><b>Не распределено</b><span class="badge warn">${unassignedDoctors.length}</span>${doctorStructureDragList(unassignedDoctors, "Нет врачей")}</div></div></div>`;
   }
   let html = "";
   // состояние «свёрнуто/развёрнуто» секций настроек — переживает перерисовку
@@ -2520,7 +2594,7 @@ function renderSettings() {
   /* --- иерархия отделение -> опциональные специализации --- */
   html += `<div class="card"><div class="vhead"><h2 class="mt0">🏥 Структура клиники</h2>
       <label class="small"><input type="checkbox" id="showScoresChk" onchange="DB.settings.showScores=this.checked;saveLocal();renderAll()" ${s.showScores ? "checked" : ""}> показывать баллы</label></div>
-    <p class="small muted">Иерархия: клиника → отделение → специализация → врач. Нормативы и веса задаются специализации; цели можно задать отделению, специализации или врачу.</p>
+    <p class="small muted">Иерархия: клиника → отделение → специализация → врач. <b>Перетащите карточку врача</b> в нужную специализацию или в «Без специализации». Нормативы и веса задаются специализации; цели можно задать отделению, специализации или врачу.</p>
     <div class="toolbar">
       <label>Отделение: <select id="setDepartmentSel" onchange="UI.setDepartment=this.value;UI.setSpecialization='';renderSettings()">${departmentNames.map(n => `<option value="${esc(n)}" ${n === departmentName ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>
       <input type="text" id="newDepartmentName" placeholder="новое отделение…" style="min-width:190px">
