@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Тег существующего коммита, например v1.0.5"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -18,6 +24,8 @@ jobs:
     steps:
       - name: Получить исходники
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
       - name: Установить pnpm
         uses: pnpm/action-setup@v6
@@ -31,7 +39,7 @@ jobs:
       - name: Проверить соответствие тега версии
         shell: pwsh
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
         run: |
           $version = (Get-Content -Raw package.json | ConvertFrom-Json).version
           if ($env:RELEASE_TAG -ne "v$version") {
@@ -47,10 +55,34 @@ jobs:
       - name: Запустить тесты
         run: pnpm test
 
-      - name: Собрать и опубликовать установщики
-        run: pnpm run release
+      - name: Собрать установщики
+        run: pnpm run dist:all
         env:
-          GH_TOKEN: ${{ github.token }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Опубликовать единый атомарный релиз
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: |
+          $version = (Get-Content -Raw package.json | ConvertFrom-Json).version
+          $assets = @(
+            "dist/DoctorReview-Setup-$version-x64.exe",
+            "dist/DoctorReview-Setup-$version-x64.exe.blockmap",
+            "dist/DoctorReview-Portable-$version-x64.exe",
+            "dist/latest.yml"
+          )
+          foreach ($asset in $assets) {
+            if (-not (Test-Path -LiteralPath $asset)) { throw "Не найден файл релиза: $asset" }
+          }
+
+          $existingIds = @(gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" --paginate --jq ".[] | select(.tag_name == `"$env:RELEASE_TAG`") | .id")
+          foreach ($releaseId in $existingIds) {
+            gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/releases/$releaseId"
+          }
+
+          gh release create $env:RELEASE_TAG @assets --draft --verify-tag --title $version --generate-notes
+          gh release edit $env:RELEASE_TAG --draft=false --latest

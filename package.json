@@ -1,6 +1,6 @@
 {
   "name": "doctor-performance-app",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Локальное приложение для оценки работы врачей и отделений",
   "main": "desktop/main.cjs",
   "author": "Nikita",
@@ -24,8 +24,7 @@
     "test:pdf": "pnpm run assemble && electron . --pdf-smoke",
     "dist": "pnpm run assemble && electron-builder --win nsis --publish never",
     "dist:portable": "pnpm run assemble && electron-builder --win portable --publish never",
-    "dist:all": "pnpm run assemble && electron-builder --win nsis portable --publish never",
-    "release": "pnpm run assemble && electron-builder --win nsis portable --publish always"
+    "dist:all": "pnpm run assemble && electron-builder --win nsis portable --publish never"
   },
   "dependencies": {
     "electron-updater": "^6.6.2"
