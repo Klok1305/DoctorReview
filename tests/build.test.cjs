@@ -37,9 +37,16 @@ test("assembled HTML is reproducible and complete", () => {
   const actual = fs.readFileSync(path.join(root, "index.html"), "utf8").replace(/\r\n/g, "\n");
   assert.equal(actual, expected);
   assert.doesNotMatch(actual, /\/\*__[A-Z0-9_]+__\*\//);
-  for (const required of ["btnExportAllPdf", "desktopWorkspaceCard", "btnScanInput", "Content-Security-Policy"]) {
+  for (const id of ["lib-xlsx", "lib-jszip", "lib-html2canvas", "lib-jspdf"]) {
+    assert.match(actual, new RegExp(`<script type="text/plain" id="${id}">`));
+  }
+  for (const required of ["btnExportAllPdf", "desktopWorkspaceCard", "btnScanInput", "Content-Security-Policy", "departmentBody", "departmentFilter", "departmentMonth"]) {
     assert.match(actual, new RegExp(required));
   }
+  assert.match(actual, /data-tab="department">🏥 Отделение/);
+  assert.match(actual, /data-tab="dept">🩺 Специализация/);
+  assert.match(actual, /Персональные цели и нормативы врача/);
+  assert.match(actual, /doctorMetricSettingsCard/);
   for (const profileMetric of ["Пациентов за месяц", "Количество визитов за месяц", "Объём активной клиентской базы"]) {
     assert.match(actual, new RegExp(profileMetric));
   }

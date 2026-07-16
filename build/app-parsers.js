@@ -535,6 +535,7 @@ async function processFile(file) {
   const log = { name: file.name, type: null, doctor: null, period: null, month: null, status: "ошибка", note: "" };
   try {
     const buf = await file.arrayBuffer();
+    loadBundledLibrary("lib-xlsx", "XLSX");
     const wb = XLSX.read(buf, { type: "array", cellStyles: true });
     const ws = wb.Sheets[wb.SheetNames[0]];
     const rows = sheetToRows(ws);
@@ -637,8 +638,9 @@ async function processFile(file) {
 async function expandZips(fileList) {
   const out = [];
   for (const f of [...fileList]) {
-    if (/\.zip$/i.test(f.name) && typeof JSZip !== "undefined") {
+    if (/\.zip$/i.test(f.name)) {
       try {
+        loadBundledLibrary("lib-jszip", "JSZip");
         if (DESKTOP_API) await ensureDesktopFileSource(f);
         const zip = await JSZip.loadAsync(await f.arrayBuffer());
         for (const [path, entry] of Object.entries(zip.files)) {

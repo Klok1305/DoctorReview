@@ -5,6 +5,8 @@
 
 const UI = {
   tab: "data",
+  departmentMonth: null,
+  departmentFilter: "all",
   deptMonth: null,
   deptFilter: "all",
   subFilter: "all",
@@ -16,6 +18,7 @@ const UI = {
   cmp: [null, null, null],
   staffFilter: "",
   openGroups: {},
+  setDoctor: null,
   pvSlice: 3,     // тогл первички: 3/6/12
   nazSlice: 1,    // тогл назначений: 1/3
   kbWin: 12,      // тогл окна базы: 12/36
@@ -394,6 +397,145 @@ function renderCompleteness() {
 
 /* ================= СТРАНИЦА: ОТДЕЛЕНИЕ ================= */
 
+function departmentMetricDefs() {
+  return [
+    { key: "sales", label: "Выручка", get: r => r && r.econ.sales, fmt: fmtMoney, mode: "pct" },
+    { key: "withRef", label: "Выручка с перенаправлениями", get: r => r && r.econ.revenueWithRef, fmt: fmtMoney, mode: "pct" },
+    { key: "refShare", label: "Доля перенаправлений от выручки", get: r => r && r.cross.crossShare, fmt: fmtPct, mode: "pp" },
+    { key: "pv3", label: "Возвращаемость первички за 3 месяца", get: r => r && r.loyalty.pvSlices[3] ? r.loyalty.pvSlices[3].pct : null, fmt: fmtPct, mode: "pp" },
+    { key: "pv6", label: "Возвращаемость первички за 6 месяцев", get: r => r && r.loyalty.pvSlices[6] ? r.loyalty.pvSlices[6].pct : null, fmt: fmtPct, mode: "pp" },
+    { key: "active", label: "Активная клиентская база", get: r => r && r.akb.wins[12] ? r.akb.wins[12].seg.loyalActive : null, fmt: v => fmtNum(v), mode: "pct" },
+    { key: "lost", label: "Потерянная клиентская база", get: r => r && r.akb.wins[12] ? r.akb.wins[12].seg.lost : null, fmt: v => fmtNum(v), mode: "pct", lower: true },
+    { key: "sched", label: "Загрузка отделения за месяц", get: r => r && r.loyalty.sched ? r.loyalty.sched.pct : null, fmt: fmtPct, mode: "pp" },
+  ];
+}
+
+function departmentTrend(current, base, def) {
+  if (current == null || base == null || isNaN(current) || isNaN(base)) return '<span class="muted">—</span>';
+  const delta = def.mode === "pp" ? current - base : (base ? (current - base) / Math.abs(base) * 100 : null);
+  if (delta == null || isNaN(delta)) return '<span class="muted">—</span>';
+  const flat = Math.abs(delta) < 0.05;
+  const favorable = def.lower ? delta < 0 : delta > 0;
+  const cls = flat ? "flat" : (favorable ? "up" : "down");
+  const arrow = flat ? "→" : (delta > 0 ? "▲" : "▼");
+  const value = def.mode === "pp" ? fmtNum(Math.abs(delta), 1) + " п.п." : fmtPct(Math.abs(delta), 1);
+  return `<span class="delta ${cls}">${arrow} ${value}</span>`;
+}
+
+function renderDepartmentCharts(history, defs) {
+  const labels = history.map(x => monthLabel(x.mk).replace(/ \d{4}$/, ""));
+  const vals = key => {
+    const def = defs.find(d => d.key === key);
+    return history.map(x => def.get(x.r));
+  };
+  const common = {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: "index", intersect: false },
+    plugins: { legend: { position: "bottom" }, datalabels: { display: false } },
+  };
+  chart("chDepartmentRevenue", {
+    type: "bar",
+    data: { labels, datasets: [
+      { label: "Выручка", data: vals("sales"), backgroundColor: "rgba(37,99,235,.55)", borderColor: "#2563eb", borderWidth: 1 },
+      { label: "С перенаправлениями", data: vals("withRef"), type: "line", borderColor: "#7c3aed", backgroundColor: "#7c3aed", tension: .25, pointRadius: 3 },
+    ] },
+    options: { ...common, scales: { y: { beginAtZero: true, ticks: { callback: v => Math.abs(v) >= 1000000 ? fmtNum(v / 1000000, 1) + " млн" : fmtNum(v) } } } },
+  });
+  chart("chDepartmentRates", {
+    type: "line",
+    data: { labels, datasets: [
+      { label: "Первичка 3 мес.", data: vals("pv3"), borderColor: "#2563eb", backgroundColor: "#2563eb", tension: .25, spanGaps: true },
+      { label: "Первичка 6 мес.", data: vals("pv6"), borderColor: "#7c3aed", backgroundColor: "#7c3aed", tension: .25, spanGaps: true },
+      { label: "Доля перенаправлений", data: vals("refShare"), borderColor: "#d97706", backgroundColor: "#d97706", tension: .25, spanGaps: true },
+      { label: "Загрузка", data: vals("sched"), borderColor: "#059669", backgroundColor: "#059669", tension: .25, spanGaps: true },
+    ] },
+    options: { ...common, scales: { y: { beginAtZero: true, suggestedMax: 100, ticks: { callback: v => v + "%" } } } },
+  });
+  chart("chDepartmentBase", {
+    type: "line",
+    data: { labels, datasets: [
+      { label: "Активная база", data: vals("active"), borderColor: "#059669", backgroundColor: "rgba(5,150,105,.15)", fill: true, tension: .25, spanGaps: true },
+      { label: "Потерянная база", data: vals("lost"), borderColor: "#dc2626", backgroundColor: "rgba(220,38,38,.1)", fill: true, tension: .25, spanGaps: true },
+    ] },
+    options: { ...common, scales: { y: { beginAtZero: true } } },
+  });
+}
+
+function renderDepartment() {
+  const months = monthKeysSorted();
+  const monthSelect = document.getElementById("departmentMonth");
+  const filterSelect = document.getElementById("departmentFilter");
+  setControlsDisabled(["departmentMonth", "departmentFilter"], !months.length);
+  if (!months.length) {
+    monthSelect.innerHTML = "";
+    filterSelect.innerHTML = "";
+    document.getElementById("departmentBody").innerHTML = '<div class="card"><p class="muted">Загрузите данные на вкладке «Данные».</p></div>';
+    return;
+  }
+
+  if (!UI.departmentMonth || !DB.months[UI.departmentMonth]) UI.departmentMonth = months[months.length - 1];
+  monthSelect.innerHTML = months.map(k => `<option value="${k}" ${k === UI.departmentMonth ? "selected" : ""}>${monthLabel(k)}</option>`).join("");
+  const groups = departmentGroups();
+  const names = Object.keys(groups);
+  if (UI.departmentFilter !== "all" && !groups[UI.departmentFilter]) UI.departmentFilter = "all";
+  filterSelect.innerHTML = `<option value="all">все отделения</option>` + names.map(name => `<option value="${esc(name)}" ${name === UI.departmentFilter ? "selected" : ""}>${esc(name)}</option>`).join("");
+
+  const mk = UI.departmentMonth;
+  const specs = departmentSpecializations(UI.departmentFilter);
+  const year = mk.slice(0, 4);
+  const yearMonths = months.filter(k => k.startsWith(year + "-") && k <= mk);
+  const history = yearMonths.map(k => ({ mk: k, r: aggregateDeptMonth(k, specs) }));
+  const current = history.find(x => x.mk === mk).r;
+  const previousKey = prevMonthKey(mk);
+  const previousInHistory = history.find(x => x.mk === previousKey);
+  const previous = previousInHistory ? previousInHistory.r : aggregateDeptMonth(previousKey, specs);
+  const prior = history.filter(x => x.mk < mk && x.r);
+  const mean = values => {
+    const xs = values.filter(v => v != null && !isNaN(v));
+    return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+  };
+  const defs = departmentMetricDefs();
+  const scope = UI.departmentFilter === "all" ? "Все отделения" : UI.departmentFilter;
+
+  if (!current) {
+    document.getElementById("departmentBody").innerHTML = `<div class="notice blue">В ${monthLabel(mk)} по отделению «${esc(scope)}» нет данных. Проверьте состав отделений в настройках или выберите другой месяц.</div>`;
+    return;
+  }
+
+  let html = `<div class="notice blue"><b>${esc(scope)}</b>: ${specs.map(esc).join(", ") || "специализации не назначены"}. Стрелки сравнивают месяц с предыдущим календарным месяцем и со средним значением прошлых месяцев ${year} года.</div>`;
+  html += '<div class="grid cols-4">' + defs.map(def => {
+    const cur = def.get(current);
+    const prev = def.get(previous);
+    const avg = mean(prior.map(x => def.get(x.r)));
+    return `<div class="kpi"><div class="lbl">${def.label}</div><div class="val" style="font-size:${def.key === "sales" || def.key === "withRef" ? "19px" : "24px"}">${def.fmt(cur)}</div>
+      <div class="sub">к прошлому месяцу: ${departmentTrend(cur, prev, def)}</div>
+      <div class="sub">к среднему до текущего месяца: ${departmentTrend(cur, avg, def)}</div></div>`;
+  }).join("") + "</div>";
+
+  const specRows = specs.map(spec => ({ spec, r: aggregateDeptMonth(mk, [spec]) }));
+  html += `<div class="card"><h2>Итоги специализаций за ${monthLabel(mk)} <span class="spacer"></span>${copyBtn("copyTable", "tblDepartmentSpecs")}</h2>
+    <table class="data" id="tblDepartmentSpecs"><tr><th>Специализация</th><th class="num">Врачей</th><th class="num">Выручка</th><th class="num">С перенаправлениями</th><th class="num">Доля перенапр.</th><th class="num">Первичка 3 мес.</th><th class="num">Первичка 6 мес.</th><th class="num">Активная база</th><th class="num">Потерянная база</th><th class="num">Загрузка</th></tr>`;
+  for (const row of specRows) {
+    const r = row.r;
+    html += `<tr><td><b>${esc(row.spec)}</b></td><td class="num">${r ? fmtNum(r.doctors) : "—"}</td><td class="num">${r ? fmtMoney(r.econ.sales) : "—"}</td><td class="num">${r ? fmtMoney(r.econ.revenueWithRef) : "—"}</td><td class="num">${r ? fmtPct(r.cross.crossShare) : "—"}</td><td class="num">${r && r.loyalty.pvSlices[3] ? fmtPct(r.loyalty.pvSlices[3].pct) : "—"}</td><td class="num">${r && r.loyalty.pvSlices[6] ? fmtPct(r.loyalty.pvSlices[6].pct) : "—"}</td><td class="num">${r && r.akb.wins[12] ? fmtNum(r.akb.wins[12].seg.loyalActive) : "—"}</td><td class="num">${r && r.akb.wins[12] ? fmtNum(r.akb.wins[12].seg.lost) : "—"}</td><td class="num">${r && r.loyalty.sched ? fmtPct(r.loyalty.sched.pct) : "—"}</td></tr>`;
+  }
+  html += "</table></div>";
+
+  html += `<div class="grid cols-2"><div class="card"><h2>Выручка за ${year} год <span class="spacer"></span>${copyBtn("copyChart", "chDepartmentRevenue", "график")}</h2><div class="chart-box"><canvas id="chDepartmentRevenue"></canvas></div></div>
+    <div class="card"><h2>Возвращаемость, перенаправления и загрузка <span class="spacer"></span>${copyBtn("copyChart", "chDepartmentRates", "график")}</h2><div class="chart-box"><canvas id="chDepartmentRates"></canvas></div></div></div>
+    <div class="card"><h2>Клиентская база за ${year} год <span class="spacer"></span>${copyBtn("copyChart", "chDepartmentBase", "график")}</h2><div class="chart-box"><canvas id="chDepartmentBase"></canvas></div></div>`;
+
+  html += `<div class="card"><h2>Годовая таблица показателей <span class="spacer"></span>${copyBtn("copyTable", "tblDepartmentYear")}</h2><table class="data" id="tblDepartmentYear"><tr><th>Месяц</th>${defs.map(d => `<th class="num">${d.label}</th>`).join("")}</tr>`;
+  for (const point of history) html += `<tr><td>${monthLabel(point.mk)}</td>${defs.map(d => `<td class="num">${d.fmt(d.get(point.r))}</td>`).join("")}</tr>`;
+  html += "</table></div>";
+
+  document.getElementById("departmentBody").innerHTML = html;
+  renderDepartmentCharts(history, defs);
+}
+
+/* ================= СТРАНИЦА: СПЕЦИАЛИЗАЦИЯ ================= */
+
 function deptRows(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilter) {
   const core = coreDoctorsInMonth(mk);
   const docIds = core.length ? core : doctorsInMonth(mk);
@@ -438,9 +580,9 @@ function renderDept() {
 
   const depts = deptListForMonth(mk, allIds);
   const fSel = document.getElementById("deptFilter");
-  fSel.innerHTML = `<option value="all">все отделения</option>` + depts.map(d => `<option value="${esc(d)}" ${UI.deptFilter === d ? "selected" : ""}>${esc(d)}</option>`).join("");
+  fSel.innerHTML = `<option value="all">все специализации</option>` + depts.map(d => `<option value="${esc(d)}" ${UI.deptFilter === d ? "selected" : ""}>${esc(d)}</option>`).join("");
   if (UI.deptFilter !== "all" && !depts.includes(UI.deptFilter)) { UI.deptFilter = "all"; fSel.value = "all"; }
-  // подразделения выбранного отделения (задаются в профиле отделения)
+  // группы выбранной специализации (задаются в профиле специализации)
   const subSel = document.getElementById("subFilter");
   if (subSel) {
     const subs = UI.deptFilter !== "all" ? (deptProfile(UI.deptFilter).subdivisions || []) : [];
@@ -471,10 +613,10 @@ function renderDept() {
   };
   const avgPatientsYtd = meanKnown(ytdDept.map(r => r.traffic.patients));
   const avgActiveBasePctYtd = meanKnown(ytdDept.map(r => r.akb.wins[12] ? r.akb.wins[12].activeBasePct : null));
-  const scopeText = UI.deptFilter !== "all" ? esc(UI.deptFilter) : "все отделения";
+  const scopeText = UI.deptFilter !== "all" ? esc(UI.deptFilter) : "все специализации";
 
   let html = `<div class="grid cols-5">
-    <div class="kpi"><div class="lbl">Пациентов по отделению за месяц</div><div class="val">${fmtNum(currentPatients)} ${deptKpiTrend(currentPatients, avgPatientsYtd, "pct")}</div><div class="sub">среднее за ${year}: ${fmtNum(avgPatientsYtd)} · ${scopeText}</div></div>
+    <div class="kpi"><div class="lbl">Пациентов по специализации за месяц</div><div class="val">${fmtNum(currentPatients)} ${deptKpiTrend(currentPatients, avgPatientsYtd, "pct")}</div><div class="sub">среднее за ${year}: ${fmtNum(avgPatientsYtd)} · ${scopeText}</div></div>
     <div class="kpi"><div class="lbl">Доля активной базы</div><div class="val">${fmtPct(currentActiveBasePct)} ${deptKpiTrend(currentActiveBasePct, avgActiveBasePctYtd, "pp")}</div><div class="sub">база 12 мес. · среднее за ${year}: ${fmtPct(avgActiveBasePctYtd)}</div></div>
     <div class="kpi"><div class="lbl">Продажи (собственные)</div><div class="val" style="font-size:19px">${fmtMoney(totalSales)}</div><div class="sub">по загруженным выработкам</div></div>
     <div class="kpi"><div class="lbl">Выручка от перенаправлений</div><div class="val" style="font-size:19px">${fmtMoney(totalRef)}</div><div class="sub">по данным врачей</div></div>
@@ -527,7 +669,7 @@ function renderDept() {
   html += lb("🤝 Наивысшая доля выручки от перенаправлений", r => r.cross.crossShare, fmtPct);
   html += "</div>";
 
-  // тепловая карта экспертных позиций — при выбранном отделении (у каждого свой набор)
+  // тепловая карта экспертных позиций — при выбранной специализации (у каждой свой набор)
   if (UI.deptFilter !== "all") {
     const fProfile = deptProfile(UI.deptFilter);
     const devs = (fProfile.expertise.items || []).map(d => d.name);
@@ -549,11 +691,11 @@ function renderDept() {
         }
         html += `<td class="num"><b>${rowTotal}</b></td></tr>`;
       }
-      html += '<tr><td><b>Итого по отделению</b></td>' + devs.map(dv => `<td class="num"><b>${devTotals[dv] || 0}</b></td>`).join("") + `<td class="num"><b>${Object.values(devTotals).reduce((a, b) => a + b, 0)}</b></td></tr>`;
-      html += '</table><p class="small muted">«·» по всем врачам — простаивающая позиция. Набор настраивается в профиле отделения.</p></div>';
+      html += '<tr><td><b>Итого по специализации</b></td>' + devs.map(dv => `<td class="num"><b>${devTotals[dv] || 0}</b></td>`).join("") + `<td class="num"><b>${Object.values(devTotals).reduce((a, b) => a + b, 0)}</b></td></tr>`;
+      html += '</table><p class="small muted">«·» по всем врачам — простаивающая позиция. Набор настраивается в профиле специализации.</p></div>';
     }
   } else if (rows.some(x => x.r.product)) {
-    html += `<div class="card"><p class="small muted" style="margin:0">🔥 Тепловая карта аппаратов/услуг доступна при выборе конкретного отделения в фильтре сверху — у каждого отделения свой набор отслеживаемых позиций.</p></div>`;
+    html += `<div class="card"><p class="small muted" style="margin:0">🔥 Тепловая карта аппаратов/услуг доступна при выборе конкретной специализации в фильтре сверху — у каждой специализации свой набор отслеживаемых позиций.</p></div>`;
   }
 
   // риск-мониторинг (новая сегментация)
@@ -570,7 +712,7 @@ function renderDept() {
         <td class="num" style="color:var(--warn)">${fmtNum(kb.seg.newRisk)}</td>
         <td class="num" style="color:var(--bad)">${fmtNum(kb.seg.lost)}</td></tr>`;
     }
-    html += '</table><p class="small muted">«Риск» — лояльные пациенты, не приходившие дольше нормы отделения: первые кандидаты на обзвон.</p></div>';
+    html += '</table><p class="small muted">«Риск» — лояльные пациенты, не приходившие дольше нормы специализации: первые кандидаты на обзвон.</p></div>';
   }
 
   // профайлы специалистов — все врачи фильтра, метрики в строках
@@ -580,11 +722,11 @@ function renderDept() {
       <div id="cmpTable" style="overflow-x:auto"></div></div>`;
   }
 
-  /* ---- динамика отделения: точки роста и риска ---- */
+  /* ---- динамика специализации: точки роста и риска ---- */
   const deptDyn = computeDeptDynamics(mk, UI.deptFilter, UI.subFilter);
   if (deptDyn && deptDyn.months.length) {
-    html += dynamicsHtml(deptDyn, "blkDeptDyn", "Динамика отделения: точки роста и риска",
-      `${UI.deptFilter === "all" ? "Все врачи с данными" : "Отделение «" + esc(UI.deptFilter) + "»"} · последние ${deptDyn.months.length} мес. по ${monthLabel(mk)}. Последний месяц сравнивается с прошлым и со средним предыдущих месяцев. Деньги, визиты и база — суммы по врачам; занятость, конверсии и баллы — средние.`,
+    html += dynamicsHtml(deptDyn, "blkDeptDyn", "Динамика специализации: точки роста и риска",
+      `${UI.deptFilter === "all" ? "Все врачи с данными" : "Специализация «" + esc(UI.deptFilter) + "»"} · последние ${deptDyn.months.length} мес. по ${monthLabel(mk)}. Последний месяц сравнивается с прошлым и со средним предыдущих месяцев. Деньги, визиты и база — суммы по врачам; занятость, конверсии и баллы — средние.`,
       `dept|${mk}|${UI.deptFilter}|${UI.subFilter}`);
     if (DB.settings.showScores && deptDyn.months.length >= 2) {
       html += `<h3 class="small muted" style="margin:14px 0 6px">СРЕДНИЕ БАЛЛЫ ПО ВЕКТОРАМ ПО МЕСЯЦАМ ${copyBtn("copyChart", "chDeptScores", "PNG")}</h3>
@@ -652,7 +794,8 @@ async function exportDeptXlsx() {
   if (!mk) return;
   const { rows } = deptRows(mk);
   if (!rows.length) { toast("Нет данных за выбранный месяц", true); return; }
-  const header = ["Специалист", "Отделение", "Общий балл", "Продажи, ₽", "Выручка с перенаправл., ₽", "Выручка от перенаправлений, ₽", "Ср. чек пациента, ₽", "Ср. чек посещения, ₽",
+  loadBundledLibrary("lib-xlsx", "XLSX");
+  const header = ["Специалист", "Специализация", "Общий балл", "Продажи, ₽", "Выручка с перенаправл., ₽", "Выручка от перенаправлений, ₽", "Ср. чек пациента, ₽", "Ср. чек посещения, ₽",
     "Визиты", "Пациенты", "Частота", "Занятость, %", "Часы график", "Часы занято",
     `Возвращаемость первички (${UI.pvSlice} мес.), %`, "Собств. записи, шт", "Собств. записи, %", "Курсовое, %",
     "База 12м", "Активная база 12м", "Потерянные 12м", "Ядро 12м", "Экспертных позиций", "Конверсия назначений, %", "Доля выручки от перенаправлений, %"];
@@ -781,10 +924,10 @@ const stackTotalsPlugin = {
 async function copyBlock(id) {
   const el = document.getElementById(id);
   if (!el) return;
-  if (typeof html2canvas === "undefined") { toast("Экспорт блоков недоступен", true); return; }
   toast("Готовлю картинку блока…");
   el.classList.add("exporting");
   try {
+    loadBundledLibrary("lib-html2canvas", "html2canvas");
     // windowWidth: рендерим блок в десктопной ширине, даже если окно узкое
     const canvas = await html2canvas(el, { backgroundColor: "#ffffff", scale: 2, logging: false, windowWidth: Math.max(1200, document.documentElement.clientWidth) });
     el.classList.remove("exporting");
@@ -812,6 +955,8 @@ function blockBtn(id) {
 /* PDF из набора карточек: каждый слайд — страница, длинные карточки режутся. */
 async function buildPdfFromSlides(slides, onProgress) {
   if (!slides.length) throw new Error("в отчёте нет страниц");
+  loadBundledLibrary("lib-html2canvas", "html2canvas");
+  loadBundledLibrary("lib-jspdf", "jspdf");
   const pdf = new window.jspdf.jsPDF({ orientation: "landscape", unit: "mm", format: "a4", compress: true });
   const pageW = pdf.internal.pageSize.getWidth();
   const pageH = pdf.internal.pageSize.getHeight();
@@ -882,11 +1027,17 @@ async function writePdfToDirectory(directory, fileName, pdf) {
   }
 }
 
-/* Пакетная выгрузка: один PDF на врача и один PDF на отделение, все в одной папке. */
+/* Пакетная выгрузка: один PDF на врача и один PDF на специализацию, все в одной папке. */
 async function exportAllReportsToFolder() {
   const mk = UI.repMonth;
   if (!mk || !DB.months[mk]) { toast("Сначала выберите месяц с данными", true); return; }
-  if (typeof html2canvas === "undefined" || !window.jspdf) { toast("Экспорт в PDF недоступен", true); return; }
+  try {
+    loadBundledLibrary("lib-html2canvas", "html2canvas");
+    loadBundledLibrary("lib-jspdf", "jspdf");
+  } catch (error) {
+    toast("Экспорт в PDF недоступен: " + error.message, true);
+    return;
+  }
   const useDesktopExport = Boolean(DESKTOP_API);
   if (!useDesktopExport && typeof window.showDirectoryPicker !== "function") {
     toast("Выбор папки поддерживается в Chrome и Edge. Откройте приложение в одном из этих браузеров.", true);
@@ -908,7 +1059,7 @@ async function exportAllReportsToFolder() {
   const doctors = core.length ? core : doctorsInMonth(mk);
   const departments = deptListForMonth(mk, doctors);
   const targets = [
-    ...departments.map(name => ({ kind: "Отделение", name, html: () => buildDeptReport(mk, name, "all") })),
+    ...departments.map(name => ({ kind: "Специализация", name, html: () => buildDeptReport(mk, name, "all") })),
     ...doctors.map(id => ({ kind: "Врач", name: doctorName(id), html: () => buildDoctorReport(id, mk) })),
   ];
   if (!targets.length) { toast("За выбранный месяц нет отчётов для выгрузки", true); return; }
@@ -1443,12 +1594,13 @@ function renderDoctor() {
   html += `<div class="card" id="blkHead">
     <div class="flex" style="justify-content:space-between">
       <h2 class="mt0" style="margin-bottom:4px">${esc(doctorName(UI.docId))} <span class="muted small">· ${monthLabel(mk)} · ${esc(doctorDept(UI.docId))}</span>
+        ${DB.doctors[UI.docId].metricSettings ? ' <span class="badge info" title="Цели, веса и нормативы настроены персонально для этого врача">индивидуальные цели</span>' : ""}
         ${r.partial ? ` <span class="badge warn" title="${esc(r.missing.join(", "))}">не все отчёты</span>` : ""}</h2>
       <span class="no-print" style="white-space:nowrap"><label class="small"><input type="checkbox" ${UI.showLabels ? "checked" : ""} onchange="toggleLabels()"> цифры на графиках</label> ${blockBtn("blkHead")}</span>
     </div>
     ${r.partial ? `<p class="small muted" style="margin:0 0 10px">Не загружено: ${esc(r.missing.join(", "))}.</p>` : ""}
     <div class="gauge-wrap">
-      ${showSc ? `<div class="dpi-ring" style="width:130px;height:130px" title="Средневзвешенный балл выполнения нормативов по векторам. Веса и цели — в Настройках → «Баллы и веса»">
+      ${showSc ? `<div class="dpi-ring" style="width:130px;height:130px" title="Средневзвешенный балл выполнения нормативов по векторам. Веса и цели задаются в настройках специализации или персонально для врача">
         <svg width="130" height="130"><circle cx="65" cy="65" r="54" fill="none" stroke="var(--line)" stroke-width="12"/>
         <circle cx="65" cy="65" r="54" fill="none" stroke="${scColor}" stroke-width="12" stroke-linecap="round"
           stroke-dasharray="${(circ * (totalScore || 0) / 100).toFixed(1)} ${circ.toFixed(1)}"/></svg>
@@ -1508,7 +1660,7 @@ function renderDoctor() {
       html += `<div class="notice" style="margin-bottom:10px">⚠ ${candCnt} процедур похожи на «${esc(exTitle)}», но не привязаны (${fmtMoney(Object.values(p.devCandidates).reduce((a, x) => a + x.s, 0))}) — <a href="#" onclick="switchTab('settings');return false">привяжите в Настройках</a>.</div>`;
     }
     if (exMode === "none") {
-      html += `<p class="small muted" style="margin-top:0">У отделения «${esc(doctorDept(UI.docId))}» блок экспертности отключён — оценивается структура выручки, балл вектора не считается (вес перераспределён).</p>`;
+      html += `<p class="small muted" style="margin-top:0">У специализации «${esc(doctorDept(UI.docId))}» блок экспертности отключён — оценивается структура выручки, балл вектора не считается (вес перераспределён).</p>`;
     }
     html += `<div class="grid cols-2">
       <div><h3 class="small muted" style="margin-bottom:6px">ДОЛЕВОЕ РАСПРЕДЕЛЕНИЕ ВЫРУЧКИ ${copyBtn("copyChart", "chRevStruct", "PNG")}</h3>
@@ -1648,7 +1800,7 @@ function renderDoctor() {
     const pr = kb.params;
     const nv = pr.minVisits - 1;
     const kbDyn = clientBaseDynamics(UI.docId, mk, kbWinCur);
-    html += `<p class="small muted" style="margin-top:0">Источник: выгрузка «Давность посещений» за ${kb.window} мес (период ${periodStr(kb.period)}) — ${fmtNum(kb.total)} клиентов, ${fmtNum(kb.visits)} визитов. Пороги отделения «${esc(doctorDept(UI.docId))}» настраиваются <a href="#" onclick="switchTab('settings');return false">здесь</a>.</p>
+    html += `<p class="small muted" style="margin-top:0">Источник: выгрузка «Давность посещений» за ${kb.window} мес (период ${periodStr(kb.period)}) — ${fmtNum(kb.total)} клиентов, ${fmtNum(kb.visits)} визитов. Пороги специализации «${esc(doctorDept(UI.docId))}» настраиваются <a href="#" onclick="switchTab('settings');return false">здесь</a>.</p>
     <div class="kb-dynamics">
       <div class="kb-dyn-card">
         <div class="kb-dyn-title">Динамика клиентской базы</div>
@@ -1981,7 +2133,7 @@ function renderReport() {
   const mk = UI.repMonth;
   mSel.innerHTML = months.map(k => `<option value="${k}" ${k === mk ? "selected" : ""}>${monthLabel(k)}</option>`).join("");
   const core = coreDoctorsInMonth(mk).length ? coreDoctorsInMonth(mk) : doctorsInMonth(mk);
-  sSel.innerHTML = `<option value="dept" ${UI.repScope === "dept" ? "selected" : ""}>Отделение целиком</option>` +
+  sSel.innerHTML = `<option value="dept" ${UI.repScope === "dept" ? "selected" : ""}>Специализация целиком</option>` +
     core.map(id => `<option value="doc:${id}" ${UI.repScope === "doc:" + id ? "selected" : ""}>${esc(doctorName(id))}</option>`).join("");
   if (UI.repScope.startsWith("doc:") && !core.includes(UI.repScope.slice(4))) UI.repScope = "dept";
   body.innerHTML = UI.repScope === "dept" ? buildDeptReport(mk) : buildDoctorReport(UI.repScope.slice(4), mk);
@@ -2004,7 +2156,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
   const sub = monthLabel(mk) + (deptFilter !== "all" ? " · " + esc(deptFilter) : "");
 
   /* Слайд 1: итоги + сводная */
-  let html = `<div class="card slide">${reportHeader("Отчёт по отделению", sub)}
+  let html = `<div class="card slide">${reportHeader("Отчёт по специализации", sub)}
     <div class="grid cols-4">
       <div class="kpi"><div class="lbl">Специалистов</div><div class="val">${rows.length}</div></div>
       ${showSc && scAvg != null ? `<div class="kpi"><div class="lbl">Средний балл</div><div class="val">${fmtNum(scAvg, 1)} / 100</div></div>` : ""}
@@ -2058,7 +2210,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
     }
   } else if (withVy.length) {
     html += `<div class="card slide"><h2>Экспертность · ${sub}</h2>
-      <table class="data"><tr><th>Специалист</th><th>Отделение</th><th class="num">Задействовано позиций</th><th class="num">Доля экспертных услуг</th></tr>`;
+      <table class="data"><tr><th>Специалист</th><th>Специализация</th><th class="num">Задействовано позиций</th><th class="num">Доля экспертных услуг</th></tr>`;
     for (const x of withVy) {
       html += `<tr><td>${esc(doctorName(x.id))}</td><td>${esc(doctorDept(x.id))}</td><td class="num">${x.r.product.park ? x.r.product.devicesUsed + " из " + x.r.product.park : "—"}</td><td class="num">${fmtPct(x.r.product.expertShare)}</td></tr>`;
     }
@@ -2224,6 +2376,19 @@ function fmtEx(example) {
   return `<div class="fmt-ex"><b>Пример заполнения:</b><pre>${esc(example)}</pre></div>`;
 }
 
+function scoringBenchmarkDefs(profile) {
+  const title = profile.expertise && profile.expertise.title ? profile.expertise.title : "экспертных услуг";
+  return [
+    ["revenue", "Продажи, ₽/мес"], ["avgCheck", "Средний чек на пациента, ₽"],
+    ["hwShare", `Доля «${title}», %`], ["crossShare", "Доля выручки от перенаправлений, %"],
+    ["nazConv", "Конверсия назначений, %"], ["akbShare", "Активная база, %"],
+    ["riskShare", "В зоне риска, % (ниже—лучше)"], ["churn", "Потерянные за 3 года, % (ниже—лучше)"],
+    ["schedLoad", "Занятость расписания, %"], ["pervichka", `Первичка ${profile.pervichkaM || 3} мес, %`],
+    ["ownRecords", "Доля собственных записей, %"], ["courseIdx", "Курсовое лечение, %"],
+    ["rating", "Рейтинг площадок (из 5)"], ["nps", "NPS, %"], ["reviews", "Отзывов в месяц, шт"],
+  ];
+}
+
 function renderSettings() {
   const s = DB.settings;
   const dn = curSetDept();
@@ -2231,20 +2396,27 @@ function renderSettings() {
   const deptNames = Object.keys(s.depts);
   let html = "";
   // состояние «свёрнуто/развёрнуто» секций настроек — переживает перерисовку
-  if (!UI.setOpen) UI.setOpen = { norm: true, expert: true, nom: true, score: false, rules: false };
+  if (!UI.setOpen) UI.setOpen = { norm: false, expert: false, nom: false, score: false, doctor: true, rules: false };
   // атрибуты для схлопывающейся секции: data-ключ + запоминание при переключении
   const det = key => `data-sk="${key}" ${UI.setOpen[key] ? "open" : ""} ontoggle="UI.setOpen['${key}']=this.open"`;
 
-  /* --- выбор отделения + общие переключатели --- */
-  html += `<div class="card"><div class="vhead"><h2 class="mt0">🏥 Настройки отделения</h2>
+  /* --- состав отделений --- */
+  const groupsText = Object.entries(departmentGroups()).map(([name, specs]) => `${name} = ${specs.join(", ")}`).join("\n");
+  html += `<div class="card"><h2 class="mt0">🏥 Состав отделений</h2>
+    <p class="small muted">Каждое отделение собирается из одной или нескольких специализаций. Одна специализация может входить только в одно отделение. Формат строки: <code>Название отделения = Специализация 1, Специализация 2</code>.</p>
+    <textarea id="departmentGroupsTa" style="min-height:110px" placeholder="Название отделения = Специализация 1, Специализация 2">${esc(groupsText)}</textarea>
+    <div class="toolbar"><button class="btn primary" onclick="saveDepartmentGroups()">💾 Сохранить состав отделений</button><span class="small muted">Доступные специализации: ${deptNames.map(esc).join(", ")}</span></div></div>`;
+
+  /* --- выбор специализации + общие переключатели --- */
+  html += `<div class="card"><div class="vhead"><h2 class="mt0">🩺 Настройки специализации</h2>
       <label class="small"><input type="checkbox" id="showScoresChk" onchange="DB.settings.showScores=this.checked;saveLocal();renderAll()" ${s.showScores ? "checked" : ""}> показывать баллы</label></div>
     <div class="toolbar">
-      <label>Отделение: <select id="setDeptSel" onchange="UI.setDept=this.value;renderSettings()">${deptNames.map(n => `<option value="${esc(n)}" ${n === dn ? "selected" : ""}>${esc(n)}${n === "По умолчанию" ? " (шаблон)" : ""}</option>`).join("")}</select></label>
-      <input type="text" id="newDeptName" placeholder="новое отделение…" style="min-width:200px">
+      <label>Специализация: <select id="setDeptSel" onchange="UI.setDept=this.value;renderSettings()">${deptNames.map(n => `<option value="${esc(n)}" ${n === dn ? "selected" : ""}>${esc(n)}${n === "По умолчанию" ? " (шаблон)" : ""}</option>`).join("")}</select></label>
+      <input type="text" id="newDeptName" placeholder="новая специализация…" style="min-width:200px">
       <button class="btn" onclick="addDeptV3()">+ Добавить</button>
       ${dn !== "По умолчанию" ? `<button class="btn danger" onclick="removeDeptV3('${esc(dn)}')">Удалить «${esc(dn)}»</button>` : ""}
       <span class="spacer"></span>
-      <span class="small muted">Новое отделение создаётся копией шаблона «По умолчанию» и настраивается ниже.</span>
+      <span class="small muted">Новая специализация создаётся копией шаблона «По умолчанию» и настраивается ниже.</span>
     </div></div>`;
 
   /* --- 1. Нормативы и подразделения --- */
@@ -2266,10 +2438,10 @@ function renderSettings() {
       <td class="num"><input type="number" id="np_corePct" value="${p.corePct}" min="50" max="95"></td>
       <td class="num"><input type="number" id="np_pervichkaM" value="${p.pervichkaM || 3}" min="1" max="12"></td></tr></table>
     <div class="grid cols-2" style="margin-top:10px">
-      <label class="fld"><span>Подразделения отделения (по одному в строке) — назначаются врачам в «Сотрудниках», дают фильтр на дашборде</span>
+      <label class="fld"><span>Группы внутри специализации (по одной в строке) — назначаются врачам в «Сотрудниках», дают дополнительный фильтр</span>
         <textarea id="np_subdivisions" placeholder="по одному в строке" style="min-height:70px">${esc((p.subdivisions || []).join("\n"))}</textarea>
         ${fmtEx("УЗИ\nМаммологи\nОнкодерматологи")}</label>
-      <label class="fld"><span>Слова-определители: врач попадает в это отделение, если его должность/специализация содержит одно из слов (через запятую)</span>
+      <label class="fld"><span>Слова-определители: врач попадает в эту специализацию, если его должность содержит одно из слов (через запятую)</span>
         <textarea id="np_matchers" placeholder="через запятую" style="min-height:70px">${esc((p.matchers || []).join(", "))}</textarea>
         ${fmtEx("гинеколог, акушер")}</label>
     </div>
@@ -2280,7 +2452,7 @@ function renderSettings() {
   const exp = p.expertise;
   const cands = collectDeviceCandidates(dn);
   html += `<details class="card" style="display:block" ${det("expert")}><summary style="cursor:pointer"><b>⭐ Экспертность (Вектор 2) — «${esc(dn)}»</b></summary>
-    <p class="small muted" style="margin-top:8px">Что отслеживаем у врачей этого отделения: аппараты или услуги. Название блока задаёте сами — так он будет называться в профайле врача и отчётах.</p>
+    <p class="small muted" style="margin-top:8px">Что отслеживаем у врачей этой специализации: аппараты или услуги. Название блока задаёте сами — так он будет называться в профайле врача и отчётах.</p>
     <div class="toolbar">
       <label>Название блока: <input type="text" id="ex_title" value="${esc(exp.title || "")}" style="min-width:220px"></label>
       <label>Тип: <select id="ex_mode">
@@ -2379,17 +2551,9 @@ function renderSettings() {
 
   /* --- 4. Баллы и веса отделения --- */
   const sc = p.scoring;
-  const bmDefs = [
-    ["revenue", "Продажи, ₽/мес"], ["avgCheck", "Средний чек на пациента, ₽"],
-    ["hwShare", `Доля «${exp.title}», %`], ["crossShare", "Доля выручки от перенаправлений, %"],
-    ["nazConv", "Конверсия назначений, %"], ["akbShare", "Активная база, %"],
-    ["riskShare", "В зоне риска, % (ниже—лучше)"], ["churn", "Потерянные за 3 года, % (ниже—лучше)"],
-    ["schedLoad", "Занятость расписания, %"], ["pervichka", `Первичка ${p.pervichkaM || 3} мес, %`],
-    ["ownRecords", "Доля собственных записей, %"], ["courseIdx", "Курсовое лечение, %"],
-    ["rating", "Рейтинг площадок (из 5)"], ["nps", "NPS, %"], ["reviews", "Отзывов в месяц, шт"],
-  ];
+  const bmDefs = scoringBenchmarkDefs(p);
   html += `<details class="card" style="display:block" ${det("score")}><summary style="cursor:pointer"><b>🎯 Баллы и веса — «${esc(dn)}»</b></summary>
-    <p class="small muted" style="margin-top:8px">Цели и веса этого отделения. <b>Пустая цель = метрика не оценивается</b> (пример: выручку в план не ставим — очищаем «Продажи», а «Средний чек» остаётся целью). Вес выключенных векторов перераспределяется.</p>
+    <p class="small muted" style="margin-top:8px">Цели и веса этой специализации. <b>Пустая цель = метрика не оценивается</b> (пример: выручку в план не ставим — очищаем «Продажи», а «Средний чек» остаётся целью). Вес выключенных векторов перераспределяется.</p>
     <div class="grid cols-2">
       <div><h3>Векторы и веса</h3>
         <table class="data wtable"><tr><th>Учитывать</th><th>Вектор</th><th class="num">Вес</th></tr>
@@ -2406,17 +2570,61 @@ function renderSettings() {
     <div class="toolbar"><button class="btn primary" onclick="saveDeptScoring()">💾 Сохранить баллы и веса</button></div>
   </details>`;
 
-  /* --- Сотрудники --- */
+  /* --- 5. Персональные цели и нормативы врача --- */
   const ids = Object.keys(DB.doctors).sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru"));
+  if (!UI.setDoctor || !DB.doctors[UI.setDoctor]) UI.setDoctor = ids[0] || null;
+  if (UI.setDoctor) {
+    const doctorId = UI.setDoctor;
+    const doctor = DB.doctors[doctorId];
+    const hasOwn = Boolean(doctor.metricSettings && typeof doctor.metricSettings === "object");
+    const doctorProfile = profileForDoctor(doctorId);
+    const doctorSc = doctorProfile.scoring;
+    const doctorBmDefs = scoringBenchmarkDefs(doctorProfile);
+    const disabled = hasOwn ? "" : "disabled";
+    const specName = resolvedDeptName(doctorId);
+    html += `<details class="card" id="doctorMetricSettingsCard" style="display:block" ${det("doctor")}><summary style="cursor:pointer"><b>👤 Персональные цели и нормативы врача</b></summary>
+      <div class="toolbar" style="margin-top:10px">
+        <label>Врач: <select id="setDoctorSel" onchange="UI.setDoctor=this.value;renderSettings()">${ids.map(id => `<option value="${esc(id)}" ${id === doctorId ? "selected" : ""}>${esc(doctorName(id))}</option>`).join("")}</select></label>
+        <span class="badge ${hasOwn ? "ok" : ""}">${hasOwn ? "индивидуальные настройки" : "наследует специализацию"}</span>
+        <span class="small muted">Специализация: ${esc(specName)}</span><span class="spacer"></span>
+        ${hasOwn
+          ? `<button class="btn danger" onclick="resetDoctorMetricSettings()">↺ Сбросить к специализации</button>`
+          : `<button class="btn primary" onclick="enableDoctorMetricSettings()">Включить индивидуальные настройки</button>`}
+      </div>
+      <p class="small muted">Без индивидуального профиля врач автоматически использует цели и нормативы специализации «${esc(specName)}». После включения значения можно менять независимо.</p>
+      <h3>Нормативы врача</h3>
+      <table class="data wtable"><tr><th class="num">Лояльный: от, виз.</th><th class="num">Активный: до, мес.</th><th class="num">Риск: до, мес.</th><th class="num">Курсовое: от, виз.</th><th class="num">Курсовое: за, мес.</th><th class="num">Ядро, %</th><th class="num">Первичка: срез, мес.</th></tr><tr>
+        <td class="num"><input type="number" id="dm_minVisits" value="${doctorProfile.minVisits}" min="2" max="20" ${disabled}></td>
+        <td class="num"><input type="number" id="dm_activeM" value="${doctorProfile.activeM}" min="1" max="24" ${disabled}></td>
+        <td class="num"><input type="number" id="dm_riskM" value="${doctorProfile.riskM}" min="2" max="36" ${disabled}></td>
+        <td class="num"><input type="number" id="dm_courseX" value="${doctorProfile.courseX}" min="2" max="20" ${disabled}></td>
+        <td class="num"><input type="number" id="dm_courseM" value="${doctorProfile.courseM}" min="1" max="36" ${disabled}></td>
+        <td class="num"><input type="number" id="dm_corePct" value="${doctorProfile.corePct}" min="50" max="95" ${disabled}></td>
+        <td class="num"><input type="number" id="dm_pervichkaM" value="${doctorProfile.pervichkaM || 3}" min="1" max="12" ${disabled}></td></tr></table>
+      <div class="grid cols-2" style="margin-top:12px">
+        <div><h3>Векторы и веса врача</h3><table class="data wtable"><tr><th>Учитывать</th><th>Вектор</th><th class="num">Вес</th></tr>
+          ${["v1", "v2", "v3", "v4", "v5", "v6"].map(vk => `<tr><td><input type="checkbox" id="dm_en_${vk}" ${doctorSc.enabled[vk] ? "checked" : ""} ${disabled}></td><td>В${vk[1]}. ${VECTOR_META[vk].name}</td><td class="num"><input type="number" id="dm_w_${vk}" value="${doctorSc.weights[vk]}" min="0" max="100" style="width:70px" ${disabled}> %</td></tr>`).join("")}
+        </table></div>
+        <div><h3>Цели врача</h3><table class="data" style="width:100%"><tr><th>Метрика</th><th class="num">Цель</th></tr>
+          ${doctorBmDefs.map(([k, n]) => `<tr><td>${n}</td><td class="num"><input type="number" id="dm_bm_${k}" value="${doctorSc.benchmarks[k] != null && doctorSc.benchmarks[k] !== "" ? doctorSc.benchmarks[k] : ""}" step="any" style="width:110px" placeholder="—" ${disabled}></td></tr>`).join("")}
+        </table></div>
+      </div>
+      <div class="toolbar"><button class="btn primary" onclick="saveDoctorMetricSettings()" ${disabled}>💾 Сохранить настройки врача</button></div>
+    </details>`;
+  } else {
+    html += '<div class="card"><h2>👤 Персональные цели врача</h2><p class="muted">В базе пока нет врачей. Они появятся после загрузки отчётов.</p></div>';
+  }
+
+  /* --- Сотрудники --- */
   const filter = UI.staffFilter.toLowerCase();
   const visible = ids.filter(id => !filter || doctorName(id).toLowerCase().includes(filter));
   html += `<div class="card"><h2>👥 Сотрудники (${ids.length})</h2>
-    <p class="small muted"><b>Должность</b> подставляется из 1С (специализация), но её можно вписать/поправить вручную — по ней врач автоматически попадает в отделение (по «словам-определителям»). <b>Отделение</b> определяет профиль врача (нормативы, категории, баллы); «авто» = по должности. <b>Подразделение</b> — внутри отделения. Дубли (филиалы) — отметьте и «Склеить».</p>
+    <p class="small muted"><b>Должность</b> подставляется из 1С, но её можно поправить вручную — по ней врач автоматически попадает в специализацию (по словам-определителям). <b>Специализация</b> определяет нормативы, категории и баллы; «авто» = по должности. <b>Группа</b> — дополнительный уровень внутри специализации. Дубли (филиалы) — отметьте и «Склеить».</p>
     <div class="toolbar">
       <input type="text" id="staffFilter" placeholder="поиск по фамилии…" value="${esc(UI.staffFilter)}">
       <button class="btn" onclick="mergeSelected()">🔗 Склеить выбранных</button>
     </div>
-    <div class="scroll-y"><table class="data"><tr><th></th><th>Сотрудник</th><th>Должность / специализация</th><th>Отделение</th><th>Подразделение</th><th>Другие написания</th></tr>`;
+    <div class="scroll-y"><table class="data"><tr><th></th><th>Сотрудник</th><th>Должность</th><th>Специализация</th><th>Группа</th><th>Другие написания</th></tr>`;
   for (const id of visible) {
     const d = DB.doctors[id];
     const autoDept = resolvedDeptName(id);
@@ -2455,19 +2663,49 @@ function renderSettings() {
   });
 }
 
-/* --- отделения --- */
+/* --- отделения и специализации --- */
+function saveDepartmentGroups() {
+  const known = new Set(Object.keys(DB.settings.depts));
+  const assigned = new Set();
+  const groups = {};
+  const warnings = [];
+  for (const raw of document.getElementById("departmentGroupsTa").value.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const pos = line.indexOf("=");
+    if (pos < 1) { warnings.push(`неверный формат: ${line}`); continue; }
+    const name = line.slice(0, pos).trim();
+    const specs = [];
+    for (const spec of line.slice(pos + 1).split(",").map(x => x.trim()).filter(Boolean)) {
+      if (!known.has(spec)) { warnings.push(`неизвестная специализация: ${spec}`); continue; }
+      if (assigned.has(spec)) { warnings.push(`«${spec}» уже назначена другому отделению`); continue; }
+      assigned.add(spec);
+      specs.push(spec);
+    }
+    if (name && specs.length) groups[name] = specs;
+  }
+  if (!Object.keys(groups).length) {
+    toast("Добавьте хотя бы одно отделение и его специализацию", true);
+    return;
+  }
+  DB.settings.departments = groups;
+  saveLocal();
+  renderAll();
+  toast(warnings.length ? `Состав отделений сохранён. Пропущено: ${warnings.slice(0, 2).join("; ")}` : "Состав отделений сохранён");
+}
+
 function addDeptV3() {
   const name = document.getElementById("newDeptName").value.trim();
-  if (!name) { toast("Введите название отделения", true); return; }
-  if (DB.settings.depts[name]) { toast("Такое отделение уже есть", true); return; }
+  if (!name) { toast("Введите название специализации", true); return; }
+  if (DB.settings.depts[name]) { toast("Такая специализация уже есть", true); return; }
   DB.settings.depts[name] = JSON.parse(JSON.stringify(deptProfile("По умолчанию")));
   UI.setDept = name;
   saveLocal();
-  toast(`Отделение «${name}» создано копией шаблона — настройте экспертность и категории ниже`);
+  toast(`Специализация «${name}» создана копией шаблона — настройте экспертность и категории ниже`);
   renderSettings();
 }
 function removeDeptV3(name) {
-  if (!confirm(`Удалить отделение «${name}»? Его врачи получат профиль «По умолчанию» (или по словам-определителям).`)) return;
+  if (!confirm(`Удалить специализацию «${name}»? Её врачи получат профиль «По умолчанию» (или по словам-определителям).`)) return;
   delete DB.settings.depts[name];
   for (const d of Object.values(DB.doctors)) if (d.dept === name) d.dept = null;
   UI.setDept = null;
@@ -2486,7 +2724,7 @@ function saveDeptBasics() {
   p.subdivisions = document.getElementById("np_subdivisions").value.split("\n").map(x => x.trim()).filter(Boolean);
   p.matchers = document.getElementById("np_matchers").value.split(",").map(x => x.trim()).filter(Boolean);
   saveLocal();
-  toast("Нормативы отделения сохранены");
+  toast("Нормативы специализации сохранены");
   renderAll();
 }
 function saveDeptExpertise() {
@@ -2618,7 +2856,53 @@ function saveDeptScoring() {
     p.scoring.benchmarks[k] = raw === "" ? "" : parseFloat(raw);
   }
   saveLocal();
-  toast("Баллы и веса отделения сохранены");
+  toast("Баллы и веса специализации сохранены");
+  renderAll();
+}
+/* --- персональные цели и нормативы врача --- */
+function enableDoctorMetricSettings() {
+  const id = UI.setDoctor;
+  if (!id || !DB.doctors[id]) return;
+  DB.doctors[id].metricSettings = doctorMetricSettingsFromProfile(deptProfile(resolvedDeptName(id)));
+  saveLocal();
+  toast(`Индивидуальные настройки включены для ${doctorName(id)}`);
+  renderSettings();
+}
+function resetDoctorMetricSettings() {
+  const id = UI.setDoctor;
+  if (!id || !DB.doctors[id] || !DB.doctors[id].metricSettings) return;
+  if (!confirm(`Сбросить индивидуальные цели врача «${doctorName(id)}» и снова использовать настройки специализации?`)) return;
+  delete DB.doctors[id].metricSettings;
+  saveLocal();
+  toast(`${doctorName(id)} снова наследует настройки специализации`);
+  renderSettings();
+}
+function saveDoctorMetricSettings() {
+  const id = UI.setDoctor;
+  const doctor = id && DB.doctors[id];
+  if (!doctor || !doctor.metricSettings) {
+    toast("Сначала включите индивидуальные настройки врача", true);
+    return;
+  }
+  const settings = doctor.metricSettings;
+  for (const key of DOCTOR_METRIC_PROFILE_KEYS) {
+    const el = document.getElementById("dm_" + key);
+    const value = el ? parseInt(el.value) : NaN;
+    if (!isNaN(value)) settings[key] = value;
+  }
+  if (!settings.scoring) settings.scoring = doctorMetricSettingsFromProfile(profileForDoctor(id)).scoring;
+  for (const vk of ["v1", "v2", "v3", "v4", "v5", "v6"]) {
+    settings.scoring.enabled[vk] = document.getElementById("dm_en_" + vk).checked;
+    settings.scoring.weights[vk] = parseFloat(document.getElementById("dm_w_" + vk).value) || 0;
+  }
+  for (const key of Object.keys(defaultBenchmarks())) {
+    const el = document.getElementById("dm_bm_" + key);
+    if (!el) continue;
+    const raw = el.value.trim();
+    settings.scoring.benchmarks[key] = raw === "" ? "" : parseFloat(raw);
+  }
+  saveLocal();
+  toast(`Цели и нормативы врача «${doctorName(id)}» сохранены`);
   renderAll();
 }
 /* --- сотрудники --- */
@@ -2663,6 +2947,7 @@ async function mergeSelected() {
 function renderAll() {
   updateHeaderStatus();
   if (UI.tab === "data") renderData();
+  if (UI.tab === "department") renderDepartment();
   if (UI.tab === "dept") renderDept();
   if (UI.tab === "doctor") renderDoctor();
   if (UI.tab === "report") renderReport();
@@ -2702,6 +2987,8 @@ async function initApp() {
       .then(files => handleFiles(files))
       .catch(error => toast("Не удалось прочитать перетащенные файлы: " + error.message, true));
   });
+  document.getElementById("departmentMonth").addEventListener("change", e => { UI.departmentMonth = e.target.value; renderDepartment(); });
+  document.getElementById("departmentFilter").addEventListener("change", e => { UI.departmentFilter = e.target.value; renderDepartment(); });
   document.getElementById("deptMonth").addEventListener("change", e => { UI.deptMonth = e.target.value; renderDept(); });
   document.getElementById("deptFilter").addEventListener("change", e => { UI.deptFilter = e.target.value; UI.subFilter = "all"; renderDept(); });
   document.getElementById("subFilter").addEventListener("change", e => { UI.subFilter = e.target.value; renderDept(); });

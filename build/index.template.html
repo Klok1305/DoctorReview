@@ -14,7 +14,8 @@
   <div class="logo">🩺 Оценка <span class="logo-work">работы</span> <span class="logo-doctors">врачей</span></div>
   <nav class="tabs">
     <button data-tab="data">📥 Данные</button>
-    <button data-tab="dept">🏥 Отделение</button>
+    <button data-tab="department">🏥 Отделение</button>
+    <button data-tab="dept">🩺 Специализация</button>
     <button data-tab="doctor">👤 Врач</button>
     <button data-tab="report">📄 Отчёт</button>
     <button data-tab="settings">⚙️ Настройки</button>
@@ -82,13 +83,23 @@
   <div class="card"><h2>Журнал загрузок</h2><div class="file-log" id="fileLog"></div></div>
 </section>
 
-<section id="page-dept" class="page">
+<section id="page-department" class="page">
   <div class="toolbar no-print">
     <h2 style="margin:0">Дашборд отделения</h2>
     <span class="spacer"></span>
+    <label>Отделение: <select id="departmentFilter"></select></label>
+    <label>Месяц: <select id="departmentMonth"></select></label>
+  </div>
+  <div id="departmentBody"></div>
+</section>
+
+<section id="page-dept" class="page">
+  <div class="toolbar no-print">
+    <h2 style="margin:0">Дашборд специализации</h2>
+    <span class="spacer"></span>
     <button class="btn" id="btnXlsx" title="Скачать сводную таблицу месяца в Excel">⇓ Экспорт в Excel</button>
-    <label>Отделение: <select id="deptFilter"></select></label>
-    <label style="display:none">Подразделение: <select id="subFilter"></select></label>
+    <label>Специализация: <select id="deptFilter"></select></label>
+    <label style="display:none">Группа: <select id="subFilter"></select></label>
     <label>Месяц: <select id="deptMonth"></select></label>
   </div>
   <div id="deptBody"></div>
@@ -110,10 +121,10 @@
     <span class="spacer"></span>
     <label>Кому: <select id="repScope" style="min-width:220px"></select></label>
     <label>Месяц: <select id="repMonth"></select></label>
-    <button class="btn primary" id="btnExportAllPdf" title="Создать отдельные PDF по всем врачам и отделениям и сохранить их в выбранную папку">📁 Выгрузить все PDF</button>
+    <button class="btn primary" id="btnExportAllPdf" title="Создать отдельные PDF по всем врачам и специализациям и сохранить их в выбранную папку">📁 Выгрузить все PDF</button>
     <button class="btn" id="btnPrint">🖨 Печать</button>
   </div>
-  <div class="notice blue no-print">Кнопка «Выгрузить все PDF» создаёт за выбранный месяц отдельный файл для каждого врача и каждого отделения с данными. Все файлы сохраняются прямо в одну выбранную папку. Предпросмотр «Кому» и кнопка «Печать» работают для одного выбранного отчёта.</div>
+  <div class="notice blue no-print">Кнопка «Выгрузить все PDF» создаёт за выбранный месяц отдельный файл для каждого врача и каждой специализации с данными. Все файлы сохраняются прямо в одну выбранную папку. Предпросмотр «Кому» и кнопка «Печать» работают для одного выбранного отчёта.</div>
   <div id="reportBody"></div>
 </section>
 
@@ -124,10 +135,10 @@
 
 </main>
 <footer class="app-footer no-print" id="footerText">Приложение работает полностью локально: данные не покидают этот компьютер. Сохраняйте базу в файл после каждой загрузки данных.</footer>
-<script>
+<script type="text/plain" id="lib-xlsx">
 /*__XLSX__*/
 </script>
-<script>
+<script type="text/plain" id="lib-jszip">
 /*__JSZIP__*/
 </script>
 <script>
@@ -136,10 +147,10 @@
 <script>
 /*__DATALABELS__*/
 </script>
-<script>
+<script type="text/plain" id="lib-html2canvas">
 /*__HTML2CANVAS__*/
 </script>
-<script>
+<script type="text/plain" id="lib-jspdf">
 /*__JSPDF__*/
 </script>
 <script>

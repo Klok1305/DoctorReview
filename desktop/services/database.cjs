@@ -155,10 +155,6 @@ class DatabaseService {
     }
   }
 
-  hasData() {
-    return Boolean(this.db.prepare("SELECT 1 FROM app_settings WHERE id = 1").get());
-  }
-
   loadSnapshot() {
     const settingsRow = this.db.prepare("SELECT data_json FROM app_settings WHERE id = 1").get();
     if (!settingsRow) return null;

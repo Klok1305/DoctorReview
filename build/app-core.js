@@ -12,6 +12,19 @@ let desktopPendingRevision = 0;
 let desktopWrittenRevision = 0;
 let desktopWriterPromise = null;
 
+function loadBundledLibrary(id, globalName) {
+  if (globalThis[globalName]) return globalThis[globalName];
+  const source = document.getElementById(id);
+  if (!source) throw new Error(`Bundled library source is missing: ${id}`);
+  const script = document.createElement("script");
+  script.textContent = source.textContent;
+  document.head.appendChild(script);
+  script.remove();
+  source.remove();
+  if (!globalThis[globalName]) throw new Error(`Bundled library failed to load: ${globalName}`);
+  return globalThis[globalName];
+}
+
 const MONTH_NAMES = ["Январь","Февраль","Март","Апрель","Май","Июнь","Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь"];
 
 /* ============================================================
@@ -317,6 +330,10 @@ function defaultSettings() {
   return {
     showScores: true,
     weightsV: 4, // версия схемы (v3-профили)
+    departments: {
+      "Общее отделение": ["Косметология", "Гинекология", "Хирургия", "Терапия", "Физиотерапия"],
+      "Без специализации": ["По умолчанию"],
+    },
     depts: {
       "По умолчанию": defaultProfile(),
       "Косметология": profileCosmetology(),
@@ -326,6 +343,40 @@ function defaultSettings() {
       "Физиотерапия": profilePhysiotherapy(),
     },
   };
+}
+
+/*
+ * Верхний уровень структуры клиники. Исторически settings.depts содержит
+ * профили специализаций; отдельное поле departments объединяет их в отделения.
+ */
+function departmentGroups() {
+  const known = Object.keys((DB.settings && DB.settings.depts) || {});
+  const configured = (DB.settings && DB.settings.departments && typeof DB.settings.departments === "object" && !Array.isArray(DB.settings.departments))
+    ? DB.settings.departments : {};
+  const result = {};
+  const assigned = new Set();
+  for (const [name, values] of Object.entries(configured)) {
+    const cleanName = String(name || "").trim();
+    if (!cleanName || !Array.isArray(values)) continue;
+    const specs = [];
+    for (const value of values) {
+      const spec = String(value || "").trim();
+      if (!known.includes(spec) || assigned.has(spec)) continue;
+      assigned.add(spec);
+      specs.push(spec);
+    }
+    if (!specs.length) continue;
+    result[cleanName] = specs;
+  }
+  const unassigned = known.filter(v => !assigned.has(v));
+  if (unassigned.length) result["Без отделения"] = [...new Set([...(result["Без отделения"] || []), ...unassigned])];
+  return result;
+}
+
+function departmentSpecializations(name) {
+  const groups = departmentGroups();
+  if (!name || name === "all") return [...new Set(Object.values(groups).flat())];
+  return (groups[name] || []).slice();
 }
 
 /* Резолвер: полный профиль отделения с наследованием от «По умолчанию» */
@@ -361,8 +412,36 @@ function resolvedDeptName(docId) {
   }
   return "По умолчанию";
 }
+
+const DOCTOR_METRIC_PROFILE_KEYS = ["minVisits", "activeM", "riskM", "courseX", "courseM", "corePct", "pervichkaM"];
+
+function doctorMetricSettingsFromProfile(profile) {
+  const settings = {};
+  for (const key of DOCTOR_METRIC_PROFILE_KEYS) settings[key] = profile[key];
+  settings.scoring = {
+    weights: Object.assign({}, profile.scoring.weights),
+    enabled: Object.assign({}, profile.scoring.enabled),
+    benchmarks: Object.assign({}, profile.scoring.benchmarks),
+  };
+  return settings;
+}
+
 function profileForDoctor(docId) {
-  return deptProfile(resolvedDeptName(docId));
+  const base = deptProfile(resolvedDeptName(docId));
+  const doc = DB.doctors[docId];
+  const own = doc && doc.metricSettings;
+  if (!own || typeof own !== "object") return base;
+  const merged = Object.assign({}, base);
+  for (const key of DOCTOR_METRIC_PROFILE_KEYS) {
+    if (own[key] != null && own[key] !== "") merged[key] = own[key];
+  }
+  const ownScoring = own.scoring || {};
+  merged.scoring = {
+    weights: Object.assign({}, base.scoring.weights, ownScoring.weights || {}),
+    enabled: Object.assign({}, base.scoring.enabled, ownScoring.enabled || {}),
+    benchmarks: Object.assign({}, base.scoring.benchmarks, ownScoring.benchmarks || {}),
+  };
+  return merged;
 }
 
 /* палитра групп: закреплена за позицией группы в таксономии отделения */
@@ -515,10 +594,6 @@ function periodStr(p) {
   if (!p) return "—";
   const f = n => String(n).padStart(2, "0");
   return `${f(p.from.d)}.${f(p.from.m)}.${p.from.y} – ${f(p.to.d)}.${f(p.to.m)}.${p.to.y}`;
-}
-function prevYearKey(monthKey) {
-  const [y, m] = monthKey.split("-");
-  return (Number(y) - 1) + "-" + m;
 }
 function prevMonthKey(monthKey, back = 1) {
   let [y, m] = monthKey.split("-").map(Number);
@@ -702,6 +777,21 @@ function normalizeProfiles() {
     if (!Array.isArray(p.matchers)) p.matchers = [];
     DB.settings.depts[dn] = p;
   }
+  if (!DB.settings.departments || typeof DB.settings.departments !== "object" || Array.isArray(DB.settings.departments)) {
+    DB.settings.departments = defaultSettings().departments;
+  }
+  // Сохраняем только корректные связи. Не назначенные профили будут показаны
+  // виртуальной группой «Без отделения» в departmentGroups().
+  const normalizedDepartments = {};
+  for (const [name, values] of Object.entries(DB.settings.departments)) {
+    const cleanName = String(name || "").trim();
+    if (!cleanName || !Array.isArray(values)) continue;
+    const specs = [...new Set(values.map(v => String(v || "").trim()).filter(v => DB.settings.depts[v]))];
+    if (specs.length) normalizedDepartments[cleanName] = specs;
+  }
+  DB.settings.departments = Object.keys(normalizedDepartments).length
+    ? normalizedDepartments
+    : { "Общее отделение": Object.keys(DB.settings.depts) };
 }
 
 function applyLoadedDatabase(parsed) {
@@ -809,6 +899,7 @@ function mergeDoctors(ids) {
     if (!tgt.dept && src.dept) tgt.dept = src.dept;
     if (!tgt.subdept && src.subdept) tgt.subdept = src.subdept;
     if (!tgt.spec && src.spec) tgt.spec = src.spec;
+    if (!tgt.metricSettings && src.metricSettings) tgt.metricSettings = src.metricSettings;
     for (const m of Object.values(DB.months)) {
       if (m.vyrabotka[id]) {
         if (m.vyrabotka[target]) m.vyrabotka[target].items.push(...m.vyrabotka[id].items);

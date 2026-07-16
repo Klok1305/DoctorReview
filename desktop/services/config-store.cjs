@@ -164,11 +164,6 @@ class ConfigStore {
     return this.publicConfig();
   }
 
-  setUpdateUrl(url) {
-    this.config.updateUrl = String(url || "").trim();
-    this.save();
-    return this.publicConfig();
-  }
 }
 
 module.exports = { ConfigStore, FOLDER_NAMES, ensureDirectory, isUnsupportedStoragePath };

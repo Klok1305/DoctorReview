@@ -30,7 +30,6 @@ contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   exportBackup: () => invoke("backup:export"),
   restoreBackup: () => invoke("backup:restore"),
 
-  getUpdateStatus: () => invoke("update:status"),
   checkUpdates: () => invoke("update:check"),
   installDownloadedUpdate: () => invoke("update:install-downloaded"),
   installUpdateFile: () => invoke("update:install-file"),

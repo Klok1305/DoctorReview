@@ -210,6 +210,8 @@ function createWindow() {
         const smokeAction = PDF_SMOKE_TEST
           ? `(async () => {
               await new Promise(resolve => setTimeout(resolve, 1200));
+              const optionalLibrariesDeferred = typeof XLSX === 'undefined' && typeof JSZip === 'undefined' && typeof html2canvas === 'undefined' && !window.jspdf;
+              loadBundledLibrary('lib-xlsx', 'XLSX');
               DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], dept: 'По умолчанию', spec: 'Терапевт' } };
               DB.months = { '2026-01': emptyMonth() };
               DB.months['2026-01'].vyrabotka.d1 = {
@@ -224,19 +226,52 @@ function createWindow() {
               return {
                 title: document.title,
                 dataPage: Boolean(document.getElementById('page-data')),
+                optionalLibrariesDeferred,
                 xlsx: typeof XLSX !== 'undefined',
                 chart: typeof Chart !== 'undefined',
                 desktop: Boolean(window.desktopAPI),
                 saved
               };
             })()`
-          : `new Promise(resolve => setTimeout(() => resolve({
-              title: document.title,
-              dataPage: Boolean(document.getElementById('page-data')),
-              xlsx: typeof XLSX !== 'undefined',
-              chart: typeof Chart !== 'undefined',
-              desktop: Boolean(window.desktopAPI)
-            }), 1200))`;
+          : `(async () => {
+              await new Promise(resolve => setTimeout(resolve, 1200));
+              const optionalLibrariesDeferred = typeof XLSX === 'undefined' && typeof JSZip === 'undefined' && typeof html2canvas === 'undefined' && !window.jspdf;
+              loadBundledLibrary('lib-xlsx', 'XLSX');
+              DB.doctors = {
+                d1: { name: 'Тестов Косметолог', aliases: [], dept: 'Косметология', spec: 'Косметолог' },
+                d2: { name: 'Тестов Терапевт', aliases: [], dept: 'Терапия', spec: 'Терапевт' }
+              };
+              DB.months = { '2026-01': emptyMonth(), '2026-02': emptyMonth() };
+              for (const mk of Object.keys(DB.months)) {
+                DB.months[mk].vyrabotka.d1 = { items: [{ form: '', cat: 'Прием', n: 'Прием врача', q: 5, sOwn: mk.endsWith('01') ? 100000 : 120000, sRef: 20000, goods: false }] };
+                DB.months[mk].vyrabotka.d2 = { items: [{ form: '', cat: 'Прием', n: 'Прием врача', q: 4, sOwn: mk.endsWith('01') ? 80000 : 90000, sRef: 10000, goods: false }] };
+              }
+              clearMetricsCache();
+              UI.departmentMonth = '2026-02';
+              UI.departmentFilter = 'all';
+              switchTab('department');
+              await new Promise(resolve => setTimeout(resolve, 300));
+              const departmentPage = document.getElementById('page-department').classList.contains('active');
+              const departmentCharts = Boolean(UI.charts.chDepartmentRevenue && UI.charts.chDepartmentRates && UI.charts.chDepartmentBase);
+              UI.setDoctor = 'd1';
+              switchTab('settings');
+              enableDoctorMetricSettings();
+              document.getElementById('dm_bm_revenue').value = '150000';
+              saveDoctorMetricSettings();
+              document.getElementById('doctorMetricSettingsCard').scrollIntoView({ block: 'start' });
+              await new Promise(resolve => setTimeout(resolve, 200));
+              return {
+                title: document.title,
+                dataPage: Boolean(document.getElementById('page-data')),
+                optionalLibrariesDeferred,
+                departmentPage,
+                departmentCharts,
+                doctorMetricSettings: profileForDoctor('d1').scoring.benchmarks.revenue === 150000 && !document.getElementById('dm_bm_revenue').disabled,
+                xlsx: typeof XLSX !== 'undefined',
+                chart: typeof Chart !== 'undefined',
+                desktop: Boolean(window.desktopAPI)
+              };
+            })()`;
         const result = await mainWindow.webContents.executeJavaScript(smokeAction);
         const artifactRoot = SMOKE_ARTIFACT_ROOT;
         fs.mkdirSync(artifactRoot, { recursive: true });
@@ -258,7 +293,8 @@ function createWindow() {
           result.pdfDir = pdfDir;
         }
         process.stdout.write(`${JSON.stringify(result)}\n`);
-        const passed = result.dataPage && result.xlsx && result.chart && result.desktop
+        const passed = result.dataPage && result.optionalLibrariesDeferred && result.xlsx && result.chart && result.desktop
+          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.doctorMetricSettings))
           && (!PDF_SMOKE_TEST || (result.saved && result.pdfFiles.length === 2));
         app.exit(passed ? 0 : 2);
       } catch (error) {
@@ -415,7 +451,6 @@ function registerIpc() {
     return { canceled: false, restored, snapshot: database.loadSnapshot(), summary: database.summary() };
   });
 
-  ipcMain.handle("update:status", () => updateService.getStatus());
   ipcMain.handle("update:check", () => updateService.check());
   ipcMain.handle("update:install-downloaded", () => updateService.installDownloaded());
   ipcMain.handle("update:install-file", async () => {

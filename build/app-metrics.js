@@ -538,28 +538,6 @@ function computeMetricsRaw(docId, monthKey) {
   };
 }
 
-/* YoY-сравнение ключевых метрик */
-function computeYoY(docId, monthKey) {
-  const prev = prevYearKey(monthKey);
-  if (!DB.months[prev]) return null;
-  const cur = computeMetrics(docId, monthKey);
-  const old = computeMetrics(docId, prev);
-  if (!cur || !old) return null;
-  const rows = [];
-  const pick = (label, getter, fmt) => {
-    const a = getter(cur), b = getter(old);
-    if (a == null && b == null) return;
-    rows.push({ label, cur: a, old: b, fmt, deltaPct: (a != null && b) ? (a - b) / Math.abs(b) * 100 : null });
-  };
-  pick("Продажи", r => r.econ.sales, fmtMoney);
-  pick("Выручка с перенаправлениями", r => r.econ.revenueWithRef, fmtMoney);
-  pick("Средний чек на пациента", r => r.econ.avgClient, fmtMoney);
-  pick("Визиты", r => r.traffic.visits, v => fmtNum(v));
-  pick("Пациенты", r => r.traffic.patients, v => fmtNum(v));
-  pick("Занятость расписания", r => r.loyalty.sched ? r.loyalty.sched.pct : null, fmtPct);
-  return { prevKey: prev, rows };
-}
-
 /* Врачи месяца */
 function doctorsInMonth(monthKey) {
   const m = DB.months[monthKey];
@@ -607,9 +585,6 @@ function collectDeptItems(deptName) {
     e.override = profile.overrides ? profile.overrides[e.n.toLowerCase()] : null;
   }
   return out.sort((a, b) => b.s - a.s);
-}
-function collectUnmapped(deptName) {
-  return collectDeptItems(deptName).filter(e => e.cls.unmapped);
 }
 function collectDeviceCandidates(deptName) {
   return collectDeptItems(deptName).filter(e => e.cls.devCandidate);
@@ -706,8 +681,11 @@ function computeDoctorDynamics(docId, endMk) {
 /* Агрегат отделения за месяц — «виртуальный r» с теми же полями, что читают dynMetricDefs */
 function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
   const core = coreDoctorsInMonth(mk);
+  const requestedSpecs = Array.isArray(deptFilter)
+    ? new Set(deptFilter)
+    : (deptFilter instanceof Set ? deptFilter : null);
   const ids = (core.length ? core : doctorsInMonth(mk)).filter(id =>
-    (deptFilter === "all" || doctorDept(id) === deptFilter) &&
+    (deptFilter === "all" || (requestedSpecs ? requestedSpecs.has(doctorDept(id)) : doctorDept(id) === deptFilter)) &&
     (subFilter === "all" || (DB.doctors[id] && DB.doctors[id].subdept) === subFilter)
   );
   if (!ids.length) return null;
@@ -724,18 +702,27 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
   const patients12 = sum(r => r.akb.wins[12] ? r.akb.wins[12].total : null);
   const expSum = sum(r => r.extras.vy ? r.extras.vy.expertShareSum : null);
   const ownSum = sum(r => r.extras.vy ? r.extras.vy.ownSum : null);
-  const pvM = (deptFilter !== "all" ? deptProfile(deptFilter).pervichkaM : 3) || 3;
-  const pvF = sum(r => r.loyalty.pvSlices[pvM] ? r.loyalty.pvSlices[pvM].first : null);
-  const pvR = sum(r => r.loyalty.pvSlices[pvM] ? r.loyalty.pvSlices[pvM].ret : null);
+  const pvMonths = [...new Set([3, 6, 12, ...rs.flatMap(r => Object.keys(r.loyalty.pvSlices || {}).map(Number))])].sort((a, b) => a - b);
+  const pvSlices = {};
+  for (const pvM of pvMonths) {
+    const first = sum(r => r.loyalty.pvSlices[pvM] ? r.loyalty.pvSlices[pvM].first : null);
+    const ret = sum(r => r.loyalty.pvSlices[pvM] ? r.loyalty.pvSlices[pvM].ret : null);
+    if (first != null && first > 0) pvSlices[pvM] = { pct: (ret || 0) / first * 100, first, ret: ret || 0 };
+  }
+  const schedNorm = sum(r => r.loyalty.sched ? r.loyalty.sched.normaMin : null);
+  const schedBusy = sum(r => r.loyalty.sched ? r.loyalty.sched.busyMin : null);
+  const schedAvg = avg(r => r.loyalty.sched ? r.loyalty.sched.pct : null);
   const nazA = sum(r => r.cross.naz[1] ? r.cross.naz[1].totals.assigned : null);
   const nazD = sum(r => r.cross.naz[1] ? r.cross.naz[1].totals.done + r.cross.naz[1].totals.soldQ : null);
   // «виртуальный r» отделения
   return {
-    econ: { sales, revenueWithRef: withRef, avgClient: (sales != null && patients) ? sales / patients : null },
+    econ: { sales, refRevenue: refSum, revenueWithRef: withRef, avgClient: (sales != null && patients) ? sales / patients : null },
     traffic: { visits, patients, freq: (visits != null && patients) ? visits / patients : null },
     loyalty: {
-      sched: avg(r => r.loyalty.sched ? r.loyalty.sched.pct : null) != null ? { pct: avg(r => r.loyalty.sched ? r.loyalty.sched.pct : null) } : null,
-      pvSlices: (pvF != null && pvF > 0) ? { [pvM]: { pct: pvR / pvF * 100, first: pvF, ret: pvR } } : {},
+      sched: schedNorm && schedBusy != null
+        ? { pct: schedBusy / schedNorm * 100, normaMin: schedNorm, busyMin: schedBusy }
+        : (schedAvg != null ? { pct: schedAvg } : null),
+      pvSlices,
       ownRec: avg(r => r.loyalty.ownRec ? r.loyalty.ownRec.pct : null) != null ? { pct: avg(r => r.loyalty.ownRec ? r.loyalty.ownRec.pct : null) } : null,
       courseIdx: avg(r => r.loyalty.courseIdx),
       freq12: (visits12 != null && patients12) ? visits12 / patients12 : null,
@@ -763,6 +750,6 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
 }
 
 function computeDeptDynamics(endMk, deptFilter, subFilter = "all") {
-  const profile = deptFilter && deptFilter !== "all" ? deptProfile(deptFilter) : deptProfile("По умолчанию");
+  const profile = typeof deptFilter === "string" && deptFilter !== "all" ? deptProfile(deptFilter) : deptProfile("По умолчанию");
   return buildDynamics(monthKeysSorted(), endMk, k => aggregateDeptMonth(k, deptFilter || "all", subFilter), 6, profile);
 }
