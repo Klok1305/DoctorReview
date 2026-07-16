@@ -1,0 +1,85 @@
+{
+  "name": "doctor-performance-app",
+  "version": "1.0.4",
+  "description": "Локальное приложение для оценки работы врачей и отделений",
+  "main": "desktop/main.cjs",
+  "author": "Nikita",
+  "license": "UNLICENSED",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Klok1305/DoctorReview.git"
+  },
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=11"
+  },
+  "packageManager": "pnpm@11.9.0",
+  "scripts": {
+    "assemble": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./build/assemble.ps1",
+    "audit:repo": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/audit-repository.ps1",
+    "start": "pnpm run assemble && electron .",
+    "test": "node --test tests/*.test.cjs",
+    "test:smoke": "pnpm run assemble && electron . --smoke-test",
+    "test:pdf": "pnpm run assemble && electron . --pdf-smoke",
+    "dist": "pnpm run assemble && electron-builder --win nsis --publish never",
+    "dist:portable": "pnpm run assemble && electron-builder --win portable --publish never",
+    "dist:all": "pnpm run assemble && electron-builder --win nsis portable --publish never",
+    "release": "pnpm run assemble && electron-builder --win nsis portable --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2"
+  },
+  "devDependencies": {
+    "electron": "^37.2.3",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "ru.local.doctorperformance",
+    "productName": "Оценка врачей",
+    "artifactName": "DoctorReview-Setup-${version}-${arch}.${ext}",
+    "asar": true,
+    "files": [
+      "index.html",
+      "desktop/**",
+      "resources/**",
+      "docs/**",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "extraResources": [
+      {
+        "from": "resources/update-config.json",
+        "to": "update-config.json"
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Klok1305",
+        "repo": "DoctorReview",
+        "releaseType": "release"
+      }
+    ],
+    "win": {
+      "icon": "resources/app-icon.ico",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Оценка врачей",
+      "deleteAppDataOnUninstall": false
+    },
+    "portable": {
+      "artifactName": "DoctorReview-Portable-${version}-${arch}.${ext}"
+    }
+  }
+}

@@ -1,0 +1,90 @@
+# БЕЗОПАСНОСТЬ: репозиторий работает как белый список.
+# По умолчанию запрещено всё; ниже перечислены только исходники, сборочные
+# сценарии, тесты и документация. Рабочие данные клиники сюда не попадают.
+/*
+
+# Служебные файлы репозитория.
+!/.gitignore
+!/.gitattributes
+!/.github/
+/.github/*
+!/.github/workflows/
+/.github/workflows/*
+!/.github/workflows/ci.yml
+!/.github/workflows/release.yml
+
+# Корневые файлы приложения и менеджера пакетов.
+!/index.html
+!/README.md
+!/package.json
+!/pnpm-lock.yaml
+!/pnpm-workspace.yaml
+
+# Исходники веб-интерфейса и сборщик единого index.html.
+!/build/
+/build/*
+!/build/*.js
+!/build/*.css
+!/build/*.html
+!/build/*.ps1
+
+# Electron и локальные сервисы.
+!/desktop/
+/desktop/*
+!/desktop/*.cjs
+!/desktop/services/
+/desktop/services/*
+!/desktop/services/*.cjs
+
+# Документация, безопасные ресурсы, сценарии и тесты.
+!/docs/
+/docs/*
+!/docs/*.md
+!/resources/
+/resources/*
+!/resources/app-icon.ico
+!/resources/app-icon.png
+!/resources/update-config.json
+!/scripts/
+/scripts/*
+!/scripts/*.ps1
+!/scripts/*.py
+!/tests/
+/tests/*
+!/tests/*.test.cjs
+
+# Дополнительный запрет на пользовательские данные, результаты, сборки и секреты.
+# Эти правила остаются в силе даже при расширении белого списка выше.
+node_modules/
+dist/
+out/
+tmp/
+output/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.db-shm
+*.db-wal
+*.ovbackup
+*.xls
+*.xlsx
+*.xlsm
+*.csv
+*.tsv
+*.pdf
+*.zip
+*.7z
+*.rar
+*.log
+*.exe
+*.msi
+*.blockmap
+latest.yml
+config.json
+.env
+.env.*
+*.pem
+*.pfx
+*.p12
+*.key

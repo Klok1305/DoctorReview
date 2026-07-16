@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Оценка работы врачей</title>
+<style>
+/*__CSS__*/
+</style>
+</head>
+<body>
+<header class="app-header no-print">
+  <div class="logo">🩺 Оценка <span>работы врачей</span></div>
+  <nav class="tabs">
+    <button data-tab="data">📥 Данные</button>
+    <button data-tab="dept">🏥 Отделение</button>
+    <button data-tab="doctor">👤 Врач</button>
+    <button data-tab="report">📄 Отчёт</button>
+    <button data-tab="settings">⚙️ Настройки</button>
+  </nav>
+  <div class="header-status" id="headerStatus"></div>
+</header>
+<main>
+
+<section id="page-data" class="page">
+  <div class="notice blue">
+    Загружайте сюда выгрузки из 1С (.xls / .xlsx) — можно <b>пачкой, папкой или ZIP-архивом</b>, сразу за несколько месяцев.
+    Поддерживаются отчёты: <b>выработка</b> и <b>возвращаемость пациентов и КБ</b> (по врачу),
+    <b>возвращаемость первички</b>, <b>простой сотрудников</b>, <b>собственная запись в 1С</b> (общие).
+    Тип отчёта, врач и период определяются автоматически по содержимому — имена файлов не важны.
+  </div>
+  <div class="dropzone" id="dropzone">
+    <div class="big">Перетащите сюда файлы, папку или ZIP-архив с выгрузками</div>
+    <div style="margin-bottom:10px">или выберите вручную:</div>
+    <div class="flex" style="justify-content:center">
+      <button class="btn" id="btnPickFiles">📄 Выбрать файлы</button>
+      <button class="btn" id="btnPickDir">📁 Выбрать папку</button>
+    </div>
+  </div>
+  <input type="file" id="fileInput" multiple accept=".xls,.xlsx,.json,.zip" class="hidden">
+  <input type="file" id="dirInput" webkitdirectory class="hidden">
+  <div class="toolbar" style="margin-top:14px">
+    <button class="btn primary" id="btnExport">💾 Сохранить базу в файл</button>
+    <button class="btn" id="btnImport">📂 Загрузить базу из файла</button>
+    <input type="file" id="importInput" accept=".json" class="hidden">
+    <button class="btn" id="btnAutosave" title="База будет автоматически записываться в выбранный файл при каждом изменении (Chrome/Edge)">⚡ Автосохранение в файл</button>
+    <span class="small muted" id="autosaveStatus"></span>
+    <span class="spacer"></span>
+    <button class="btn danger" id="btnClear">🗑 Очистить базу</button>
+  </div>
+  <div class="card desktop-only hidden" id="desktopWorkspaceCard">
+    <div class="workspace-head">
+      <div>
+        <h2>Рабочее место</h2>
+        <div class="small muted" id="desktopAppVersion"></div>
+      </div>
+      <div class="flex">
+        <button class="btn primary" id="btnScanInput">▶ Обработать новые выгрузки</button>
+        <button class="btn" id="btnOpenOutput">📂 Открыть результаты</button>
+      </div>
+    </div>
+    <div class="workspace-paths">
+      <div class="workspace-path-row"><b>Рабочая папка</b><code id="workspaceRootPath"></code><button class="btn mini" id="btnChooseWorkspace">изменить</button><button class="btn mini" data-open-path="workspace">открыть</button></div>
+      <div class="workspace-path-row"><b>Входящие данные</b><code id="inputDirPath"></code><button class="btn mini" data-choose-folder="input">изменить</button><button class="btn mini" data-open-path="input">открыть</button></div>
+      <div class="workspace-path-row"><b>Результаты</b><code id="outputDirPath"></code><button class="btn mini" data-choose-folder="output">изменить</button><button class="btn mini" data-open-path="output">открыть</button></div>
+      <div class="workspace-path-row"><b>Резервные копии</b><code id="backupDirPath"></code><button class="btn mini" data-choose-folder="backup">изменить</button><button class="btn mini" data-open-path="backup">открыть</button></div>
+      <div class="workspace-path-row"><b>Рабочая база</b><code id="databasePath"></code><span></span><button class="btn mini" data-open-path="database">открыть</button></div>
+    </div>
+    <div class="toolbar compact-toolbar">
+      <button class="btn" id="btnBackupNow">🛡 Создать копию</button>
+      <button class="btn" id="btnExportBackup">⇓ Переносимая копия</button>
+      <button class="btn" id="btnRestoreBackup">↺ Восстановить</button>
+      <span class="spacer"></span>
+      <span class="small muted" id="updateStatus"></span>
+      <button class="btn" id="btnCheckUpdates">Проверить обновления</button>
+      <button class="btn" id="btnInstallUpdate">Установить обновление из файла</button>
+    </div>
+  </div>
+  <div class="card" id="completenessCard"><div id="completeness"></div></div>
+  <div class="card"><h2>Данные в базе</h2><div id="dataSummary"></div></div>
+  <div class="card"><h2>Журнал загрузок</h2><div class="file-log" id="fileLog"></div></div>
+</section>
+
+<section id="page-dept" class="page">
+  <div class="toolbar no-print">
+    <h2 style="margin:0">Дашборд отделения</h2>
+    <span class="spacer"></span>
+    <button class="btn" id="btnXlsx" title="Скачать сводную таблицу месяца в Excel">⇓ Экспорт в Excel</button>
+    <label>Отделение: <select id="deptFilter"></select></label>
+    <label style="display:none">Подразделение: <select id="subFilter"></select></label>
+    <label>Месяц: <select id="deptMonth"></select></label>
+  </div>
+  <div id="deptBody"></div>
+</section>
+
+<section id="page-doctor" class="page">
+  <div class="toolbar no-print">
+    <h2 style="margin:0">Профайл специалиста</h2>
+    <span class="spacer"></span>
+    <label>Специалист: <select id="docSelect" style="min-width:240px"></select></label>
+    <label>Месяц: <select id="docMonth"></select></label>
+  </div>
+  <div id="doctorBody"></div>
+</section>
+
+<section id="page-report" class="page">
+  <div class="toolbar no-print">
+    <h2 style="margin:0">Отчёт для печати</h2>
+    <span class="spacer"></span>
+    <label>Кому: <select id="repScope" style="min-width:220px"></select></label>
+    <label>Месяц: <select id="repMonth"></select></label>
+    <button class="btn primary" id="btnExportAllPdf" title="Создать отдельные PDF по всем врачам и отделениям и сохранить их в выбранную папку">📁 Выгрузить все PDF</button>
+    <button class="btn" id="btnPrint">🖨 Печать</button>
+  </div>
+  <div class="notice blue no-print">Кнопка «Выгрузить все PDF» создаёт за выбранный месяц отдельный файл для каждого врача и каждого отделения с данными. Все файлы сохраняются прямо в одну выбранную папку. Предпросмотр «Кому» и кнопка «Печать» работают для одного выбранного отчёта.</div>
+  <div id="reportBody"></div>
+</section>
+
+<section id="page-settings" class="page">
+  <h2>Настройки расчёта</h2>
+  <div id="settingsBody"></div>
+</section>
+
+</main>
+<footer class="app-footer no-print" id="footerText">Приложение работает полностью локально: данные не покидают этот компьютер. Сохраняйте базу в файл после каждой загрузки данных.</footer>
+<script>
+/*__XLSX__*/
+</script>
+<script>
+/*__JSZIP__*/
+</script>
+<script>
+/*__CHART__*/
+</script>
+<script>
+/*__DATALABELS__*/
+</script>
+<script>
+/*__HTML2CANVAS__*/
+</script>
+<script>
+/*__JSPDF__*/
+</script>
+<script>
+/*__CORE__*/
+</script>
+<script>
+/*__PARSERS__*/
+</script>
+<script>
+/*__METRICS__*/
+</script>
+<script>
+/*__UI__*/
+</script>
+</body>
+</html>

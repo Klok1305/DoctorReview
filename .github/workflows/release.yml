@@ -1,0 +1,56 @@
+name: Выпуск обновления
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Получить исходники
+        uses: actions/checkout@v6
+
+      - name: Установить pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Установить Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Проверить соответствие тега версии
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $version = (Get-Content -Raw package.json | ConvertFrom-Json).version
+          if ($env:RELEASE_TAG -ne "v$version") {
+            throw "Тег $env:RELEASE_TAG не соответствует версии package.json: v$version"
+          }
+
+      - name: Установить зависимости
+        run: pnpm install --frozen-lockfile
+
+      - name: Проверить состав репозитория
+        run: pnpm run audit:repo
+
+      - name: Запустить тесты
+        run: pnpm test
+
+      - name: Собрать и опубликовать установщики
+        run: pnpm run release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"

@@ -1,0 +1,39 @@
+name: Проверка
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Получить исходники
+        uses: actions/checkout@v6
+
+      - name: Установить pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Установить Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Установить зависимости
+        run: pnpm install --frozen-lockfile
+
+      - name: Проверить состав репозитория
+        run: pnpm run audit:repo
+
+      - name: Запустить тесты
+        run: pnpm test
