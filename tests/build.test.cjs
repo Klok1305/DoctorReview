@@ -44,14 +44,20 @@ test("assembled HTML is reproducible and complete", () => {
     assert.match(actual, new RegExp(required));
   }
   assert.match(actual, /data-tab="department">🏥 Отделение/);
-  assert.match(actual, /data-tab="dept">🩺 Специализация/);
+  assert.match(actual, /data-tab="dept">🩺 Профили врачей/);
+  assert.match(actual, /Нужны специализации/);
+  assert.match(actual, /setDoctorDepartment/);
   assert.match(actual, /Персональные цели и нормативы врача/);
   assert.match(actual, /doctorMetricSettingsCard/);
   for (const profileMetric of ["Пациентов за месяц", "Количество визитов за месяц", "Объём активной клиентской базы"]) {
     assert.match(actual, new RegExp(profileMetric));
   }
-  assert.match(actual, /class="logo-work">работы<\/span>/);
-  assert.match(actual, /class="logo-doctors">врачей<\/span>/);
+  assert.match(actual, /<title>Пульс клиники<\/title>/);
+  assert.match(actual, /class="logo-work">Пульс<\/span>/);
+  assert.match(actual, /class="logo-doctors">клиники<\/span>/);
+  assert.match(actual, /Записей врача на 100 визитов/);
+  assert.match(actual, /Фактическая загрузка пациентами/);
+  assert.match(actual, /ПАЦИЕНТЫ ПО СЕГМЕНТУ/);
   assert.match(actual, /\.logo-work\s*\{\s*color:\s*#65a30d;/);
   assert.match(actual, /\.logo-doctors\s*\{\s*color:\s*#7c3aed;/);
   assert.doesNotMatch(actual, /Трафик: визиты за месяц/);
@@ -59,6 +65,10 @@ test("assembled HTML is reproducible and complete", () => {
 
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
+  const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  assert.equal(packageJson.build.productName, "Пульс клиники");
+  assert.match(source, /const APP_NAME = "Пульс клиники"/);
+  assert.match(source, /legacyUserData[\s\S]*Оценка врачей/);
   const visibleWindow = source.indexOf("mainWindow.show();");
   const firstRunPrompt = source.indexOf("promptForWorkspaceOnFirstRun().catch");
   assert.ok(visibleWindow >= 0, "the main window must be shown during startup");

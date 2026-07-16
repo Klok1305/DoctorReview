@@ -41,7 +41,7 @@ function defaultBenchmarks() {
     avgCheck: 25000,    // ₽ средний чек на пациента
     schedLoad: 75,      // % занятость расписания
     pervichka: 40,      // % возвращаемость первички
-    ownRecords: 10,     // % доля собственных записей
+    ownRecords: 10,     // записей, созданных врачом, на 100 визитов
     courseIdx: 30,      // % курсовое лечение
     akbShare: 40,       // % активная база от всей базы
     riskShare: 25,      // % в зоне риска (МЕНЬШЕ = лучше)
@@ -144,6 +144,9 @@ function profileCosmetology() {
 }
 function profileGynecology() {
   const p = defaultProfile();
+  // Плановые наблюдения чаще имеют годовой цикл.
+  p.activeM = 12;
+  p.riskM = 24;
   p.matchers = ["гинеколог"];
   p.expertise = {
     title: "Аппараты", mode: "devices", group: "Аппараты",
@@ -190,6 +193,9 @@ function profileGynecology() {
 }
 function profileSurgery() {
   const p = defaultProfile();
+  // Для эпизодической хирургической помощи удержание базы не является
+  // универсально сопоставимым KPI; при необходимости вектор можно включить вручную.
+  p.scoring.enabled.v4 = false;
   p.matchers = ["хирург", "флеболог", "маммолог", "онкодермат", "дермотоонко"];
   p.expertise = {
     title: "Аппаратные процедуры", mode: "services", group: "Аппаратные процедуры",
@@ -282,6 +288,10 @@ function profileTherapy() {
 }
 function profilePhysiotherapy() {
   const p = defaultProfile();
+  // Курсовые услуги предполагают более короткий цикл возврата.
+  p.minVisits = 4;
+  p.activeM = 3;
+  p.riskM = 6;
   p.matchers = ["физио", "массаж", "остеопат", "реабилит", "мануальн"];
   p.expertise = {
     title: "Аппараты", mode: "devices", group: "Аппараты",
@@ -327,12 +337,21 @@ function profilePhysiotherapy() {
 }
 
 function defaultSettings() {
+  const baseDepartmentProfile = defaultProfile();
   return {
     showScores: true,
     weightsV: 4, // версия схемы (v3-профили)
     departments: {
       "Общее отделение": ["Косметология", "Гинекология", "Хирургия", "Терапия", "Физиотерапия"],
       "Без специализации": ["По умолчанию"],
+    },
+    departmentProfiles: {
+      "Общее отделение": JSON.parse(JSON.stringify(baseDepartmentProfile)),
+      "Без специализации": JSON.parse(JSON.stringify(baseDepartmentProfile)),
+    },
+    departmentUsesSpecializations: {
+      "Общее отделение": true,
+      "Без специализации": false,
     },
     depts: {
       "По умолчанию": defaultProfile(),
@@ -345,47 +364,61 @@ function defaultSettings() {
   };
 }
 
-/*
- * Верхний уровень структуры клиники. Исторически settings.depts содержит
- * профили специализаций; отдельное поле departments объединяет их в отделения.
- */
+/* Верхний уровень структуры клиники.
+ * settings.departments: отделение -> дочерние специализации.
+ * settings.departmentProfiles: собственные настройки отделений.
+ * settings.depts оставлено как хранилище профилей специализаций для совместимости. */
 function departmentGroups() {
   const known = Object.keys((DB.settings && DB.settings.depts) || {});
   const configured = (DB.settings && DB.settings.departments && typeof DB.settings.departments === "object" && !Array.isArray(DB.settings.departments))
     ? DB.settings.departments : {};
   const result = {};
   const assigned = new Set();
-  for (const [name, values] of Object.entries(configured)) {
+  const profileNames = Object.keys((DB.settings && DB.settings.departmentProfiles) || {});
+  const departmentNames = [...new Set([...Object.keys(configured), ...profileNames])];
+  for (const name of departmentNames) {
+    const values = configured[name];
     const cleanName = String(name || "").trim();
-    if (!cleanName || !Array.isArray(values)) continue;
+    if (!cleanName) continue;
     const specs = [];
-    for (const value of values) {
+    for (const value of (Array.isArray(values) ? values : [])) {
       const spec = String(value || "").trim();
       if (!known.includes(spec) || assigned.has(spec)) continue;
       assigned.add(spec);
       specs.push(spec);
     }
-    if (!specs.length) continue;
     result[cleanName] = specs;
   }
   const unassigned = known.filter(v => !assigned.has(v));
   if (unassigned.length) result["Без отделения"] = [...new Set([...(result["Без отделения"] || []), ...unassigned])];
+  if (!Object.keys(result).length) result["Общее отделение"] = [];
   return result;
+}
+
+function departmentUsesSpecializations(name) {
+  const flags = (DB.settings && DB.settings.departmentUsesSpecializations) || {};
+  return flags[name] === true;
+}
+
+function departmentForSpecialization(specName) {
+  for (const [name, specs] of Object.entries(departmentGroups())) {
+    if (specs.includes(specName)) return name;
+  }
+  return null;
 }
 
 function departmentSpecializations(name) {
   const groups = departmentGroups();
-  if (!name || name === "all") return [...new Set(Object.values(groups).flat())];
-  return (groups[name] || []).slice();
+  const effective = deptName => {
+    const specs = groups[deptName] || [];
+    return departmentUsesSpecializations(deptName) ? [deptName, ...specs] : [deptName];
+  };
+  if (!name || name === "all") return [...new Set(Object.keys(groups).flatMap(effective))];
+  return effective(name);
 }
 
-/* Резолвер: полный профиль отделения с наследованием от «По умолчанию» */
-function deptProfile(deptName) {
-  const d = DB.settings.depts;
-  const base = d["По умолчанию"] || defaultProfile();
-  const own = deptName && d[deptName] ? d[deptName] : null;
+function mergeMetricProfile(base, own) {
   if (!own || own === base) return base;
-  // неглубокое наследование по верхним ключам (профили самодостаточны после миграции)
   const merged = Object.assign({}, base, own);
   merged.expertise = Object.assign({}, base.expertise, own.expertise || {});
   merged.scoring = {
@@ -396,21 +429,77 @@ function deptProfile(deptName) {
   return merged;
 }
 
-/* Отделение врача: ручное поле → сопоставление специализации 1С → «По умолчанию» */
-function resolvedDeptName(docId) {
+function departmentProfile(deptName) {
+  const profiles = (DB.settings && DB.settings.departmentProfiles) || {};
+  const fallback = ((DB.settings && DB.settings.depts) || {})["По умолчанию"] || defaultProfile();
+  const own = deptName && profiles[deptName] ? profiles[deptName] : null;
+  return mergeMetricProfile(fallback, own || fallback);
+}
+
+/* Полный профиль: отделение либо специализация с наследованием от своего отделения. */
+function deptProfile(profileName) {
+  const departments = (DB.settings && DB.settings.departmentProfiles) || {};
+  if (profileName && departments[profileName]) return departmentProfile(profileName);
+  const specializations = (DB.settings && DB.settings.depts) || {};
+  const own = profileName && specializations[profileName] ? specializations[profileName] : null;
+  const parent = departmentForSpecialization(profileName);
+  const base = parent ? departmentProfile(parent) : (specializations["По умолчанию"] || defaultProfile());
+  return mergeMetricProfile(base, own || base);
+}
+
+function profileMatchesJob(profile, jobText) {
+  const hay = String(jobText || "").toLowerCase();
+  return hay && (profile.matchers || []).some(m => hay.includes(String(m).toLowerCase()));
+}
+
+/* Отделение врача: ручной выбор -> старая связь -> должность -> резервное отделение. */
+function resolvedDepartmentName(docId) {
   const doc = DB.doctors[docId];
-  if (!doc) return "По умолчанию";
-  if (doc.dept && DB.settings.depts[doc.dept]) return doc.dept;
-  const hay = ((doc.dept || "") + " " + (doc.spec || "")).toLowerCase();
-  if (hay.trim()) {
-    for (const [name, p] of Object.entries(DB.settings.depts)) {
-      if (name === "По умолчанию") continue;
-      for (const m of (p.matchers || [])) {
-        if (hay.includes(m.toLowerCase())) return name;
-      }
-    }
+  const groups = departmentGroups();
+  const names = Object.keys(groups);
+  if (!doc) return names.includes("Без специализации") ? "Без специализации" : names[0];
+  if (doc.department && groups[doc.department]) return doc.department;
+  if (doc.dept && groups[doc.dept]) return doc.dept;
+  for (const candidate of [doc.specialization, doc.dept]) {
+    const parent = candidate ? departmentForSpecialization(candidate) : null;
+    if (parent) return parent;
   }
-  return "По умолчанию";
+  for (const [deptName, specs] of Object.entries(groups)) {
+    for (const specName of specs) {
+      const p = DB.settings.depts[specName];
+      if (p && profileMatchesJob(p, doc.spec)) return deptName;
+    }
+    if (profileMatchesJob(departmentProfile(deptName), doc.spec)) return deptName;
+  }
+  return names.includes("Без специализации") ? "Без специализации" : names[0];
+}
+
+/* Специализация применяется только когда она включена у выбранного отделения. */
+function resolvedSpecializationName(docId) {
+  const doc = DB.doctors[docId];
+  if (!doc) return null;
+  const departmentName = resolvedDepartmentName(docId);
+  if (!departmentUsesSpecializations(departmentName)) return null;
+  const specs = departmentGroups()[departmentName] || [];
+  for (const candidate of [doc.specialization, doc.dept]) {
+    if (candidate && specs.includes(candidate)) return candidate;
+  }
+  for (const specName of specs) {
+    const p = DB.settings.depts[specName];
+    if (p && profileMatchesJob(p, doc.spec)) return specName;
+  }
+  return null;
+}
+
+/* Историческое имя функции: теперь возвращает эффективный профиль врача. */
+function resolvedDeptName(docId) {
+  return resolvedSpecializationName(docId) || resolvedDepartmentName(docId);
+}
+
+function doctorStructureLabel(docId) {
+  const departmentName = resolvedDepartmentName(docId);
+  const specializationName = resolvedSpecializationName(docId);
+  return specializationName ? `${departmentName} · ${specializationName}` : departmentName;
 }
 
 const DOCTOR_METRIC_PROFILE_KEYS = ["minVisits", "activeM", "riskM", "courseX", "courseM", "corePct", "pervichkaM"];
@@ -590,6 +679,15 @@ function extractPeriod(text) {
 }
 function periodMonthKey(p) { return p.to.y + "-" + String(p.to.m).padStart(2, "0"); }
 function periodMonths(p) { return (p.to.y - p.from.y) * 12 + (p.to.m - p.from.m) + 1; }
+function daysInMonth(year, month) { return new Date(year, month, 0).getDate(); }
+function isFullMonthPeriod(p) {
+  if (!p || !p.from || !p.to) return false;
+  if (p.from.m < 1 || p.from.m > 12 || p.to.m < 1 || p.to.m > 12) return false;
+  if (p.from.d !== 1 || p.to.d !== daysInMonth(p.to.y, p.to.m)) return false;
+  const fromIndex = p.from.y * 12 + p.from.m;
+  const toIndex = p.to.y * 12 + p.to.m;
+  return toIndex >= fromIndex;
+}
 function periodStr(p) {
   if (!p) return "—";
   const f = n => String(n).padStart(2, "0");
@@ -754,44 +852,103 @@ function migrateDB(parsed) {
   return null;
 }
 
-/* Профиль после загрузки/импорта: добить недостающие ключи до полной формы */
+function normalizeProfileRecord(raw, inherited) {
+  const def = inherited || defaultProfile();
+  const source = raw && typeof raw === "object" ? raw : {};
+  const p = Object.assign({}, def, source);
+  p.expertise = Object.assign({}, def.expertise, source.expertise || {});
+  if (!Array.isArray(p.expertise.items)) p.expertise.items = [];
+  if (!Array.isArray(p.expertise.rules)) p.expertise.rules = [];
+  if (!Array.isArray(p.expertise.hints)) p.expertise.hints = [];
+  if (!p.groups || !Object.keys(p.groups).length) p.groups = JSON.parse(JSON.stringify(def.groups));
+  if (!Array.isArray(p.rules)) p.rules = (def.rules || []).slice();
+  if (!p.overrides) p.overrides = {};
+  const baseScoring = def.scoring || defaultScoring();
+  const os = source.scoring || {};
+  p.scoring = {
+    weights: Object.assign({}, defaultScoring().weights, baseScoring.weights || {}, os.weights || {}),
+    enabled: Object.assign({}, defaultScoring().enabled, baseScoring.enabled || {}, os.enabled || {}),
+    benchmarks: Object.assign({}, defaultBenchmarks(), baseScoring.benchmarks || {}, os.benchmarks || {}),
+  };
+  if (!Array.isArray(p.subdivisions)) p.subdivisions = [];
+  if (!Array.isArray(p.matchers)) p.matchers = [];
+  p.activeM = Number(p.activeM) > 0 ? Number(p.activeM) : def.activeM;
+  p.riskM = Number(p.riskM) > p.activeM ? Number(p.riskM) : Math.max(p.activeM + 1, p.activeM * 2);
+  p.minVisits = Number(p.minVisits) >= 2 ? Number(p.minVisits) : def.minVisits;
+  p.courseX = Number(p.courseX) >= 2 ? Number(p.courseX) : def.courseX;
+  p.courseM = Number(p.courseM) > 0 ? Number(p.courseM) : def.courseM;
+  p.pervichkaM = Number(p.pervichkaM) > 0 ? Number(p.pervichkaM) : def.pervichkaM;
+  return p;
+}
+
+/* Профили после загрузки/импорта: нормализовать старую плоскую схему и
+   достроить отделение -> опциональные специализации. */
 function normalizeProfiles() {
-  const def = defaultProfile();
-  if (!DB.settings.depts) DB.settings.depts = defaultSettings().depts;
+  const defaults = defaultSettings();
+  if (!DB.settings.depts || typeof DB.settings.depts !== "object") DB.settings.depts = defaults.depts;
   for (const dn of Object.keys(DB.settings.depts)) {
-    const p = Object.assign({}, def, DB.settings.depts[dn]);
-    p.expertise = Object.assign({}, def.expertise, DB.settings.depts[dn].expertise || {});
-    if (!Array.isArray(p.expertise.items)) p.expertise.items = [];
-    if (!Array.isArray(p.expertise.rules)) p.expertise.rules = [];
-    if (!Array.isArray(p.expertise.hints)) p.expertise.hints = [];
-    if (!p.groups || !Object.keys(p.groups).length) p.groups = JSON.parse(JSON.stringify(def.groups));
-    if (!Array.isArray(p.rules)) p.rules = def.rules.slice();
-    if (!p.overrides) p.overrides = {};
-    const os = (DB.settings.depts[dn].scoring || {});
-    p.scoring = {
-      weights: Object.assign({}, defaultScoring().weights, os.weights || {}),
-      enabled: Object.assign({}, defaultScoring().enabled, os.enabled || {}),
-      benchmarks: Object.assign({}, defaultBenchmarks(), os.benchmarks || {}),
-    };
-    if (!Array.isArray(p.subdivisions)) p.subdivisions = [];
-    if (!Array.isArray(p.matchers)) p.matchers = [];
-    DB.settings.depts[dn] = p;
+    DB.settings.depts[dn] = normalizeProfileRecord(DB.settings.depts[dn], defaultProfile());
   }
-  if (!DB.settings.departments || typeof DB.settings.departments !== "object" || Array.isArray(DB.settings.departments)) {
-    DB.settings.departments = defaultSettings().departments;
-  }
-  // Сохраняем только корректные связи. Не назначенные профили будут показаны
-  // виртуальной группой «Без отделения» в departmentGroups().
+
+  const configured = (DB.settings.departments && typeof DB.settings.departments === "object" && !Array.isArray(DB.settings.departments))
+    ? DB.settings.departments : defaults.departments;
+  const rawDepartmentProfiles = (DB.settings.departmentProfiles && typeof DB.settings.departmentProfiles === "object" && !Array.isArray(DB.settings.departmentProfiles))
+    ? DB.settings.departmentProfiles : {};
+  const allDepartmentNames = [...new Set([...Object.keys(configured), ...Object.keys(rawDepartmentProfiles)])];
+  const assigned = new Set();
   const normalizedDepartments = {};
-  for (const [name, values] of Object.entries(DB.settings.departments)) {
-    const cleanName = String(name || "").trim();
-    if (!cleanName || !Array.isArray(values)) continue;
-    const specs = [...new Set(values.map(v => String(v || "").trim()).filter(v => DB.settings.depts[v]))];
-    if (specs.length) normalizedDepartments[cleanName] = specs;
+  for (const rawName of allDepartmentNames) {
+    const name = String(rawName || "").trim();
+    if (!name) continue;
+    const specs = [];
+    for (const value of (Array.isArray(configured[rawName]) ? configured[rawName] : [])) {
+      const spec = String(value || "").trim();
+      if (!DB.settings.depts[spec] || assigned.has(spec)) continue;
+      assigned.add(spec);
+      specs.push(spec);
+    }
+    normalizedDepartments[name] = specs;
   }
-  DB.settings.departments = Object.keys(normalizedDepartments).length
-    ? normalizedDepartments
-    : { "Общее отделение": Object.keys(DB.settings.depts) };
+  if (!Object.keys(normalizedDepartments).length) normalizedDepartments["Общее отделение"] = [];
+  const unassigned = Object.keys(DB.settings.depts).filter(spec => !assigned.has(spec));
+  if (unassigned.length) normalizedDepartments["Без отделения"] = [...new Set([...(normalizedDepartments["Без отделения"] || []), ...unassigned])];
+  DB.settings.departments = normalizedDepartments;
+
+  const normalizedDepartmentProfiles = {};
+  for (const [name, specs] of Object.entries(normalizedDepartments)) {
+    const legacySingle = specs.length === 1 ? DB.settings.depts[specs[0]] : null;
+    const seed = rawDepartmentProfiles[name] || defaults.departmentProfiles[name] || legacySingle || DB.settings.depts["По умолчанию"] || defaultProfile();
+    normalizedDepartmentProfiles[name] = normalizeProfileRecord(seed, DB.settings.depts["По умолчанию"] || defaultProfile());
+  }
+  DB.settings.departmentProfiles = normalizedDepartmentProfiles;
+
+  const oldFlags = (DB.settings.departmentUsesSpecializations && typeof DB.settings.departmentUsesSpecializations === "object")
+    ? DB.settings.departmentUsesSpecializations : {};
+  DB.settings.departmentUsesSpecializations = {};
+  for (const [name, specs] of Object.entries(normalizedDepartments)) {
+    DB.settings.departmentUsesSpecializations[name] = Object.prototype.hasOwnProperty.call(oldFlags, name)
+      ? oldFlags[name] === true
+      : specs.some(spec => spec !== "По умолчанию");
+  }
+
+  // Старое doctor.dept означало специализацию. Сохраняем его, но добавляем
+  // однозначные поля новой модели.
+  for (const doctor of Object.values(DB.doctors || {})) {
+    if (!doctor || typeof doctor !== "object") continue;
+    if (!doctor.department && doctor.dept) {
+      if (normalizedDepartments[doctor.dept]) doctor.department = doctor.dept;
+      else {
+        const parent = Object.keys(normalizedDepartments).find(name => normalizedDepartments[name].includes(doctor.dept));
+        if (parent) {
+          doctor.department = parent;
+          if (!doctor.specialization) doctor.specialization = doctor.dept;
+        }
+      }
+    }
+    if (!doctor.specialization && doctor.dept && doctor.department && (normalizedDepartments[doctor.department] || []).includes(doctor.dept)) {
+      doctor.specialization = doctor.dept;
+    }
+  }
 }
 
 function applyLoadedDatabase(parsed) {
@@ -897,6 +1054,8 @@ function mergeDoctors(ids) {
       if (al !== tgt.name && !tgt.aliases.includes(al)) tgt.aliases.push(al);
     }
     if (!tgt.dept && src.dept) tgt.dept = src.dept;
+    if (!tgt.department && src.department) tgt.department = src.department;
+    if (!tgt.specialization && src.specialization) tgt.specialization = src.specialization;
     if (!tgt.subdept && src.subdept) tgt.subdept = src.subdept;
     if (!tgt.spec && src.spec) tgt.spec = src.spec;
     if (!tgt.metricSettings && src.metricSettings) tgt.metricSettings = src.metricSettings;

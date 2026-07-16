@@ -18,7 +18,7 @@ const VECTOR_META = {
 
 const REF_TYPES = ["Товары", "Приемы", "Анализы", "Профильные услуги", "Другие услуги клиники"];
 
-/* Отображаемое отделение врача и его профиль (см. app-core: resolvedDeptName/deptProfile) */
+/* Эффективный расчетный профиль врача: специализация либо отделение. */
 function doctorDept(id) {
   return resolvedDeptName(id);
 }
@@ -231,9 +231,13 @@ function naznachSummary(docId, monthKey, slice) {
   }
   for (const t of REF_TYPES) {
     const b = out.byType[t];
-    b.conv = b.assigned > 0 ? (b.done + b.soldQ) / b.assigned * 100 : null;
+    b.valid = b.assigned >= 0 && b.done >= 0 && b.soldQ >= 0 && b.done + b.soldQ <= b.assigned;
+    b.issue = b.valid ? null : "выполнено + продано больше назначенного";
+    b.conv = b.valid && b.assigned > 0 ? (b.done + b.soldQ) / b.assigned * 100 : null;
   }
-  out.totals.conv = out.totals.assigned > 0 ? (out.totals.done + out.totals.soldQ) / out.totals.assigned * 100 : null;
+  out.totals.valid = out.totals.assigned >= 0 && out.totals.done >= 0 && out.totals.soldQ >= 0 && out.totals.done + out.totals.soldQ <= out.totals.assigned;
+  out.totals.issue = out.totals.valid ? null : "выполнено + продано больше назначенного";
+  out.totals.conv = out.totals.valid && out.totals.assigned > 0 ? (out.totals.done + out.totals.soldQ) / out.totals.assigned * 100 : null;
   return out;
 }
 
@@ -253,24 +257,42 @@ function kbSummary(docId, monthKey, win) {
   if (!kb) return null;
   const p = deptParams(docId);
   const dActive = Math.round(p.activeM * 30.44);
-  const dRisk = Math.round(p.riskM * 30.44);
-  const seg = { loyalActive: 0, loyalRisk: 0, loyalSleep: 0, newActive: 0, newRisk: 0, lost: 0 };
-  let totalSum = 0, totalVisits = 0, lostSum = 0;
-  for (const c of kb.clients) {
-    totalSum += c.s;
-    totalVisits += c.v;
-    const loyal = c.v >= p.minVisits;
-    const r = c.r == null ? 0 : c.r;
-    if (loyal) {
-      if (r <= dActive) seg.loyalActive++;
-      else if (r <= dRisk) seg.loyalRisk++;
-      else seg.loyalSleep++;
-    } else {
-      if (r <= dActive) seg.newActive++;
-      else if (r <= dRisk) seg.newRisk++;
-      else { seg.lost++; lostSum += c.s; }
+  const dLost = Math.round(Math.max(p.riskM, p.activeM + 1) * 30.44);
+  const dSleep = Math.round((p.activeM + Math.max(p.riskM, p.activeM + 1)) / 2 * 30.44);
+  const seg = {
+    active: 0, risk: 0, sleep: 0, lost: 0, unknown: 0,
+    loyalActive: 0, loyalRisk: 0, loyalSleep: 0, loyalLost: 0, loyalUnknown: 0,
+    newActive: 0, newRisk: 0, newSleep: 0, newLost: 0, newUnknown: 0,
+  };
+  const statusSums = { active: 0, risk: 0, sleep: 0, lost: 0, unknown: 0 };
+  let totalSum = 0, totalVisits = 0, loyalCount = 0;
+  const clientRows = kb.clients.map((c, index) => {
+    const sum = Number(c.s) || 0;
+    const visits = Number(c.v) || 0;
+    totalSum += sum;
+    totalVisits += visits;
+    const loyal = visits >= p.minVisits;
+    if (loyal) loyalCount++;
+    let status = "unknown";
+    if (c.r != null && !isNaN(c.r)) {
+      if (c.r <= dActive) status = "active";
+      else if (c.r <= dSleep) status = "risk";
+      else if (c.r <= dLost) status = "sleep";
+      else status = "lost";
     }
-  }
+    seg[status]++;
+    seg[(loyal ? "loyal" : "new") + status[0].toUpperCase() + status.slice(1)]++;
+    statusSums[status] += sum;
+    const normalizedName = normFio(c.name || "");
+    const normalizedId = String(c.patientId || "").trim().toLowerCase();
+    return {
+      key: normalizedId ? "id:" + normalizedId : (normalizedName ? "name:" + normalizedName : `doctor:${docId}:row:${index}`),
+      patientId: c.patientId || null,
+      name: c.name || `Пациент ${index + 1}`,
+      s: sum, v: visits, r: c.r == null || isNaN(c.r) ? null : Number(c.r),
+      loyal, status,
+    };
+  });
   const total = kb.clients.length;
   const sorted = [...kb.clients].sort((a, b) => b.s - a.s);
   const coreShare = (p.corePct || 80) / 100;
@@ -282,17 +304,25 @@ function kbSummary(docId, monthKey, win) {
   const courseCnt = kb.clients.filter(c => c.v >= p.courseX).length;
   return {
     window: Number(win), period: kb.period, params: p,
-    total, seg, totalSum, totalVisits, lostSum,
+    thresholds: { activeDays: dActive, riskDays: dSleep, lostDays: dLost, riskM: dSleep / 30.44 },
+    total, known: total - seg.unknown, seg, totalSum, totalVisits,
+    activeSum: statusSums.active, riskSum: statusSums.risk, sleepSum: statusSums.sleep,
+    lostSum: statusSums.lost, revenueAtRisk: statusSums.risk + statusSums.sleep + statusSums.lost,
+    reactivationCandidates: seg.risk + seg.sleep,
+    reactivationSum: statusSums.risk + statusSums.sleep,
+    clientRows,
     visits: totalVisits, patients: total,
     freq: total ? totalVisits / total : null,
     avgVisit: totalVisits ? totalSum / totalVisits : null,
     avgClient: total ? totalSum / total : null,
-    one2: seg.newActive + seg.newRisk + seg.lost,
-    activeBase: seg.loyalActive,
-    activeBasePct: total ? seg.loyalActive / total * 100 : null,
+    one2: total - loyalCount,
+    loyalCount,
+    loyalPct: total ? loyalCount / total * 100 : null,
+    activeBase: seg.active,
+    activeBasePct: total ? seg.active / total * 100 : null,
     lostPct: total ? seg.lost / total * 100 : null,
-    riskShare: total ? (seg.loyalRisk + seg.newRisk) / total * 100 : null,
-    sleepRiskShare: total ? (seg.loyalRisk + seg.loyalSleep + seg.newRisk) / total * 100 : null,
+    riskShare: total ? seg.risk / total * 100 : null,
+    sleepRiskShare: total ? (seg.risk + seg.sleep) / total * 100 : null,
     core,
     courseCnt,
     courseIdx: total ? courseCnt / total * 100 : null,
@@ -320,7 +350,7 @@ function computeMetricsRaw(docId, monthKey) {
   const kbWins = kbAvailableWindows(docId, monthKey);
   const kb1 = kbSummary(docId, monthKey, 1);
   const kb12 = kbSummary(docId, monthKey, 12);
-  const kb36 = kbSummary(docId, monthKey, 36) || (kbWins.find(w => w >= 24) ? kbSummary(docId, monthKey, kbWins.find(w => w >= 24)) : null);
+  const kb36 = kbSummary(docId, monthKey, 36);
   const naz1 = naznachSummary(docId, monthKey, 1);
   const naz3 = naznachSummary(docId, monthKey, 3);
   const prostoy = m.prostoy[docId];
@@ -330,7 +360,14 @@ function computeMetricsRaw(docId, monthKey) {
   const pvSlices = {};
   for (const s of slices) {
     const d = m.pervichka[String(s)].perDoc[docId];
-    if (d) pvSlices[s] = Object.assign({ pct: d.first > 0 ? d.ret / d.first * 100 : null }, d);
+    if (d) {
+      const valid = d.first >= 0 && d.ret >= 0 && d.notRet >= 0 && d.ret <= d.first && Math.abs((d.ret + d.notRet) - d.first) < 0.5;
+      pvSlices[s] = Object.assign({
+        valid,
+        issue: valid ? null : "вернулось + не вернулось должно равняться числу первичных",
+        pct: valid && d.first > 0 ? d.ret / d.first * 100 : null,
+      }, d);
+    }
   }
 
   const hasAny = vy || kbWins.length || naz1 || naz3 || prostoy || zapis || man6 || Object.keys(pvSlices).length;
@@ -408,27 +445,29 @@ function computeMetricsRaw(docId, monthKey) {
     const norma = prostoy.normaMin;
     const busy = prostoy.zayavkiMin != null ? prostoy.zayavkiMin : null;
     const pct = (busy != null && norma) ? busy / norma * 100 : (prostoy.schedPct != null ? prostoy.schedPct : null);
-    return { normaMin: norma, busyMin: busy, pct, factMin: prostoy.factMin, nvPct: prostoy.schedNvPct };
+    const factMin = prostoy.factMin;
+    const factPct = (factMin != null && norma) ? factMin / norma * 100 : null;
+    return {
+      normaMin: norma, busyMin: busy, pct, factMin, factPct,
+      gapMin: busy != null && factMin != null ? busy - factMin : null,
+      gapPct: pct != null && factPct != null ? pct - factPct : null,
+      nvPct: prostoy.schedNvPct,
+    };
   })() : null;
   const ownRec = zapis ? {
     count: zapis.zapis,
     pct: traffic.visits ? zapis.zapis / traffic.visits * 100 : null,
   } : null;
-  // курсовое: «≥X визитов за последние M месяцев» — считаем по КБ-окну ровно M мес,
-  // иначе по ближайшему окну побольше (с пометкой)
+  // Курсовое: только выгрузка с точным окном M месяцев.
   const pDept = deptParams(docId);
-  let courseWin = null;
-  if (kbWins.includes(pDept.courseM)) courseWin = pDept.courseM;
-  else {
-    const bigger = kbWins.filter(w => w >= pDept.courseM);
-    courseWin = bigger.length ? bigger[0] : null;
-  }
+  const courseWin = kbWins.includes(pDept.courseM) ? pDept.courseM : null;
   const kbCourse = courseWin != null ? kbSummary(docId, monthKey, courseWin) : null;
   const loyalty = {
     sched, ownRec,
     pvSlices, slices,
     courseIdx: kbCourse ? kbCourse.courseIdx : null,
     courseCnt: kbCourse ? kbCourse.courseCnt : null,
+    courseBase: kbCourse ? kbCourse.total : null,
     courseX: pDept.courseX,
     courseM: pDept.courseM,
     courseWin,
@@ -447,11 +486,14 @@ function computeMetricsRaw(docId, monthKey) {
   /* В6 Репутация */
   let rep = null;
   if (man6) {
-    const ratings = ["prodoctorov", "napopravku", "doctu", "yandex"].map(k => man6[k]).filter(v => v != null && v > 0);
+    const ratings = ["prodoctorov", "napopravku", "doctu", "yandex"].map(k => man6[k]).filter(v => v != null && v >= 0 && v <= 5);
+    const nps = man6.nps != null && man6.nps >= -100 && man6.nps <= 100 ? man6.nps : null;
+    const reviews = man6.reviews != null && man6.reviews >= 0 ? man6.reviews : null;
     rep = {
       avgRating: ratings.length ? ratings.reduce((a, b) => a + b, 0) / ratings.length : null,
-      nps: man6.nps != null ? man6.nps : null,
-      reviews: man6.reviews != null ? man6.reviews : null,
+      nps,
+      reviews,
+      valid: ratings.length === ["prodoctorov", "napopravku", "doctu", "yandex"].map(k => man6[k]).filter(v => v != null).length && (man6.nps == null || nps != null) && (man6.reviews == null || reviews != null),
       raw: man6,
     };
   }
@@ -459,8 +501,9 @@ function computeMetricsRaw(docId, monthKey) {
   /* ---- Баллы: % выполнения нормативов ОТДЕЛЕНИЯ (профиль → «Баллы и веса»).
      Пустая цель = метрика не оценивается (пример: нет плана по выручке, но есть по чеку). ---- */
   const B = profile.scoring.benchmarks;
+  const hasTarget = t => t != null && t !== "" && !isNaN(t) && Number(t) > 0;
   const achieve = (v, t, lower) => {
-    if (v == null || isNaN(v) || t == null || t === "" || isNaN(t) || !t) return null;
+    if (v == null || isNaN(v) || !hasTarget(t)) return null;
     if (lower) return v <= 0 ? 1 : Math.min(t / v, 1);
     return Math.max(0, Math.min(v / t, 1));
   };
@@ -470,35 +513,54 @@ function computeMetricsRaw(docId, monthKey) {
   };
   const expertSharePct = product ? product.expertShare : null;
   const nazBest = naz1 || naz3;
-  const v3ScoreForNaz = nz => meanScore([
-    achieve(cross.crossShare, B.crossShare),
-    nz && nz.totals.conv != null ? achieve(nz.totals.conv, B.nazConv) : null,
-  ]);
+  const component = (value, target, lower = false, applicable = true) => ({
+    expected: applicable && hasTarget(target),
+    score: applicable && hasTarget(target) ? achieve(value, target, lower) : null,
+  });
+  const intrinsic = (score, applicable = true) => ({ expected: applicable, score: applicable ? score : null });
+  const componentsScore = list => meanScore(list.filter(c => c.expected).map(c => c.score));
+  const componentsCoverage = list => {
+    const expected = list.filter(c => c.expected);
+    return expected.length ? expected.filter(c => c.score != null).length / expected.length * 100 : null;
+  };
+  const v3ComponentsForNaz = nz => [
+    component(cross.crossShare, B.crossShare),
+    component(nz && nz.totals.valid !== false ? nz.totals.conv : null, B.nazConv),
+  ];
+  const v3ScoreForNaz = nz => componentsScore(v3ComponentsForNaz(nz));
   const v3ByNaz = {
     1: naz1 ? v3ScoreForNaz(naz1) : null,
     3: naz3 ? v3ScoreForNaz(naz3) : null,
   };
-  const kbForScore = kb12 || kb36;
   const pvM = profile.pervichkaM || 3;
-  const pvForScore = pvSlices[pvM] || pvSlices[3] || pvSlices[slices.find(s => pvSlices[s])];
-  const vecScores = {
-    v1: meanScore([achieve(sales, B.revenue), achieve(avgClient, B.avgCheck)]),
-    // если у отделения нет «экспертности» (mode none) — Вектор 2 не оценивается, вес уходит остальным
-    v2: (vy && ex.mode !== "none") ? meanScore([achieve(expertSharePct, B.hwShare), (product && product.park) ? product.devicesUsed / product.park : null]) : null,
-    v3: v3ScoreForNaz(nazBest),
-    v4: kbForScore ? meanScore([
-      achieve(kbForScore.activeBasePct, B.akbShare),
-      achieve(kbForScore.riskShare, B.riskShare, true),
-      achieve(kb36 ? kb36.lostPct : kbForScore.lostPct, B.churn, true),
-    ]) : null,
-    v5: meanScore([
-      sched ? achieve(sched.pct, B.schedLoad) : null,
-      pvForScore ? achieve(pvForScore.pct, B.pervichka) : null,
-      ownRec && ownRec.pct != null ? achieve(ownRec.pct, B.ownRecords) : null,
-      achieve(loyalty.courseIdx, B.courseIdx),
-    ]),
-    v6: rep ? meanScore([achieve(rep.avgRating, B.rating), achieve(rep.nps, B.nps), achieve(rep.reviews, B.reviews)]) : null,
+  const pvForScore = pvSlices[pvM] || null;
+  const vectorComponents = {
+    v1: [component(sales, B.revenue), component(avgClient, B.avgCheck)],
+    // Широта набора — встроенный компонент В2, у неё нет отдельной цели.
+    v2: ex.mode !== "none" ? [
+      component(expertSharePct, B.hwShare),
+      intrinsic(product && product.park ? product.devicesUsed / product.park : null, Boolean((ex.items || []).filter(d => d.core !== false).length)),
+    ] : [],
+    v3: v3ComponentsForNaz(nazBest),
+    v4: [
+      component(kb12 ? kb12.activeBasePct : null, B.akbShare),
+      component(kb12 ? kb12.riskShare : null, B.riskShare, true),
+      component(kb36 ? kb36.lostPct : null, B.churn, true),
+    ],
+    v5: [
+      component(sched ? sched.pct : null, B.schedLoad),
+      component(pvForScore && pvForScore.valid !== false ? pvForScore.pct : null, B.pervichka),
+      component(ownRec ? ownRec.pct : null, B.ownRecords),
+      component(loyalty.courseIdx, B.courseIdx),
+    ],
+    v6: [component(rep ? rep.avgRating : null, B.rating), component(rep ? rep.nps : null, B.nps), component(rep ? rep.reviews : null, B.reviews)],
   };
+  const vecScores = {};
+  const vectorCoverage = {};
+  for (const [vk, components] of Object.entries(vectorComponents)) {
+    vecScores[vk] = componentsScore(components);
+    vectorCoverage[vk] = componentsCoverage(components);
+  }
   const en = profile.scoring.enabled, W = profile.scoring.weights;
   const scoreTotalFor = vectors => {
     let weightSum = 0;
@@ -513,12 +575,24 @@ function computeMetricsRaw(docId, monthKey) {
     return { total: Math.round(result * 10) / 10, wSum: weightSum };
   };
   const baseTotal = scoreTotalFor(vecScores);
+  let coverageWeight = 0, coveredWeight = 0;
+  for (const vk of Object.keys(vecScores)) {
+    if (!en[vk] || vectorCoverage[vk] == null || !(W[vk] > 0)) continue;
+    coverageWeight += W[vk];
+    coveredWeight += W[vk] * vectorCoverage[vk] / 100;
+  }
+  const coveragePct = coverageWeight ? Math.round(coveredWeight / coverageWeight * 1000) / 10 : null;
+  const rankEligible = coveragePct != null && coveragePct >= 80;
   const totalByNaz = {};
   for (const slice of [1, 3]) {
     if (v3ByNaz[slice] == null) continue;
     totalByNaz[slice] = scoreTotalFor({ ...vecScores, v3: v3ByNaz[slice] }).total;
   }
-  const scores = { vec: vecScores, total: baseTotal.total, wSum: baseTotal.wSum, v3ByNaz, totalByNaz };
+  const scores = {
+    vec: vecScores, total: baseTotal.total, wSum: baseTotal.wSum,
+    vectorCoverage, coveragePct, rankEligible, preliminary: baseTotal.total != null && !rankEligible,
+    v3ByNaz, totalByNaz,
+  };
 
   /* полнота */
   const missing = [];
@@ -529,7 +603,8 @@ function computeMetricsRaw(docId, monthKey) {
   if (!naz1 && !naz3) missing.push("назначения");
   if (!prostoy) missing.push("загрузка расписания");
   if (!zapis) missing.push("запись в 1С");
-  if (!Object.keys(pvSlices).length) missing.push("первичка");
+  if (!pvForScore) missing.push(`первичка ровно ${pvM} мес`);
+  if (courseWin == null) missing.push(`давность ровно ${pDept.courseM} мес для курсового`);
 
   return {
     traffic, econ, product, akb, loyalty, cross, rep, scores,
@@ -622,14 +697,14 @@ function dynMetricDefs(profile) {
     { key: "patients", name: "Пациенты", fmt: v => fmtNum(v), get: r => r.traffic.patients },
     { key: "freq", name: "Частота за месяц (виз./пациента)", fmt: v => fmtNum(v, 2), get: r => r.traffic.freq },
     { key: "return12", name: "Индекс возвращаемости за год (виз./пациента)", fmt: v => fmtNum(v, 2), get: r => r.loyalty.freq12 },
-    { key: "sched", name: "Занятость расписания", fmt: fmtPct, get: r => r.loyalty.sched ? r.loyalty.sched.pct : null, target: B.schedLoad },
+    { key: "sched", name: "Загрузка по записям", fmt: fmtPct, get: r => r.loyalty.sched ? r.loyalty.sched.pct : null, target: B.schedLoad },
     { key: "perv", name: `Возвращаемость первички (${pvM} мес)`, fmt: fmtPct, get: r => r.loyalty.pvSlices[pvM] ? r.loyalty.pvSlices[pvM].pct : null, target: B.pervichka },
-    { key: "ownRec", name: "Доля собственных записей", fmt: fmtPct, get: r => r.loyalty.ownRec ? r.loyalty.ownRec.pct : null, target: B.ownRecords },
+    { key: "ownRec", name: "Записей на 100 визитов", fmt: fmtPct, get: r => r.loyalty.ownRec ? r.loyalty.ownRec.pct : null, target: B.ownRecords },
     { key: "course", name: "Курсовое лечение", fmt: fmtPct, get: r => r.loyalty.courseIdx, target: B.courseIdx },
     { key: "hw", name: `Доля: ${exTitle}`, fmt: fmtPct, get: r => r.product ? r.product.expertShare : null, target: B.hwShare },
     { key: "cross", name: "Доля выручки от перенаправлений", fmt: fmtPct, get: r => r.cross.crossShare, target: B.crossShare },
     { key: "nazConv", name: "Конверсия назначений (1 мес)", fmt: fmtPct, get: r => r.cross.naz[1] ? r.cross.naz[1].totals.conv : null, target: B.nazConv },
-    { key: "akb", name: "Активная база (12 мес)", fmt: v => fmtNum(v) + " чел.", get: r => r.akb.wins[12] ? r.akb.wins[12].seg.loyalActive : null },
+    { key: "akb", name: "Активная база (12 мес)", fmt: v => fmtNum(v) + " чел.", get: r => r.akb.wins[12] ? r.akb.wins[12].seg.active : null },
     { key: "lost", name: "Потерянные (12 мес)", fmt: v => fmtNum(v) + " чел.", get: r => r.akb.wins[12] ? r.akb.wins[12].seg.lost : null, lower: true },
     { key: "score", name: "Общий балл", fmt: v => fmtNum(v, 0), get: r => DB.settings.showScores && r.scores ? r.scores.total : null },
   ];
@@ -689,42 +764,80 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
     (subFilter === "all" || (DB.doctors[id] && DB.doctors[id].subdept) === subFilter)
   );
   if (!ids.length) return null;
-  const rs = ids.map(id => computeMetrics(id, mk)).filter(Boolean);
+  const records = ids.map(id => ({ id, r: computeMetrics(id, mk) })).filter(x => Boolean(x.r));
+  const rs = records.map(x => x.r);
   if (!rs.length) return null;
   const sum = get => { const xs = rs.map(get).filter(v => v != null && !isNaN(v)); return xs.length ? xs.reduce((a, b) => a + b, 0) : null; };
   const avg = get => { const xs = rs.map(get).filter(v => v != null && !isNaN(v)); return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null; };
+  const uniqueWindow = win => {
+    const clients = new Map();
+    let available = false;
+    for (const { r } of records) {
+      const kb = r.akb.wins[win];
+      if (!kb || !Array.isArray(kb.clientRows)) continue;
+      available = true;
+      for (const c of kb.clientRows) {
+        const old = clients.get(c.key);
+        if (!old) clients.set(c.key, { ...c });
+        else {
+          old.v += c.v || 0;
+          old.s += c.s || 0;
+          if (c.r != null && (old.r == null || c.r < old.r)) {
+            old.r = c.r;
+            old.status = c.status;
+          }
+          old.loyal = old.loyal || c.loyal;
+        }
+      }
+    }
+    if (!available) return null;
+    const seg = { active: 0, risk: 0, sleep: 0, lost: 0, unknown: 0 };
+    for (const c of clients.values()) seg[c.status || "unknown"]++;
+    return { total: clients.size, seg, clientRows: [...clients.values()] };
+  };
+  const unique1 = uniqueWindow(1);
+  const unique12 = uniqueWindow(12);
   const sales = sum(r => r.econ.sales);
   const withRef = sum(r => r.econ.revenueWithRef);
   const refSum = sum(r => r.econ.refRevenue);
   const visits = sum(r => r.traffic.visits);
-  const patients = sum(r => r.traffic.patients);
+  const patients = unique1 ? unique1.total : sum(r => r.traffic.patients);
   const visits12 = sum(r => r.akb.wins[12] ? r.akb.wins[12].visits : null);
-  const patients12 = sum(r => r.akb.wins[12] ? r.akb.wins[12].total : null);
+  const patients12 = unique12 ? unique12.total : sum(r => r.akb.wins[12] ? r.akb.wins[12].total : null);
   const expSum = sum(r => r.extras.vy ? r.extras.vy.expertShareSum : null);
   const ownSum = sum(r => r.extras.vy ? r.extras.vy.ownSum : null);
   const pvMonths = [...new Set([3, 6, 12, ...rs.flatMap(r => Object.keys(r.loyalty.pvSlices || {}).map(Number))])].sort((a, b) => a - b);
   const pvSlices = {};
   for (const pvM of pvMonths) {
-    const first = sum(r => r.loyalty.pvSlices[pvM] ? r.loyalty.pvSlices[pvM].first : null);
-    const ret = sum(r => r.loyalty.pvSlices[pvM] ? r.loyalty.pvSlices[pvM].ret : null);
+    const first = sum(r => r.loyalty.pvSlices[pvM] && r.loyalty.pvSlices[pvM].valid !== false ? r.loyalty.pvSlices[pvM].first : null);
+    const ret = sum(r => r.loyalty.pvSlices[pvM] && r.loyalty.pvSlices[pvM].valid !== false ? r.loyalty.pvSlices[pvM].ret : null);
     if (first != null && first > 0) pvSlices[pvM] = { pct: (ret || 0) / first * 100, first, ret: ret || 0 };
   }
   const schedNorm = sum(r => r.loyalty.sched ? r.loyalty.sched.normaMin : null);
   const schedBusy = sum(r => r.loyalty.sched ? r.loyalty.sched.busyMin : null);
+  const schedFact = sum(r => r.loyalty.sched ? r.loyalty.sched.factMin : null);
   const schedAvg = avg(r => r.loyalty.sched ? r.loyalty.sched.pct : null);
-  const nazA = sum(r => r.cross.naz[1] ? r.cross.naz[1].totals.assigned : null);
-  const nazD = sum(r => r.cross.naz[1] ? r.cross.naz[1].totals.done + r.cross.naz[1].totals.soldQ : null);
+  const nazA = sum(r => r.cross.naz[1] && r.cross.naz[1].totals.valid !== false ? r.cross.naz[1].totals.assigned : null);
+  const nazD = sum(r => r.cross.naz[1] && r.cross.naz[1].totals.valid !== false ? r.cross.naz[1].totals.done + r.cross.naz[1].totals.soldQ : null);
+  const ownRecords = sum(r => r.loyalty.ownRec ? r.loyalty.ownRec.count : null);
+  const courseCnt = sum(r => r.loyalty.courseCnt);
+  const courseBase = sum(r => r.loyalty.courseBase);
   // «виртуальный r» отделения
   return {
     econ: { sales, refRevenue: refSum, revenueWithRef: withRef, avgClient: (sales != null && patients) ? sales / patients : null },
     traffic: { visits, patients, freq: (visits != null && patients) ? visits / patients : null },
     loyalty: {
       sched: schedNorm && schedBusy != null
-        ? { pct: schedBusy / schedNorm * 100, normaMin: schedNorm, busyMin: schedBusy }
+        ? {
+          pct: schedBusy / schedNorm * 100,
+          factPct: schedFact != null ? schedFact / schedNorm * 100 : null,
+          gapPct: schedFact != null ? (schedBusy - schedFact) / schedNorm * 100 : null,
+          normaMin: schedNorm, busyMin: schedBusy, factMin: schedFact,
+        }
         : (schedAvg != null ? { pct: schedAvg } : null),
       pvSlices,
-      ownRec: avg(r => r.loyalty.ownRec ? r.loyalty.ownRec.pct : null) != null ? { pct: avg(r => r.loyalty.ownRec ? r.loyalty.ownRec.pct : null) } : null,
-      courseIdx: avg(r => r.loyalty.courseIdx),
+      ownRec: ownRecords != null && visits ? { count: ownRecords, pct: ownRecords / visits * 100 } : null,
+      courseIdx: courseCnt != null && courseBase ? courseCnt / courseBase * 100 : null,
       freq12: (visits12 != null && patients12) ? visits12 / patients12 : null,
     },
     cross: {
@@ -732,19 +845,21 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
       naz: { 1: (nazA != null && nazA > 0) ? { totals: { conv: nazD / nazA * 100 } } : null },
     },
     akb: { wins: { 12: (() => {
-      const act = sum(r => r.akb.wins[12] ? r.akb.wins[12].seg.loyalActive : null);
-      const lost = sum(r => r.akb.wins[12] ? r.akb.wins[12].seg.lost : null);
-      const total = sum(r => r.akb.wins[12] ? r.akb.wins[12].total : null);
+      const act = unique12 ? unique12.seg.active : sum(r => r.akb.wins[12] ? r.akb.wins[12].seg.active : null);
+      const risk = unique12 ? unique12.seg.risk : sum(r => r.akb.wins[12] ? r.akb.wins[12].seg.risk : null);
+      const sleep = unique12 ? unique12.seg.sleep : sum(r => r.akb.wins[12] ? r.akb.wins[12].seg.sleep : null);
+      const lost = unique12 ? unique12.seg.lost : sum(r => r.akb.wins[12] ? r.akb.wins[12].seg.lost : null);
+      const total = unique12 ? unique12.total : sum(r => r.akb.wins[12] ? r.akb.wins[12].total : null);
       return (act != null || lost != null || total != null) ? {
         total,
         activeBasePct: total ? (act || 0) / total * 100 : null,
-        seg: { loyalActive: act, lost },
+        seg: { active: act, risk, sleep, lost },
       } : null;
     })() } },
     product: (ownSum != null && ownSum > 0) ? { expertShare: (expSum || 0) / ownSum * 100 } : null,
     extras: { vy: (ownSum != null && ownSum > 0) ? { ownSum, expertShareSum: expSum || 0 } : null },
-    scores: { total: avg(r => r.scores ? r.scores.total : null) },
-    vecAvg: (() => { const o = {}; for (const vk of ["v1","v2","v3","v4","v5","v6"]) o[vk] = avg(r => r.scores ? r.scores.vec[vk] : null); return o; })(),
+    scores: { total: avg(r => r.scores && r.scores.rankEligible ? r.scores.total : null) },
+    vecAvg: (() => { const o = {}; for (const vk of ["v1","v2","v3","v4","v5","v6"]) o[vk] = avg(r => r.scores && r.scores.rankEligible ? r.scores.vec[vk] : null); return o; })(),
     doctors: rs.length,
   };
 }

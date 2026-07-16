@@ -361,17 +361,21 @@ function parseKB(rows, info) {
   const cSum = hr.findIndex(v => v === "Сумма");
   const cVis = hr.findIndex(v => v.includes("Количество посещений"));
   const cRec = hr.findIndex(v => v.includes("Давность"));
+  const cName = hr.findIndex(v => /^(Клиент|Пациент|ФИО)$/i.test(v));
+  const cId = hr.findIndex(v => /^(ID|Идентификатор|Код клиента|Код пациента|GUID)$/i.test(v));
   const clients = [];
   for (let i = hIdx + 1; i < rows.length; i++) {
     const r = rows[i] || [];
     const num = parseRuNumber(r[0]);
-    const name = cellStr(r[1]);
+    const name = cellStr(r[cName >= 0 ? cName : 1]);
     if (num == null || !name) {
       if (cellStr(r[0]) === "Итого" || rowText(r).trim() === "") continue;
       if (clients.length) break;
       continue;
     }
     clients.push({
+      name,
+      patientId: cId >= 0 ? (cellStr(r[cId]) || null) : null,
       s: parseRuNumber(r[cSum >= 0 ? cSum : 4]) || 0,
       v: parseRuNumber(r[cVis >= 0 ? cVis : 5]) || 0,
       r: parseRuNumber(r[cRec >= 0 ? cRec : 8]),
@@ -544,6 +548,9 @@ async function processFile(file) {
     log.type = type;
     const info = extractHeaderInfo(rows);
     if (!info.period) throw new Error("не найдена строка «Период: …»");
+    if (!isFullMonthPeriod(info.period)) {
+      throw new Error(`период ${periodStr(info.period)} неполный: расчёты принимают только целые календарные месяцы`);
+    }
     log.period = periodStr(info.period);
     const nMonths = periodMonths(info.period);
     const monthKey = periodMonthKey(info.period);

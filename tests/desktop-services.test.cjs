@@ -66,7 +66,7 @@ test("OneDrive paths are rejected before filesystem access can block startup", t
   const root = makeTemp("doctor-app-onedrive-guard-");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const store = new ConfigStore({ userDataDir: path.join(root, "config"), documentsDir: path.join(root, "documents") });
-  const blocked = path.join(root, "OneDrive - Clinic", "Оценка врачей");
+  const blocked = path.join(root, "OneDrive - Clinic", "Пульс клиники");
   assert.equal(isUnsupportedStoragePath(blocked), true);
   assert.throws(() => store.setWorkspaceRoot(blocked), /OneDrive/);
   assert.equal(fs.existsSync(blocked), false);

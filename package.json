@@ -1,7 +1,7 @@
 {
   "name": "doctor-performance-app",
   "version": "1.0.7",
-  "description": "Локальное приложение для оценки работы врачей и отделений",
+  "description": "Локальное приложение «Пульс клиники» для аналитики врачей и отделений",
   "main": "desktop/main.cjs",
   "author": "Nikita",
   "license": "UNLICENSED",
@@ -35,7 +35,7 @@
   },
   "build": {
     "appId": "ru.local.doctorperformance",
-    "productName": "Оценка врачей",
+    "productName": "Пульс клиники",
     "artifactName": "DoctorReview-Setup-${version}-${arch}.${ext}",
     "asar": true,
     "electronLanguages": ["ru", "en-US"],
@@ -75,7 +75,7 @@
       "perMachine": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Оценка врачей",
+      "shortcutName": "Пульс клиники",
       "deleteAppDataOnUninstall": false
     },
     "portable": {

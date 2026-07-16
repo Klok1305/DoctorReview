@@ -50,7 +50,7 @@ class ConfigStore {
   }
 
   #defaultRoot() {
-    return path.join(this.documentsDir, "Оценка врачей");
+    return path.join(this.documentsDir, "Пульс клиники");
   }
 
   #defaults(root = this.#defaultRoot()) {

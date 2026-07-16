@@ -181,7 +181,7 @@ class FileService {
         publishedFiles.push(destination);
       }
       const protocol = [
-        "Оценка врачей — протокол выгрузки",
+        "Пульс клиники — протокол выгрузки",
         `Дата: ${new Date().toLocaleString("ru-RU")}`,
         `Месяц: ${batch.month || "не указан"}`,
         `Тип: ${batch.kind}`,

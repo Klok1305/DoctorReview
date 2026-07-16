@@ -17,12 +17,22 @@ const { UpdateService } = require("./services/update-service.cjs");
 
 const PDF_SMOKE_TEST = process.argv.includes("--pdf-smoke");
 const SMOKE_TEST = PDF_SMOKE_TEST || process.argv.includes("--smoke-test");
-const APP_NAME = "Оценка врачей";
+const APP_NAME = "Пульс клиники";
 const APPLICATION_ROOT = path.resolve(__dirname, "..");
 const SMOKE_ROOT = app.isPackaged
   ? path.join(app.getPath("temp"), "doctor-app-smoke", String(process.pid))
   : path.join(APPLICATION_ROOT, "tmp", "electron-smoke", String(process.pid));
 const SMOKE_ARTIFACT_ROOT = app.isPackaged ? path.join(SMOKE_ROOT, "artifacts") : path.join(APPLICATION_ROOT, "tmp");
+
+// После переименования используем старую папку настроек, если в ней уже есть
+// конфигурация: обновление не должно «терять» выбранную рабочую базу.
+if (!SMOKE_TEST) {
+  const legacyUserData = path.join(app.getPath("appData"), "Оценка врачей");
+  const currentUserData = app.getPath("userData");
+  if (fs.existsSync(path.join(legacyUserData, "config.json")) && !fs.existsSync(path.join(currentUserData, "config.json"))) {
+    app.setPath("userData", legacyUserData);
+  }
+}
 
 if (SMOKE_TEST) {
   for (const name of ["user-data", "documents", "temp"]) {
@@ -419,7 +429,7 @@ function registerIpc() {
     const date = new Date().toISOString().slice(0, 10);
     const result = await dialog.showSaveDialog(mainWindow, {
       title: "Сохранить переносимую резервную копию",
-      defaultPath: path.join(configStore.publicConfig().backupDir, `ОценкаВрачей-backup-${date}.ovbackup`),
+      defaultPath: path.join(configStore.publicConfig().backupDir, `ПульсКлиники-backup-${date}.ovbackup`),
       filters: [{ name: "Резервная копия", extensions: ["ovbackup"] }],
     });
     if (result.canceled || !result.filePath) return { canceled: true };
