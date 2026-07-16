@@ -1,6 +1,6 @@
 {
   "name": "doctor-performance-app",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Локальное приложение для оценки работы врачей и отделений",
   "main": "desktop/main.cjs",
   "author": "Nikita",

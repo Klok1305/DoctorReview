@@ -45,7 +45,8 @@ h3 { font-size: 15px; }
   z-index: 50;
 }
 .app-header .logo { font-size: 16px; font-weight: 700; white-space: nowrap; }
-.app-header .logo span { color: var(--accent); }
+.app-header .logo .logo-work { color: #65a30d; }
+.app-header .logo .logo-doctors { color: #7c3aed; }
 nav.tabs { display: flex; gap: 4px; flex: 1; }
 nav.tabs button {
   border: none;
@@ -449,7 +450,7 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
 </head>
 <body>
 <header class="app-header no-print">
-  <div class="logo">🩺 Оценка <span>работы врачей</span></div>
+  <div class="logo">🩺 Оценка <span class="logo-work">работы</span> <span class="logo-doctors">врачей</span></div>
   <nav class="tabs">
     <button data-tab="data">📥 Данные</button>
     <button data-tab="dept">🏥 Отделение</button>

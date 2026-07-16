@@ -43,6 +43,10 @@ test("assembled HTML is reproducible and complete", () => {
   for (const profileMetric of ["Пациентов за месяц", "Количество визитов за месяц", "Объём активной клиентской базы"]) {
     assert.match(actual, new RegExp(profileMetric));
   }
+  assert.match(actual, /class="logo-work">работы<\/span>/);
+  assert.match(actual, /class="logo-doctors">врачей<\/span>/);
+  assert.match(actual, /\.logo-work\s*\{\s*color:\s*#65a30d;/);
+  assert.match(actual, /\.logo-doctors\s*\{\s*color:\s*#7c3aed;/);
   assert.doesNotMatch(actual, /Трафик: визиты за месяц/);
 });
 

@@ -28,7 +28,7 @@ function makeSnapshot(name) {
 
 test("packaged application contains the public GitHub update feed", () => {
   const updateService = new UpdateService({
-    app: { getVersion: () => "1.0.5", isPackaged: false },
+    app: { getVersion: () => "1.0.6", isPackaged: false },
     backupService: {},
     configStore: { publicConfig: () => ({ updateUrl: "" }) },
     resourcesPath: path.join(__dirname, "..", "resources"),

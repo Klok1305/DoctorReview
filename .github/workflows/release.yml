@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Тег существующего коммита, например v1.0.5"
+        description: "Тег существующего коммита, например v1.2.3"
         required: true
         type: string
 

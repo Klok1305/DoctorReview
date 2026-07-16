@@ -37,7 +37,8 @@ h3 { font-size: 15px; }
   z-index: 50;
 }
 .app-header .logo { font-size: 16px; font-weight: 700; white-space: nowrap; }
-.app-header .logo span { color: var(--accent); }
+.app-header .logo .logo-work { color: #65a30d; }
+.app-header .logo .logo-doctors { color: #7c3aed; }
 nav.tabs { display: flex; gap: 4px; flex: 1; }
 nav.tabs button {
   border: none;
