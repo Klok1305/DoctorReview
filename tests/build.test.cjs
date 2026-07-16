@@ -71,6 +71,11 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /Записей врача на 100 визитов/);
   assert.match(actual, /Фактическая загрузка пациентами/);
   assert.match(actual, /ПАЦИЕНТЫ ПО СЕГМЕНТУ/);
+  assert.match(actual, /collapsible-list-summary/);
+  assert.match(actual, /rememberListToggle/);
+  assert.match(actual, /clientSegmentPatients/);
+  assert.match(actual, /appointmentDetails/);
+  assert.match(actual, /primaryReturnDetails/);
   assert.match(actual, /\.logo-work\s*\{\s*color:\s*#65a30d;/);
   assert.match(actual, /\.logo-doctors\s*\{\s*color:\s*#7c3aed;/);
   assert.doesNotMatch(actual, /Трафик: визиты за месяц/);

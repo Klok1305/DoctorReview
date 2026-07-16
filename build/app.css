@@ -410,6 +410,41 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
   line-height: 1.35;
 }
 .section-title .section-detail { color: var(--muted); font-size: 12px; font-weight: 500; letter-spacing: 0; }
+.collapsible-list {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--card);
+  margin-top: 8px;
+  overflow: hidden;
+}
+.collapsible-list-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+  cursor: pointer;
+  padding: 9px 11px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .02em;
+  user-select: none;
+}
+.collapsible-list-summary::-webkit-details-marker { display: none; }
+.collapsible-list-summary::before { content: "▸"; color: var(--accent); font-size: 14px; }
+.collapsible-list[open] > .collapsible-list-summary::before { content: "▾"; }
+.collapsible-list[open] > .collapsible-list-summary { border-bottom: 1px solid var(--line); }
+.collapsible-list-summary > span:first-of-type { flex: 1; min-width: 0; }
+.collapse-hint { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0; }
+.collapse-hint::after { content: "Развернуть"; }
+.collapsible-list[open] .collapse-hint::after { content: "Свернуть"; }
+.collapsible-list-body { padding: 8px 10px 10px; overflow-x: auto; }
+.collapsible-list-body > .data { margin-top: 0; }
+@media print {
+  .collapsible-list > .collapsible-list-body { display: block !important; }
+  .collapsible-list > .collapsible-list-summary { border-bottom: 1px solid var(--line); }
+  .collapsible-list .collapse-hint { display: none; }
+}
 .tracked-metric {
   display: flex;
   align-items: center;

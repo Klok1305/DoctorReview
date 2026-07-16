@@ -418,6 +418,41 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
   line-height: 1.35;
 }
 .section-title .section-detail { color: var(--muted); font-size: 12px; font-weight: 500; letter-spacing: 0; }
+.collapsible-list {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--card);
+  margin-top: 8px;
+  overflow: hidden;
+}
+.collapsible-list-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+  cursor: pointer;
+  padding: 9px 11px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .02em;
+  user-select: none;
+}
+.collapsible-list-summary::-webkit-details-marker { display: none; }
+.collapsible-list-summary::before { content: "▸"; color: var(--accent); font-size: 14px; }
+.collapsible-list[open] > .collapsible-list-summary::before { content: "▾"; }
+.collapsible-list[open] > .collapsible-list-summary { border-bottom: 1px solid var(--line); }
+.collapsible-list-summary > span:first-of-type { flex: 1; min-width: 0; }
+.collapse-hint { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0; }
+.collapse-hint::after { content: "Развернуть"; }
+.collapsible-list[open] .collapse-hint::after { content: "Свернуть"; }
+.collapsible-list-body { padding: 8px 10px 10px; overflow-x: auto; }
+.collapsible-list-body > .data { margin-top: 0; }
+@media print {
+  .collapsible-list > .collapsible-list-body { display: block !important; }
+  .collapsible-list > .collapsible-list-summary { border-bottom: 1px solid var(--line); }
+  .collapsible-list .collapse-hint { display: none; }
+}
 .tracked-metric {
   display: flex;
   align-items: center;
@@ -4444,6 +4479,7 @@ const UI = {
   cmp: [null, null, null],
   staffFilter: "",
   openGroups: {},
+  openLists: {},
   setDoctor: null,
   pvSlice: 3,     // тогл первички: 3/6/12
   nazSlice: 1,    // тогл назначений: 1/3
@@ -4460,6 +4496,15 @@ function setControlsDisabled(ids, disabled) {
     const control = document.getElementById(id);
     if (control) control.disabled = Boolean(disabled);
   }
+}
+
+function collapsibleListAttrs(key, defaultOpen = true) {
+  const isOpen = Object.prototype.hasOwnProperty.call(UI.openLists, key) ? UI.openLists[key] : defaultOpen;
+  return `class="collapsible-list" data-list-key="${esc(key)}" ${isOpen ? "open" : ""} ontoggle="rememberListToggle(${esc(JSON.stringify(key))}, this.open)"`;
+}
+
+function rememberListToggle(key, isOpen) {
+  UI.openLists[key] = Boolean(isOpen);
 }
 
 function renderDesktopWorkspace() {
@@ -6106,7 +6151,8 @@ function renderDoctor() {
     html += `<div class="grid cols-2">
       <div><h3 class="small muted" style="margin-bottom:6px">ДОЛЕВОЕ РАСПРЕДЕЛЕНИЕ ВЫРУЧКИ ${copyBtn("copyChart", "chRevStruct", "PNG")}</h3>
         <div class="chart-box tall"><canvas id="chRevStruct"></canvas></div></div>
-      <div><details open><summary class="small muted" style="cursor:pointer;margin-bottom:6px">РАСШИФРОВКА <span class="muted">(клик — схлопнуть таблицу; ▸ у категории — раскрыть подкатегории)</span></summary>
+      <div><details ${collapsibleListAttrs("revenueBreakdown")}><summary class="collapsible-list-summary"><span>РАСШИФРОВКА ВЫРУЧКИ <span class="section-detail">· ▸ у категории — подкатегории</span></span><span class="collapse-hint"></span></summary>
+        <div class="collapsible-list-body">
         <div class="toolbar no-print" style="margin:4px 0 6px">
           <button class="btn mini" onclick="expandGroups(true)">развернуть все подкатегории</button>
           <button class="btn mini" onclick="expandGroups(false)">свернуть</button>
@@ -6134,7 +6180,7 @@ function renderDoctor() {
         }
       }
     }
-    html += `<tr><td><b>Итого продажи</b></td><td class="num"><b>${fmtNum(r.extras.vy.ownQty)}</b></td><td class="num"><b>${fmtMoney(totalOwn)}</b></td><td class="num"><b>100%</b></td></tr></table></details></div></div>`;
+    html += `<tr><td><b>Итого продажи</b></td><td class="num"><b>${fmtNum(r.extras.vy.ownQty)}</b></td><td class="num"><b>${fmtMoney(totalOwn)}</b></td><td class="num"><b>100%</b></td></tr></table></div></details></div></div>`;
 
     // экспертные позиции: две круговые (штуки и деньги) + таблица
     if (exMode !== "none") {
@@ -6145,7 +6191,8 @@ function renderDoctor() {
       html += `<div class="grid cols-3" style="margin-top:12px">
       <div><h3 class="small muted" style="margin-bottom:6px">${upTitle}: ШТУКИ ${copyBtn("copyChart", "chDevices", "PNG")}</h3><div class="chart-box"><canvas id="chDevices"></canvas></div></div>
       <div><h3 class="small muted" style="margin-bottom:6px">${upTitle}: ВЫРУЧКА, ₽ ${copyBtn("copyChart", "chDevicesMoney", "PNG")}</h3><div class="chart-box"><canvas id="chDevicesMoney"></canvas></div></div>
-      <div><h3 class="small muted" style="margin-bottom:6px">${upTitle}: ТАБЛИЦА ${copyBtn("copyTable", "tblDevices")}</h3>
+      <div><details ${collapsibleListAttrs("expertPositions")}><summary class="collapsible-list-summary"><span>${upTitle}: СПИСОК</span><span class="collapse-hint"></span></summary>
+      <div class="collapsible-list-body"><div class="toolbar no-print">${copyBtn("copyTable", "tblDevices")}</div>
       <table class="data" id="tblDevices"><tr><th>Позиция</th><th class="num">Штук</th><th class="num">Выручка</th></tr>`;
       const coreSet = new Set(docProfile.expertise.items.filter(d => d.core !== false).map(d => d.name));
       for (const nm of devEntries) {
@@ -6153,7 +6200,7 @@ function renderDoctor() {
       }
       const unusedDevs = [...coreSet].filter(nm => !p.expert[nm]);
       if (unusedDevs.length) html += `<tr><td class="small muted" colspan="3">Не задействованы: ${unusedDevs.map(esc).join(", ")}</td></tr>`;
-      html += `</table></div></div>`;
+      html += `</table></div></details></div></div>`;
     }
     html += `</div>`;
   }
@@ -6179,7 +6226,8 @@ function renderDoctor() {
         <div><div class="tracked-title">Конверсия за ${nazCur} мес.</div><div class="tracked-note">Выполнено + продано / назначено · ${fmtNum(nz.totals.done + nz.totals.soldQ)} из ${fmtNum(nz.totals.assigned)}</div></div>
         <div class="tracked-side"><div class="tracked-value">${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</div><div class="tracked-goal">${hasConvTarget ? `цель ≥ ${fmtPct(Number(convTarget))}` : "цель не установлена"}</div></div>
       </div>
-      <table class="data" id="tblNaz"><tr><th>Тип направления</th><th class="num">Назначено, шт</th><th class="num">Выполнено, шт</th><th class="num">Продано, шт</th><th class="num">Продажи по отчёту «Назначения», ₽</th><th class="num">Конверсия</th></tr>`;
+      <details ${collapsibleListAttrs("appointmentDetails")}><summary class="collapsible-list-summary"><span>ДЕТАЛИ НАЗНАЧЕНИЙ</span><span class="collapse-hint"></span></summary>
+      <div class="collapsible-list-body"><table class="data" id="tblNaz"><tr><th>Тип направления</th><th class="num">Назначено, шт</th><th class="num">Выполнено, шт</th><th class="num">Продано, шт</th><th class="num">Продажи по отчёту «Назначения», ₽</th><th class="num">Конверсия</th></tr>`;
     let ntIdx = 0;
     for (const t of REF_TYPES) {
       const b = nz.byType[t];
@@ -6195,7 +6243,7 @@ function renderDoctor() {
           <td class="num small muted">${fmtNum(v.assigned)}</td><td class="num small muted">${fmtNum(v.done)}</td><td class="num small muted">${fmtNum(v.soldQ)}</td><td class="num small muted">${fmtMoney(v.soldSum)}</td><td class="num small muted"></td></tr>`;
       }
     }
-    html += `<tr><td><b>Итого</b></td><td class="num"><b>${fmtNum(nz.totals.assigned)}</b></td><td class="num"><b>${fmtNum(nz.totals.done)}</b></td><td class="num"><b>${fmtNum(nz.totals.soldQ)}</b></td><td class="num"><b>${fmtMoney(nz.totals.soldSum)}</b></td><td class="num"><b>${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</b></td></tr></table>`;
+    html += `<tr><td><b>Итого</b></td><td class="num"><b>${fmtNum(nz.totals.assigned)}</b></td><td class="num"><b>${fmtNum(nz.totals.done)}</b></td><td class="num"><b>${fmtNum(nz.totals.soldQ)}</b></td><td class="num"><b>${fmtMoney(nz.totals.soldSum)}</b></td><td class="num"><b>${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</b></td></tr></table></div></details>`;
   } else {
     html += '<p class="muted small" style="margin-top:8px">Нет выгрузки «Назначения» за этот месяц — конверсии недоступны.</p>';
   }
@@ -6206,7 +6254,8 @@ function renderDoctor() {
       html += `<div class="source-compare ${sourceMatch ? "match" : ""}"><b>Сверка двух источников:</b> отчёт «Назначения» — ${fmtMoney(nz.totals.soldSum)}, отчёт «Выработка» — ${fmtMoney(refWorkTotal)}${sourceMatch ? ". Суммы совпадают." : `, разница — ${fmtMoney(Math.abs(sourceDiff))}. Это отдельные выгрузки; расхождение теперь показано явно и не скрывается одной итоговой цифрой.`}</div>`;
     }
     html += `<div class="grid cols-2" style="margin-top:12px"><div>
-      <h3 class="section-title" style="margin:0 0 6px">ВЫПОЛНЕНИЕ НАПРАВЛЕНИЙ <span class="section-detail">· источник: отчёт «Выработка» · ▸ раскрыть состав (шт. и ₽)</span> ${copyBtn("copyTable", "tblRef")}</h3>
+      <details ${collapsibleListAttrs("completedReferralDetails")}><summary class="collapsible-list-summary"><span>ВЫПОЛНЕНИЕ НАПРАВЛЕНИЙ <span class="section-detail">· источник: «Выработка»</span></span><span class="collapse-hint"></span></summary>
+      <div class="collapsible-list-body"><div class="toolbar no-print">${copyBtn("copyTable", "tblRef")}</div>
       <table class="data" id="tblRef"><tr><th>Тип</th><th class="num">Штук</th><th class="num">Сумма по отчёту «Выработка»</th></tr>`;
     let rtIdx = 0;
     for (const t of REF_TYPES) {
@@ -6223,7 +6272,7 @@ function renderDoctor() {
           <td class="num small muted">${fmtNum(v.q)}</td><td class="num small muted">${fmtMoney(v.s)}</td></tr>`;
       }
     }
-    html += `<tr><td><b>Итого</b></td><td class="num"></td><td class="num"><b>${fmtMoney(refWorkTotal)}</b></td></tr></table></div>
+    html += `<tr><td><b>Итого</b></td><td class="num"></td><td class="num"><b>${fmtMoney(refWorkTotal)}</b></td></tr></table></div></details></div>
       <div><h3 class="section-title" style="margin:0 0 6px">СТРУКТУРА НАПРАВЛЕНИЙ ПО ДЕНЬГАМ ${copyBtn("copyChart", "chNazStruct", "PNG")}</h3>
       <div class="chart-box"><canvas id="chNazStruct"></canvas></div></div></div>`;
   }
@@ -6283,11 +6332,12 @@ function renderDoctor() {
     <div><h3 class="small muted" style="margin-bottom:6px">СЕГМЕНТЫ БАЗЫ ${copyBtn("copyChart", "chSegments", "PNG")}</h3>
       <div class="chart-box tall"><canvas id="chSegments"></canvas></div></div>
     </div>
-    <div class="no-print" style="margin-top:14px"><div class="vhead"><h3 class="section-title" style="margin:0">ПАЦИЕНТЫ ПО СЕГМЕНТУ</h3>${segToggle("clientSegmentSeg", segmentOptions, UI.clientSegment, "setClientSegment")}</div>
+    <div class="no-print" style="margin-top:14px"><details ${collapsibleListAttrs("clientSegmentPatients")}><summary class="collapsible-list-summary"><span>ПАЦИЕНТЫ ПО СЕГМЕНТУ <span class="badge mut">${fmtNum(selectedClients.length)}</span></span><span class="collapse-hint"></span></summary>
+      <div class="collapsible-list-body"><div class="vhead"><span class="small muted">Выберите сегмент базы</span>${segToggle("clientSegmentSeg", segmentOptions, UI.clientSegment, "setClientSegment")}</div>
       <div style="overflow-x:auto;margin-top:8px"><table class="data" id="tblClientSegment"><tr><th>Пациент</th><th>Признак</th><th class="num">Визитов</th><th class="num">Дней с визита</th><th class="num">Историческая выручка</th></tr>
       ${selectedClients.slice(0, 250).map(c => `<tr><td><b>${esc(c.name)}</b>${c.patientId ? `<br><span class="small muted">ID: ${esc(c.patientId)}</span>` : ""}</td><td>${c.loyal ? '<span class="badge ok">лояльный</span>' : '<span class="badge mut">новый/разовый</span>'}</td><td class="num">${fmtNum(c.v)}</td><td class="num">${c.r != null ? fmtNum(c.r) : "—"}</td><td class="num">${fmtMoney(c.s)}</td></tr>`).join("")}
       ${selectedClients.length ? "" : '<tr><td colspan="5" class="muted small">В этом сегменте пациентов нет.</td></tr>'}
-      </table>${selectedClients.length > 250 ? `<p class="small muted">Показаны первые 250 из ${fmtNum(selectedClients.length)} пациентов.</p>` : ""}</div></div>
+      </table>${selectedClients.length > 250 ? `<p class="small muted">Показаны первые 250 из ${fmtNum(selectedClients.length)} пациентов.</p>` : ""}</div></div></details></div>
     </div>`;
   }
 
@@ -6319,14 +6369,14 @@ function renderDoctor() {
       ${metricHighlight(`Возвращаемость первички (${pvCur != null ? pvCur : "—"} мес.)`, fmtPct(pvValue), pv ? (pv.valid === false ? `ошибка данных: ${pv.issue}` : `первичных: ${fmtNum(pv.first)}, вернулось: ${fmtNum(pv.ret)}, не вернулось: ${fmtNum(pv.notRet)}`) : "нет выгрузки первички", trackedMetricState(pvValue, B5.pervichka), metricGoalText(B5.pervichka, fmtPct), metricHistoryMarkup(pvValue, pvDyn, "pp", "", 1, fmtPct))}
     </div>`;
   if (pvCur != null) {
-    html += `<h3 class="section-title" style="margin:4px 0 6px">ДЕТАЛИ ВОЗВРАЩАЕМОСТИ ПЕРВИЧКИ</h3>
-      <table class="data" id="tblPerv"><tr><th>Срез</th><th class="num">Первичных</th><th class="num">Вернулось</th><th class="num">%</th></tr>`;
+    html += `<details ${collapsibleListAttrs("primaryReturnDetails")}><summary class="collapsible-list-summary"><span>ДЕТАЛИ ВОЗВРАЩАЕМОСТИ ПЕРВИЧКИ</span><span class="collapse-hint"></span></summary>
+      <div class="collapsible-list-body"><table class="data" id="tblPerv"><tr><th>Срез</th><th class="num">Первичных</th><th class="num">Вернулось</th><th class="num">%</th></tr>`;
     for (const s of L.slices) {
       const d = L.pvSlices[s];
       if (!d) continue;
       html += `<tr ${s === pvCur ? 'style="background:var(--accent-soft)"' : ""}><td>${s} мес</td><td class="num">${fmtNum(d.first)}</td><td class="num">${fmtNum(d.ret)}</td><td class="num"><b>${fmtPct(d.pct)}</b></td></tr>`;
     }
-    html += "</table>";
+    html += "</table></div></details>";
   } else {
     html += '<p class="muted small">Нет выгрузок первички за этот месяц.</p>';
   }
