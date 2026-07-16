@@ -44,11 +44,19 @@ test("assembled HTML is reproducible and complete", () => {
     assert.match(actual, new RegExp(required));
   }
   assert.match(actual, /data-tab="department">🏥 Отделение/);
-  assert.match(actual, /data-tab="dept">🩺 Профили врачей/);
+  assert.match(actual, /data-tab="dept">🩺 Специализации/);
   assert.match(actual, /Нужны специализации/);
   assert.match(actual, /setDoctorDepartment/);
-  assert.match(actual, /Персональные цели и нормативы врача/);
+  assert.match(actual, /Индивидуальные цели врача/);
   assert.match(actual, /doctorMetricSettingsCard/);
+  assert.match(actual, /clinic-tree/);
+  assert.match(actual, /selectSettingsStructure/);
+  assert.match(actual, /openDoctorGoalSettings/);
+  assert.match(actual, /Нормативы настраиваются только на уровне специализации/);
+  assert.match(actual, /Векторы и веса специализации/);
+  assert.match(actual, /Цели отделения/);
+  assert.match(actual, /\+ Добавить врача/);
+  assert.match(actual, /addDoctorV4/);
   for (const profileMetric of ["Пациентов за месяц", "Количество визитов за месяц", "Объём активной клиентской базы"]) {
     assert.match(actual, new RegExp(profileMetric));
   }

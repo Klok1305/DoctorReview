@@ -155,6 +155,35 @@ main { padding: 20px 24px 60px; max-width: 1500px; margin: 0 auto; }
 .seg button:hover { color: var(--ink); background: var(--bg); }
 .seg button.active { background: var(--accent); color: #fff; }
 .vhead { flex-wrap: wrap; gap: 8px; }
+.clinic-tree {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.clinic-tree-department {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  background: var(--bg);
+}
+.clinic-tree-department.selected, .clinic-tree-spec.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.clinic-tree-head, .clinic-tree-spec {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.clinic-tree-head { margin-bottom: 7px; }
+.clinic-tree-head .badge, .clinic-tree-spec .badge { margin-left: 6px; }
+.clinic-tree-spec {
+  border-left: 2px solid var(--line);
+  padding: 7px 6px 7px 10px;
+}
+.clinic-tree-spec + .clinic-tree-spec { border-top: 1px solid var(--line); }
 /* блок «пример заполнения» под структурными полями */
 .fmt-ex {
   background: var(--bg);

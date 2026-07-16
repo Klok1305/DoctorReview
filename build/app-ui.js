@@ -1608,14 +1608,14 @@ function renderDoctor() {
   html += `<div class="card" id="blkHead">
     <div class="flex" style="justify-content:space-between">
       <h2 class="mt0" style="margin-bottom:4px">${esc(doctorName(UI.docId))} <span class="muted small">· ${monthLabel(mk)} · ${esc(doctorStructureLabel(UI.docId))}</span>
-        ${DB.doctors[UI.docId].metricSettings ? ' <span class="badge info" title="Цели, веса и нормативы настроены персонально для этого врача">индивидуальные цели</span>' : ""}
+        ${DB.doctors[UI.docId].metricSettings ? ' <span class="badge info" title="Цели настроены персонально для этого врача">индивидуальные цели</span>' : ""}
         ${r.partial ? ` <span class="badge warn" title="${esc(r.missing.join(", "))}">не все отчёты</span>` : ""}
         ${showSc && !scoreEligible ? ` <span class="badge warn" title="В рейтинг врач попадёт при полноте от 80%">балл предварительный · полнота ${fmtPct(r.scores.coveragePct)}</span>` : ""}</h2>
       <span class="no-print" style="white-space:nowrap"><label class="small"><input type="checkbox" ${UI.showLabels ? "checked" : ""} onchange="toggleLabels()"> цифры на графиках</label> ${blockBtn("blkHead")}</span>
     </div>
     ${r.partial ? `<p class="small muted" style="margin:0 0 10px">Не загружено: ${esc(r.missing.join(", "))}.</p>` : ""}
     <div class="gauge-wrap">
-      ${showSc ? `<div class="dpi-ring" style="width:130px;height:130px" title="Средневзвешенный балл выполнения нормативов по векторам. Веса и цели задаются в настройках специализации или персонально для врача">
+      ${showSc ? `<div class="dpi-ring" style="width:130px;height:130px" title="Средневзвешенный балл выполнения нормативов по векторам. Веса задаются специализации; цели — отделению, специализации или врачу">
         <svg width="130" height="130"><circle cx="65" cy="65" r="54" fill="none" stroke="var(--line)" stroke-width="12"/>
         <circle cx="65" cy="65" r="54" fill="none" stroke="${scColor}" stroke-width="12" stroke-linecap="round"
           stroke-dasharray="${(circ * (totalScore || 0) / 100).toFixed(1)} ${circ.toFixed(1)}"/></svg>
@@ -2438,6 +2438,24 @@ function curSetProfileKind() {
   return curSetSpecialization() ? "специализации" : "отделения";
 }
 
+function selectSettingsStructure(departmentName, specializationName = "") {
+  UI.setDepartment = departmentName;
+  UI.setSpecialization = specializationName;
+  renderSettings();
+}
+
+function openDoctorGoalSettings(doctorId) {
+  if (!doctorId || !DB.doctors[doctorId]) return;
+  UI.setDoctor = doctorId;
+  if (!UI.setOpen) UI.setOpen = {};
+  UI.setOpen.doctor = true;
+  renderSettings();
+  requestAnimationFrame(() => {
+    const card = document.getElementById("doctorMetricSettingsCard");
+    if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
 /* блок «Пример заполнения» под структурным полем */
 function fmtEx(example) {
   return `<div class="fmt-ex"><b>Пример заполнения:</b><pre>${esc(example)}</pre></div>`;
@@ -2464,12 +2482,35 @@ function renderSettings() {
   const specializationName = curSetSpecialization();
   const dn = curSetDept();
   const p = curSetProfile();
-  const profileKind = curSetProfileKind();
   const profileCaption = specializationName
     ? `специализация «${specializationName}» внутри отделения «${departmentName}»`
     : `отделение «${departmentName}»`;
   const departmentNames = Object.keys(departmentGroups());
+  const allDoctorIds = Object.keys(DB.doctors).sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru"));
+  if (!UI.setDoctor || !DB.doctors[UI.setDoctor]) UI.setDoctor = allDoctorIds[0] || null;
   const movableSpecializations = Object.keys(s.depts).filter(name => name !== "По умолчанию" && !specializationNames.includes(name));
+  let structureTree = departmentNames.map(depName => {
+    const specs = departmentGroups()[depName] || [];
+    const depDoctors = allDoctorIds.filter(id => resolvedDepartmentName(id) === depName);
+    const directDoctors = depDoctors.filter(id => !resolvedSpecializationName(id));
+    const specRows = specs.map(specName => {
+      const doctors = depDoctors.filter(id => resolvedSpecializationName(id) === specName);
+      const selected = depName === departmentName && specName === specializationName;
+      return `<div class="clinic-tree-spec ${selected ? "selected" : ""}">
+        <div><b>↳ ${esc(specName)}</b><span class="badge mut">${doctors.length}</span><div class="small muted">${doctors.length ? doctors.map(id => esc(doctorName(id))).join(", ") : "врачи пока не назначены"}</div></div>
+        <button class="btn mini" onclick="selectSettingsStructure(${esc(JSON.stringify(depName))}, ${esc(JSON.stringify(specName))})">Настроить</button>
+      </div>`;
+    }).join("");
+    const directRow = directDoctors.length ? `<div class="clinic-tree-spec"><div><b>↳ Без специализации</b><span class="badge warn">${directDoctors.length}</span><div class="small muted">${directDoctors.map(id => esc(doctorName(id))).join(", ")}</div></div></div>` : "";
+    return `<div class="clinic-tree-department ${depName === departmentName && !specializationName ? "selected" : ""}">
+      <div class="clinic-tree-head"><div><b>${esc(depName)}</b><span class="badge info">${depDoctors.length} врачей</span></div><button class="btn mini" onclick="selectSettingsStructure(${esc(JSON.stringify(depName))}, &quot;&quot;)">Настроить отделение</button></div>
+      ${specRows}${directRow}
+    </div>`;
+  }).join("");
+  const unassignedDoctors = allDoctorIds.filter(id => !departmentGroups()[resolvedDepartmentName(id)]);
+  if (unassignedDoctors.length) {
+    structureTree += `<div class="clinic-tree-department"><div class="clinic-tree-head"><div><b>Не распределено</b><span class="badge warn">${unassignedDoctors.length}</span><div class="small muted">${unassignedDoctors.map(id => esc(doctorName(id))).join(", ")}</div></div></div></div>`;
+  }
   let html = "";
   // состояние «свёрнуто/развёрнуто» секций настроек — переживает перерисовку
   if (!UI.setOpen) UI.setOpen = { norm: false, expert: false, nom: false, score: false, doctor: true, rules: false };
@@ -2479,7 +2520,7 @@ function renderSettings() {
   /* --- иерархия отделение -> опциональные специализации --- */
   html += `<div class="card"><div class="vhead"><h2 class="mt0">🏥 Структура клиники</h2>
       <label class="small"><input type="checkbox" id="showScoresChk" onchange="DB.settings.showScores=this.checked;saveLocal();renderAll()" ${s.showScores ? "checked" : ""}> показывать баллы</label></div>
-    <p class="small muted">Сначала создаётся отделение. Если внутри него нужны разные нормативы, категории или цели для врачей, включите специализации и настройте каждую отдельно.</p>
+    <p class="small muted">Иерархия: клиника → отделение → специализация → врач. Нормативы и веса задаются специализации; цели можно задать отделению, специализации или врачу.</p>
     <div class="toolbar">
       <label>Отделение: <select id="setDepartmentSel" onchange="UI.setDepartment=this.value;UI.setSpecialization='';renderSettings()">${departmentNames.map(n => `<option value="${esc(n)}" ${n === departmentName ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>
       <input type="text" id="newDepartmentName" placeholder="новое отделение…" style="min-width:190px">
@@ -2497,12 +2538,18 @@ function renderSettings() {
       <button class="btn" onclick="addSpecializationV4()">+ Добавить специализацию</button>
       ${specializationName ? `<button class="btn danger" onclick="removeSpecializationV4()">Удалить «${esc(specializationName)}»</button>` : ""}
       ${movableSpecializations.length ? `<span class="spacer"></span><label>Перенести существующую: <select id="moveSpecializationSel">${movableSpecializations.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("")}</select></label><button class="btn" onclick="moveSpecializationV4()">Перенести сюда</button>` : ""}
-    </div>` : `<div class="notice blue" style="margin-top:10px">Специализации выключены: все врачи отделения используют единые настройки отделения.</div>`}
-    <p class="small muted" style="margin-bottom:0">Сейчас настраивается: <b>${esc(profileCaption)}</b>. Новая специализация создаётся копией текущих настроек отделения.</p>
+    </div>` : `<div class="notice blue" style="margin-top:10px">Специализации выключены: врачи временно используют резервный профиль отделения. Чтобы настраивать нормативы и веса, включите специализации.</div>`}
+    <p class="small muted">Сейчас настраивается: <b>${esc(profileCaption)}</b>. Новая специализация получает стартовые нормативы и веса, а цели сначала наследует от отделения.</p>
+    ${allDoctorIds.length ? `<div class="toolbar" style="margin-top:10px">
+      <label>Врач: <select id="structureDoctorSel" onchange="UI.setDoctor=this.value">${allDoctorIds.map(id => `<option value="${esc(id)}" ${id === UI.setDoctor ? "selected" : ""}>${esc(doctorName(id))}</option>`).join("")}</select></label>
+      <button class="btn" onclick="openDoctorGoalSettings(document.getElementById('structureDoctorSel').value)">Настроить цели врача</button>
+    </div>` : ""}
+    <div class="clinic-tree">${structureTree}</div>
   </div>`;
 
   /* --- 1. Нормативы и подразделения --- */
-  html += `<details class="card" style="display:block" ${det("norm")}><summary style="cursor:pointer"><b>📐 Нормативы: сегментация, курсовое, первичка — ${esc(profileCaption)}</b></summary>
+  if (specializationName) {
+    html += `<details class="card" style="display:block" ${det("norm")}><summary style="cursor:pointer"><b>📐 Нормативы специализации: сегментация, курсовое, первичка — «${esc(specializationName)}»</b></summary>
     <table class="data wtable" style="margin-top:10px"><tr>
       <th class="num" title="Отдельный признак лояльности, не меняет статус активности">Лояльный: от, виз.</th>
       <th class="num" title="Ожидаемый срок возврата T: был не позднее — активный">Ожидаемый возврат T, мес.</th>
@@ -2530,6 +2577,11 @@ function renderSettings() {
     </div>
     <button class="btn primary" onclick="saveDeptBasics()">💾 Сохранить нормативы</button>
   </details>`;
+  } else {
+    html += `<details class="card" style="display:block" ${det("norm")}><summary style="cursor:pointer"><b>📐 Нормативы специализации</b></summary>
+      <div class="notice blue" style="margin-top:10px">Нормативы настраиваются только на уровне специализации. Выберите специализацию в дереве клиники.</div>
+    </details>`;
+  }
 
   /* --- 2. Экспертность (Вектор 2): аппараты ИЛИ услуги --- */
   const exp = p.expertise;
@@ -2632,30 +2684,38 @@ function renderSettings() {
       <button class="btn" onclick="saveDeptTaxonomy()">Сохранить правила и группы</button></details>
   </details>`;
 
-  /* --- 4. Баллы и веса отделения --- */
+  /* --- 4. Веса специализации и цели трёх уровней --- */
   const sc = p.scoring;
-  const bmDefs = scoringBenchmarkDefs(p);
-  html += `<details class="card" style="display:block" ${det("score")}><summary style="cursor:pointer"><b>🎯 Баллы и веса — «${esc(dn)}»</b></summary>
-    <p class="small muted" style="margin-top:8px">Цели и веса текущего профиля. <b>Пустая цель = метрика не оценивается</b> (пример: выручку в план не ставим — очищаем «Продажи», а «Средний чек» остаётся целью). Вес выключенных векторов перераспределяется.</p>
-    <div class="grid cols-2">
-      <div><h3>Векторы и веса</h3>
+  const inheritsDepartmentGoals = Boolean(specializationName && p.inheritGoals === true);
+  const goalProfile = inheritsDepartmentGoals ? departmentProfile(departmentName) : p;
+  const goalBenchmarks = goalProfile.scoring.benchmarks;
+  const bmDefs = scoringBenchmarkDefs(specializationName ? p : goalProfile);
+  const goalInputs = bmDefs.map(([k, n]) => `<tr><td>${n}</td><td class="num"><input type="number" id="sc_bm_${k}" value="${goalBenchmarks[k] != null && goalBenchmarks[k] !== "" ? goalBenchmarks[k] : ""}" step="any" style="width:110px" placeholder="—" ${inheritsDepartmentGoals ? "disabled" : ""}></td></tr>`).join("");
+  html += `<details class="card" style="display:block" ${det("score")}><summary style="cursor:pointer"><b>🎯 ${specializationName ? `Векторы, веса и цели специализации «${esc(specializationName)}»` : `Цели отделения «${esc(departmentName)}»`}</b></summary>
+    <p class="small muted" style="margin-top:8px"><b>Пустая цель = метрика не оценивается.</b> Цели врача имеют приоритет над целями специализации, а цели специализации — над целями отделения.</p>
+    ${specializationName ? `<div class="grid cols-2">
+      <div><h3>Векторы и веса специализации</h3>
         <table class="data wtable"><tr><th>Учитывать</th><th>Вектор</th><th class="num">Вес</th></tr>
         ${["v1", "v2", "v3", "v4", "v5", "v6"].map(vk => `
           <tr><td><input type="checkbox" id="sc_en_${vk}" ${sc.enabled[vk] ? "checked" : ""}></td>
           <td>В${vk[1]}. ${VECTOR_META[vk].name}</td>
           <td class="num"><input type="number" id="sc_w_${vk}" value="${sc.weights[vk]}" min="0" max="100" style="width:70px"> %</td></tr>`).join("")}
         </table></div>
-      <div><h3>Цели (пусто — не оценивать)</h3>
-        <table class="data" style="width:100%"><tr><th>Метрика</th><th class="num">Цель</th></tr>
-        ${bmDefs.map(([k, n]) => `<tr><td>${n}</td><td class="num"><input type="number" id="sc_bm_${k}" value="${sc.benchmarks[k] != null && sc.benchmarks[k] !== "" ? sc.benchmarks[k] : ""}" step="any" style="width:110px" placeholder="—"></td></tr>`).join("")}
-        </table></div>
-    </div>
-    <div class="toolbar"><button class="btn primary" onclick="saveDeptScoring()">💾 Сохранить баллы и веса</button></div>
+      <div><h3>Цели специализации</h3>
+        ${inheritsDepartmentGoals
+          ? `<div class="notice blue">Сейчас используются цели отделения «${esc(departmentName)}».</div>`
+          : `<div class="notice">Для этой специализации заданы отдельные цели.</div>`}
+        <table class="data" style="width:100%"><tr><th>Метрика</th><th class="num">Цель</th></tr>${goalInputs}</table>
+        <div class="toolbar">${inheritsDepartmentGoals
+          ? `<button class="btn" onclick="enableSpecializationGoals()">Задать отдельные цели</button>`
+          : `<button class="btn" onclick="resetSpecializationGoals()">↺ Использовать цели отделения</button>`}</div>
+      </div>
+    </div>` : `<h3>Цели отделения</h3><table class="data" style="width:100%"><tr><th>Метрика</th><th class="num">Цель</th></tr>${goalInputs}</table>`}
+    <div class="toolbar"><button class="btn primary" onclick="saveDeptScoring()">💾 ${specializationName ? "Сохранить веса и цели специализации" : "Сохранить цели отделения"}</button></div>
   </details>`;
 
-  /* --- 5. Персональные цели и нормативы врача --- */
-  const ids = Object.keys(DB.doctors).sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru"));
-  if (!UI.setDoctor || !DB.doctors[UI.setDoctor]) UI.setDoctor = ids[0] || null;
+  /* --- 5. Персональные цели врача --- */
+  const ids = allDoctorIds;
   if (UI.setDoctor) {
     const doctorId = UI.setDoctor;
     const doctor = DB.doctors[doctorId];
@@ -2664,36 +2724,24 @@ function renderSettings() {
     const doctorSc = doctorProfile.scoring;
     const doctorBmDefs = scoringBenchmarkDefs(doctorProfile);
     const disabled = hasOwn ? "" : "disabled";
-    const effectiveProfileName = resolvedDeptName(doctorId);
+    const effectiveSpecializationName = resolvedSpecializationName(doctorId);
     const structureName = doctorStructureLabel(doctorId);
-    html += `<details class="card" id="doctorMetricSettingsCard" style="display:block" ${det("doctor")}><summary style="cursor:pointer"><b>👤 Персональные цели и нормативы врача</b></summary>
+    html += `<details class="card" id="doctorMetricSettingsCard" style="display:block" ${det("doctor")}><summary style="cursor:pointer"><b>👤 Индивидуальные цели врача</b></summary>
       <div class="toolbar" style="margin-top:10px">
         <label>Врач: <select id="setDoctorSel" onchange="UI.setDoctor=this.value;renderSettings()">${ids.map(id => `<option value="${esc(id)}" ${id === doctorId ? "selected" : ""}>${esc(doctorName(id))}</option>`).join("")}</select></label>
-        <span class="badge ${hasOwn ? "ok" : ""}">${hasOwn ? "индивидуальные настройки" : "наследует профиль"}</span>
+        <span class="badge ${hasOwn ? "ok" : ""}">${hasOwn ? "индивидуальные цели" : "наследует цели"}</span>
         <span class="small muted">Структура: ${esc(structureName)}</span><span class="spacer"></span>
         ${hasOwn
-          ? `<button class="btn danger" onclick="resetDoctorMetricSettings()">↺ Сбросить к профилю</button>`
-          : `<button class="btn primary" onclick="enableDoctorMetricSettings()">Включить индивидуальные настройки</button>`}
+          ? `<button class="btn danger" onclick="resetDoctorMetricSettings()">↺ Сбросить цели к специализации</button>`
+          : `<button class="btn primary" onclick="enableDoctorMetricSettings()">Включить индивидуальные цели</button>`}
       </div>
-      <p class="small muted">Без индивидуального профиля врач использует цели и нормативы профиля «${esc(effectiveProfileName)}». После включения значения можно менять независимо.</p>
-      <h3>Нормативы врача</h3>
-      <table class="data wtable"><tr><th class="num">Лояльный: от, виз.</th><th class="num">Ожидаемый возврат T, мес.</th><th class="num">Потерян после, мес.</th><th class="num">Курсовое: от, виз.</th><th class="num">Курсовое: за, мес.</th><th class="num">Ядро, %</th><th class="num">Первичка: срез, мес.</th></tr><tr>
-        <td class="num"><input type="number" id="dm_minVisits" value="${doctorProfile.minVisits}" min="2" max="20" ${disabled}></td>
-        <td class="num"><input type="number" id="dm_activeM" value="${doctorProfile.activeM}" min="1" max="24" ${disabled}></td>
-        <td class="num"><input type="number" id="dm_riskM" value="${doctorProfile.riskM}" min="2" max="36" ${disabled}></td>
-        <td class="num"><input type="number" id="dm_courseX" value="${doctorProfile.courseX}" min="2" max="20" ${disabled}></td>
-        <td class="num"><input type="number" id="dm_courseM" value="${doctorProfile.courseM}" min="1" max="36" ${disabled}></td>
-        <td class="num"><input type="number" id="dm_corePct" value="${doctorProfile.corePct}" min="50" max="95" ${disabled}></td>
-        <td class="num"><input type="number" id="dm_pervichkaM" value="${doctorProfile.pervichkaM || 3}" min="1" max="12" ${disabled}></td></tr></table>
-      <div class="grid cols-2" style="margin-top:12px">
-        <div><h3>Векторы и веса врача</h3><table class="data wtable"><tr><th>Учитывать</th><th>Вектор</th><th class="num">Вес</th></tr>
-          ${["v1", "v2", "v3", "v4", "v5", "v6"].map(vk => `<tr><td><input type="checkbox" id="dm_en_${vk}" ${doctorSc.enabled[vk] ? "checked" : ""} ${disabled}></td><td>В${vk[1]}. ${VECTOR_META[vk].name}</td><td class="num"><input type="number" id="dm_w_${vk}" value="${doctorSc.weights[vk]}" min="0" max="100" style="width:70px" ${disabled}> %</td></tr>`).join("")}
-        </table></div>
-        <div><h3>Цели врача</h3><table class="data" style="width:100%"><tr><th>Метрика</th><th class="num">Цель</th></tr>
+      <p class="small muted">${effectiveSpecializationName
+        ? `Нормативы и веса врач всегда получает от специализации «${esc(effectiveSpecializationName)}». Здесь можно изменить только его цели.`
+        : `<span class="badge warn">специализация не назначена</span> Назначьте специализацию врачу; до этого используется резервный профиль отделения. Здесь можно изменить только цели.`}</p>
+      <h3>Цели врача</h3><table class="data" style="width:100%"><tr><th>Метрика</th><th class="num">Цель</th></tr>
           ${doctorBmDefs.map(([k, n]) => `<tr><td>${n}</td><td class="num"><input type="number" id="dm_bm_${k}" value="${doctorSc.benchmarks[k] != null && doctorSc.benchmarks[k] !== "" ? doctorSc.benchmarks[k] : ""}" step="any" style="width:110px" placeholder="—" ${disabled}></td></tr>`).join("")}
-        </table></div>
-      </div>
-      <div class="toolbar"><button class="btn primary" onclick="saveDoctorMetricSettings()" ${disabled}>💾 Сохранить настройки врача</button></div>
+      </table>
+      <div class="toolbar"><button class="btn primary" onclick="saveDoctorMetricSettings()" ${disabled}>💾 Сохранить цели врача</button></div>
     </details>`;
   } else {
     html += '<div class="card"><h2>👤 Персональные цели врача</h2><p class="muted">В базе пока нет врачей. Они появятся после загрузки отчётов.</p></div>';
@@ -2703,12 +2751,14 @@ function renderSettings() {
   const filter = UI.staffFilter.toLowerCase();
   const visible = ids.filter(id => !filter || doctorName(id).toLowerCase().includes(filter));
   html += `<div class="card"><h2>👥 Сотрудники (${ids.length})</h2>
-    <p class="small muted"><b>Отделение</b> — обязательный уровень. <b>Специализация</b> доступна только у отделений с включённой кнопкой «Нужны специализации» и может иметь собственные нормативы, категории и цели. «Авто» определяется по должности и словам-определителям. Дубли филиалов можно склеить.</p>
+    <p class="small muted"><b>Отделение</b> объединяет специализации. <b>Специализация</b> задаёт нормативы и веса врачей. Для врача при необходимости настраиваются только индивидуальные цели. «Авто» определяется по должности и словам-определителям.</p>
     <div class="toolbar">
       <input type="text" id="staffFilter" placeholder="поиск по фамилии…" value="${esc(UI.staffFilter)}">
+      <input type="text" id="newDoctorName" placeholder="ФИО нового врача…" style="min-width:210px">
+      <button class="btn" onclick="addDoctorV4()">+ Добавить врача</button>
       <button class="btn" onclick="mergeSelected()">🔗 Склеить выбранных</button>
     </div>
-    <div class="scroll-y"><table class="data"><tr><th></th><th>Сотрудник</th><th>Должность</th><th>Отделение</th><th>Специализация</th><th>Группа</th><th>Другие написания</th></tr>`;
+    <div class="scroll-y"><table class="data"><tr><th></th><th>Сотрудник</th><th>Должность</th><th>Отделение</th><th>Специализация</th><th>Группа</th><th>Цели</th><th>Другие написания</th></tr>`;
   for (const id of visible) {
     const d = DB.doctors[id];
     const effectiveDepartment = resolvedDepartmentName(id);
@@ -2728,6 +2778,7 @@ function renderSettings() {
         ${doctorSpecializations.map(n => `<option value="${esc(n)}" ${d.specialization === n ? "selected" : ""}>${esc(n)}</option>`).join("")}
       </select>` : '<span class="small muted">не нужны</span>'}</td>
       <td>${subs.length ? `<select onchange="setSubdept('${id}', this.value)"><option value="">—</option>${subs.map(sd => `<option value="${esc(sd)}" ${d.subdept === sd ? "selected" : ""}>${esc(sd)}</option>`).join("")}</select>` : '<span class="small muted">—</span>'}</td>
+      <td><button class="btn mini" onclick="openDoctorGoalSettings('${id}')">Настроить</button></td>
       <td class="small muted">${d.aliases.length ? esc(d.aliases.join("; ")) : "—"}</td></tr>`;
   }
   html += `</table></div></div>`;
@@ -2807,8 +2858,9 @@ function addSpecializationV4() {
   const name = el ? el.value.trim() : "";
   const departmentName = curSetDepartment();
   if (!name) { toast("Введите название специализации", true); return; }
-  if (DB.settings.depts[name] || departmentGroups()[name]) { toast("Такое название уже используется", true); return; }
+  if (DB.settings.depts[name] || (departmentGroups()[name] && name !== departmentName)) { toast("Такое название уже используется", true); return; }
   DB.settings.depts[name] = JSON.parse(JSON.stringify(departmentProfile(departmentName)));
+  DB.settings.depts[name].inheritGoals = true;
   if (!Array.isArray(DB.settings.departments[departmentName])) DB.settings.departments[departmentName] = [];
   DB.settings.departments[departmentName].push(name);
   DB.settings.departmentUsesSpecializations[departmentName] = true;
@@ -2856,6 +2908,10 @@ function removeSpecializationV4() {
   renderSettings();
 }
 function saveDeptBasics() {
+  if (!curSetSpecialization()) {
+    toast("Нормативы настраиваются на уровне специализации", true);
+    return;
+  }
   const p = curSetProfile();
   const values = {};
   for (const k of ["minVisits", "activeM", "riskM", "courseX", "courseM", "corePct", "pervichkaM"]) {
@@ -2990,17 +3046,46 @@ function saveDeptTaxonomy() {
   toast(`Сохранено: правил — ${rules.length}, групп — ${Object.keys(p.groups).length}`);
   renderAll();
 }
-/* --- баллы и веса отделения --- */
+/* --- веса специализации и цели отделения/специализации --- */
+function enableSpecializationGoals() {
+  const specializationName = curSetSpecialization();
+  if (!specializationName) return;
+  const p = curSetProfile();
+  const departmentGoals = departmentProfile(curSetDepartment()).scoring.benchmarks;
+  p.scoring.benchmarks = Object.assign({}, departmentGoals);
+  p.inheritGoals = false;
+  saveLocal();
+  toast(`Для специализации «${specializationName}» включены отдельные цели`);
+  renderSettings();
+}
+
+function resetSpecializationGoals() {
+  const specializationName = curSetSpecialization();
+  if (!specializationName) return;
+  const p = curSetProfile();
+  if (!confirm(`Использовать для специализации «${specializationName}» цели отделения «${curSetDepartment()}»?`)) return;
+  p.inheritGoals = true;
+  saveLocal();
+  toast(`Специализация «${specializationName}» снова наследует цели отделения`);
+  renderAll();
+}
+
 function saveDeptScoring() {
   const p = curSetProfile();
+  const specializationName = curSetSpecialization();
   if (!p.scoring) p.scoring = defaultScoring();
-  for (const vk of ["v1", "v2", "v3", "v4", "v5", "v6"]) {
-    p.scoring.enabled[vk] = document.getElementById("sc_en_" + vk).checked;
-    p.scoring.weights[vk] = parseFloat(document.getElementById("sc_w_" + vk).value) || 0;
+  if (specializationName) {
+    for (const vk of ["v1", "v2", "v3", "v4", "v5", "v6"]) {
+      const enabledEl = document.getElementById("sc_en_" + vk);
+      const weightEl = document.getElementById("sc_w_" + vk);
+      if (enabledEl) p.scoring.enabled[vk] = enabledEl.checked;
+      if (weightEl) p.scoring.weights[vk] = parseFloat(weightEl.value) || 0;
+    }
   }
-  for (const [k] of Object.entries(p.scoring.benchmarks)) {
+  const canSaveGoals = !specializationName || p.inheritGoals !== true;
+  for (const k of Object.keys(defaultBenchmarks())) {
     const el = document.getElementById("sc_bm_" + k);
-    if (!el) continue;
+    if (!el || !canSaveGoals) continue;
     const raw = el.value.trim();
     const value = raw === "" ? "" : parseFloat(raw);
     if (value !== "" && (!isFinite(value) || value <= 0)) {
@@ -3018,16 +3103,18 @@ function saveDeptScoring() {
     p.scoring.benchmarks[k] = value;
   }
   saveLocal();
-  toast(`Баллы и веса ${curSetProfileKind()} сохранены`);
+  toast(specializationName
+    ? (p.inheritGoals === true ? `Веса специализации «${specializationName}» сохранены` : `Веса и цели специализации «${specializationName}» сохранены`)
+    : `Цели отделения «${curSetDepartment()}» сохранены`);
   renderAll();
 }
-/* --- персональные цели и нормативы врача --- */
+/* --- персональные цели врача --- */
 function enableDoctorMetricSettings() {
   const id = UI.setDoctor;
   if (!id || !DB.doctors[id]) return;
   DB.doctors[id].metricSettings = doctorMetricSettingsFromProfile(profileForDoctor(id));
   saveLocal();
-  toast(`Индивидуальные настройки включены для ${doctorName(id)}`);
+  toast(`Индивидуальные цели включены для ${doctorName(id)}`);
   renderSettings();
 }
 function resetDoctorMetricSettings() {
@@ -3036,33 +3123,18 @@ function resetDoctorMetricSettings() {
   if (!confirm(`Сбросить индивидуальные цели врача «${doctorName(id)}» и снова использовать настройки его отделения/специализации?`)) return;
   delete DB.doctors[id].metricSettings;
   saveLocal();
-  toast(`${doctorName(id)} снова наследует настройки профиля`);
+  toast(`${doctorName(id)} снова наследует цели специализации`);
   renderSettings();
 }
 function saveDoctorMetricSettings() {
   const id = UI.setDoctor;
   const doctor = id && DB.doctors[id];
   if (!doctor || !doctor.metricSettings) {
-    toast("Сначала включите индивидуальные настройки врача", true);
+    toast("Сначала включите индивидуальные цели врача", true);
     return;
   }
   const settings = doctor.metricSettings;
-  const values = {};
-  for (const key of DOCTOR_METRIC_PROFILE_KEYS) {
-    const el = document.getElementById("dm_" + key);
-    const value = el ? parseInt(el.value) : NaN;
-    if (!isNaN(value)) values[key] = value;
-  }
-  if (!(values.activeM > 0) || !(values.riskM > values.activeM)) {
-    toast("Срок потери должен быть больше ожидаемого срока возврата T", true);
-    return;
-  }
-  Object.assign(settings, values);
   if (!settings.scoring) settings.scoring = doctorMetricSettingsFromProfile(profileForDoctor(id)).scoring;
-  for (const vk of ["v1", "v2", "v3", "v4", "v5", "v6"]) {
-    settings.scoring.enabled[vk] = document.getElementById("dm_en_" + vk).checked;
-    settings.scoring.weights[vk] = parseFloat(document.getElementById("dm_w_" + vk).value) || 0;
-  }
   for (const key of Object.keys(defaultBenchmarks())) {
     const el = document.getElementById("dm_bm_" + key);
     if (!el) continue;
@@ -3083,7 +3155,7 @@ function saveDoctorMetricSettings() {
     settings.scoring.benchmarks[key] = value;
   }
   saveLocal();
-  toast(`Цели и нормативы врача «${doctorName(id)}» сохранены`);
+  toast(`Цели врача «${doctorName(id)}» сохранены`);
   renderAll();
 }
 /* --- сотрудники --- */
@@ -3091,9 +3163,25 @@ function setDoctorDepartment(id, val) {
   if (!DB.doctors[id]) return;
   const doctor = DB.doctors[id];
   doctor.department = val || null;
+  doctor.structureManual = Boolean(val);
   doctor.dept = null; // старое поле больше не должно переопределять новую иерархию
   if (!val || !(departmentGroups()[val] || []).includes(doctor.specialization)) doctor.specialization = null;
   saveLocal();
+  renderSettings();
+}
+function addDoctorV4() {
+  const el = document.getElementById("newDoctorName");
+  const name = el ? cleanupFioDisplay(el.value) : "";
+  if (!normFio(name)) { toast("Введите фамилию или ФИО врача", true); return; }
+  const duplicate = Object.entries(DB.doctors).find(([, doctor]) => [doctor.name, ...(doctor.aliases || [])].some(alias => fioScore(alias, name) >= 0.85));
+  if (duplicate) { toast(`Врач уже есть в списке: ${doctorName(duplicate[0])}`, true); return; }
+  const base = "manual_" + normFio(name).split(" ")[0];
+  let id = base, suffix = 2;
+  while (DB.doctors[id]) id = `${base}_${suffix++}`;
+  DB.doctors[id] = { name, aliases: [], structureManual: false };
+  UI.setDoctor = id;
+  saveLocal();
+  toast(`Врач «${name}» добавлен — назначьте отделение и специализацию`);
   renderSettings();
 }
 function setDoctorSpecialization(id, val) {
@@ -3101,6 +3189,7 @@ function setDoctorSpecialization(id, val) {
   const doctor = DB.doctors[id];
   const departmentName = resolvedDepartmentName(id);
   doctor.specialization = val && (departmentGroups()[departmentName] || []).includes(val) ? val : null;
+  doctor.structureManual = Boolean(doctor.department || doctor.specialization);
   doctor.dept = null;
   saveLocal();
   renderSettings();

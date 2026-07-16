@@ -336,31 +336,126 @@ function profilePhysiotherapy() {
   return p;
 }
 
+const CLINIC_STRUCTURE_VERSION = 1;
+const CLINIC_DEPARTMENT_SPECS = Object.freeze({
+  "Хирургия": ["Маммология", "Флебология", "УЗИ"],
+  "Терапия": ["Эндокринология", "Кардиология", "Неврология", "Психотерапия"],
+  "Косметология": ["Косметология", "Эстетисты"],
+  "Физиотерапия": ["Специалисты по телу", "Остеопатия"],
+  "Гинекология": ["Гинекология", "Урология"],
+});
+
+const CLINIC_DOCTOR_STRUCTURE = Object.freeze([
+  { surnames: ["пудовкина", "чернигова", "гайнутдинова", "лушникова"], department: "Косметология", specialization: "Косметология" },
+  { surnames: ["кожикина", "римашевская"], department: "Косметология", specialization: "Эстетисты" },
+  { surnames: ["кузьменко", "лятифова", "бережная"], department: "Гинекология", specialization: "Гинекология" },
+  { surnames: ["королева"], department: "Гинекология", specialization: "Урология" },
+  { surnames: ["дубровская"], department: "Хирургия", specialization: "Флебология" },
+  { surnames: ["самсонова", "никифорова"], department: "Хирургия", specialization: "Маммология" },
+  { surnames: ["перцхелия"], department: "Хирургия", specialization: "УЗИ" },
+  { surnames: ["бузина", "гоголева", "мановицкая", "жуйков"], department: "Терапия", specialization: "Эндокринология" },
+  { surnames: ["пан", "провоторова", "ахильгова"], department: "Терапия", specialization: "Кардиология" },
+  { surnames: ["федроов", "федоров"], department: "Терапия", specialization: "Неврология" },
+  { surnames: ["кузьменков"], department: "Терапия", specialization: "Психотерапия" },
+]);
+
+const CLINIC_STAFF = Object.freeze([
+  "Пудовкина", "Чернигова", "Гайнутдинова", "Лушникова", "Кожикина", "Римашевская",
+  "Кузьменко", "Лятифова", "Бережная", "Королева", "Дубровская", "Самсонова", "Никифорова", "Перцхелия",
+  "Бузина", "Гоголева", "Мановицкая", "Жуйков", "Пан", "Провоторова", "Ахильгова", "Федроов", "Кузьменков",
+]);
+
+function defaultDoctors() {
+  const doctors = {};
+  CLINIC_STAFF.forEach((name, index) => {
+    doctors[`clinic_${String(index + 1).padStart(2, "0")}`] = {
+      name,
+      aliases: name === "Федроов" ? ["Федоров"] : [],
+    };
+  });
+  return doctors;
+}
+
+function ensureClinicDoctors() {
+  if (!DB.doctors || typeof DB.doctors !== "object") DB.doctors = {};
+  let added = false;
+  const knownNames = doctor => [doctor.name, ...(doctor.aliases || [])].map(name => fioTokens(name)[0]).filter(Boolean);
+  for (const [suggestedId, staff] of Object.entries(defaultDoctors())) {
+    const surnameVariants = new Set(knownNames(staff));
+    const exists = Object.values(DB.doctors).some(doctor => knownNames(doctor).some(surname => surnameVariants.has(surname)));
+    if (exists) continue;
+    let id = suggestedId;
+    let suffix = 2;
+    while (DB.doctors[id]) id = `${suggestedId}_${suffix++}`;
+    DB.doctors[id] = staff;
+    added = true;
+  }
+  return added;
+}
+
+function cloneProfile(profile, matchers) {
+  const copy = JSON.parse(JSON.stringify(profile));
+  if (matchers) copy.matchers = matchers.slice();
+  return copy;
+}
+
+function clinicSpecializationProfiles() {
+  const profiles = {
+    "По умолчанию": defaultProfile(),
+    "Маммология": cloneProfile(profileSurgery(), ["маммолог", "онкодермат", "дермотоонко"]),
+    "Флебология": cloneProfile(profileSurgery(), ["флеболог"]),
+    "УЗИ": cloneProfile(profileSurgery(), ["узи", "ультразвуков"]),
+    "Эндокринология": cloneProfile(profileTherapy(), ["эндокрин"]),
+    "Кардиология": cloneProfile(profileTherapy(), ["кардио"]),
+    "Неврология": cloneProfile(profileTherapy(), ["невролог"]),
+    "Психотерапия": cloneProfile(profileTherapy(), ["психотерап", "психиат"]),
+    "Косметология": cloneProfile(profileCosmetology(), ["косметолог", "дермат"]),
+    "Эстетисты": cloneProfile(profileCosmetology(), ["эстетист"]),
+    "Специалисты по телу": cloneProfile(profilePhysiotherapy(), ["массаж", "реабилит", "специалист по телу", "физио"]),
+    "Остеопатия": cloneProfile(profilePhysiotherapy(), ["остеопат", "мануальн"]),
+    "Гинекология": cloneProfile(profileGynecology(), ["гинеколог", "акушер"]),
+    "Урология": cloneProfile(profileTherapy(), ["уролог"]),
+  };
+  for (const [name, profile] of Object.entries(profiles)) {
+    if (name !== "По умолчанию") profile.inheritGoals = true;
+  }
+  return profiles;
+}
+
+function clinicDepartmentProfiles() {
+  const therapy = profileTherapy();
+  therapy.matchers = therapy.matchers.filter(matcher => matcher !== "уролог");
+  const gynecology = profileGynecology();
+  gynecology.matchers = [...gynecology.matchers, "уролог"];
+  return {
+    "Хирургия": profileSurgery(),
+    "Терапия": therapy,
+    "Косметология": profileCosmetology(),
+    "Физиотерапия": profilePhysiotherapy(),
+    "Гинекология": gynecology,
+  };
+}
+
+function knownDoctorStructure(rawName) {
+  const tokens = new Set(fioTokens(rawName));
+  return CLINIC_DOCTOR_STRUCTURE.find(rule => rule.surnames.some(surname => tokens.has(surname))) || null;
+}
+
 function defaultSettings() {
-  const baseDepartmentProfile = defaultProfile();
   return {
     showScores: true,
     weightsV: 4, // версия схемы (v3-профили)
-    departments: {
-      "Общее отделение": ["Косметология", "Гинекология", "Хирургия", "Терапия", "Физиотерапия"],
-      "Без специализации": ["По умолчанию"],
-    },
-    departmentProfiles: {
-      "Общее отделение": JSON.parse(JSON.stringify(baseDepartmentProfile)),
-      "Без специализации": JSON.parse(JSON.stringify(baseDepartmentProfile)),
-    },
+    structureV: CLINIC_STRUCTURE_VERSION,
+    departments: JSON.parse(JSON.stringify(CLINIC_DEPARTMENT_SPECS)),
+    departmentProfiles: clinicDepartmentProfiles(),
     departmentUsesSpecializations: {
-      "Общее отделение": true,
-      "Без специализации": false,
+      "Хирургия": true,
+      "Терапия": true,
+      "Косметология": true,
+      "Физиотерапия": true,
+      "Гинекология": true,
     },
-    depts: {
-      "По умолчанию": defaultProfile(),
-      "Косметология": profileCosmetology(),
-      "Гинекология": profileGynecology(),
-      "Хирургия": profileSurgery(),
-      "Терапия": profileTherapy(),
-      "Физиотерапия": profilePhysiotherapy(),
-    },
+    depts: clinicSpecializationProfiles(),
   };
 }
 
@@ -369,7 +464,7 @@ function defaultSettings() {
  * settings.departmentProfiles: собственные настройки отделений.
  * settings.depts оставлено как хранилище профилей специализаций для совместимости. */
 function departmentGroups() {
-  const known = Object.keys((DB.settings && DB.settings.depts) || {});
+  const known = Object.keys((DB.settings && DB.settings.depts) || {}).filter(name => name !== "По умолчанию");
   const configured = (DB.settings && DB.settings.departments && typeof DB.settings.departments === "object" && !Array.isArray(DB.settings.departments))
     ? DB.settings.departments : {};
   const result = {};
@@ -429,6 +524,15 @@ function mergeMetricProfile(base, own) {
   return merged;
 }
 
+function specializationProfile(parentName, specializationName) {
+  const base = departmentProfile(parentName);
+  const own = specializationName && DB.settings.depts ? DB.settings.depts[specializationName] : null;
+  const merged = mergeMetricProfile(base, own || base);
+  if (!own || own.inheritGoals !== true) return merged;
+  merged.scoring.benchmarks = Object.assign({}, base.scoring.benchmarks);
+  return merged;
+}
+
 function departmentProfile(deptName) {
   const profiles = (DB.settings && DB.settings.departmentProfiles) || {};
   const fallback = ((DB.settings && DB.settings.depts) || {})["По умолчанию"] || defaultProfile();
@@ -436,14 +540,15 @@ function departmentProfile(deptName) {
   return mergeMetricProfile(fallback, own || fallback);
 }
 
-/* Полный профиль: отделение либо специализация с наследованием от своего отделения. */
+/* Полный профиль: специализация хранит свои нормативы/веса и при необходимости наследует цели отделения. */
 function deptProfile(profileName) {
-  const departments = (DB.settings && DB.settings.departmentProfiles) || {};
-  if (profileName && departments[profileName]) return departmentProfile(profileName);
   const specializations = (DB.settings && DB.settings.depts) || {};
   const own = profileName && specializations[profileName] ? specializations[profileName] : null;
   const parent = departmentForSpecialization(profileName);
-  const base = parent ? departmentProfile(parent) : (specializations["По умолчанию"] || defaultProfile());
+  if (parent && own) return specializationProfile(parent, profileName);
+  const departments = (DB.settings && DB.settings.departmentProfiles) || {};
+  if (profileName && departments[profileName]) return departmentProfile(profileName);
+  const base = specializations["По умолчанию"] || defaultProfile();
   return mergeMetricProfile(base, own || base);
 }
 
@@ -456,8 +561,11 @@ function profileMatchesJob(profile, jobText) {
 function resolvedDepartmentName(docId) {
   const doc = DB.doctors[docId];
   const groups = departmentGroups();
-  const names = Object.keys(groups);
-  if (!doc) return names.includes("Без специализации") ? "Без специализации" : names[0];
+  if (!doc) return "Не распределено";
+  if (!doc.structureManual) {
+    const known = knownDoctorStructure(doc.name);
+    if (known && groups[known.department]) return known.department;
+  }
   if (doc.department && groups[doc.department]) return doc.department;
   if (doc.dept && groups[doc.dept]) return doc.dept;
   for (const candidate of [doc.specialization, doc.dept]) {
@@ -471,7 +579,7 @@ function resolvedDepartmentName(docId) {
     }
     if (profileMatchesJob(departmentProfile(deptName), doc.spec)) return deptName;
   }
-  return names.includes("Без специализации") ? "Без специализации" : names[0];
+  return "Не распределено";
 }
 
 /* Специализация применяется только когда она включена у выбранного отделения. */
@@ -481,6 +589,10 @@ function resolvedSpecializationName(docId) {
   const departmentName = resolvedDepartmentName(docId);
   if (!departmentUsesSpecializations(departmentName)) return null;
   const specs = departmentGroups()[departmentName] || [];
+  if (!doc.structureManual) {
+    const known = knownDoctorStructure(doc.name);
+    if (known && known.department === departmentName && specs.includes(known.specialization)) return known.specialization;
+  }
   for (const candidate of [doc.specialization, doc.dept]) {
     if (candidate && specs.includes(candidate)) return candidate;
   }
@@ -502,32 +614,26 @@ function doctorStructureLabel(docId) {
   return specializationName ? `${departmentName} · ${specializationName}` : departmentName;
 }
 
-const DOCTOR_METRIC_PROFILE_KEYS = ["minVisits", "activeM", "riskM", "courseX", "courseM", "corePct", "pervichkaM"];
-
 function doctorMetricSettingsFromProfile(profile) {
-  const settings = {};
-  for (const key of DOCTOR_METRIC_PROFILE_KEYS) settings[key] = profile[key];
-  settings.scoring = {
-    weights: Object.assign({}, profile.scoring.weights),
-    enabled: Object.assign({}, profile.scoring.enabled),
-    benchmarks: Object.assign({}, profile.scoring.benchmarks),
+  return {
+    scoring: {
+      benchmarks: Object.assign({}, profile.scoring.benchmarks),
+    },
   };
-  return settings;
 }
 
 function profileForDoctor(docId) {
-  const base = deptProfile(resolvedDeptName(docId));
+  const departmentName = resolvedDepartmentName(docId);
+  const specializationName = resolvedSpecializationName(docId);
+  const base = specializationName ? specializationProfile(departmentName, specializationName) : departmentProfile(departmentName);
   const doc = DB.doctors[docId];
   const own = doc && doc.metricSettings;
   if (!own || typeof own !== "object") return base;
   const merged = Object.assign({}, base);
-  for (const key of DOCTOR_METRIC_PROFILE_KEYS) {
-    if (own[key] != null && own[key] !== "") merged[key] = own[key];
-  }
   const ownScoring = own.scoring || {};
   merged.scoring = {
-    weights: Object.assign({}, base.scoring.weights, ownScoring.weights || {}),
-    enabled: Object.assign({}, base.scoring.enabled, ownScoring.enabled || {}),
+    weights: Object.assign({}, base.scoring.weights),
+    enabled: Object.assign({}, base.scoring.enabled),
     benchmarks: Object.assign({}, base.scoring.benchmarks, ownScoring.benchmarks || {}),
   };
   return merged;
@@ -624,7 +730,7 @@ function cosmetologyRules() {
 let DB = {
   version: APP_VERSION,
   settings: defaultSettings(),
-  doctors: {},   // id -> {name, aliases:[], spec, dept}
+  doctors: defaultDoctors(),   // id -> {name, aliases:[], spec, department, specialization}
   months: {},    // 'YYYY-MM' -> {vyrabotka:{}, kb:{docId:{win:{...}}}, naznach:{docId:{slice:{...}}}, pervichka:{}, prostoy:{}, zapis:{}, manual6:{}}
   dynamicNotes: {}, // ручные пояснения к точкам роста и риска
   fileLog: [],
@@ -726,6 +832,7 @@ function fioScore(rawA, rawB) {
   const ta = fioTokens(rawA), tb = fioTokens(rawB);
   if (!ta.length || !tb.length) return 0;
   if (tokenMatch(ta[0], tb[0]) === 0) return 0;
+  if (ta.length === 1 || tb.length === 1) return 0.9; // карточка штатного расписания содержит только фамилию
   const n = Math.min(ta.length, tb.length, 3);
   let sum = 0;
   for (let i = 0; i < n; i++) sum += tokenMatch(ta[i], tb[i]);
@@ -881,10 +988,68 @@ function normalizeProfileRecord(raw, inherited) {
   return p;
 }
 
+function upgradeClinicStructure(defaults) {
+  if (Number(DB.settings.structureV || 0) >= CLINIC_STRUCTURE_VERSION) return false;
+  const sourceProfiles = (DB.settings.depts && typeof DB.settings.depts === "object") ? DB.settings.depts : {};
+  const sourceDepartments = (DB.settings.departments && typeof DB.settings.departments === "object" && !Array.isArray(DB.settings.departments)) ? DB.settings.departments : {};
+  const sourceDepartmentProfiles = (DB.settings.departmentProfiles && typeof DB.settings.departmentProfiles === "object") ? DB.settings.departmentProfiles : {};
+  const sourceFlags = (DB.settings.departmentUsesSpecializations && typeof DB.settings.departmentUsesSpecializations === "object") ? DB.settings.departmentUsesSpecializations : {};
+  const sourceBySpecialization = {
+    "Маммология": "Хирургия", "Флебология": "Хирургия", "УЗИ": "Хирургия",
+    "Эндокринология": "Терапия", "Кардиология": "Терапия", "Неврология": "Терапия", "Психотерапия": "Терапия",
+    "Эстетисты": "Косметология", "Специалисты по телу": "Физиотерапия", "Остеопатия": "Физиотерапия",
+    "Урология": "Терапия",
+  };
+  const copy = value => JSON.parse(JSON.stringify(value));
+  const targetDepartments = copy(defaults.departments);
+  const targetDepartmentProfiles = {};
+  const targetFlags = {};
+  const targetProfiles = {
+    "По умолчанию": copy(sourceProfiles["По умолчанию"] || defaults.depts["По умолчанию"]),
+  };
+
+  for (const [departmentName, specs] of Object.entries(targetDepartments)) {
+    const departmentSeed = sourceProfiles[departmentName] || sourceDepartmentProfiles[departmentName] || defaults.departmentProfiles[departmentName];
+    targetDepartmentProfiles[departmentName] = copy(departmentSeed);
+    targetDepartmentProfiles[departmentName].matchers = (defaults.departmentProfiles[departmentName].matchers || []).slice();
+    targetFlags[departmentName] = true;
+    for (const specName of specs) {
+      const sourceName = sourceBySpecialization[specName];
+      const seed = sourceProfiles[specName] || (sourceName && sourceProfiles[sourceName]) || defaults.depts[specName];
+      targetProfiles[specName] = copy(seed);
+      targetProfiles[specName].matchers = (defaults.depts[specName].matchers || []).slice();
+      targetProfiles[specName].inheritGoals = true;
+    }
+  }
+
+  // Не удаляем созданные пользователем отделения и профили во время перехода.
+  const oldServiceDepartments = new Set(["Общее отделение", "Без специализации", "Без отделения"]);
+  for (const [departmentName, specs] of Object.entries(sourceDepartments)) {
+    if (oldServiceDepartments.has(departmentName) || targetDepartments[departmentName]) continue;
+    targetDepartments[departmentName] = Array.isArray(specs) ? specs.slice() : [];
+    targetDepartmentProfiles[departmentName] = copy(sourceDepartmentProfiles[departmentName] || sourceProfiles[departmentName] || defaults.depts["По умолчанию"]);
+    targetFlags[departmentName] = sourceFlags[departmentName] === true;
+  }
+  const legacyGeneralProfiles = new Set(["Хирургия", "Терапия", "Физиотерапия"]);
+  for (const [profileName, profile] of Object.entries(sourceProfiles)) {
+    if (profileName === "По умолчанию" || targetProfiles[profileName] || legacyGeneralProfiles.has(profileName)) continue;
+    targetProfiles[profileName] = copy(profile);
+  }
+
+  DB.settings.departments = targetDepartments;
+  DB.settings.departmentProfiles = targetDepartmentProfiles;
+  DB.settings.departmentUsesSpecializations = targetFlags;
+  DB.settings.depts = targetProfiles;
+  DB.settings.structureV = CLINIC_STRUCTURE_VERSION;
+  return true;
+}
+
 /* Профили после загрузки/импорта: нормализовать старую плоскую схему и
    достроить отделение -> опциональные специализации. */
 function normalizeProfiles() {
   const defaults = defaultSettings();
+  const structureUpgraded = upgradeClinicStructure(defaults);
+  let metricScopeUpgraded = false;
   if (!DB.settings.depts || typeof DB.settings.depts !== "object") DB.settings.depts = defaults.depts;
   for (const dn of Object.keys(DB.settings.depts)) {
     DB.settings.depts[dn] = normalizeProfileRecord(DB.settings.depts[dn], defaultProfile());
@@ -910,7 +1075,7 @@ function normalizeProfiles() {
     normalizedDepartments[name] = specs;
   }
   if (!Object.keys(normalizedDepartments).length) normalizedDepartments["Общее отделение"] = [];
-  const unassigned = Object.keys(DB.settings.depts).filter(spec => !assigned.has(spec));
+  const unassigned = Object.keys(DB.settings.depts).filter(spec => spec !== "По умолчанию" && !assigned.has(spec));
   if (unassigned.length) normalizedDepartments["Без отделения"] = [...new Set([...(normalizedDepartments["Без отделения"] || []), ...unassigned])];
   DB.settings.departments = normalizedDepartments;
 
@@ -921,6 +1086,25 @@ function normalizeProfiles() {
     normalizedDepartmentProfiles[name] = normalizeProfileRecord(seed, DB.settings.depts["По умолчанию"] || defaultProfile());
   }
   DB.settings.departmentProfiles = normalizedDepartmentProfiles;
+
+  // Переход от общей настройки профиля к явным уровням:
+  // нормативы/веса принадлежат специализации, а цели могут наследоваться от отделения.
+  for (const [departmentName, specs] of Object.entries(normalizedDepartments)) {
+    const departmentBenchmarks = normalizedDepartmentProfiles[departmentName].scoring.benchmarks;
+    for (const specName of specs) {
+      const profile = DB.settings.depts[specName];
+      if (!profile) continue;
+      if (profile.inheritGoals == null) {
+        const sameGoals = JSON.stringify(profile.scoring.benchmarks) === JSON.stringify(departmentBenchmarks);
+        profile.inheritGoals = profile.inheritMetrics === true || sameGoals;
+        metricScopeUpgraded = true;
+      }
+      if (Object.prototype.hasOwnProperty.call(profile, "inheritMetrics")) {
+        delete profile.inheritMetrics;
+        metricScopeUpgraded = true;
+      }
+    }
+  }
 
   const oldFlags = (DB.settings.departmentUsesSpecializations && typeof DB.settings.departmentUsesSpecializations === "object")
     ? DB.settings.departmentUsesSpecializations : {};
@@ -948,7 +1132,14 @@ function normalizeProfiles() {
     if (!doctor.specialization && doctor.dept && doctor.department && (normalizedDepartments[doctor.department] || []).includes(doctor.dept)) {
       doctor.specialization = doctor.dept;
     }
+    if (structureUpgraded && !doctor.structureManual && knownDoctorStructure(doctor.name)) {
+      doctor.department = null;
+      doctor.specialization = null;
+      doctor.dept = null;
+    }
   }
+  const rosterExpanded = ensureClinicDoctors();
+  return structureUpgraded || metricScopeUpgraded || rosterExpanded;
 }
 
 function applyLoadedDatabase(parsed) {
@@ -956,8 +1147,9 @@ function applyLoadedDatabase(parsed) {
   if (!db) return false;
   DB = db;
   if (DB.settings.showScores == null) DB.settings.showScores = true;
-  normalizeProfiles();
+  const normalized = normalizeProfiles();
   for (const mk of Object.keys(DB.months)) ensureMonth(mk);
+  if (normalized) setTimeout(() => { saveLocal(); }, 0);
   return true;
 }
 
@@ -1056,6 +1248,7 @@ function mergeDoctors(ids) {
     if (!tgt.dept && src.dept) tgt.dept = src.dept;
     if (!tgt.department && src.department) tgt.department = src.department;
     if (!tgt.specialization && src.specialization) tgt.specialization = src.specialization;
+    if (!tgt.structureManual && src.structureManual) tgt.structureManual = true;
     if (!tgt.subdept && src.subdept) tgt.subdept = src.subdept;
     if (!tgt.spec && src.spec) tgt.spec = src.spec;
     if (!tgt.metricSettings && src.metricSettings) tgt.metricSettings = src.metricSettings;
@@ -1337,7 +1530,7 @@ async function clearDB() {
     }
   }
   const st = DB.settings;
-  DB = { version: APP_VERSION, settings: st, doctors: {}, months: {}, dynamicNotes: {}, fileLog: [] };
+  DB = { version: APP_VERSION, settings: st, doctors: defaultDoctors(), months: {}, dynamicNotes: {}, fileLog: [] };
   await saveLocal();
   renderAll();
 }

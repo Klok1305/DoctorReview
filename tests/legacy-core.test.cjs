@@ -90,10 +90,11 @@ test("client-base parser preserves patient identity for operational lists", () =
 test("score coverage requires exact windows and blocks incomplete ranking", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
-    DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], dept: 'По умолчанию' } };
-    const own = doctorMetricSettingsFromProfile(deptProfile('По умолчанию'));
-    for (const key of Object.keys(own.scoring.enabled)) own.scoring.enabled[key] = key === 'v4';
-    own.scoring.weights.v4 = 100;
+    DB.doctors = { d1: { name: 'Бузина Врач', aliases: [] } };
+    const specialization = DB.settings.depts['Эндокринология'];
+    for (const key of Object.keys(specialization.scoring.enabled)) specialization.scoring.enabled[key] = key === 'v4';
+    specialization.scoring.weights.v4 = 100;
+    const own = doctorMetricSettingsFromProfile(profileForDoctor('d1'));
     for (const key of Object.keys(own.scoring.benchmarks)) own.scoring.benchmarks[key] = '';
     own.scoring.benchmarks.akbShare = 10;
     own.scoring.benchmarks.riskShare = 50;
@@ -182,7 +183,7 @@ test("legacy v1 database migrates to the current schema", () => {
   assert.deepEqual(Object.keys(result.doctors), ["d1"]);
 });
 
-test("legacy settings receive department groups without changing specializations", () => {
+test("default settings expose the clinic departments and hide the system fallback profile", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
     const before = Object.keys(DB.settings.depts);
@@ -192,11 +193,57 @@ test("legacy settings receive department groups without changing specializations
   })()`, context);
   assert.deepEqual(JSON.parse(JSON.stringify(result.before)), JSON.parse(JSON.stringify(result.after)));
   const groups = JSON.parse(JSON.stringify(result.groups));
-  assert.ok(Object.values(groups).flat().includes("Косметология"));
-  assert.ok(Object.values(groups).flat().includes("По умолчанию"));
+  assert.deepEqual(Object.keys(groups), ["Хирургия", "Терапия", "Косметология", "Физиотерапия", "Гинекология"]);
+  assert.deepEqual(groups["Хирургия"], ["Маммология", "Флебология", "УЗИ"]);
+  assert.deepEqual(groups["Терапия"], ["Эндокринология", "Кардиология", "Неврология", "Психотерапия"]);
+  assert.deepEqual(groups["Косметология"], ["Косметология", "Эстетисты"]);
+  assert.deepEqual(groups["Физиотерапия"], ["Специалисты по телу", "Остеопатия"]);
+  assert.deepEqual(groups["Гинекология"], ["Гинекология", "Урология"]);
+  assert.ok(!Object.values(groups).flat().includes("По умолчанию"));
 });
 
-test("legacy doctor specialization is migrated under its parent department", () => {
+test("the clinic roster is available before the first import", () => {
+  const context = createContext();
+  const names = vm.runInContext("Object.values(DB.doctors).map(d => d.name)", context);
+  assert.deepEqual(JSON.parse(JSON.stringify(names)), [
+    "Пудовкина", "Чернигова", "Гайнутдинова", "Лушникова", "Кожикина", "Римашевская",
+    "Кузьменко", "Лятифова", "Бережная", "Королева", "Дубровская", "Самсонова", "Никифорова", "Перцхелия",
+    "Бузина", "Гоголева", "Мановицкая", "Жуйков", "Пан", "Провоторова", "Ахильгова", "Федроов", "Кузьменков",
+  ]);
+  const structures = vm.runInContext("Object.fromEntries(Object.entries(DB.doctors).map(([id, d]) => [d.name, doctorStructureLabel(id)]))", context);
+  assert.deepEqual(JSON.parse(JSON.stringify(structures)), {
+    "Пудовкина": "Косметология · Косметология", "Чернигова": "Косметология · Косметология",
+    "Гайнутдинова": "Косметология · Косметология", "Лушникова": "Косметология · Косметология",
+    "Кожикина": "Косметология · Эстетисты", "Римашевская": "Косметология · Эстетисты",
+    "Кузьменко": "Гинекология · Гинекология", "Лятифова": "Гинекология · Гинекология", "Бережная": "Гинекология · Гинекология",
+    "Королева": "Гинекология · Урология", "Дубровская": "Хирургия · Флебология",
+    "Самсонова": "Хирургия · Маммология", "Никифорова": "Хирургия · Маммология", "Перцхелия": "Хирургия · УЗИ",
+    "Бузина": "Терапия · Эндокринология", "Гоголева": "Терапия · Эндокринология",
+    "Мановицкая": "Терапия · Эндокринология", "Жуйков": "Терапия · Эндокринология",
+    "Пан": "Терапия · Кардиология", "Провоторова": "Терапия · Кардиология", "Ахильгова": "Терапия · Кардиология",
+    "Федроов": "Терапия · Неврология", "Кузьменков": "Терапия · Психотерапия",
+  });
+});
+
+test("full names from imports enrich roster cards instead of creating duplicates", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    const before = Object.keys(DB.doctors).length;
+    const pudovkinaId = resolveDoctor('Пудовкина Юлия Геннадьевна');
+    const fedorovId = resolveDoctor('Федоров Иван Сергеевич');
+    return {
+      before, after: Object.keys(DB.doctors).length,
+      pudovkinaId, pudovkinaName: doctorName(pudovkinaId),
+      fedorovId, fedorovName: doctorName(fedorovId)
+    };
+  })()`, context);
+  assert.equal(result.before, 23);
+  assert.equal(result.after, 23);
+  assert.equal(result.pudovkinaName, "Пудовкина Юлия Геннадьевна");
+  assert.equal(result.fedorovName, "Федоров Иван Сергеевич");
+});
+
+test("legacy flat therapy assignment becomes the therapy department", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
     DB.doctors = { d1: { name: 'Старый Врач', aliases: [], dept: 'Терапия' } };
@@ -208,10 +255,129 @@ test("legacy doctor specialization is migrated under its parent department", () 
       resolvedSpecialization: resolvedSpecializationName('d1')
     };
   })()`, context);
-  assert.equal(result.department, "Общее отделение");
-  assert.equal(result.specialization, "Терапия");
-  assert.equal(result.resolvedDepartment, "Общее отделение");
-  assert.equal(result.resolvedSpecialization, "Терапия");
+  assert.equal(result.department, "Терапия");
+  assert.equal(result.specialization, undefined);
+  assert.equal(result.resolvedDepartment, "Терапия");
+  assert.equal(result.resolvedSpecialization, null);
+});
+
+test("listed doctors are assigned to their specialization by surname", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = {
+      d1: { name: 'Пудовкина Юлия Геннадьевна', aliases: [] },
+      d2: { name: 'Римашевская Анна', aliases: [] },
+      d3: { name: 'Королева Мария', aliases: [] },
+      d4: { name: 'Дубровская Ольга', aliases: [] },
+      d5: { name: 'Перцхелия Нино', aliases: [] },
+      d6: { name: 'Провоторова Елена', aliases: [] },
+      d7: { name: 'Федоров Иван', aliases: [] },
+      d8: { name: 'Кузьменков Петр', aliases: [] }
+    };
+    normalizeProfiles();
+    return Object.fromEntries(Object.keys(DB.doctors).map(id => [id, {
+      department: resolvedDepartmentName(id), specialization: resolvedSpecializationName(id)
+    }]));
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.deepEqual(plain.d1, { department: "Косметология", specialization: "Косметология" });
+  assert.deepEqual(plain.d2, { department: "Косметология", specialization: "Эстетисты" });
+  assert.deepEqual(plain.d3, { department: "Гинекология", specialization: "Урология" });
+  assert.deepEqual(plain.d4, { department: "Хирургия", specialization: "Флебология" });
+  assert.deepEqual(plain.d5, { department: "Хирургия", specialization: "УЗИ" });
+  assert.deepEqual(plain.d6, { department: "Терапия", specialization: "Кардиология" });
+  assert.deepEqual(plain.d7, { department: "Терапия", specialization: "Неврология" });
+  assert.deepEqual(plain.d8, { department: "Терапия", specialization: "Психотерапия" });
+});
+
+test("manual doctor structure overrides the surname preset", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: {
+      name: 'Пудовкина Юлия', aliases: [], structureManual: true,
+      department: 'Терапия', specialization: 'Эндокринология'
+    } };
+    return { department: resolvedDepartmentName('d1'), specialization: resolvedSpecializationName('d1') };
+  })()`, context);
+  assert.equal(result.department, "Терапия");
+  assert.equal(result.specialization, "Эндокринология");
+});
+
+test("job-title fallback follows the new department hierarchy", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = {
+      d1: { name: 'Новый Уролог', aliases: [], spec: 'врач-уролог' },
+      d2: { name: 'Новый Остеопат', aliases: [], spec: 'врач-остеопат' },
+      d3: { name: 'Новый Маммолог', aliases: [], spec: 'врач-маммолог' }
+    };
+    return Object.fromEntries(Object.keys(DB.doctors).map(id => [id, doctorStructureLabel(id)]));
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.equal(plain.d1, "Гинекология · Урология");
+  assert.equal(plain.d2, "Физиотерапия · Остеопатия");
+  assert.equal(plain.d3, "Хирургия · Маммология");
+});
+
+test("same department and specialization names keep separate metric profiles", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.settings.departmentProfiles['Косметология'].minVisits = 8;
+    DB.settings.depts['Косметология'].minVisits = 4;
+    DB.settings.departmentProfiles['Косметология'].scoring.weights.v1 = 70;
+    DB.settings.depts['Косметология'].scoring.weights.v1 = 25;
+    DB.settings.departmentProfiles['Косметология'].scoring.benchmarks.revenue = 100;
+    DB.settings.depts['Косметология'].scoring.benchmarks.revenue = 250;
+    DB.doctors = { d1: { name: 'Пудовкина Юлия', aliases: [] } };
+    const inheritedGoal = profileForDoctor('d1').scoring.benchmarks.revenue;
+    DB.settings.depts['Косметология'].inheritGoals = false;
+    return {
+      effective: profileForDoctor('d1').scoring.benchmarks.revenue,
+      inheritedGoal,
+      effectiveMinVisits: profileForDoctor('d1').minVisits,
+      effectiveWeight: profileForDoctor('d1').scoring.weights.v1,
+      department: departmentProfile('Косметология').scoring.benchmarks.revenue,
+      specialization: deptProfile('Косметология').scoring.benchmarks.revenue
+    };
+  })()`, context);
+  assert.equal(result.inheritedGoal, 100);
+  assert.equal(result.department, 100);
+  assert.equal(result.specialization, 250);
+  assert.equal(result.effective, 250);
+  assert.equal(result.effectiveMinVisits, 4);
+  assert.equal(result.effectiveWeight, 25);
+});
+
+test("v1.0.8 structure migrates once and preserves configured profile values", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    const cosmetology = profileCosmetology();
+    cosmetology.activeM = 9;
+    DB.settings = {
+      showScores: true, weightsV: 4,
+      departments: { 'Общее отделение': ['Косметология', 'Гинекология', 'Хирургия', 'Терапия', 'Физиотерапия'] },
+      departmentProfiles: { 'Общее отделение': defaultProfile() },
+      departmentUsesSpecializations: { 'Общее отделение': true },
+      depts: {
+        'По умолчанию': defaultProfile(), 'Косметология': cosmetology,
+        'Гинекология': profileGynecology(), 'Хирургия': profileSurgery(),
+        'Терапия': profileTherapy(), 'Физиотерапия': profilePhysiotherapy()
+      }
+    };
+    DB.doctors = { d1: { name: 'Кожикина Анна', aliases: [], department: 'Общее отделение', specialization: 'Косметология' } };
+    normalizeProfiles();
+    return {
+      version: DB.settings.structureV,
+      departments: Object.keys(departmentGroups()),
+      inheritedActiveM: DB.settings.depts['Эстетисты'].activeM,
+      doctor: { department: resolvedDepartmentName('d1'), specialization: resolvedSpecializationName('d1') }
+    };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.equal(plain.version, 1);
+  assert.deepEqual(plain.departments, ["Хирургия", "Терапия", "Косметология", "Физиотерапия", "Гинекология"]);
+  assert.equal(plain.inheritedActiveM, 9);
+  assert.deepEqual(plain.doctor, { department: "Косметология", specialization: "Эстетисты" });
 });
 
 test("department profile is used when specializations are disabled", () => {
@@ -262,17 +428,17 @@ test("specialization can override settings inside one department", () => {
   assert.equal(result.label, "Диагностика · УЗИ");
 });
 
-test("doctor metric settings inherit specialization values and override selected goals", () => {
+test("doctor settings override only goals and keep specialization norms and weights", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
     DB.doctors = {
-      d1: { name: 'Врач с целью', aliases: [], dept: 'Терапия' },
-      d2: { name: 'Врач без цели', aliases: [], dept: 'Терапия' }
+      d1: { name: 'Бузина Врач с целью', aliases: [] },
+      d2: { name: 'Гоголева Врач без цели', aliases: [] }
     };
     const inherited = profileForDoctor('d1');
     DB.doctors.d1.metricSettings = {
       minVisits: 9,
-      scoring: { benchmarks: { revenue: 123456 } }
+      scoring: { weights: { v1: 99 }, enabled: { v1: false }, benchmarks: { revenue: 123456 } }
     };
     const personalized = profileForDoctor('d1');
     const untouched = profileForDoctor('d2');
@@ -282,6 +448,11 @@ test("doctor metric settings inherit specialization values and override selected
       personalizedRevenue: personalized.scoring.benchmarks.revenue,
       personalizedAvgCheck: personalized.scoring.benchmarks.avgCheck,
       personalizedMinVisits: personalized.minVisits,
+      inheritedMinVisits: inherited.minVisits,
+      personalizedWeight: personalized.scoring.weights.v1,
+      inheritedWeight: inherited.scoring.weights.v1,
+      personalizedEnabled: personalized.scoring.enabled.v1,
+      inheritedEnabled: inherited.scoring.enabled.v1,
       untouchedRevenue: untouched.scoring.benchmarks.revenue,
       snapshot: doctorMetricSettingsFromProfile(untouched)
     };
@@ -289,9 +460,13 @@ test("doctor metric settings inherit specialization values and override selected
   const plain = JSON.parse(JSON.stringify(result));
   assert.equal(plain.personalizedRevenue, 123456);
   assert.equal(plain.personalizedAvgCheck, plain.inheritedAvgCheck);
-  assert.equal(plain.personalizedMinVisits, 9);
+  assert.equal(plain.personalizedMinVisits, plain.inheritedMinVisits);
+  assert.equal(plain.personalizedWeight, plain.inheritedWeight);
+  assert.equal(plain.personalizedEnabled, plain.inheritedEnabled);
   assert.equal(plain.untouchedRevenue, plain.inheritedRevenue);
   assert.equal(plain.snapshot.scoring.benchmarks.revenue, plain.untouchedRevenue);
+  assert.equal(Object.hasOwn(plain.snapshot, "minVisits"), false);
+  assert.equal(Object.hasOwn(plain.snapshot.scoring, "weights"), false);
 });
 
 test("replacement protection distinguishes identical and changed slots", () => {
@@ -325,11 +500,12 @@ test("metric engine calculates a deterministic synthetic month", () => {
 test("personal doctor goal is used by the score calculation", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
-    DB.doctors = { d1: { name: 'Врач с личной целью', aliases: [], dept: 'По умолчанию' } };
-    const own = doctorMetricSettingsFromProfile(deptProfile('По умолчанию'));
-    for (const key of Object.keys(own.scoring.enabled)) own.scoring.enabled[key] = false;
-    own.scoring.enabled.v1 = true;
-    own.scoring.weights.v1 = 100;
+    DB.doctors = { d1: { name: 'Бузина Врач с личной целью', aliases: [] } };
+    const specialization = DB.settings.depts['Эндокринология'];
+    for (const key of Object.keys(specialization.scoring.enabled)) specialization.scoring.enabled[key] = false;
+    specialization.scoring.enabled.v1 = true;
+    specialization.scoring.weights.v1 = 100;
+    const own = doctorMetricSettingsFromProfile(profileForDoctor('d1'));
     for (const key of Object.keys(own.scoring.benchmarks)) own.scoring.benchmarks[key] = '';
     own.scoring.benchmarks.revenue = 100;
     DB.doctors.d1.metricSettings = own;
