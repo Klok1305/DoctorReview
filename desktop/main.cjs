@@ -313,6 +313,59 @@ function createWindow() {
               UI.docMonth = '2026-02';
               switchTab('doctor');
               await new Promise(resolve => setTimeout(resolve, 300));
+              const doctorHeaderMetrics = [...document.querySelectorAll('#blkHead .kpi .lbl')].map(element => element.textContent.trim());
+              const doctorHeaderMetricsValid = doctorHeaderMetrics.length === 5
+                && doctorHeaderMetrics.some(label => label.includes('Пациентов за месяц'))
+                && doctorHeaderMetrics.some(label => label.includes('Загрузка расписания'))
+                && doctorHeaderMetrics.some(label => label.includes('Коэффициент визитов на пациента за месяц'))
+                && doctorHeaderMetrics.some(label => label.includes('Коэффициент визитов на пациента за 12 мес.'))
+                && doctorHeaderMetrics.some(label => label.includes('Объём активной клиентской базы'))
+                && !doctorHeaderMetrics.some(label => label.includes('Количество визитов за месяц'));
+              const doctorHeaderCardRects = [...document.querySelectorAll('#blkHead .kpi')].map(element => {
+                const rect = element.getBoundingClientRect();
+                return { width: Math.round(rect.width), top: Math.round(rect.top) };
+              });
+              const doctorHeaderLayoutValid = doctorHeaderCardRects.length === 5
+                && doctorHeaderCardRects.every(rect => rect.width >= 150)
+                && Math.max(...doctorHeaderCardRects.map(rect => rect.top)) - Math.min(...doctorHeaderCardRects.map(rect => rect.top)) <= 2;
+              const doctorGoalCards = [...document.querySelectorAll('#doctorGoalsSummary .doctor-goal-item')].map(element => ({
+                key: element.dataset.goalKey,
+                vector: element.dataset.goalVector,
+                vectorLabel: element.querySelector('.doctor-goal-vector')?.textContent.trim() || '',
+                target: element.querySelector('.doctor-goal-target')?.textContent.trim() || '',
+                fact: element.querySelector('.doctor-goal-fact')?.textContent.trim() || '',
+                state: ['goal-good', 'goal-warn', 'goal-bad', 'goal-na'].find(name => element.classList.contains(name)) || ''
+              }));
+              const doctorGoalsSummaryValid = doctorGoalCards.length > 0
+                && doctorGoalCards.every(goal => /^v[1-6]$/.test(goal.vector)
+                  && /^В[1-6]\\*?$/.test(goal.vectorLabel)
+                  && goal.target.startsWith('Цель:')
+                  && goal.fact.startsWith('Факт:')
+                  && Boolean(goal.state))
+                && doctorGoalCards.some(goal => goal.fact !== 'Факт: нет данных')
+                && doctorGoalCards.some(goal => goal.state === 'goal-good')
+                && doctorGoalCards.some(goal => goal.state === 'goal-bad');
+              const mirrorChart = UI.charts.chStack;
+              const mirrorGap = mirrorChart ? Number(mirrorChart.options.plugins.mirrorRevenue.gap) : 0;
+              const mirrorOwnDatasets = mirrorChart ? mirrorChart.data.datasets.filter(dataset => dataset.mirrorSide === 'own') : [];
+              const mirrorRefDataset = mirrorChart ? mirrorChart.data.datasets.find(dataset => dataset.mirrorSide === 'ref') : null;
+              const mirrorRevenueDetails = {
+                ownDatasets: mirrorOwnDatasets.length,
+                refDataset: Boolean(mirrorRefDataset),
+                gap: mirrorGap,
+                gapPixels: mirrorChart ? Math.round(Math.abs(mirrorChart.scales.x.getPixelForValue(mirrorGap) - mirrorChart.scales.x.getPixelForValue(-mirrorGap))) : 0,
+                ownRangesValid: mirrorOwnDatasets.length > 0 && mirrorOwnDatasets.every(dataset => dataset.data.every((range, index) => Array.isArray(range)
+                  && range.length === 2
+                  && range[1] <= -mirrorGap + 0.01
+                  && Math.abs((range[1] - range[0]) - (dataset.mirrorValues[index] || 0)) < 0.01)),
+                refRangesValid: Boolean(mirrorRefDataset) && mirrorRefDataset.data.every((range, index) => Array.isArray(range)
+                  && range.length === 2
+                  && Math.abs(range[0] - mirrorGap) < 0.01
+                  && Math.abs((range[1] - range[0]) - (mirrorRefDataset.mirrorValues[index] || 0)) < 0.01)
+              };
+              const mirrorRevenueChartValid = mirrorRevenueDetails.ownRangesValid
+                && mirrorRevenueDetails.refRangesValid
+                && mirrorRevenueDetails.gapPixels >= 20;
               const focusResult = computeMetrics('d1', '2026-02');
               const interdisciplinaryFocusDetails = {
                 block: document.getElementById('blkV3').textContent.includes('ФОКУСЫ НАЗНАЧЕНИЙ'),
@@ -333,15 +386,26 @@ function createWindow() {
               saveDoctorMetricSettings();
               document.getElementById('doctorMetricSettingsCard').scrollIntoView({ block: 'start' });
               await new Promise(resolve => setTimeout(resolve, 200));
+              const doctorMetricSettings = profileForDoctor('d1').scoring.benchmarks.revenue === 150000 && !document.getElementById('dm_bm_revenue').disabled;
+              switchTab('doctor');
+              await new Promise(resolve => setTimeout(resolve, 200));
               return {
                 title: document.title,
                 dataPage: Boolean(document.getElementById('page-data')),
                 optionalLibrariesDeferred,
                 departmentPage,
                 departmentCharts,
+                doctorHeaderMetrics,
+                doctorHeaderMetricsValid,
+                doctorHeaderCardRects,
+                doctorHeaderLayoutValid,
+                doctorGoalsSummaryValid,
+                doctorGoalCards,
+                mirrorRevenueChartValid,
+                mirrorRevenueDetails,
                 interdisciplinaryFocus,
                 interdisciplinaryFocusDetails,
-                doctorMetricSettings: profileForDoctor('d1').scoring.benchmarks.revenue === 150000 && !document.getElementById('dm_bm_revenue').disabled,
+                doctorMetricSettings,
                 xlsx: typeof XLSX !== 'undefined',
                 chart: typeof Chart !== 'undefined',
                 desktop: Boolean(window.desktopAPI)
@@ -350,6 +414,31 @@ function createWindow() {
         const result = await mainWindow.webContents.executeJavaScript(smokeAction);
         const artifactRoot = SMOKE_ARTIFACT_ROOT;
         fs.mkdirSync(artifactRoot, { recursive: true });
+        if (!PDF_SMOKE_TEST) {
+          const goalsScreenshotPath = path.join(artifactRoot, "doctor-goals-smoke.png");
+          const goalsScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            loadBundledLibrary('lib-html2canvas', 'html2canvas');
+            document.querySelectorAll('.page').forEach(page => page.classList.remove('active'));
+            document.getElementById('page-doctor')?.classList.add('active');
+            const element = document.getElementById('doctorGoalsSummary');
+            if (!element) return '';
+            const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.5, logging: false, windowWidth: 1400 });
+            return canvas.toDataURL('image/png');
+          })()`);
+          if (!goalsScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок блока целей врача');
+          fs.writeFileSync(goalsScreenshotPath, Buffer.from(goalsScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.goalsScreenshot = goalsScreenshotPath;
+          const mirrorScreenshotPath = path.join(artifactRoot, "mirror-revenue-smoke.png");
+          const mirrorScreenshot = await mainWindow.webContents.executeJavaScript(`document.getElementById('chStack')?.toDataURL('image/png') || ''`);
+          if (!mirrorScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок зеркального графика');
+          fs.writeFileSync(mirrorScreenshotPath, Buffer.from(mirrorScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.mirrorScreenshot = mirrorScreenshotPath;
+          await mainWindow.webContents.executeJavaScript(`(() => {
+            UI.docId = 'd1'; UI.docMonth = '2026-02'; switchTab('doctor');
+            document.getElementById('blkHead')?.scrollIntoView({ block: 'start' });
+          })()`);
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
         const screenshotPath = path.join(artifactRoot, "desktop-smoke.png");
         const screenshot = await mainWindow.webContents.capturePage();
         fs.writeFileSync(screenshotPath, screenshot.toPNG());
@@ -380,7 +469,7 @@ function createWindow() {
         }
         process.stdout.write(`${JSON.stringify(result)}\n`);
         const passed = result.dataPage && result.optionalLibrariesDeferred && result.xlsx && result.chart && result.desktop
-          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.interdisciplinaryFocus && result.doctorMetricSettings))
+          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.doctorGoalsSummaryValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.doctorMetricSettings))
           && (!PDF_SMOKE_TEST || (result.saved && result.pdfExport && result.pdfExport.saved === 3
             && result.pdfExport.chartImages >= 3 && result.pdfFiles.length === 3
             && result.sessionSaveStatus && result.sessionSaveStatus.includes('Сохранено в рабочую базу SQLite')

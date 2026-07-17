@@ -75,9 +75,10 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /Цели отделения/);
   assert.match(actual, /\+ Добавить врача/);
   assert.match(actual, /addDoctorV4/);
-  for (const profileMetric of ["Пациентов за месяц", "Количество визитов за месяц", "Объём активной клиентской базы"]) {
+  for (const profileMetric of ["Пациентов за месяц", "Загрузка расписания", "Коэффициент визитов на пациента за месяц", "Коэффициент визитов на пациента за 12 мес.", "Объём активной клиентской базы"]) {
     assert.match(actual, new RegExp(profileMetric));
   }
+  assert.doesNotMatch(actual, /📅 Количество визитов за месяц/);
   assert.match(actual, /<title>Пульс клиники<\/title>/);
   assert.match(actual, /class="logo-work">Пульс<\/span>/);
   assert.match(actual, /class="logo-doctors">клиники<\/span>/);
@@ -122,13 +123,18 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /🎯 Цели врача/);
   assert.match(actual, /doctor-goals-grid/);
   assert.match(actual, /индивидуальные цели/);
-  assert.match(actual, /doctorGoalsSummaryHtml\(docId, reportProfile, false\)/);
+  assert.match(actual, /doctorGoalsSummaryHtml\(docId, reportProfile, false, r\)/);
+  assert.match(actual, /const DOCTOR_GOAL_VECTORS/);
+  assert.match(actual, /function doctorGoalFact/);
+  assert.match(actual, /data-goal-vector/);
+  assert.match(actual, /Факт:/);
+  assert.match(actual, /doctor-goal-item \$\{state\}/);
   assert.match(actual, /saveCrossFocusSettings/);
   assert.match(actual, /Фокусы междисциплинарного подхода \(Вектор 3\)/);
   assert.match(actual, /chNazFocusQty/);
   assert.match(actual, /chNazFocusMoney/);
   assert.match(actual, /nazFocusShare/);
-  assert.match(actual, /lowerGoals\.has\(goal\.key\) \? "≤" : "≥"/);
+  assert.match(actual, /const lower = lowerGoals\.has\(goal\.key\)/);
   assert.match(actual, /ПАЦИЕНТЫ ПО СЕГМЕНТУ/);
   assert.match(actual, /collapsible-list-summary/);
   assert.match(actual, /rememberListToggle/);
@@ -144,10 +150,15 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /appointmentDetails/);
   assert.doesNotMatch(actual, /primaryReturnDetails/);
   assert.doesNotMatch(actual, /ДЕТАЛИ ВОЗВРАЩАЕМОСТИ ПЕРВИЧКИ/);
-  assert.match(actual, /xAxisID:\s*"xRef"/);
+  assert.match(actual, /const mirrorRevenuePlugin/);
+  assert.match(actual, /mirrorGap\s*=\s*mirrorMax\s*\*\s*0\.08/);
+  assert.match(actual, /ownRanges\[g\]\.push\(\[cursor, cursor \+ amount\]\)/);
+  assert.match(actual, /refRevenueByMonth\.map\(amount => \[mirrorGap, mirrorGap \+ amount\]\)/);
+  assert.match(actual, /plugins:\s*\[mirrorRevenuePlugin\]/);
   assert.match(actual, /refRevenueColor\s*=\s*"#334155"/);
-  assert.match(actual, /Выручка от перенаправлений · отдельная шкала/);
-  assert.match(actual, /borderDash:\s*\[7,\s*4\]/);
+  assert.match(actual, /Собственная выручка ←/);
+  assert.match(actual, /→ Выручка от перенаправлений/);
+  assert.doesNotMatch(actual, /xAxisID:\s*"xRef"|borderDash:\s*\[7,\s*4\]/);
   assert.match(actual, /Выводы и комментарии/);
   assert.match(actual, /Хорошая работа:/);
   assert.match(actual, /Обратите внимание:/);
@@ -189,6 +200,21 @@ test("department KPI goals distinguish achieved, missed and unavailable values",
   assert.equal(departmentGoalInfo(lowerDef, { value: 40 }, profile).state, "department-goal-bad");
   assert.equal(departmentGoalInfo(unavailableDef, { value: 120 }, profile).state, "department-goal-plain");
   assert.match(departmentGoalInfo(unavailableDef, { value: 120 }, profile).text, /факт н\/д/);
+});
+
+test("doctor goal cards color facts for direct and lower-is-better targets", () => {
+  const source = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const match = source.match(/function doctorGoalState\(fact, target, lower = false\) \{[\s\S]*?\n\}/);
+  assert.ok(match, "doctorGoalState source must be present");
+  const doctorGoalState = new Function(`${match[0]}; return doctorGoalState;`)();
+
+  assert.equal(doctorGoalState(100, 100), "goal-good");
+  assert.equal(doctorGoalState(85, 100), "goal-warn");
+  assert.equal(doctorGoalState(70, 100), "goal-bad");
+  assert.equal(doctorGoalState(30, 30, true), "goal-good");
+  assert.equal(doctorGoalState(34, 30, true), "goal-warn");
+  assert.equal(doctorGoalState(40, 30, true), "goal-bad");
+  assert.equal(doctorGoalState(null, 100), "goal-na");
 });
 
 test("first-run folder prompt is attached to a visible application window", () => {

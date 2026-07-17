@@ -1076,33 +1076,69 @@ function crossFocusColor(profile, name) {
   return DEVICE_COLORS[(i >= 0 ? i : items.length) % DEVICE_COLORS.length];
 }
 
-/* сумма в конце каждой полосы горизонтальной стековой */
-const stackTotalsPlugin = {
-  id: "stackTotals",
-  afterDatasetsDraw(c) {
-    const metas = c.getSortedVisibleDatasetMetas();
-    const barMeta = metas.find(m => m.type === "bar");
-    const stackDatasets = c.data.datasets.filter(ds => ds.stack === "s" && ds.type !== "line");
-    if (!barMeta || !stackDatasets.length) return;
+/* Зеркальная выручка: очищает центральный зазор и подписывает итоги снаружи полос. */
+const mirrorRevenuePlugin = {
+  id: "mirrorRevenue",
+  beforeDatasetsDraw(c, _args, options) {
+    const x = c.scales.x;
+    const gap = Number(options && options.gap) || 0;
+    if (!x || gap <= 0) return;
+    const left = x.getPixelForValue(-gap);
+    const right = x.getPixelForValue(gap);
+    const { ctx, chartArea } = c;
+    ctx.save();
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(Math.min(left, right), chartArea.top, Math.abs(right - left), chartArea.bottom - chartArea.top);
+    ctx.strokeStyle = "#d8dee9";
+    ctx.lineWidth = 1;
+    [left, right].forEach(px => {
+      ctx.beginPath();
+      ctx.moveTo(px, chartArea.top);
+      ctx.lineTo(px, chartArea.bottom);
+      ctx.stroke();
+    });
+    ctx.restore();
+  },
+  afterDatasetsDraw(c, _args, options) {
+    const x = c.scales.x;
+    const y = c.scales.y;
+    const ownTotals = (options && options.ownTotals) || [];
+    const refTotals = (options && options.refTotals) || [];
+    const gap = Number(options && options.gap) || 0;
+    if (!x || !y) return;
     const { ctx } = c;
     ctx.save();
-    ctx.font = "700 13px 'Segoe UI', system-ui, sans-serif";
+    ctx.font = "700 12px 'Segoe UI', system-ui, sans-serif";
     ctx.textBaseline = "middle";
-    ctx.textAlign = "left";
     for (let i = 0; i < c.data.labels.length; i++) {
-      let total = 0;
-      stackDatasets.forEach(ds => { total += ds.data[i] || 0; });
-      if (!total) continue;
-      const x = c.scales.x.getPixelForValue(total);
-      const el = barMeta.data[i];
-      const y = el ? el.y : c.scales.y.getPixelForValue(i);
-      const txt = total >= 1000000 ? (total / 1000000).toLocaleString("ru-RU", { maximumFractionDigits: 2 }) + " млн ₽" : fmtNum(total) + " ₽";
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = "#ffffff"; // белая обводка, чтобы сумма читалась на любом фоне
-      ctx.strokeText(txt, x + 7, y);
-      ctx.fillStyle = "#1c2333";
-      ctx.fillText(txt, x + 7, y);
+      const yPx = y.getPixelForValue(i);
+      const own = Number(ownTotals[i]) || 0;
+      const ref = Number(refTotals[i]) || 0;
+      if (own > 0) {
+        ctx.textAlign = "right";
+        ctx.fillStyle = "#1c2333";
+        ctx.fillText(fmtMoney(own), x.getPixelForValue(-gap - own) - 7, yPx);
+      }
+      if (ref > 0) {
+        ctx.textAlign = "left";
+        ctx.fillStyle = "#334155";
+        ctx.fillText(fmtMoney(ref), x.getPixelForValue(gap + ref) + 7, yPx);
+      }
     }
+    ctx.restore();
+  },
+  afterDraw(c, _args, options) {
+    const x = c.scales.x;
+    const gap = Number(options && options.gap) || 0;
+    if (!x || gap <= 0) return;
+    const { ctx, chartArea } = c;
+    ctx.save();
+    ctx.font = "600 12px 'Segoe UI', system-ui, sans-serif";
+    ctx.textBaseline = "bottom";
+    ctx.fillStyle = "#475569";
+    ctx.textAlign = "center";
+    ctx.fillText("Собственная выручка ←", (chartArea.left + x.getPixelForValue(-gap)) / 2, chartArea.top - 7);
+    ctx.fillText("→ Выручка от перенаправлений", (x.getPixelForValue(gap) + chartArea.right) / 2, chartArea.top - 7);
     ctx.restore();
   },
 };
@@ -2024,18 +2060,84 @@ function doctorGoalValue(key, value) {
   return fmtPct(value);
 }
 
-function doctorGoalsSummaryHtml(docId, profile, standalone = true) {
+const DOCTOR_GOAL_VECTORS = {
+  revenue: "v1", avgCheck: "v1",
+  hwShare: "v2",
+  crossShare: "v3", nazConv: "v3", nazFocusShare: "v3",
+  akbShare: "v4", riskShare: "v4", churn: "v4",
+  schedLoad: "v5", pervichka: "v5", ownRecords: "v5", courseIdx: "v5",
+  rating: "v6", nps: "v6", reviews: "v6",
+};
+
+function doctorGoalFact(key, result, profile) {
+  if (!result) return null;
+  const base = selectedClientBaseSummary(result, profile);
+  const naz = result.cross && result.cross.naz
+    ? (result.cross.naz[UI.nazSlice] || result.cross.naz[1] || result.cross.naz[3])
+    : null;
+  switch (key) {
+    case "revenue": return result.econ ? result.econ.sales : null;
+    case "avgCheck": return result.econ ? result.econ.avgClient : null;
+    case "hwShare": return result.product ? result.product.expertShare : null;
+    case "crossShare": return result.cross ? result.cross.crossShare : null;
+    case "nazConv": return naz && naz.totals && naz.totals.valid !== false ? naz.totals.conv : null;
+    case "nazFocusShare": return naz && naz.totals && naz.totals.valid !== false && naz.focus ? naz.focus.revenueShare : null;
+    case "akbShare": return base ? base.activeBasePct : null;
+    case "riskShare": return base ? base.riskShare : null;
+    case "churn": return result.akb ? result.akb.churn36 : null;
+    case "schedLoad": return result.loyalty && result.loyalty.sched ? result.loyalty.sched.pct : null;
+    case "pervichka": {
+      const pv = result.loyalty && result.loyalty.pvSlices ? result.loyalty.pvSlices[profile.pervichkaM || 3] : null;
+      return pv && pv.valid !== false ? pv.pct : null;
+    }
+    case "ownRecords": return result.loyalty && result.loyalty.ownRec ? result.loyalty.ownRec.pct : null;
+    case "courseIdx": return result.loyalty ? result.loyalty.courseIdx : null;
+    case "rating": return result.rep ? result.rep.avgRating : null;
+    case "nps": return result.rep ? result.rep.nps : null;
+    case "reviews": return result.rep ? result.rep.reviews : null;
+    default: return null;
+  }
+}
+
+function doctorGoalState(fact, target, lower = false) {
+  if (fact == null || isNaN(fact)) return "goal-na";
+  const value = Number(fact);
+  const goal = Number(target);
+  if (lower) {
+    if (value <= goal) return "goal-good";
+    if (value <= goal * 1.2) return "goal-warn";
+    return "goal-bad";
+  }
+  if (value >= goal) return "goal-good";
+  if (value >= goal * 0.8) return "goal-warn";
+  return "goal-bad";
+}
+
+function doctorGoalsSummaryHtml(docId, profile, standalone = true, result = null) {
   const benchmarks = profile && profile.scoring ? profile.scoring.benchmarks : {};
   const lowerGoals = new Set(["riskShare", "churn"]);
   const goals = scoringBenchmarkDefs(profile).map(([key, label]) => ({
     key,
     label,
     value: benchmarks[key],
+    vector: DOCTOR_GOAL_VECTORS[key],
+    fact: doctorGoalFact(key, result, profile),
   })).filter(goal => goal.value != null && goal.value !== "" && !isNaN(goal.value) && Number(goal.value) > 0);
   const body = goals.length
-    ? `<div class="doctor-goals-grid">${goals.map(goal => `<div class="doctor-goal-item"><span>${esc(goal.label)}</span><b>${lowerGoals.has(goal.key) ? "≤" : "≥"} ${doctorGoalValue(goal.key, Number(goal.value))}</b></div>`).join("")}</div>`
+    ? `<div class="doctor-goals-grid">${goals.map(goal => {
+      const lower = lowerGoals.has(goal.key);
+      const state = doctorGoalState(goal.fact, goal.value, lower);
+      const vector = goal.vector || "v1";
+      const vectorEnabled = !profile.scoring || !profile.scoring.enabled || profile.scoring.enabled[vector] !== false;
+      const factText = goal.fact == null || isNaN(goal.fact) ? "нет данных" : doctorGoalValue(goal.key, Number(goal.fact));
+      return `<div class="doctor-goal-item ${state}" data-goal-key="${esc(goal.key)}" data-goal-vector="${esc(vector)}">
+        <div class="doctor-goal-title"><span>${esc(goal.label)}</span><em class="doctor-goal-vector ${vector}" title="${esc(VECTOR_META[vector].name)}${vectorEnabled ? "" : " · не входит в общий балл"}">В${vector[1]}${vectorEnabled ? "" : "*"}</em></div>
+        <div class="doctor-goal-target">Цель: <b>${lower ? "≤" : "≥"} ${doctorGoalValue(goal.key, Number(goal.value))}</b></div>
+        <div class="doctor-goal-fact">Факт: <strong>${factText}</strong></div>
+      </div>`;
+    }).join("")}</div>`
     : '<p class="small muted" style="margin:0">Для врача цели пока не установлены.</p>';
-  return `<div class="${standalone ? "card " : ""}doctor-goals-summary">
+  return `<div ${standalone ? 'id="doctorGoalsSummary" ' : ""}class="${standalone ? "card " : ""}doctor-goals-summary">
     <div class="doctor-goals-head"><h3>🎯 Цели врача</h3><span class="badge info">${esc(doctorGoalsSource(docId))}</span></div>
     ${body}
   </div>`;
@@ -2097,6 +2199,9 @@ function renderDoctor() {
   const activeBaseDyn = doctorMetricDynamics(UI.docId, mk, rr => (
     selectedClientBaseSummary(rr, docProfile) ? selectedClientBaseSummary(rr, docProfile).activeBasePct : null
   ));
+  const schedule = r.loyalty.sched;
+  const monthlyVisitRate = r.traffic.freq;
+  const annualVisitRate = r.loyalty.freq12;
   html += `<div class="card" id="blkHead">
     <div class="flex" style="justify-content:space-between">
       <h2 class="mt0" style="margin-bottom:4px">${esc(doctorName(UI.docId))} <span class="muted small">· ${monthLabel(mk)} · ${esc(doctorStructureLabel(UI.docId))}</span>
@@ -2113,9 +2218,11 @@ function renderDoctor() {
           stroke-dasharray="${(circ * (totalScore || 0) / 100).toFixed(1)} ${circ.toFixed(1)}"/></svg>
         <div class="num"><b style="font-size:28px">${totalScore != null ? fmtNum(totalScore, 0) : "—"}</b><i>${scoreEligible ? "общий балл" : "предварительный"}</i></div>
       </div>` : ""}
-      <div style="flex:1;min-width:280px"><div class="grid cols-3">
+      <div style="flex:1;min-width:280px"><div class="grid cols-5">
         <div class="kpi"><div class="lbl">🧍 Пациентов за месяц</div><div class="val">${fmtNum(r.traffic.patients)}</div><div class="sub">уникальные пациенты</div></div>
-        <div class="kpi"><div class="lbl">📅 Количество визитов за месяц</div><div class="val">${fmtNum(r.traffic.visits)}</div><div class="sub">${esc(r.traffic.src)}</div></div>
+        <div class="kpi"><div class="lbl">📅 Загрузка расписания</div><div class="val">${fmtPct(schedule ? schedule.pct : null)}</div><div class="sub">${schedule ? `записано ${minToHours(schedule.busyMin)} из ${minToHours(schedule.normaMin)} по графику` : "нет выгрузки «Загрузка расписания»"}</div></div>
+        <div class="kpi"><div class="lbl">🔁 Коэффициент визитов на пациента за месяц</div><div class="val">${fmtNum(monthlyVisitRate, 2)}</div><div class="sub">${monthlyVisitRate != null ? `${fmtNum(r.traffic.visits)} визитов / ${fmtNum(r.traffic.patients)} пациентов` : esc(r.traffic.src)}</div></div>
+        <div class="kpi"><div class="lbl">🗓 Коэффициент визитов на пациента за 12 мес.</div><div class="val">${fmtNum(annualVisitRate, 2)}</div><div class="sub">${annualVisitRate != null ? "визиты / уникальные пациенты за 12 месяцев" : "нет выгрузки «Давность посещений» за 12 мес."}</div></div>
         <div class="kpi"><div class="lbl">🟢 Объём активной клиентской базы</div><div class="val">${fmtPct(activeBaseValue)}</div>
           <div class="sub">${activeBase ? `${fmtNum(activeBase.seg.active)} активных из ${fmtNum(activeBase.total)} · окно ${activeBaseWin} мес.` : "нет подходящей выгрузки клиентской базы"}</div>
           ${metricHistoryMarkup(activeBaseValue, activeBaseDyn, "pp", "", 1, fmtPct)}
@@ -2131,7 +2238,7 @@ function renderDoctor() {
     }).join("")}</div>` : ""}
   </div>`;
 
-  html += doctorGoalsSummaryHtml(UI.docId, docProfile);
+  html += doctorGoalsSummaryHtml(UI.docId, docProfile, true, r);
 
   /* ---- В1 Экономика ---- */
   const e = r.econ;
@@ -2636,34 +2743,47 @@ function renderDoctor() {
   const monthTotals = keys.map((k, i) => docGroups.reduce((a, g) => a + (dsMap[g][i] || 0), 0));
   const maxTotal = Math.max(0, ...monthTotals);
   const maxRefRevenue = Math.max(0, ...refRevenueByMonth);
-  const hasRefRevenue = refRevenueByMonth.some(v => v > 0);
+  const mirrorMax = Math.max(maxTotal, maxRefRevenue, 1);
+  const mirrorGap = mirrorMax * 0.08;
+  const mirrorExtent = mirrorMax * 1.24 + mirrorGap;
+  const ownRanges = {};
+  for (const g of docGroups) ownRanges[g] = [];
+  for (let i = 0; i < keys.length; i++) {
+    let cursor = -mirrorGap - monthTotals[i];
+    for (const g of docGroups) {
+      const amount = dsMap[g][i] || 0;
+      ownRanges[g].push([cursor, cursor + amount]);
+      cursor += amount;
+    }
+  }
   const refRevenueColor = "#334155";
   const revenueDatasets = docGroups.filter(g => dsMap[g].some(v => v > 0)).map(g => ({
-    label: g, data: dsMap[g], backgroundColor: groupColor(docProfile, g), stack: "s", order: 1,
-    borderColor: "#ffffff", borderWidth: 1, // разделители сегментов
+    label: g,
+    data: ownRanges[g],
+    mirrorValues: dsMap[g],
+    mirrorSide: "own",
+    backgroundColor: groupColor(docProfile, g),
+    grouped: false,
+    barPercentage: 0.72,
+    categoryPercentage: 0.82,
+    borderColor: "#ffffff",
+    borderWidth: 1,
   }));
-  if (hasRefRevenue) revenueDatasets.push({
-    type: "line",
+  revenueDatasets.push({
     label: "Выручка от перенаправлений",
-    data: refRevenueByMonth,
-    xAxisID: "xRef",
-    yAxisID: "y",
-    borderColor: refRevenueColor,
+    data: refRevenueByMonth.map(amount => [mirrorGap, mirrorGap + amount]),
+    mirrorValues: refRevenueByMonth,
+    mirrorSide: "ref",
     backgroundColor: refRevenueColor,
-    pointBackgroundColor: "#ffffff",
-    pointBorderColor: refRevenueColor,
-    pointBorderWidth: 3,
-    pointRadius: 5,
-    pointHoverRadius: 7,
-    borderWidth: 3,
-    borderDash: [7, 4],
-    tension: 0.25,
-    fill: false,
-    order: -10,
+    grouped: false,
+    barPercentage: 0.72,
+    categoryPercentage: 0.82,
+    borderColor: "#ffffff",
+    borderWidth: 1,
   });
   chart("chStack", {
     type: "bar",
-    plugins: [stackTotalsPlugin],
+    plugins: [mirrorRevenuePlugin],
     data: {
       labels: keys.map(monthLabel),
       datasets: revenueDatasets,
@@ -2671,28 +2791,38 @@ function renderDoctor() {
     options: {
       indexAxis: "y",
       maintainAspectRatio: false,
+      layout: { padding: { top: 24, left: 90, right: 90 } },
       plugins: {
         legend: { position: "bottom" },
+        mirrorRevenue: { gap: mirrorGap, ownTotals: monthTotals, refTotals: refRevenueByMonth },
         datalabels: {
           display: ctx => {
-            if (!UI.showLabels || ctx.dataset.data[ctx.dataIndex] <= 0) return false;
-            if (ctx.dataset.type === "line") return true;
-            const ownTotal = ctx.chart.data.datasets.filter(d => d.stack === "s").reduce((a, d) => a + (d.data[ctx.dataIndex] || 0), 0);
-            return ctx.dataset.data[ctx.dataIndex] / (ownTotal || 1) > 0.055;
+            const amount = Number(ctx.dataset.mirrorValues && ctx.dataset.mirrorValues[ctx.dataIndex]) || 0;
+            if (!UI.showLabels || amount <= 0) return false;
+            if (ctx.dataset.mirrorSide === "ref") return true;
+            return amount / (monthTotals[ctx.dataIndex] || 1) > 0.055;
           },
-          color: ctx => ctx.dataset.type === "line" ? refRevenueColor : "#fff",
-          anchor: ctx => ctx.dataset.type === "line" ? "end" : "center",
-          align: ctx => ctx.dataset.type === "line" ? "right" : "center",
-          offset: ctx => ctx.dataset.type === "line" ? 5 : 0,
+          color: "#fff",
+          anchor: "center",
+          align: "center",
           font: { size: 11, weight: "700" },
-          formatter: v => (v >= 1000000 ? (v / 1000000).toFixed(1) + " млн" : Math.round(v / 1000) + " т."),
+          formatter: (_value, ctx) => {
+            const amount = Number(ctx.dataset.mirrorValues && ctx.dataset.mirrorValues[ctx.dataIndex]) || 0;
+            return amount >= 1000000 ? (amount / 1000000).toFixed(1) + " млн" : Math.round(amount / 1000) + " т.";
+          },
         },
-        tooltip: { callbacks: { label: c => c.dataset.label + ": " + fmtMoney(c.raw) } },
+        tooltip: { callbacks: { label: c => c.dataset.label + ": " + fmtMoney(c.dataset.mirrorValues[c.dataIndex] || 0) } },
       },
       scales: {
-        x: { stacked: true, suggestedMax: maxTotal * 1.18, ticks: { callback: v => (v / 1000000).toFixed(1) + " млн" }, title: { display: true, text: "Собственная выручка" } },
-        ...(hasRefRevenue ? { xRef: { position: "top", beginAtZero: true, suggestedMax: maxRefRevenue * 1.18, grid: { drawOnChartArea: false }, ticks: { color: refRevenueColor, callback: v => (v / 1000000).toFixed(1) + " млн" }, title: { display: true, text: "Выручка от перенаправлений · отдельная шкала", color: refRevenueColor } } } : {}),
-        y: { stacked: true },
+        x: {
+          min: -mirrorExtent,
+          max: mirrorExtent,
+          grid: { color: ctx => Math.abs(ctx.tick.value) < 1 ? "#cbd5e1" : "rgba(148,163,184,.22)" },
+          ticks: {
+            callback: value => Math.abs(value) < mirrorGap * 0.75 ? "" : (Math.abs(value) / 1000000).toFixed(1) + " млн",
+          },
+        },
+        y: { stacked: false },
       },
     },
   });
@@ -2910,7 +3040,7 @@ function buildDoctorReport(docId, mk) {
       <div class="kpi"><div class="lbl">Ср. чек пациента</div><div class="val" style="font-size:17px">${fmtMoney(e.avgClient)}</div></div>
       <div class="kpi"><div class="lbl">Визиты / пациенты</div><div class="val" style="font-size:17px">${fmtNum(r.traffic.visits)} / ${fmtNum(r.traffic.patients)}</div></div>
     </div>
-    ${doctorGoalsSummaryHtml(docId, reportProfile, false)}
+    ${doctorGoalsSummaryHtml(docId, reportProfile, false, r)}
     <div class="grid cols-2" style="margin-top:12px"><div>
       ${metricRow("Загрузка расписания", r.loyalty.sched ? fmtPct(r.loyalty.sched.pct) : "—")}
       ${metricRow("Средний чек посещения", fmtMoney(e.avgVisit))}

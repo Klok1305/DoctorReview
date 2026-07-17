@@ -80,6 +80,36 @@ test("patient-base statuses depend on recency while loyalty stays separate", () 
   assert.equal(plain.rows[0].loyal, false);
 });
 
+test("doctor visit coefficients use visits per unique patient for one and twelve months", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], dept: 'По умолчанию' } };
+    DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].kb.d1 = {
+      '1': { clients: [
+        { name: 'Пациент Один', s: 100, v: 2, r: 10 },
+        { name: 'Пациент Два', s: 200, v: 1, r: 20 }
+      ] },
+      '12': { clients: [
+        { name: 'Пациент Один', s: 600, v: 6, r: 10 },
+        { name: 'Пациент Два', s: 200, v: 2, r: 20 }
+      ] }
+    };
+    clearMetricsCache();
+    const metrics = computeMetrics('d1', '2026-01');
+    return {
+      monthly: metrics.traffic.freq,
+      annual: metrics.loyalty.freq12,
+      monthlyVisits: metrics.traffic.visits,
+      monthlyPatients: metrics.traffic.patients
+    };
+  })()`, context);
+  assert.equal(result.monthlyVisits, 3);
+  assert.equal(result.monthlyPatients, 2);
+  assert.equal(result.monthly, 1.5);
+  assert.equal(result.annual, 4);
+});
+
 test("client-base source window follows the specialization loss threshold", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
