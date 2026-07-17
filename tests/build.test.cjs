@@ -40,9 +40,22 @@ test("assembled HTML is reproducible and complete", () => {
   for (const id of ["lib-xlsx", "lib-jszip", "lib-html2canvas", "lib-jspdf"]) {
     assert.match(actual, new RegExp(`<script type="text/plain" id="${id}">`));
   }
-  for (const required of ["btnExportAllPdf", "desktopWorkspaceCard", "btnScanInput", "Content-Security-Policy", "departmentBody", "departmentFilter", "departmentMonth"]) {
+  for (const required of ["btnExportAllPdf", "btnSaveSession", "desktopWorkspaceCard", "btnScanInput", "Content-Security-Policy", "departmentBody", "departmentFilter", "departmentMonth"]) {
     assert.match(actual, new RegExp(required));
   }
+  assert.match(actual, /function pdfReportTargets/);
+  assert.match(actual, /function cloneDashboardForPdf/);
+  assert.match(actual, /function splitDynamicPdfSection/);
+  assert.match(actual, /async function saveSessionState/);
+  assert.match(actual, /Все изменения текущей сессии сохранены/);
+  assert.match(actual, /Сохранить копию базы/);
+  assert.match(actual, /pdf-chart-image/);
+  assert.match(actual, /pdf-continuation-title/);
+  assert.match(actual, /relativePath:\s*target\.relativePath/);
+  assert.match(actual, /\["Отделения",\s*departmentName\]/);
+  assert.match(actual, /"Специализации"/);
+  assert.match(actual, /"Врачи"/);
+  assert.match(actual, /полные PDF дашбордов отделений, специализаций и врачей со всеми графиками/);
   assert.match(actual, /data-tab="department">🏥 Отделение/);
   assert.match(actual, /data-tab="dept">🩺 Специализации/);
   assert.match(actual, /Нужны специализации/);
@@ -72,6 +85,8 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /Пациенты за месяц/);
   assert.match(actual, /Загрузка отделения/);
   assert.match(actual, /currentLoadPct/);
+  assert.match(actual, /sberhealth/);
+  assert.doesNotMatch(actual, /yandex/);
   assert.match(actual, /Собственная запись в 1С/);
   assert.match(actual, /собственных записей \/.*всех визитов за месяц × 100%/);
   assert.match(actual, /За выбранный месяц текущего значения нет/);
@@ -108,6 +123,11 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /doctor-goals-grid/);
   assert.match(actual, /индивидуальные цели/);
   assert.match(actual, /doctorGoalsSummaryHtml\(docId, reportProfile, false\)/);
+  assert.match(actual, /saveCrossFocusSettings/);
+  assert.match(actual, /Фокусы междисциплинарного подхода \(Вектор 3\)/);
+  assert.match(actual, /chNazFocusQty/);
+  assert.match(actual, /chNazFocusMoney/);
+  assert.match(actual, /nazFocusShare/);
   assert.match(actual, /lowerGoals\.has\(goal\.key\) \? "≤" : "≥"/);
   assert.match(actual, /ПАЦИЕНТЫ ПО СЕГМЕНТУ/);
   assert.match(actual, /collapsible-list-summary/);

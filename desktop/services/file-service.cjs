@@ -38,6 +38,56 @@ function safeFileName(value) {
   return name || "файл";
 }
 
+function safeDirectorySegment(value) {
+  const raw = String(value == null ? "" : value).trim();
+  if (!raw || raw === "." || raw === "..") throw new Error("Некорректная папка результата");
+  let name = raw
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/g, "")
+    .slice(0, 120);
+  if (!name || name === "." || name === "..") throw new Error("Некорректная папка результата");
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)) name = `_${name}`;
+  return name;
+}
+
+function normalizeExportRelativePath(value) {
+  if (value == null) return [];
+  if (!Array.isArray(value) || value.length > 16) throw new Error("Некорректный путь результата");
+  return value.map(safeDirectorySegment);
+}
+
+function filesRecursive(root, { skipRootNames = [] } = {}) {
+  if (!fs.existsSync(root)) return [];
+  const skip = new Set(skipRootNames.map(name => String(name).toLocaleLowerCase("ru-RU")));
+  const found = [];
+  const walk = (directory, depth) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) continue;
+      if (depth === 0 && skip.has(entry.name.toLocaleLowerCase("ru-RU"))) continue;
+      const fullPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) walk(fullPath, depth + 1);
+      else if (entry.isFile()) found.push(fullPath);
+    }
+  };
+  walk(root, 0);
+  return found;
+}
+
+function removeEmptyExportDirectories(root) {
+  if (!fs.existsSync(root)) return;
+  const walk = directory => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.isSymbolicLink() || entry.name === "Предыдущие версии") continue;
+      const fullPath = path.join(directory, entry.name);
+      walk(fullPath);
+      if (!fs.readdirSync(fullPath).length) fs.rmdirSync(fullPath);
+    }
+  };
+  walk(root);
+}
+
 function monthFolder(month) {
   const value = String(month || "без-месяца");
   return /^\d{4}-\d{2}$/.test(value) ? value : "без-месяца";
@@ -125,23 +175,27 @@ class FileService {
     return { token, outputDir: targetDir };
   }
 
-  writeExportFile({ token, fileName, bytes }) {
+  writeExportFile({ token, fileName, relativePath = [], bytes }) {
     const batch = this.batches.get(String(token));
     if (!batch) throw new Error("Пакет выгрузки не найден или уже завершён");
     const safeName = safeFileName(fileName);
+    const safePath = normalizeExportRelativePath(relativePath);
     if (!EXPORT_EXTENSIONS.has(path.extname(safeName).toLowerCase())) throw new Error("Недопустимое расширение результата");
-    const target = path.join(batch.tempDir, safeName);
+    const relativeName = path.join(...safePath, safeName);
+    const displayName = relativeName.replace(/\\/g, "/");
+    const target = path.join(batch.tempDir, relativeName);
     if (!isPathInside(target, batch.tempDir)) throw new Error("Некорректное имя результата");
     const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
     if (buffer.length > 500 * 1024 * 1024) throw new Error("Файл результата превышает 500 МБ");
-    if (batch.files.some(file => file.name.toLocaleLowerCase("ru-RU") === safeName.toLocaleLowerCase("ru-RU"))) {
-      throw new Error(`Файл «${safeName}» уже добавлен в этот пакет`);
+    if (batch.files.some(file => file.name.toLocaleLowerCase("ru-RU") === displayName.toLocaleLowerCase("ru-RU"))) {
+      throw new Error(`Файл «${displayName}» уже добавлен в этот пакет`);
     }
+    fs.mkdirSync(path.dirname(target), { recursive: true });
     const temp = `${target}.part`;
     fs.writeFileSync(temp, buffer);
     fs.renameSync(temp, target);
-    batch.files.push({ name: safeName, bytes: buffer.length });
-    return { name: safeName, bytes: buffer.length };
+    batch.files.push({ name: displayName, relativeName, bytes: buffer.length });
+    return { name: displayName, relativePath: safePath, bytes: buffer.length };
   }
 
   finishExportBatch({ token, failures = [] }) {
@@ -156,23 +210,26 @@ class FileService {
     try {
       const currentExtension = batch.kind === "pdf" ? ".pdf" : batch.kind === "excel" ? ".xlsx" : null;
       if (currentExtension) {
-        const currentFiles = fs.readdirSync(batch.targetDir, { withFileTypes: true })
-          .filter(entry => entry.isFile() && path.extname(entry.name).toLowerCase() === currentExtension);
+        const currentFiles = filesRecursive(batch.targetDir, { skipRootNames: ["Предыдущие версии"] })
+          .filter(filePath => path.extname(filePath).toLowerCase() === currentExtension);
         if (currentFiles.length) fs.mkdirSync(archiveDir, { recursive: true });
-        for (const entry of currentFiles) {
-          const source = path.join(batch.targetDir, entry.name);
-          const destination = path.join(archiveDir, entry.name);
+        for (const source of currentFiles) {
+          const relativeName = path.relative(batch.targetDir, source);
+          const destination = path.join(archiveDir, relativeName);
+          fs.mkdirSync(path.dirname(destination), { recursive: true });
           fs.renameSync(source, destination);
           archivedFiles.push({ source, destination });
           archived++;
         }
       }
       for (const file of batch.files) {
-        const source = path.join(batch.tempDir, file.name);
-        const destination = path.join(batch.targetDir, file.name);
+        const source = path.join(batch.tempDir, file.relativeName || file.name);
+        const destination = path.join(batch.targetDir, file.relativeName || file.name);
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
         if (fs.existsSync(destination)) {
           fs.mkdirSync(archiveDir, { recursive: true });
-          const archivedDestination = path.join(archiveDir, file.name);
+          const archivedDestination = path.join(archiveDir, file.relativeName || file.name);
+          fs.mkdirSync(path.dirname(archivedDestination), { recursive: true });
           fs.renameSync(destination, archivedDestination);
           archivedFiles.push({ source: destination, destination: archivedDestination });
           archived++;
@@ -180,6 +237,7 @@ class FileService {
         fs.renameSync(source, destination);
         publishedFiles.push(destination);
       }
+      removeEmptyExportDirectories(batch.targetDir);
       const protocol = [
         "Пульс клиники — протокол выгрузки",
         `Дата: ${new Date().toLocaleString("ru-RU")}`,
@@ -209,6 +267,7 @@ class FileService {
       for (const archivedFile of archivedFiles.reverse()) {
         try {
           if (fs.existsSync(archivedFile.destination) && !fs.existsSync(archivedFile.source)) {
+            fs.mkdirSync(path.dirname(archivedFile.source), { recursive: true });
             fs.renameSync(archivedFile.destination, archivedFile.source);
           }
         } catch (_) { /* original error is more useful */ }
@@ -238,4 +297,4 @@ class FileService {
   }
 }
 
-module.exports = { FileService, INPUT_EXTENSIONS, safeFileName, isPathInside, sha256File };
+module.exports = { FileService, INPUT_EXTENSIONS, safeFileName, safeDirectorySegment, normalizeExportRelativePath, isPathInside, sha256File };

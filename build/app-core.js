@@ -49,6 +49,7 @@ function defaultBenchmarks() {
     hwShare: 35,        // % доля экспертной группы в выручке
     crossShare: 8,      // % доля выручки от перенаправлений
     nazConv: 30,        // % конверсия назначений
+    nazFocusShare: 30,  // % доля выручки настроенных фокусов в назначениях
     rating: 4.8, nps: 70, reviews: 5,
   };
 }
@@ -74,6 +75,12 @@ function defaultProfile() {
       items: [],            // [{name, syn:[...], core:true}]
       rules: [],            // ручные привязки: [подстрока номенклатуры, имя позиции]
       hints: [],            // маркеры «похоже на экспертное, но не привязано»
+    },
+    // «Междисциплинарный подход» (Вектор 3): настраиваемые фокусы в отчёте «Назначения»
+    crossFocus: {
+      title: "Фокусы междисциплинарного подхода",
+      items: [],            // [{name, syn:[...], core:true}]
+      rules: [],            // ручные привязки: [подстрока назначения, имя фокуса]
     },
     // таксономия категорий выручки: группа -> подгруппы
     groups: {
@@ -516,6 +523,7 @@ function mergeMetricProfile(base, own) {
   if (!own || own === base) return base;
   const merged = Object.assign({}, base, own);
   merged.expertise = Object.assign({}, base.expertise, own.expertise || {});
+  merged.crossFocus = Object.assign({}, base.crossFocus, own.crossFocus || {});
   merged.scoring = {
     weights: Object.assign({}, base.scoring.weights, (own.scoring || {}).weights || {}),
     enabled: Object.assign({}, base.scoring.enabled, (own.scoring || {}).enabled || {}),
@@ -967,6 +975,9 @@ function normalizeProfileRecord(raw, inherited) {
   if (!Array.isArray(p.expertise.items)) p.expertise.items = [];
   if (!Array.isArray(p.expertise.rules)) p.expertise.rules = [];
   if (!Array.isArray(p.expertise.hints)) p.expertise.hints = [];
+  p.crossFocus = Object.assign({}, def.crossFocus, source.crossFocus || {});
+  if (!Array.isArray(p.crossFocus.items)) p.crossFocus.items = [];
+  if (!Array.isArray(p.crossFocus.rules)) p.crossFocus.rules = [];
   if (!p.groups || !Object.keys(p.groups).length) p.groups = JSON.parse(JSON.stringify(def.groups));
   if (!Array.isArray(p.rules)) p.rules = (def.rules || []).slice();
   if (!p.overrides) p.overrides = {};
@@ -1203,9 +1214,11 @@ function saveLocal() {
   if (DESKTOP_API) {
     return queueDesktopSnapshot(snapshot);
   }
+  let localSaved = false;
   try {
     // Синхронная локальная копия создаётся до перерисовки интерфейса.
     localStorage.setItem(LS_KEY, snapshot);
+    localSaved = true;
   } catch (e) {
     console.warn("localStorage save failed", e);
     toast("⚠ Не удалось сохранить в браузере (переполнение?) — сохраните базу в файл!", true);
@@ -1213,7 +1226,7 @@ function saveLocal() {
   // Тот же снимок немедленно передаётся последовательной записи в подключённый файл.
   const fileSave = queueAutosaveSnapshot(snapshot);
   updateHeaderStatus();
-  return fileSave;
+  return Promise.resolve(fileSave).then(fileSaved => localSaved || Boolean(fileSaved));
 }
 function loadLocal() {
   try {

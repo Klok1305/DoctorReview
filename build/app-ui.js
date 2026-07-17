@@ -290,6 +290,32 @@ function dlDoughnut(totalGetter) {
 
 /* ================= СТРАНИЦА: ДАННЫЕ ================= */
 
+async function saveSessionState() {
+  const button = document.getElementById("btnSaveSession");
+  const status = document.getElementById("sessionSaveStatus");
+  if (!button || button.disabled) return false;
+  const oldLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "⏳ Сохраняю…";
+  if (status) status.textContent = "Фиксирую текущее состояние базы…";
+  try {
+    const saved = await saveLocal();
+    if (!saved) throw new Error("хранилище не подтвердило запись");
+    const destination = DESKTOP_API ? "в рабочую базу SQLite" : "в локальную базу браузера";
+    const message = `Сохранено ${destination} · ${autosaveTime()}`;
+    if (status) status.textContent = message;
+    toast("✓ Все изменения текущей сессии сохранены");
+    return true;
+  } catch (error) {
+    if (status) status.textContent = "Ошибка сохранения: " + error.message;
+    toast("Не удалось сохранить изменения: " + error.message, true);
+    return false;
+  } finally {
+    button.disabled = false;
+    button.textContent = oldLabel;
+  }
+}
+
 function renderData() {
   const asEl = document.getElementById("autosaveStatus");
   if (asEl) asEl.textContent = autosaveStatus || (DESKTOP_API ? "SQLite · автоматическое сохранение" : (window.showSaveFilePicker ? "не подключено" : "недоступно в этом браузере"));
@@ -772,9 +798,9 @@ function renderDept() {
       `${UI.deptFilter === "all" ? "Все врачи с данными" : "Специализация «" + esc(UI.deptFilter) + "»"} · последние ${deptDyn.months.length} мес. по ${monthLabel(mk)}. Последний месяц сравнивается с прошлым и со средним предыдущих месяцев. Деньги и визиты суммируются, пациенты дедуплицируются, доли и конверсии взвешиваются; средний балл включает только врачей с полнотой данных от 80%.`,
       `dept|${mk}|${UI.deptFilter}|${UI.subFilter}`);
     if (DB.settings.showScores && deptDyn.months.length >= 2) {
-      html += `<h3 class="small muted" style="margin:14px 0 6px">СРЕДНИЕ БАЛЛЫ ПО ВЕКТОРАМ ПО МЕСЯЦАМ ${copyBtn("copyChart", "chDeptScores", "PNG")}</h3>
+      html += `<div id="chDeptScoresWrap"><h3 class="small muted" style="margin:14px 0 6px">СРЕДНИЕ БАЛЛЫ ПО ВЕКТОРАМ ПО МЕСЯЦАМ ${copyBtn("copyChart", "chDeptScores", "PNG")}</h3>
         ${scoreChartPicker("chDeptScores")}
-        <div class="chart-box score-chart"><canvas id="chDeptScores"></canvas></div>`;
+        <div class="chart-box score-chart"><canvas id="chDeptScores"></canvas></div></div>`;
     }
     html += "</div>";
   }
@@ -784,9 +810,10 @@ function renderDept() {
   if (deptDyn && deptDyn.months.length >= 2) {
     renderDynCharts(deptDyn, "blkDeptDyn");
     if (DB.settings.showScores) {
-      renderScoresChart("chDeptScores", deptDyn.months,
+      const rendered = renderScoresChart("chDeptScores", deptDyn.months,
         (k, vk) => { const rr = deptDyn.results[k]; return rr && rr.vecAvg ? rr.vecAvg[vk] : null; },
         k => { const rr = deptDyn.results[k]; return rr && rr.scores ? rr.scores.total : null; });
+      if (!rendered) document.getElementById("chDeptScoresWrap")?.remove();
     }
   }
 }
@@ -801,6 +828,10 @@ function renderCompare(mk, rows) {
   const specializationGoals = goalProfile && goalProfile.scoring ? goalProfile.scoring.benchmarks : null;
   const primaryReturnMonths = goalProfile ? (goalProfile.pervichkaM || 3) : UI.pvSlice;
   const expertTitle = goalProfile && goalProfile.expertise ? (goalProfile.expertise.title || "экспертных услуг") : "экспертных услуг";
+  const hasCrossFocus = rows.some(row => {
+    const focus = profileForDoctor(row.id).crossFocus;
+    return Boolean(focus && focus.items && focus.items.length);
+  });
   const comparisonKb = (r, doctorId) => selectedClientBaseSummary(r, profileForDoctor(doctorId));
   const exactBaseShare = (r, doctorId, key) => {
     const kb = comparisonKb(r, doctorId);
@@ -842,6 +873,10 @@ function renderCompare(mk, rows) {
     { name: `Доля «${expertTitle}» в выручке`, fmt: r => r.product ? fmtPct(r.product.expertShare) : "—", num: r => r.product ? r.product.expertShare : null, targetKey: "hwShare", targetFmt: fmtPct },
     { name: "Доля выручки от перенаправлений", fmt: r => fmtPct(r.cross.crossShare), num: r => r.cross.crossShare, targetKey: "crossShare", targetFmt: fmtPct },
     { name: "Конверсия назначений", fmt: r => { const nz = r.cross.naz[UI.nazSlice] || r.cross.naz[1] || r.cross.naz[3]; return nz && nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"; }, num: r => { const nz = r.cross.naz[UI.nazSlice] || r.cross.naz[1] || r.cross.naz[3]; return nz ? nz.totals.conv : null; }, targetKey: "nazConv", targetFmt: fmtPct },
+    ...(hasCrossFocus ? [
+      { name: "Фокусов назначений задействовано", fmt: r => { const nz = r.cross.naz[UI.nazSlice] || r.cross.naz[1] || r.cross.naz[3]; return nz && nz.focus ? `${nz.focus.used} из ${nz.focus.park}` : "—"; }, num: r => { const nz = r.cross.naz[UI.nazSlice] || r.cross.naz[1] || r.cross.naz[3]; return nz && nz.focus ? nz.focus.used : null; } },
+      { name: "Доля выручки фокусов назначений", fmt: r => { const nz = r.cross.naz[UI.nazSlice] || r.cross.naz[1] || r.cross.naz[3]; return nz && nz.focus ? fmtPct(nz.focus.revenueShare) : "—"; }, num: r => { const nz = r.cross.naz[UI.nazSlice] || r.cross.naz[1] || r.cross.naz[3]; return nz && nz.focus ? nz.focus.revenueShare : null; }, targetKey: "nazFocusShare", targetFmt: fmtPct },
+    ] : []),
     { name: "Доля активной базы (окно по настройкам)", fmt: (r, id) => baseShareMarkup(r, id, "activeBasePct"), num: (r, id) => exactBaseShare(r, id, "activeBasePct"), targetKey: "akbShare", targetFmt: fmtPct },
     { name: "Доля базы в зоне риска (окно по настройкам)", fmt: (r, id) => baseShareMarkup(r, id, "riskShare"), num: (r, id) => exactBaseShare(r, id, "riskShare"), targetKey: "riskShare", targetFmt: fmtPct, lower: true },
     { name: `Потерянные (${goalProfile ? ">" + fmtNum(goalProfile.riskM, 1) + " мес." : "порог специализации"})`, fmt: (r, id) => { const kb = comparisonKb(r, id); return kb ? `${kb.sourceWindowComplete ? "" : "≥"}${fmtNum(kb.seg.lost)} чел.` : "—"; }, num: (r, id) => { const kb = comparisonKb(r, id); return kb && kb.sourceWindowComplete ? kb.seg.lost : null; }, lower: true },
@@ -1035,6 +1070,11 @@ function deviceColor(profile, name) {
   const i = items.findIndex(d => d.name === name);
   return DEVICE_COLORS[(i >= 0 ? i : items.length) % DEVICE_COLORS.length];
 }
+function crossFocusColor(profile, name) {
+  const items = (profile && profile.crossFocus && profile.crossFocus.items) || [];
+  const i = items.findIndex(item => item.name === name);
+  return DEVICE_COLORS[(i >= 0 ? i : items.length) % DEVICE_COLORS.length];
+}
 
 /* сумма в конце каждой полосы горизонтальной стековой */
 const stackTotalsPlugin = {
@@ -1099,18 +1139,28 @@ function blockBtn(id) {
   return `<button class="btn mini no-print" onclick="copyBlock('${id}')" title="Скопировать весь блок одной картинкой — для вставки в Word/PowerPoint">🖼 блок</button>`;
 }
 
-/* PDF из набора карточек: каждый слайд — страница, длинные карточки режутся. */
+/* PDF из последовательных блоков полного дашборда. Короткие блоки упаковываются
+   на одну страницу, длинные режутся только если целиком не помещаются на A4. */
 async function buildPdfFromSlides(slides, onProgress) {
-  if (!slides.length) throw new Error("в отчёте нет страниц");
+  if (!slides.length) throw new Error("в отчёте нет блоков");
   loadBundledLibrary("lib-html2canvas", "html2canvas");
   loadBundledLibrary("lib-jspdf", "jspdf");
   const pdf = new window.jspdf.jsPDF({ orientation: "landscape", unit: "mm", format: "a4", compress: true });
   const pageW = pdf.internal.pageSize.getWidth();
   const pageH = pdf.internal.pageSize.getHeight();
   const margin = 8;
+  const gap = 4;
   const imgW = pageW - margin * 2;
   const maxImgH = pageH - margin * 2;
-  let first = true;
+  let pageStarted = false;
+  let cursorY = margin;
+  const startPage = () => {
+    if (pageStarted) pdf.addPage();
+    pageStarted = true;
+    cursorY = margin;
+    pdf.setFillColor(255, 255, 255);
+    pdf.rect(0, 0, pageW, pageH, "F");
+  };
   for (let i = 0; i < slides.length; i++) {
     const el = slides[i];
     el.classList.add("exporting");
@@ -1121,6 +1171,14 @@ async function buildPdfFromSlides(slides, onProgress) {
       el.classList.remove("exporting");
     }
     if (onProgress) onProgress(i + 1, slides.length);
+    const scaledHeight = canvas.height * imgW / canvas.width;
+    if (scaledHeight <= maxImgH) {
+      if (!pageStarted || cursorY + scaledHeight > pageH - margin) startPage();
+      pdf.addImage(canvas.toDataURL("image/jpeg", 0.94), "JPEG", margin, cursorY, imgW, scaledHeight);
+      cursorY += scaledHeight + gap;
+      canvas.width = canvas.height = 0;
+      continue;
+    }
     const slicePx = Math.floor(maxImgH * canvas.width / imgW);
     for (let y = 0; y < canvas.height; y += slicePx) {
       const hPx = Math.min(slicePx, canvas.height - y);
@@ -1129,16 +1187,14 @@ async function buildPdfFromSlides(slides, onProgress) {
       part.width = canvas.width;
       part.height = hPx;
       part.getContext("2d").drawImage(canvas, 0, y, canvas.width, hPx, 0, 0, canvas.width, hPx);
-      if (!first) pdf.addPage();
-      first = false;
-      pdf.setFillColor(255, 255, 255);
-      pdf.rect(0, 0, pageW, pageH, "F");
+      startPage();
       pdf.addImage(part.toDataURL("image/jpeg", 0.92), "JPEG", margin, margin, imgW, hPx * imgW / canvas.width);
+      cursorY = margin + hPx * imgW / canvas.width + gap;
       part.width = part.height = 0;
     }
     canvas.width = canvas.height = 0;
   }
-  if (first) throw new Error("не удалось отрисовать страницы отчёта");
+  if (!pageStarted) throw new Error("не удалось отрисовать страницы отчёта");
   return pdf;
 }
 
@@ -1152,18 +1208,23 @@ function safePdfNamePart(value) {
   return clean || "Без названия";
 }
 
-function uniquePdfFileName(base, usedNames) {
+function uniquePdfFileName(base, usedNames, relativePath = []) {
   let name = safePdfNamePart(base) + ".pdf";
   let n = 2;
-  while (usedNames.has(name.toLocaleLowerCase("ru-RU"))) {
+  const key = value => [...relativePath, value].join("/").toLocaleLowerCase("ru-RU");
+  while (usedNames.has(key(name))) {
     name = `${safePdfNamePart(base)} (${n++}).pdf`;
   }
-  usedNames.add(name.toLocaleLowerCase("ru-RU"));
+  usedNames.add(key(name));
   return name;
 }
 
-async function writePdfToDirectory(directory, fileName, pdf) {
-  const file = await directory.getFileHandle(fileName, { create: true });
+async function writePdfToDirectory(directory, relativePath, fileName, pdf) {
+  let targetDirectory = directory;
+  for (const segment of relativePath) {
+    targetDirectory = await targetDirectory.getDirectoryHandle(safePdfNamePart(segment), { create: true });
+  }
+  const file = await targetDirectory.getFileHandle(fileName, { create: true });
   const writable = await file.createWritable();
   try {
     await writable.write(pdf.output("blob"));
@@ -1172,6 +1233,163 @@ async function writePdfToDirectory(directory, fileName, pdf) {
     try { await writable.abort(); } catch (_) { /* поток уже мог закрыться */ }
     throw e;
   }
+}
+
+function pdfReportTargets(monthKey) {
+  const core = coreDoctorsInMonth(monthKey);
+  const doctors = core.length ? core : doctorsInMonth(monthKey);
+  const tree = new Map();
+  for (const doctorId of doctors) {
+    const departmentName = resolvedDepartmentName(doctorId) || "Не распределено";
+    const specializationName = resolvedSpecializationName(doctorId);
+    const specializationLabel = specializationName || "Без специализации";
+    if (!tree.has(departmentName)) tree.set(departmentName, new Map());
+    const specializations = tree.get(departmentName);
+    if (!specializations.has(specializationLabel)) specializations.set(specializationLabel, { specializationName, doctors: [] });
+    specializations.get(specializationLabel).doctors.push(doctorId);
+  }
+
+  const targets = [];
+  for (const departmentName of [...tree.keys()].sort((a, b) => a.localeCompare(b, "ru"))) {
+    const departmentPath = ["Отделения", departmentName];
+    if (departmentGroups()[departmentName]) {
+      targets.push({
+        kind: "Отделение", name: departmentName, tab: "department",
+        departmentName, relativePath: departmentPath,
+        fileBase: `Отчёт по отделению — ${departmentName} — ${monthKey}`,
+      });
+    }
+    const specializations = tree.get(departmentName);
+    for (const specializationLabel of [...specializations.keys()].sort((a, b) => a.localeCompare(b, "ru"))) {
+      const group = specializations.get(specializationLabel);
+      const specializationPath = [...departmentPath, "Специализации", specializationLabel];
+      targets.push({
+        kind: "Специализация", name: specializationLabel, tab: "dept",
+        departmentName, specializationName: group.specializationName,
+        deptFilter: group.specializationName || departmentName,
+        relativePath: specializationPath,
+        fileBase: `Отчёт по специализации — ${specializationLabel} — ${monthKey}`,
+      });
+      for (const doctorId of group.doctors.sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru"))) {
+        targets.push({
+          kind: "Врач", name: doctorName(doctorId), tab: "doctor", doctorId,
+          departmentName, specializationName: group.specializationName,
+          relativePath: [...specializationPath, "Врачи"],
+          fileBase: `${doctorName(doctorId)} — ${monthKey}`,
+        });
+      }
+    }
+  }
+  return targets;
+}
+
+function pdfTargetSource(target, monthKey) {
+  if (target.tab === "department") {
+    UI.departmentMonth = monthKey;
+    UI.departmentFilter = target.departmentName;
+    switchTab("department");
+    return document.getElementById("departmentBody");
+  }
+  if (target.tab === "dept") {
+    UI.deptMonth = monthKey;
+    UI.deptFilter = target.deptFilter;
+    UI.subFilter = "all";
+    switchTab("dept");
+    return document.getElementById("deptBody");
+  }
+  UI.docMonth = monthKey;
+  UI.docId = target.doctorId;
+  switchTab("doctor");
+  return document.getElementById("doctorBody");
+}
+
+async function settlePdfCharts(source) {
+  if (document.fonts && document.fonts.ready) await document.fonts.ready;
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  for (const canvas of source.querySelectorAll("canvas")) {
+    const instance = typeof Chart !== "undefined" && typeof Chart.getChart === "function" ? Chart.getChart(canvas) : null;
+    if (!instance) continue;
+    instance.stop();
+    instance.resize();
+    instance.update("none");
+  }
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+}
+
+async function cloneDashboardForPdf(source) {
+  await settlePdfCharts(source);
+  const clone = source.cloneNode(true);
+  const sourceCanvases = [...source.querySelectorAll("canvas")];
+  const cloneCanvases = [...clone.querySelectorAll("canvas")];
+  let chartImages = 0;
+  sourceCanvases.forEach((canvas, index) => {
+    const targetCanvas = cloneCanvases[index];
+    if (!targetCanvas || !canvas.width || !canvas.height) return;
+    const image = document.createElement("img");
+    image.src = canvas.toDataURL("image/png");
+    image.alt = canvas.getAttribute("aria-label") || "График";
+    image.className = "pdf-chart-image";
+    image.dataset.pdfChart = "true";
+    targetCanvas.replaceWith(image);
+    chartImages++;
+  });
+  clone.querySelectorAll("[id]").forEach(element => element.removeAttribute("id"));
+  clone.querySelectorAll("[onclick], [onchange], [ontoggle]").forEach(element => {
+    element.removeAttribute("onclick");
+    element.removeAttribute("onchange");
+    element.removeAttribute("ontoggle");
+  });
+  for (const details of clone.querySelectorAll("details:not(.no-print)")) details.open = true;
+  await Promise.all([...clone.querySelectorAll("img")].map(image => image.complete ? Promise.resolve() : new Promise(resolve => {
+    image.onload = image.onerror = resolve;
+  })));
+  return { clone, chartImages };
+}
+
+function splitDynamicPdfSection(section) {
+  const children = [...section.children];
+  const narrativeIndex = children.findIndex(child => child.classList.contains("dyn-narrative"));
+  if (narrativeIndex < 0) return [section];
+  const chartGridIndex = children.findIndex((child, index) => index > narrativeIndex
+    && child.classList.contains("grid") && child.querySelector(".pdf-chart-image"));
+  if (chartGridIndex < 0) return [section];
+  const scoreIndex = children.findIndex((child, index) => index > chartGridIndex
+    && child.querySelector(".score-chart"));
+  const title = section.querySelector(".vhead h3")?.textContent?.trim() || "Динамика";
+  const groups = [
+    children.slice(0, chartGridIndex),
+    [children[chartGridIndex]],
+    children.slice(chartGridIndex + 1, scoreIndex < 0 ? children.length : scoreIndex),
+  ];
+  if (scoreIndex >= 0) groups.push([children[scoreIndex]]);
+  return groups.filter(group => group.length).map((group, index) => {
+    const shell = section.cloneNode(false);
+    shell.innerHTML = "";
+    if (index > 0) {
+      const continuation = document.createElement("h3");
+      continuation.className = "pdf-continuation-title";
+      continuation.textContent = `${title} — продолжение`;
+      shell.appendChild(continuation);
+    }
+    group.forEach(child => shell.appendChild(child));
+    return shell;
+  });
+}
+
+async function preparePdfDashboard(stage, target, monthKey) {
+  const source = pdfTargetSource(target, monthKey);
+  if (!source) throw new Error("не найден экран отчёта");
+  const { clone, chartImages } = await cloneDashboardForPdf(source);
+  stage.innerHTML = `<div class="card pdf-export-title"><h1>${esc(target.kind)}: ${esc(target.name)}</h1><div class="muted">${monthLabel(monthKey)} · ${esc(target.departmentName || "")}${target.specializationName ? " · " + esc(target.specializationName) : ""}</div></div>`;
+  for (const child of [...clone.children]) {
+    if (child.classList.contains("no-print")) continue;
+    for (const section of splitDynamicPdfSection(child)) {
+      section.classList.add("exporting", "pdf-export-section");
+      stage.appendChild(section);
+    }
+  }
+  const sections = [...stage.children].filter(element => !element.classList.contains("no-print"));
+  return { sections, chartImages };
 }
 
 /* Пакетная выгрузка: один PDF на врача и один PDF на специализацию, все в одной папке. */
@@ -1202,13 +1420,7 @@ async function exportAllReportsToFolder() {
     }
   }
 
-  const core = coreDoctorsInMonth(mk);
-  const doctors = core.length ? core : doctorsInMonth(mk);
-  const departments = deptListForMonth(mk, doctors);
-  const targets = [
-    ...departments.map(name => ({ kind: "Специализация", name, html: () => buildDeptReport(mk, name, "all") })),
-    ...doctors.map(id => ({ kind: "Врач", name: doctorName(id), html: () => buildDoctorReport(id, mk) })),
-  ];
+  const targets = pdfReportTargets(mk);
   if (!targets.length) { toast("За выбранный месяц нет отчётов для выгрузки", true); return; }
 
   let exportBatch = null;
@@ -1226,30 +1438,46 @@ async function exportAllReportsToFolder() {
   const stage = document.createElement("div");
   stage.className = "pdf-export-stage";
   stage.setAttribute("aria-hidden", "true");
+  const overlay = document.createElement("div");
+  overlay.className = "pdf-export-overlay";
+  overlay.innerHTML = '<div><b>Формирую полные PDF-отчёты</b><span id="pdfExportOverlayStatus">Подготавливаю графики…</span></div>';
   document.body.appendChild(stage);
+  document.body.appendChild(overlay);
+  document.body.classList.add("pdf-export-running");
   const usedNames = new Set();
   const failed = [];
+  let chartImages = 0;
+  const previousUi = {
+    tab: UI.tab,
+    departmentMonth: UI.departmentMonth, departmentFilter: UI.departmentFilter,
+    deptMonth: UI.deptMonth, deptFilter: UI.deptFilter, subFilter: UI.subFilter,
+    docMonth: UI.docMonth, docId: UI.docId,
+    showLabels: UI.showLabels,
+  };
+  UI.showLabels = true;
   button.disabled = true;
   try {
     if (document.fonts && document.fonts.ready) await document.fonts.ready;
     for (let i = 0; i < targets.length; i++) {
       const target = targets[i];
+      const overlayStatus = document.getElementById("pdfExportOverlayStatus");
+      if (overlayStatus) overlayStatus.textContent = `${i + 1} из ${targets.length}: ${target.kind.toLowerCase()} «${target.name}»`;
       button.textContent = `⏳ ${i + 1} из ${targets.length}`;
       toast(`PDF ${i + 1} из ${targets.length}: ${target.kind.toLowerCase()} «${target.name}»`);
       try {
-        stage.innerHTML = target.html();
+        const prepared = await preparePdfDashboard(stage, target, mk);
+        chartImages += prepared.chartImages;
         void stage.offsetHeight;
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-        const slides = [...stage.querySelectorAll(".card")];
-        const pdf = await buildPdfFromSlides(slides, (page, total) => {
+        const pdf = await buildPdfFromSlides(prepared.sections, (page, total) => {
           toast(`PDF ${i + 1} из ${targets.length}: страница ${page} из ${total}`);
         });
-        const fileName = uniquePdfFileName(`${target.kind} — ${target.name} — ${mk}`, usedNames);
+        const fileName = uniquePdfFileName(target.fileBase, usedNames, target.relativePath);
         if (useDesktopExport) {
           const bytes = new Uint8Array(pdf.output("arraybuffer"));
-          await DESKTOP_API.writeExportFile({ token: exportBatch.token, fileName, bytes });
+          await DESKTOP_API.writeExportFile({ token: exportBatch.token, relativePath: target.relativePath, fileName, bytes });
         } else {
-          await writePdfToDirectory(directory, fileName, pdf);
+          await writePdfToDirectory(directory, [mk, ...target.relativePath], fileName, pdf);
         }
       } catch (e) {
         failed.push(`${target.kind} «${target.name}»: ${e.message}`);
@@ -1260,6 +1488,10 @@ async function exportAllReportsToFolder() {
     }
   } finally {
     stage.remove();
+    overlay.remove();
+    document.body.classList.remove("pdf-export-running");
+    Object.assign(UI, previousUi);
+    switchTab(previousUi.tab);
     button.disabled = false;
     button.textContent = oldLabel;
   }
@@ -1280,6 +1512,7 @@ async function exportAllReportsToFolder() {
   } else {
     toast(`Готово: ${saved} PDF сохранено${desktopResult ? " · " + desktopResult.outputDir : " в выбранную папку"}`);
   }
+  return { saved, failed: failed.length, requested: targets.length, chartImages, outputDir: desktopResult ? desktopResult.outputDir : null };
 }
 
 /* ---------- блок «Динамика»: таблица трендов + точки роста/риска ---------- */
@@ -2004,7 +2237,7 @@ function renderDoctor() {
   const shownV3Score = shownVecScores ? shownVecScores.v3 : undefined;
   html += `<div class="card vector-card" id="blkV3" style="border-top-color:${VECTOR_META.v3.color}">
     <div class="vhead"><h3 class="mt0">Вектор 3. Междисциплинарный подход <span class="badge ${VECTOR_META.v3.cls}">${VECTOR_META.v3.tag}</span></h3>
-    <span>${vecBadge("v3", r, docProfile, shownV3Score)} ${blockBtn("blkV3")} ${r.cross.nazSlices.length ? segToggle("nazSeg", r.cross.nazSlices.map(s => ({ v: s, label: "назначения " + s + " мес" })), nazCur, "setNazSlice") : ""}</span></div>
+    <span>${vecBadge("v3", r, docProfile, shownV3Score)} ${blockBtn("blkV3")} ${nz && nz.focus && nz.focus.park ? `<span class="vscore">${nz.focus.used}<span class="small muted"> из ${nz.focus.park} фокусов</span></span>` : ""} ${r.cross.nazSlices.length ? segToggle("nazSeg", r.cross.nazSlices.map(s => ({ v: s, label: "назначения " + s + " мес" })), nazCur, "setNazSlice") : ""}</span></div>
     ${metricRow("Доля выручки от перенаправлений", `<b>${fmtPct(r.cross.crossShare)}</b>`, "перенаправления / выручка с перенаправлениями")}`;
   if (nz) {
     const convTarget = docProfile.scoring && docProfile.scoring.benchmarks ? docProfile.scoring.benchmarks.nazConv : null;
@@ -2034,6 +2267,33 @@ function renderDoctor() {
       }
     }
     html += `<tr><td><b>Итого</b></td><td class="num"><b>${fmtNum(nz.totals.assigned)}</b></td><td class="num"><b>${fmtNum(nz.totals.done)}</b></td><td class="num"><b>${fmtNum(nz.totals.soldQ)}</b></td><td class="num"><b>${fmtMoney(nz.totals.soldSum)}</b></td><td class="num"><b>${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</b></td></tr></table></div></details>`;
+    if (nz.focus) {
+      const focusOrder = (docProfile.crossFocus.items || []).map(item => item.name);
+      for (const name of Object.keys(nz.focus.items)) if (!focusOrder.includes(name)) focusOrder.push(name);
+      const focusEntries = focusOrder.filter(name => nz.focus.items[name]);
+      const focusQtyEntries = focusEntries.filter(name => nz.focus.items[name].soldQ > 0);
+      const focusMoneyEntries = focusEntries.filter(name => nz.focus.items[name].soldSum > 0);
+      const focusCore = new Set((docProfile.crossFocus.items || []).filter(item => item.core !== false).map(item => item.name));
+      const focusUnused = [...focusCore].filter(name => !nz.focus.items[name] || nz.focus.items[name].soldQ <= 0);
+      const focusTitle = esc((nz.focus.title || "Фокусы междисциплинарного подхода").toUpperCase());
+      const focusTarget = docProfile.scoring && docProfile.scoring.benchmarks ? docProfile.scoring.benchmarks.nazFocusShare : null;
+      const focusState = trackedMetricState(nz.focus.revenueShare, focusTarget);
+      const hasFocusTarget = focusTarget != null && focusTarget !== "" && !isNaN(focusTarget) && Number(focusTarget) > 0;
+      html += `<h3 class="section-title" style="margin:14px 0 6px">${focusTitle} <span class="section-detail">· проданные позиции и выручка из отчёта «Назначения»</span></h3>
+        <div class="tracked-metric ${focusState}">
+          <div><div class="tracked-title">Доля выручки фокусов</div><div class="tracked-note">${fmtMoney(nz.focus.soldSum)} из ${fmtMoney(nz.totals.soldSum)} · задействовано ${nz.focus.used} из ${nz.focus.park} фокусов</div></div>
+          <div class="tracked-side"><div class="tracked-value">${fmtPct(nz.focus.revenueShare)}</div><div class="tracked-goal">${hasFocusTarget ? `цель ≥ ${fmtPct(Number(focusTarget))}` : "цель не установлена"}</div></div>
+        </div>
+        <div class="grid cols-3" style="margin-top:12px">
+          <div>${focusQtyEntries.length ? `<h3 class="small muted" style="margin-bottom:6px">${focusTitle}: ШТУКИ ${copyBtn("copyChart", "chNazFocusQty", "PNG")}</h3><div class="chart-box"><canvas id="chNazFocusQty"></canvas></div>` : '<p class="muted small">По фокусам пока нет проданных позиций.</p>'}</div>
+          <div>${focusMoneyEntries.length ? `<h3 class="small muted" style="margin-bottom:6px">${focusTitle}: ВЫРУЧКА ${copyBtn("copyChart", "chNazFocusMoney", "PNG")}</h3><div class="chart-box"><canvas id="chNazFocusMoney"></canvas></div>` : '<p class="muted small">По фокусам пока нет выручки.</p>'}</div>
+          <div><details ${collapsibleListAttrs("interdisciplinaryFocusPositions")}><summary class="collapsible-list-summary"><span>${focusTitle}: СПИСОК</span><span class="collapse-hint"></span></summary>
+            <div class="collapsible-list-body"><div class="toolbar no-print">${copyBtn("copyTable", "tblNazFocus")}</div><table class="data" id="tblNazFocus"><tr><th>Фокус</th><th class="num">Продано, шт</th><th class="num">Выручка</th></tr>
+            ${focusEntries.map(name => `<tr><td>${esc(name)}${focusCore.has(name) ? "" : ' <span class="small muted">(вне набора)</span>'}</td><td class="num">${fmtNum(nz.focus.items[name].soldQ)}</td><td class="num">${fmtMoney(nz.focus.items[name].soldSum)}</td></tr>`).join("")}
+            ${focusUnused.length ? `<tr><td class="small muted" colspan="3">Не задействованы: ${focusUnused.map(esc).join(", ")}</td></tr>` : ""}
+            </table></div></details></div>
+        </div>`;
+    }
   } else {
     html += '<p class="muted small" style="margin-top:8px">Нет выгрузки «Назначения» за этот месяц — конверсии недоступны.</p>';
   }
@@ -2208,7 +2468,7 @@ function renderDoctor() {
       <label class="fld"><span>ПроДокторов (0–5)</span>${inp("prodoctorov", man6.prodoctorov, "0.1", 5)}</label>
       <label class="fld"><span>НаПоправку (0–5)</span>${inp("napopravku", man6.napopravku, "0.1", 5)}</label>
       <label class="fld"><span>DocTu (0–5)</span>${inp("doctu", man6.doctu, "0.1", 5)}</label>
-      <label class="fld"><span>Яндекс.Карты (0–5)</span>${inp("yandex", man6.yandex, "0.1", 5)}</label>
+      <label class="fld"><span>СберЗдоровье (0–5)</span>${inp("sberhealth", man6.sberhealth, "0.1", 5)}</label>
       <label class="fld"><span>NPS (−100…100)</span>${inp("nps", man6.nps, "1", 100, -100)}</label>
       <label class="fld"><span>Новых отзывов</span>${inp("reviews", man6.reviews, "1")}</label>
       <button class="btn primary" onclick="saveManual6()">Сохранить</button>
@@ -2224,9 +2484,9 @@ function renderDoctor() {
       `Последние ${docDyn.months.length} мес. по ${monthLabel(mk)}: последний месяц сравнивается с прошлым и со средним предыдущих месяцев; жирным — текущий месяц.`,
       `doctor|${mk}|${UI.docId}`);
     if (DB.settings.showScores && docDyn.months.length >= 2) {
-      html += `<h3 class="small muted" style="margin:14px 0 6px">БАЛЛЫ ПО ВЕКТОРАМ ПО МЕСЯЦАМ ${copyBtn("copyChart", "chScores", "PNG")}</h3>
+      html += `<div id="chScoresWrap"><h3 class="small muted" style="margin:14px 0 6px">БАЛЛЫ ПО ВЕКТОРАМ ПО МЕСЯЦАМ ${copyBtn("copyChart", "chScores", "PNG")}</h3>
         ${scoreChartPicker("chScores")}
-        <div class="chart-box score-chart"><canvas id="chScores"></canvas></div>`;
+        <div class="chart-box score-chart"><canvas id="chScores"></canvas></div></div>`;
     }
     html += "</div>"; // закрываем карточку динамики
   }
@@ -2305,6 +2565,39 @@ function renderDoctor() {
         maintainAspectRatio: false,
       },
     });
+  }
+  if (nz && nz.focus) {
+    const focusOrder = (docProfile.crossFocus.items || []).map(item => item.name);
+    for (const name of Object.keys(nz.focus.items)) if (!focusOrder.includes(name)) focusOrder.push(name);
+    const focusQtyNames = focusOrder.filter(name => nz.focus.items[name] && nz.focus.items[name].soldQ > 0);
+    const focusMoneyNames = focusOrder.filter(name => nz.focus.items[name] && nz.focus.items[name].soldSum > 0);
+    if (focusQtyNames.length) {
+      chart("chNazFocusQty", {
+        type: "doughnut",
+        data: { labels: focusQtyNames, datasets: [{ data: focusQtyNames.map(name => nz.focus.items[name].soldQ), backgroundColor: focusQtyNames.map(name => crossFocusColor(docProfile, name)) }] },
+        options: {
+          plugins: {
+            legend: { position: "right" },
+            datalabels: { display: () => UI.showLabels, color: "#fff", font: { size: 11, weight: "700" }, formatter: value => fmtNum(value) },
+          },
+          maintainAspectRatio: false,
+        },
+      });
+    }
+    if (focusMoneyNames.length) {
+      chart("chNazFocusMoney", {
+        type: "doughnut",
+        data: { labels: focusMoneyNames, datasets: [{ data: focusMoneyNames.map(name => nz.focus.items[name].soldSum), backgroundColor: focusMoneyNames.map(name => crossFocusColor(docProfile, name)) }] },
+        options: {
+          plugins: {
+            legend: { position: "right" },
+            datalabels: dlDoughnut(() => nz.focus.soldSum),
+            tooltip: { callbacks: { label: context => context.label + ": " + fmtMoney(context.raw) + " (" + fmtPct(context.raw / (nz.focus.soldSum || 1) * 100) + ")" } },
+          },
+          maintainAspectRatio: false,
+        },
+      });
+    }
   }
   if (kb) {
     const segData = [
@@ -2407,9 +2700,10 @@ function renderDoctor() {
   if (docDyn.months.length >= 2) {
     renderDynCharts(docDyn, "blkDyn");
     if (DB.settings.showScores) {
-      renderScoresChart("chScores", docDyn.months,
+      const rendered = renderScoresChart("chScores", docDyn.months,
         (k, vk) => { const rr = docDyn.results[k]; return rr && rr.scores ? rr.scores.vec[vk] : null; },
         k => { const rr = docDyn.results[k]; return rr && rr.scores ? rr.scores.total : null; });
+      if (!rendered) document.getElementById("chScoresWrap")?.remove();
     }
   }
 }
@@ -2422,8 +2716,8 @@ function saveManual6() {
     const v = parseFloat(el.value);
     return isNaN(v) ? null : v;
   };
-  const rec = { prodoctorov: val("prodoctorov"), napopravku: val("napopravku"), doctu: val("doctu"), yandex: val("yandex"), nps: val("nps"), reviews: val("reviews") };
-  const ratings = [rec.prodoctorov, rec.napopravku, rec.doctu, rec.yandex].filter(v => v != null);
+  const rec = { prodoctorov: val("prodoctorov"), napopravku: val("napopravku"), doctu: val("doctu"), sberhealth: val("sberhealth"), nps: val("nps"), reviews: val("reviews") };
+  const ratings = [rec.prodoctorov, rec.napopravku, rec.doctu, rec.sberhealth].filter(v => v != null);
   if (ratings.some(v => v < 0 || v > 5) || (rec.nps != null && (rec.nps < -100 || rec.nps > 100)) || (rec.reviews != null && rec.reviews < 0)) {
     toast("Проверьте диапазоны: рейтинги 0–5, NPS −100…100, отзывы ≥ 0", true);
     return;
@@ -2542,12 +2836,12 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
   const withNaz = rows.filter(x => x.r.cross.naz[1] || x.r.cross.naz[3]);
   if (withNaz.length) {
     html += `<div class="card slide"><h2>Междисциплинарный подход · ${sub}</h2>
-      <table class="data"><tr><th>Специалист</th><th class="num">Назначено</th><th class="num">Выполнено</th><th class="num">Продано</th><th class="num">Конверсия</th><th class="num">Выручка от перенаправлений</th><th class="num">Доля выручки от перенаправлений</th></tr>`;
+      <table class="data"><tr><th>Специалист</th><th class="num">Назначено</th><th class="num">Выполнено</th><th class="num">Продано</th><th class="num">Конверсия</th><th class="num">Фокусы</th><th class="num">Доля выручки фокусов</th><th class="num">Выручка от перенаправлений</th><th class="num">Доля выручки от перенаправлений</th></tr>`;
     for (const x of withNaz) {
       const nz = x.r.cross.naz[1] || x.r.cross.naz[3];
       html += `<tr><td>${esc(doctorName(x.id))} <span class="small muted">(${nz.slice} мес)</span></td>
         <td class="num">${fmtNum(nz.totals.assigned)}</td><td class="num">${fmtNum(nz.totals.done)}</td><td class="num">${fmtNum(nz.totals.soldQ)}</td>
-        <td class="num"><b>${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</b></td>
+        <td class="num"><b>${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</b></td><td class="num">${nz.focus ? `${nz.focus.used} из ${nz.focus.park}` : "—"}</td><td class="num">${nz.focus ? fmtPct(nz.focus.revenueShare) : "—"}</td>
         <td class="num">${fmtMoney(x.r.econ.refRevenue)}</td><td class="num">${fmtPct(x.r.cross.crossShare)}</td></tr>`;
     }
     html += "</table></div>";
@@ -2607,6 +2901,7 @@ function buildDoctorReport(docId, mk) {
   if (!r) return '<div class="card"><p class="muted">Нет данных.</p></div>';
   const e = r.econ;
   const reportProfile = profileForDoctor(docId);
+  const reportNaz = r.cross.naz[UI.nazSlice] || r.cross.naz[1] || r.cross.naz[3];
   let html = `<div class="card slide">${reportHeader(esc(doctorName(docId)), monthLabel(mk) + " · " + esc(doctorStructureLabel(docId)))}
     <div class="grid cols-4">
       ${DB.settings.showScores && r.scores && r.scores.total != null ? `<div class="kpi"><div class="lbl">${r.scores.rankEligible ? "Общий балл" : "Предварительный балл"}</div><div class="val" style="font-size:17px">${fmtNum(r.scores.total, 0)} / 100</div><div class="sub">полнота ${fmtPct(r.scores.coveragePct)}</div></div>` : ""}
@@ -2630,6 +2925,7 @@ function buildDoctorReport(docId, mk) {
   html += `${metricRow("Доля выручки от перенаправлений", fmtPct(r.cross.crossShare))}
     ${r.cross.naz[1] ? metricRow("Конверсия назначений (1 мес)", fmtPct(r.cross.naz[1].totals.conv)) : ""}
     ${r.cross.naz[3] ? metricRow("Конверсия назначений (3 мес)", fmtPct(r.cross.naz[3].totals.conv)) : ""}
+    ${reportNaz && reportNaz.focus ? metricRow("Фокусы назначений", `${reportNaz.focus.used} из ${reportNaz.focus.park}`, `доля выручки ${fmtPct(reportNaz.focus.revenueShare)}`) : ""}
     </div></div>
     ${r.partial ? `<p class="small muted" style="margin-top:10px">⚠ Не загружено: ${esc(r.missing.join(", "))}.</p>` : ""}</div>`;
 
@@ -2660,7 +2956,14 @@ function buildDoctorReport(docId, mk) {
       if (!b || (b.assigned === 0 && b.done === 0 && b.soldQ === 0)) continue;
       html += `<tr><td>${esc(t)}</td><td class="num">${fmtNum(b.assigned)}</td><td class="num">${fmtNum(b.done)}</td><td class="num">${fmtNum(b.soldQ)}</td><td class="num">${fmtMoney(b.soldSum)}</td><td class="num">${b.conv != null ? fmtPct(b.conv) : "—"}</td></tr>`;
     }
-    html += `<tr><td><b>Итого</b></td><td class="num"><b>${fmtNum(nz.totals.assigned)}</b></td><td class="num"><b>${fmtNum(nz.totals.done)}</b></td><td class="num"><b>${fmtNum(nz.totals.soldQ)}</b></td><td class="num"><b>${fmtMoney(nz.totals.soldSum)}</b></td><td class="num"><b>${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</b></td></tr></table></div>`;
+    html += `<tr><td><b>Итого</b></td><td class="num"><b>${fmtNum(nz.totals.assigned)}</b></td><td class="num"><b>${fmtNum(nz.totals.done)}</b></td><td class="num"><b>${fmtNum(nz.totals.soldQ)}</b></td><td class="num"><b>${fmtMoney(nz.totals.soldSum)}</b></td><td class="num"><b>${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</b></td></tr></table>`;
+    if (nz.focus) {
+      const focusNames = (reportProfile.crossFocus.items || []).map(item => item.name).filter(name => nz.focus.items[name]);
+      html += `<h3 style="margin-top:14px">${esc(nz.focus.title)} · проданные позиции</h3><table class="data"><tr><th>Фокус</th><th class="num">Штук</th><th class="num">Выручка</th></tr>
+        ${focusNames.map(name => `<tr><td>${esc(name)}</td><td class="num">${fmtNum(nz.focus.items[name].soldQ)}</td><td class="num">${fmtMoney(nz.focus.items[name].soldSum)}</td></tr>`).join("")}
+        <tr><td><b>Итого · ${nz.focus.used} из ${nz.focus.park} фокусов</b></td><td class="num"><b>${fmtNum(nz.focus.soldQ)}</b></td><td class="num"><b>${fmtMoney(nz.focus.soldSum)} · ${fmtPct(nz.focus.revenueShare)}</b></td></tr></table>`;
+    }
+    html += `</div>`;
   }
   // динамика: точки роста и риска
   const repDyn = computeDoctorDynamics(docId, mk);
@@ -2818,7 +3121,9 @@ function scoringBenchmarkDefs(profile) {
   return [
     ["revenue", "Выручка, ₽/мес"], ["avgCheck", "Средний чек на пациента, ₽"],
     ["hwShare", `Доля «${title}», %`], ["crossShare", "Доля выручки от перенаправлений, %"],
-    ["nazConv", "Конверсия назначений, %"], ["akbShare", "Активная база, %"],
+    ["nazConv", "Конверсия назначений, %"],
+    ...((profile.crossFocus && profile.crossFocus.items && profile.crossFocus.items.length) ? [["nazFocusShare", "Доля выручки фокусов назначений, %"]] : []),
+    ["akbShare", "Активная база, %"],
     ["riskShare", "В зоне риска, % (ниже—лучше)"], ["churn", "Потерянные за 3 года, % (ниже—лучше)"],
     ["schedLoad", "Загрузка расписания, %"], ["pervichka", `Первичка ${profile.pervichkaM || 3} мес, %`],
     ["ownRecords", "Собственная запись в 1С, %"], ["courseIdx", "Курсовое лечение, %"],
@@ -2976,7 +3281,19 @@ function renderSettings() {
   }
   html += `</details>`;
 
-  /* --- 3. Номенклатура отделения: мама распихивает сама --- */
+  /* --- 3. Фокусы междисциплинарного подхода (Вектор 3) --- */
+  const crossFocus = p.crossFocus || { title: "Фокусы междисциплинарного подхода", items: [] };
+  html += `<details class="card" style="display:block" ${det("crossFocus")}><summary style="cursor:pointer"><b>🤝 Фокусы междисциплинарного подхода (Вектор 3) — «${esc(dn)}»</b></summary>
+    <p class="small muted" style="margin-top:8px">Настройте назначения, которые считаются фокусами этого профиля. Они ищутся непосредственно в названиях позиций отчёта «Назначения» и не зависят от категорий выручки.</p>
+    <div class="toolbar"><label>Название блока: <input type="text" id="cf_title" value="${esc(crossFocus.title || "")}" style="min-width:280px"></label></div>
+    <p class="small muted">Фокусы — по одному в строке: <code>Название = синоним1, синоним2</code>. Звёздочка в начале строки — отслеживать, но не учитывать в широте фокусов. Штуки и выручка берутся из проданных назначений.</p>
+    <textarea id="cf_items" placeholder="Название = синоним1, синоним2" style="min-height:150px">${esc((crossFocus.items || []).map(item => (item.core === false ? "* " : "") + item.name + " = " + (item.syn || []).join(", ")).join("\n"))}</textarea>
+    ${fmtEx("УЗИ сердца = эхокардиография, эхо-кг\nХолтер = холтер, суточное мониторирование\n* Анализы = лабораторные исследования")}
+    <p class="small muted">В балл Вектора 3 добавляются широта фокусов и доля их выручки. Цель по доле выручки задаётся ниже в блоке «Баллы и веса».</p>
+    <div class="toolbar"><button class="btn primary" onclick="saveCrossFocusSettings()">💾 Сохранить фокусы Вектора 3</button></div>
+  </details>`;
+
+  /* --- 4. Номенклатура отделения: мама распихивает сама --- */
   const nomAll = collectDeptItems(dn);
   const nf = (UI.nomFilter || "").toLowerCase();
   const showUnmappedOnly = !!UI.nomUnmappedOnly;
@@ -3312,6 +3629,26 @@ function saveDeptExpertise() {
   toast("Экспертность сохранена: " + items.length + " позиций");
   renderAll();
 }
+function saveCrossFocusSettings() {
+  const p = curSetProfile();
+  const items = [];
+  for (const line of document.getElementById("cf_items").value.split("\n").map(value => value.trim()).filter(Boolean)) {
+    const core = !line.startsWith("*");
+    const clean = line.replace(/^\*\s*/, "");
+    const [name, synonymString] = clean.split("=").map(value => value.trim());
+    if (!name) continue;
+    const synonyms = (synonymString || name).split(",").map(value => value.trim().toLowerCase()).filter(Boolean);
+    items.push({ name, syn: synonyms.length ? synonyms : [name.toLowerCase()], core });
+  }
+  p.crossFocus = Object.assign({}, p.crossFocus, {
+    title: document.getElementById("cf_title").value.trim() || "Фокусы междисциплинарного подхода",
+    items,
+  });
+  clearMetricsCache();
+  saveLocal();
+  toast("Фокусы Вектора 3 сохранены: " + items.length + " позиций");
+  renderAll();
+}
 function bindCandidate(i, val) {
   if (!val || !window._devCands || !window._devCands[i]) return;
   const p = curSetProfile();
@@ -3455,7 +3792,7 @@ function saveDeptScoring() {
       toast("Цель рейтинга должна быть в диапазоне 0–5", true);
       return;
     }
-    if (value !== "" && ["schedLoad", "pervichka", "ownRecords", "courseIdx", "akbShare", "riskShare", "churn", "hwShare", "crossShare", "nazConv", "nps"].includes(k) && value > 100) {
+    if (value !== "" && ["schedLoad", "pervichka", "ownRecords", "courseIdx", "akbShare", "riskShare", "churn", "hwShare", "crossShare", "nazConv", "nazFocusShare", "nps"].includes(k) && value > 100) {
       toast("Процентные цели и записи на 100 визитов не могут быть больше 100", true);
       return;
     }
@@ -3507,7 +3844,7 @@ function saveDoctorMetricSettings() {
       toast("Цель рейтинга должна быть в диапазоне 0–5", true);
       return;
     }
-    if (value !== "" && ["schedLoad", "pervichka", "ownRecords", "courseIdx", "akbShare", "riskShare", "churn", "hwShare", "crossShare", "nazConv", "nps"].includes(key) && value > 100) {
+    if (value !== "" && ["schedLoad", "pervichka", "ownRecords", "courseIdx", "akbShare", "riskShare", "churn", "hwShare", "crossShare", "nazConv", "nazFocusShare", "nps"].includes(key) && value > 100) {
       toast("Процентные цели и записи на 100 визитов не могут быть больше 100", true);
       return;
     }
@@ -3640,6 +3977,7 @@ async function initApp() {
   document.getElementById("repScope").addEventListener("change", e => { UI.repScope = e.target.value; renderReport(); });
   document.getElementById("btnPrint").addEventListener("click", () => window.print());
   document.getElementById("btnExportAllPdf").addEventListener("click", exportAllReportsToFolder);
+  document.getElementById("btnSaveSession").addEventListener("click", saveSessionState);
   document.getElementById("btnExport").addEventListener("click", exportDB);
   document.getElementById("btnImport").addEventListener("click", () => document.getElementById("importInput").click());
   document.getElementById("importInput").addEventListener("change", e => { if (e.target.files[0]) importDBFile(e.target.files[0]); e.target.value = ""; });

@@ -99,6 +99,42 @@ main { padding: 20px 24px 60px; max-width: 1500px; margin: 0 auto; }
   background: var(--bg);
   pointer-events: none;
 }
+.pdf-export-stage .card { overflow: visible; }
+.pdf-export-stage .pdf-chart-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.pdf-export-stage .pdf-export-title h1 { margin: 0 0 5px; font-size: 24px; }
+.pdf-export-stage .pdf-continuation-title {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+.pdf-export-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, .58);
+  backdrop-filter: blur(2px);
+}
+.pdf-export-overlay > div {
+  min-width: 360px;
+  max-width: min(620px, calc(100vw - 40px));
+  padding: 22px 26px;
+  border-radius: 14px;
+  background: var(--card);
+  box-shadow: 0 20px 55px rgba(15, 23, 42, .28);
+}
+.pdf-export-overlay b, .pdf-export-overlay span { display: block; }
+.pdf-export-overlay b { margin-bottom: 8px; font-size: 17px; }
+.pdf-export-overlay span { color: var(--muted); }
+body.pdf-export-running { overflow: hidden; }
 .workspace-head {
   display: flex;
   align-items: center;

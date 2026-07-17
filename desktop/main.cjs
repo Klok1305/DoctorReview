@@ -19,6 +19,7 @@ const PDF_SMOKE_TEST = process.argv.includes("--pdf-smoke");
 const SMOKE_TEST = PDF_SMOKE_TEST || process.argv.includes("--smoke-test");
 const APP_NAME = "Пульс клиники";
 const APPLICATION_ROOT = path.resolve(__dirname, "..");
+if (SMOKE_TEST) app.disableHardwareAcceleration();
 const SMOKE_ROOT = app.isPackaged
   ? path.join(app.getPath("temp"), "doctor-app-smoke", String(process.pid))
   : path.join(APPLICATION_ROOT, "tmp", "electron-smoke", String(process.pid));
@@ -222,17 +223,39 @@ function createWindow() {
               await new Promise(resolve => setTimeout(resolve, 1200));
               const optionalLibrariesDeferred = typeof XLSX === 'undefined' && typeof JSZip === 'undefined' && typeof html2canvas === 'undefined' && !window.jspdf;
               loadBundledLibrary('lib-xlsx', 'XLSX');
-              DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], dept: 'По умолчанию', spec: 'Терапевт' } };
-              DB.months = { '2026-01': emptyMonth() };
-              DB.months['2026-01'].vyrabotka.d1 = {
-                period: extractPeriod('01.01.2026 - 31.01.2026'),
-                items: [{ form: '', cat: 'Прием', n: 'Прием врача', q: 5, sOwn: 100000, sRef: 20000, goods: false }]
-              };
-              UI.repMonth = '2026-01';
+              DB.doctors = { d1: {
+                name: 'Тестов Врач', aliases: [], structureManual: true,
+                department: 'Терапия', specialization: 'Кардиология', spec: 'Кардиолог'
+              } };
+              DB.months = { '2026-01': emptyMonth(), '2026-02': emptyMonth(), '2026-03': emptyMonth() };
+              for (const [index, mk] of Object.keys(DB.months).entries()) {
+                DB.months[mk].vyrabotka.d1 = {
+                  period: extractPeriod('01.' + String(index + 1).padStart(2, '0') + '.2026 - 28.' + String(index + 1).padStart(2, '0') + '.2026'),
+                  items: [
+                    { form: '', cat: 'Приемы', n: 'Прием врача', q: 5 + index, sOwn: 100000 + index * 20000, sRef: 20000 + index * 5000, goods: false },
+                    { form: '', cat: 'Диагностика и процедуры', n: 'ЭхоКГ', q: 2 + index, sOwn: 30000 + index * 5000, sRef: 0, goods: false }
+                  ]
+                };
+              }
+              UI.repMonth = '2026-03';
               clearMetricsCache();
-              renderAll();
-              const saved = await saveLocal();
-              await exportAllReportsToFolder();
+              UI.deptMonth = '2026-03';
+              UI.deptFilter = 'Кардиология';
+              UI.subFilter = 'all';
+              switchTab('dept');
+              await new Promise(resolve => setTimeout(resolve, 300));
+              const deptScoreCanvas = document.getElementById('chDeptScores');
+              const deptScoreChart = UI.charts.chDeptScores;
+              const deptScoreChartCheck = {
+                width: deptScoreCanvas ? deptScoreCanvas.width : 0,
+                height: deptScoreCanvas ? deptScoreCanvas.height : 0,
+                imageBytes: deptScoreCanvas ? deptScoreCanvas.toDataURL('image/png').length : 0,
+                datasets: deptScoreChart ? deptScoreChart.data.datasets.length : 0,
+                emptyPlaceholderHidden: !document.getElementById('chDeptScoresWrap')
+              };
+              const saved = await saveSessionState();
+              const sessionSaveStatus = document.getElementById('sessionSaveStatus').textContent;
+              const pdfExport = await exportAllReportsToFolder();
               return {
                 title: document.title,
                 dataPage: Boolean(document.getElementById('page-data')),
@@ -240,7 +263,10 @@ function createWindow() {
                 xlsx: typeof XLSX !== 'undefined',
                 chart: typeof Chart !== 'undefined',
                 desktop: Boolean(window.desktopAPI),
-                saved
+                saved,
+                sessionSaveStatus,
+                deptScoreChartCheck,
+                pdfExport
               };
             })()`
           : `(async () => {
@@ -248,13 +274,33 @@ function createWindow() {
               const optionalLibrariesDeferred = typeof XLSX === 'undefined' && typeof JSZip === 'undefined' && typeof html2canvas === 'undefined' && !window.jspdf;
               loadBundledLibrary('lib-xlsx', 'XLSX');
               DB.doctors = {
-                d1: { name: 'Тестов Косметолог', aliases: [], dept: 'Косметология', spec: 'Косметолог' },
+                d1: {
+                  name: 'Тестов Косметолог',
+                  aliases: [],
+                  department: 'Косметология',
+                  specialization: 'Косметология',
+                  structureManual: true,
+                  spec: 'Косметолог'
+                },
                 d2: { name: 'Тестов Терапевт', aliases: [], dept: 'Терапия', spec: 'Терапевт' }
               };
               DB.months = { '2026-01': emptyMonth(), '2026-02': emptyMonth() };
+              DB.settings.depts['Косметология'].crossFocus = {
+                title: 'Фокусы назначений',
+                items: [
+                  { name: 'Фокус А', syn: ['фокус а'], core: true },
+                  { name: 'Фокус Б', syn: ['фокус б'], core: true }
+                ],
+                rules: []
+              };
+              DB.settings.depts['Косметология'].scoring.benchmarks.nazFocusShare = 50;
               for (const mk of Object.keys(DB.months)) {
                 DB.months[mk].vyrabotka.d1 = { items: [{ form: '', cat: 'Прием', n: 'Прием врача', q: 5, sOwn: mk.endsWith('01') ? 100000 : 120000, sRef: 20000, goods: false }] };
                 DB.months[mk].vyrabotka.d2 = { items: [{ form: '', cat: 'Прием', n: 'Прием врача', q: 4, sOwn: mk.endsWith('01') ? 80000 : 90000, sRef: 10000, goods: false }] };
+                DB.months[mk].naznach.d1 = { '1': { items: [
+                  { n: 'Фокус А услуга', a: 2, d: 1, sq: 1, ss: 10000 },
+                  { n: 'Прочая услуга', a: 2, d: 0, sq: 1, ss: 10000 }
+                ] } };
               }
               clearMetricsCache();
               UI.departmentMonth = '2026-02';
@@ -263,6 +309,23 @@ function createWindow() {
               await new Promise(resolve => setTimeout(resolve, 300));
               const departmentPage = document.getElementById('page-department').classList.contains('active');
               const departmentCharts = Boolean(UI.charts.chDepartmentRevenue && UI.charts.chDepartmentRates && UI.charts.chDepartmentBase);
+              UI.docId = 'd1';
+              UI.docMonth = '2026-02';
+              switchTab('doctor');
+              await new Promise(resolve => setTimeout(resolve, 300));
+              const focusResult = computeMetrics('d1', '2026-02');
+              const interdisciplinaryFocusDetails = {
+                block: document.getElementById('blkV3').textContent.includes('ФОКУСЫ НАЗНАЧЕНИЙ'),
+                charts: Boolean(UI.charts.chNazFocusQty && UI.charts.chNazFocusMoney),
+                used: focusResult.cross.naz[1].focus ? focusResult.cross.naz[1].focus.used : null,
+                park: focusResult.cross.naz[1].focus ? focusResult.cross.naz[1].focus.park : null,
+                score: focusResult.scores.vec.v3
+              };
+              const interdisciplinaryFocus = interdisciplinaryFocusDetails.block
+                && interdisciplinaryFocusDetails.charts
+                && interdisciplinaryFocusDetails.used === 1
+                && interdisciplinaryFocusDetails.park === 2
+                && interdisciplinaryFocusDetails.score === 87.5;
               UI.setDoctor = 'd1';
               switchTab('settings');
               enableDoctorMetricSettings();
@@ -276,6 +339,8 @@ function createWindow() {
                 optionalLibrariesDeferred,
                 departmentPage,
                 departmentCharts,
+                interdisciplinaryFocus,
+                interdisciplinaryFocusDetails,
                 doctorMetricSettings: profileForDoctor('d1').scoring.benchmarks.revenue === 150000 && !document.getElementById('dm_bm_revenue').disabled,
                 xlsx: typeof XLSX !== 'undefined',
                 chart: typeof Chart !== 'undefined',
@@ -290,13 +355,24 @@ function createWindow() {
         fs.writeFileSync(screenshotPath, screenshot.toPNG());
         result.screenshot = screenshotPath;
         if (PDF_SMOKE_TEST) {
-          const sourceDir = path.join(configStore.publicConfig().outputDir, "2026-01");
+          const sourceDir = path.join(configStore.publicConfig().outputDir, "2026-03");
           const pdfDir = path.join(artifactRoot, "pdfs");
+          fs.rmSync(pdfDir, { recursive: true, force: true });
           fs.mkdirSync(pdfDir, { recursive: true });
-          const pdfFiles = fs.existsSync(sourceDir)
-            ? fs.readdirSync(sourceDir).filter(name => name.toLowerCase().endsWith(".pdf"))
-            : [];
+          const pdfFiles = [];
+          const collectPdfFiles = (directory, relative = "") => {
+            if (!fs.existsSync(directory)) return;
+            for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+              if (entry.name === "Предыдущие версии") continue;
+              const childRelative = path.join(relative, entry.name);
+              const fullPath = path.join(directory, entry.name);
+              if (entry.isDirectory()) collectPdfFiles(fullPath, childRelative);
+              else if (entry.isFile() && entry.name.toLowerCase().endsWith(".pdf")) pdfFiles.push(childRelative);
+            }
+          };
+          collectPdfFiles(sourceDir);
           for (const fileName of pdfFiles) {
+            fs.mkdirSync(path.dirname(path.join(pdfDir, fileName)), { recursive: true });
             fs.copyFileSync(path.join(sourceDir, fileName), path.join(pdfDir, fileName));
           }
           result.pdfFiles = pdfFiles;
@@ -304,8 +380,13 @@ function createWindow() {
         }
         process.stdout.write(`${JSON.stringify(result)}\n`);
         const passed = result.dataPage && result.optionalLibrariesDeferred && result.xlsx && result.chart && result.desktop
-          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.doctorMetricSettings))
-          && (!PDF_SMOKE_TEST || (result.saved && result.pdfFiles.length === 2));
+          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.interdisciplinaryFocus && result.doctorMetricSettings))
+          && (!PDF_SMOKE_TEST || (result.saved && result.pdfExport && result.pdfExport.saved === 3
+            && result.pdfExport.chartImages >= 3 && result.pdfFiles.length === 3
+            && result.sessionSaveStatus && result.sessionSaveStatus.includes('Сохранено в рабочую базу SQLite')
+            && result.deptScoreChartCheck && (result.deptScoreChartCheck.datasets > 0
+              ? result.deptScoreChartCheck.imageBytes > 10000
+              : result.deptScoreChartCheck.emptyPlaceholderHidden)));
         app.exit(passed ? 0 : 2);
       } catch (error) {
         process.stderr.write(`${error.stack || error.message}\n`);

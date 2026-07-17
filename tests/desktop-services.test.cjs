@@ -84,25 +84,32 @@ test("PDF publishing replaces the current set and archives stale files", t => {
   const files = new FileService({ configStore: store, database });
   const target = path.join(store.publicConfig().outputDir, "2026-01");
   fs.mkdirSync(target, { recursive: true });
-  fs.writeFileSync(path.join(target, "старый-врач.pdf"), "old");
+  const oldDoctorDir = path.join(target, "Отделения", "Терапия", "Специализации", "Кардиология", "Врачи");
+  fs.mkdirSync(oldDoctorDir, { recursive: true });
+  fs.writeFileSync(path.join(oldDoctorDir, "старый-врач.pdf"), "old");
   fs.writeFileSync(path.join(target, "лишний-врач.pdf"), "stale");
   fs.writeFileSync(path.join(target, "Сводная_2026-01.xlsx"), "keep");
 
   const batch = files.beginExportBatch({ month: "2026-01", kind: "pdf", requestedFiles: 1 });
-  files.writeExportFile({ token: batch.token, fileName: "Врач — Тестов Врач.pdf", bytes: Buffer.from("%PDF-1.3") });
+  assert.throws(() => files.writeExportFile({ token: batch.token, relativePath: [".."], fileName: "escape.pdf", bytes: Buffer.from("%PDF-1.3") }), /папка результата/);
+  files.writeExportFile({
+    token: batch.token,
+    relativePath: ["Отделения", "Терапия", "Специализации", "Кардиология", "Врачи"],
+    fileName: "Тестов Врач.pdf",
+    bytes: Buffer.from("%PDF-1.3"),
+  });
   const result = files.finishExportBatch({ token: batch.token, failures: [] });
 
   assert.equal(result.written, 1);
   assert.equal(result.archived, 2);
-  assert.deepEqual(
-    fs.readdirSync(target).filter(name => name.endsWith(".pdf")),
-    ["Врач — Тестов Врач.pdf"],
-  );
+  assert.equal(fs.existsSync(path.join(target, "Отделения", "Терапия", "Специализации", "Кардиология", "Врачи", "Тестов Врач.pdf")), true);
+  assert.deepEqual(fs.readdirSync(target).filter(name => name.endsWith(".pdf")), []);
   assert.equal(fs.existsSync(path.join(target, "Сводная_2026-01.xlsx")), true);
   const archived = fs.readdirSync(path.join(target, "Предыдущие версии"), { recursive: true })
     .filter(name => String(name).endsWith(".pdf"));
   assert.equal(archived.length, 2);
   assert.match(fs.readFileSync(path.join(target, "Протокол выгрузки.txt"), "utf8"), /Создано файлов: 1/);
+  assert.match(fs.readFileSync(path.join(target, "Протокол выгрузки.txt"), "utf8"), /Отделения\/Терапия\/Специализации\/Кардиология\/Врачи\/Тестов Врач\.pdf/);
 });
 
 test("portable SQLite backup restores data after later changes", async t => {

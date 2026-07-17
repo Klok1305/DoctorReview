@@ -217,7 +217,29 @@ function naznachSummary(docId, monthKey, slice) {
   const nz = m && m.naznach && m.naznach[docId] && m.naznach[docId][String(slice)];
   if (!nz) return null;
   const profile = profileForDoctor(docId);
-  const out = { slice: Number(slice), period: nz.period, totals: { assigned: 0, done: 0, soldQ: 0, soldSum: 0 }, byType: {} };
+  const focusConfig = profile.crossFocus || { title: "Фокусы междисциплинарного подхода", items: [], rules: [] };
+  const focusItems = focusConfig.items || [];
+  const coreFocusNames = focusItems.filter(item => item.core !== false).map(item => item.name);
+  const matchFocus = name => {
+    const hay = String(name || "").toLowerCase();
+    for (const [fragment, focusName] of focusConfig.rules || []) {
+      if (fragment && hay.includes(String(fragment).toLowerCase())) return focusName;
+    }
+    for (const focus of focusItems) {
+      const synonyms = (focus.syn && focus.syn.length ? focus.syn : [focus.name]).map(value => String(value).toLowerCase());
+      if (synonyms.some(value => value && hay.includes(value))) return focus.name;
+    }
+    return null;
+  };
+  const out = {
+    slice: Number(slice), period: nz.period,
+    totals: { assigned: 0, done: 0, soldQ: 0, soldSum: 0 }, byType: {},
+    focus: focusItems.length ? {
+      title: focusConfig.title || "Фокусы междисциплинарного подхода",
+      items: {}, park: coreFocusNames.length, used: 0, usedNames: [],
+      soldQ: 0, soldSum: 0, qtyShare: null, revenueShare: null,
+    } : null,
+  };
   for (const t of REF_TYPES) out.byType[t] = { assigned: 0, done: 0, soldQ: 0, soldSum: 0, items: {} };
   for (const it of nz.items) {
     const cls = classifyItem(profile, "", it.n, false);
@@ -228,6 +250,16 @@ function naznachSummary(docId, monthKey, slice) {
     const bi = b.items[it.n];
     bi.assigned += it.a; bi.done += it.d; bi.soldQ += it.sq; bi.soldSum += it.ss;
     out.totals.assigned += it.a; out.totals.done += it.d; out.totals.soldQ += it.sq; out.totals.soldSum += it.ss;
+    if (out.focus) {
+      const focusName = matchFocus(it.n);
+      if (focusName) {
+        if (!out.focus.items[focusName]) out.focus.items[focusName] = { assigned: 0, done: 0, soldQ: 0, soldSum: 0 };
+        const fi = out.focus.items[focusName];
+        fi.assigned += it.a; fi.done += it.d; fi.soldQ += it.sq; fi.soldSum += it.ss;
+        out.focus.soldQ += it.sq;
+        out.focus.soldSum += it.ss;
+      }
+    }
   }
   for (const t of REF_TYPES) {
     const b = out.byType[t];
@@ -238,6 +270,12 @@ function naznachSummary(docId, monthKey, slice) {
   out.totals.valid = out.totals.assigned >= 0 && out.totals.done >= 0 && out.totals.soldQ >= 0 && out.totals.done + out.totals.soldQ <= out.totals.assigned;
   out.totals.issue = out.totals.valid ? null : "выполнено + продано больше назначенного";
   out.totals.conv = out.totals.valid && out.totals.assigned > 0 ? (out.totals.done + out.totals.soldQ) / out.totals.assigned * 100 : null;
+  if (out.focus) {
+    out.focus.usedNames = coreFocusNames.filter(name => out.focus.items[name] && out.focus.items[name].soldQ > 0);
+    out.focus.used = out.focus.usedNames.length;
+    out.focus.qtyShare = out.totals.soldQ > 0 ? out.focus.soldQ / out.totals.soldQ * 100 : null;
+    out.focus.revenueShare = out.totals.soldSum > 0 ? out.focus.soldSum / out.totals.soldSum * 100 : null;
+  }
   return out;
 }
 
@@ -511,14 +549,15 @@ function computeMetricsRaw(docId, monthKey) {
   /* В6 Репутация */
   let rep = null;
   if (man6) {
-    const ratings = ["prodoctorov", "napopravku", "doctu", "yandex"].map(k => man6[k]).filter(v => v != null && v >= 0 && v <= 5);
+    const ratingKeys = ["prodoctorov", "napopravku", "doctu", "sberhealth"];
+    const ratings = ratingKeys.map(k => man6[k]).filter(v => v != null && v >= 0 && v <= 5);
     const nps = man6.nps != null && man6.nps >= -100 && man6.nps <= 100 ? man6.nps : null;
     const reviews = man6.reviews != null && man6.reviews >= 0 ? man6.reviews : null;
     rep = {
       avgRating: ratings.length ? ratings.reduce((a, b) => a + b, 0) / ratings.length : null,
       nps,
       reviews,
-      valid: ratings.length === ["prodoctorov", "napopravku", "doctu", "yandex"].map(k => man6[k]).filter(v => v != null).length && (man6.nps == null || nps != null) && (man6.reviews == null || reviews != null),
+      valid: ratings.length === ratingKeys.map(k => man6[k]).filter(v => v != null).length && (man6.nps == null || nps != null) && (man6.reviews == null || reviews != null),
       raw: man6,
     };
   }
@@ -538,6 +577,9 @@ function computeMetricsRaw(docId, monthKey) {
   };
   const expertSharePct = product ? product.expertShare : null;
   const nazBest = naz1 || naz3;
+  const configuredFocusItems = (profile.crossFocus && profile.crossFocus.items) || [];
+  const focusShareApplicable = configuredFocusItems.length > 0;
+  const focusBreadthApplicable = configuredFocusItems.some(item => item.core !== false);
   const component = (value, target, lower = false, applicable = true) => ({
     expected: applicable && hasTarget(target),
     score: applicable && hasTarget(target) ? achieve(value, target, lower) : null,
@@ -551,6 +593,8 @@ function computeMetricsRaw(docId, monthKey) {
   const v3ComponentsForNaz = nz => [
     component(cross.crossShare, B.crossShare),
     component(nz && nz.totals.valid !== false ? nz.totals.conv : null, B.nazConv),
+    component(nz && nz.totals.valid !== false && nz.focus ? nz.focus.revenueShare : null, B.nazFocusShare, false, focusShareApplicable),
+    intrinsic(nz && nz.totals.valid !== false && nz.focus && nz.focus.park ? nz.focus.used / nz.focus.park : null, focusBreadthApplicable),
   ];
   const v3ScoreForNaz = nz => componentsScore(v3ComponentsForNaz(nz));
   const v3ByNaz = {
@@ -733,6 +777,7 @@ function dynMetricDefs(profile) {
     { key: "hw", name: `Доля: ${exTitle}`, fmt: fmtPct, get: r => r.product ? r.product.expertShare : null, target: B.hwShare },
     { key: "cross", name: "Доля выручки от перенаправлений", fmt: fmtPct, get: r => r.cross.crossShare, target: B.crossShare },
     { key: "nazConv", name: "Конверсия назначений (1 мес)", fmt: fmtPct, get: r => r.cross.naz[1] ? r.cross.naz[1].totals.conv : null, target: B.nazConv },
+    { key: "nazFocus", name: "Доля выручки фокусов назначений (1 мес)", fmt: fmtPct, get: r => r.cross.naz[1] && r.cross.naz[1].focus ? r.cross.naz[1].focus.revenueShare : null, target: B.nazFocusShare },
     { key: "akb", name: `Активная база (≤${fmtNum(activeM, 1)} мес.; окно по настройкам)`, fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb ? kb.seg.active : null; } },
     { key: "lost", name: `Потерянные (>${fmtNum(lostAfterM, 1)} мес.)`, fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb && kb.sourceWindowComplete ? kb.seg.lost : null; }, lower: true },
     { key: "score", name: "Общий балл", fmt: v => fmtNum(v, 0), get: r => DB.settings.showScores && r.scores ? r.scores.total : null },

@@ -42,7 +42,9 @@
   <input type="file" id="fileInput" multiple accept=".xls,.xlsx,.json,.zip" class="hidden">
   <input type="file" id="dirInput" webkitdirectory class="hidden">
   <div class="toolbar" style="margin-top:14px">
-    <button class="btn primary" id="btnExport">💾 Сохранить базу в файл</button>
+    <button class="btn primary" id="btnSaveSession" title="Зафиксировать текущее состояние рабочей базы со всеми изменениями этой сессии">💾 Сохранить изменения</button>
+    <span class="small muted" id="sessionSaveStatus" role="status" aria-live="polite"></span>
+    <button class="btn" id="btnExport">⇓ Сохранить копию базы</button>
     <button class="btn" id="btnImport">📂 Загрузить базу из файла</button>
     <input type="file" id="importInput" accept=".json" class="hidden">
     <button class="btn" id="btnAutosave" title="База будет автоматически записываться в выбранный файл при каждом изменении (Chrome/Edge)">⚡ Автосохранение в файл</button>
@@ -121,10 +123,10 @@
     <span class="spacer"></span>
     <label>Кому: <select id="repScope" style="min-width:220px"></select></label>
     <label>Месяц: <select id="repMonth"></select></label>
-    <button class="btn primary" id="btnExportAllPdf" title="Создать отдельные PDF по всем врачам и профилям и сохранить их в выбранную папку">📁 Выгрузить все PDF</button>
+    <button class="btn primary" id="btnExportAllPdf" title="Создать полные PDF дашбордов отделений, специализаций и врачей со всеми графиками">📁 Выгрузить все PDF</button>
     <button class="btn" id="btnPrint">🖨 Печать</button>
   </div>
-  <div class="notice blue no-print">Кнопка «Выгрузить все PDF» создаёт за выбранный месяц отдельный файл для каждого врача и каждого профиля с данными. Все файлы сохраняются прямо в одну выбранную папку. Предпросмотр «Кому» и кнопка «Печать» работают для одного выбранного отчёта.</div>
+  <div class="notice blue no-print">Кнопка «Выгрузить все PDF» сохраняет полные дашборды со всеми графиками. Структура результатов: месяц → Отделения → отделение → Специализации → специализация → Врачи. PDF отделения и специализации лежат на соответствующем уровне. Предпросмотр «Кому» и кнопка «Печать» работают для одного выбранного краткого отчёта.</div>
   <div id="reportBody"></div>
 </section>
 

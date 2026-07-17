@@ -10,6 +10,7 @@ const build = path.resolve(__dirname, "..", "build");
 
 function createContext({ desktop = false } = {}) {
   const savedSnapshots = [];
+  const localSnapshots = [];
   const window = desktop ? {
     desktopAPI: {
       saveDatabase: async json => {
@@ -22,8 +23,9 @@ function createContext({ desktop = false } = {}) {
     console,
     window,
     savedSnapshots,
+    localSnapshots,
     document: { getElementById: () => null, createElement: () => ({ style: {} }), body: { appendChild: () => {} } },
-    localStorage: { getItem: () => null, setItem: () => {} },
+    localStorage: { getItem: () => null, setItem: (_key, value) => localSnapshots.push(value) },
     indexedDB: {},
     navigator: {},
     confirm: () => true,
@@ -217,6 +219,68 @@ test("course treatment uses an exact window and own 1C records are a visit perce
   assert.equal(result.scheduled, 80);
   assert.equal(result.actual, 70);
   assert.equal(result.ownPer100, 20);
+});
+
+test("reputation rating uses SberHealth and ignores legacy Yandex Maps values", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Test Doctor', aliases: [] } };
+    DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].manual6.d1 = { prodoctorov: 4, sberhealth: 5, yandex: 1 };
+    clearMetricsCache();
+    const withSberHealth = computeMetrics('d1', '2026-01').rep.avgRating;
+    DB.months['2026-01'].manual6.d1 = { yandex: 1 };
+    clearMetricsCache();
+    const legacyYandexOnly = computeMetrics('d1', '2026-01').rep.avgRating;
+    return { withSberHealth, legacyYandexOnly };
+  })()`, context);
+  assert.equal(result.withSberHealth, 4.5);
+  assert.equal(result.legacyYandexOnly, null);
+});
+
+test("interdisciplinary focuses add revenue share and breadth to vector 3 scoring", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Focus Doctor', aliases: [], dept: 'По умолчанию' } };
+    const profile = DB.settings.depts['По умолчанию'];
+    profile.crossFocus = {
+      title: 'Focus referrals',
+      items: [
+        { name: 'Focus A', syn: ['focus a'], core: true },
+        { name: 'Focus B', syn: ['focus b'], core: true }
+      ],
+      rules: []
+    };
+    profile.scoring.benchmarks.crossShare = 10;
+    profile.scoring.benchmarks.nazConv = 50;
+    profile.scoring.benchmarks.nazFocusShare = 50;
+    DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].vyrabotka.d1 = { items: [
+      { form: '', cat: 'Приемы', n: 'Own and referral revenue', q: 1, sOwn: 100, sRef: 100, goods: false }
+    ] };
+    DB.months['2026-01'].naznach.d1 = { '1': { items: [
+      { n: 'Focus A service', a: 2, d: 1, sq: 1, ss: 100 },
+      { n: 'Other service', a: 2, d: 0, sq: 1, ss: 100 }
+    ] } };
+    clearMetricsCache();
+    const withFocus = computeMetrics('d1', '2026-01');
+    profile.crossFocus.items = [];
+    clearMetricsCache();
+    const withoutFocus = computeMetrics('d1', '2026-01');
+    return {
+      focus: withFocus.cross.naz[1].focus,
+      scoreWithFocus: withFocus.scores.vec.v3,
+      scoreWithoutFocus: withoutFocus.scores.vec.v3
+    };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.equal(plain.focus.park, 2);
+  assert.equal(plain.focus.used, 1);
+  assert.equal(plain.focus.soldQ, 1);
+  assert.equal(plain.focus.soldSum, 100);
+  assert.equal(plain.focus.revenueShare, 50);
+  assert.equal(plain.scoreWithFocus, 87.5);
+  assert.equal(plain.scoreWithoutFocus, 100);
 });
 
 test("department ratios are weighted and patients are deduplicated by stable identity", () => {
@@ -626,4 +690,18 @@ test("desktop autosave serializes the current database before writing SQLite", a
   const snapshot = JSON.parse(context.savedSnapshots[0]);
   assert.equal(snapshot.doctors.d1.name, "Тестов Врач");
   assert.ok(snapshot.months["2026-01"]);
+});
+
+test("browser save confirms and stores the complete current session snapshot", async () => {
+  const context = createContext();
+  const saved = await vm.runInContext(`(async () => {
+    DB.doctors = { d1: { name: 'Сессионный Врач', aliases: [], department: 'Терапия' } };
+    DB.dynamicNotes = { 'doctor|2026-01|d1': 'Комментарий текущей сессии' };
+    return saveLocal();
+  })()`, context);
+  assert.equal(saved, true);
+  assert.equal(context.localSnapshots.length, 1);
+  const snapshot = JSON.parse(context.localSnapshots[0]);
+  assert.equal(snapshot.doctors.d1.name, "Сессионный Врач");
+  assert.equal(snapshot.dynamicNotes["doctor|2026-01|d1"], "Комментарий текущей сессии");
 });
