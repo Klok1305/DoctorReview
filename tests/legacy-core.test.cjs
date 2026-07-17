@@ -62,7 +62,7 @@ test("patient-base statuses depend on recency while loyalty stays separate", () 
     ] } };
     clearMetricsCache();
     const kb = kbSummary('d1', '2026-01', 12);
-    return { seg: kb.seg, activeBase: kb.activeBase, loyalCount: kb.loyalCount, revenueAtRisk: kb.revenueAtRisk, rows: kb.clientRows };
+    return { seg: kb.seg, activeBase: kb.activeBase, loyalCount: kb.loyalCount, revenueAtRisk: kb.revenueAtRisk, rows: kb.clientRows, lostPct: kb.lostPct, sourceWindowComplete: kb.sourceWindowComplete };
   })()`, context);
   const plain = JSON.parse(JSON.stringify(result));
   assert.deepEqual(
@@ -72,8 +72,78 @@ test("patient-base statuses depend on recency while loyalty stays separate", () 
   assert.equal(plain.activeBase, 1);
   assert.equal(plain.loyalCount, 2);
   assert.equal(plain.revenueAtRisk, 900);
+  assert.equal(plain.sourceWindowComplete, false);
+  assert.equal(plain.lostPct, null);
   assert.equal(plain.rows[0].name, "Активный Разовый");
   assert.equal(plain.rows[0].loyal, false);
+});
+
+test("client-base source window follows the specialization loss threshold", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    const profile = { riskM: 12 };
+    return {
+      required: clientBaseRequiredWindow(profile),
+      twelveIsEnough: clientBaseWindowSufficient(12, profile),
+      thirtySixIsEnough: clientBaseWindowSufficient(36, profile),
+      selected: recommendedClientBaseWindow([12, 36], profile, 12),
+    };
+  })()`, context);
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    required: 13,
+    twelveIsEnough: false,
+    thirtySixIsEnough: true,
+    selected: 36,
+  });
+});
+
+test("doctor and specialization aggregates use the configured client-base window", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], dept: 'По умолчанию' } };
+    DB.months = { '2026-01': emptyMonth() };
+    const patient = { name: 'Потерянный Пациент', patientId: 'P-1', s: 1000, v: 2, r: 400 };
+    DB.months['2026-01'].kb.d1 = { '12': { clients: [patient] } };
+    clearMetricsCache();
+    const incompleteDoctor = computeMetrics('d1', '2026-01');
+    const incompleteAggregate = aggregateDeptMonth('2026-01', 'all');
+    const incompleteDynamics = computeDeptDynamics('2026-01', 'all');
+
+    DB.months['2026-01'].kb.d1['36'] = { clients: [patient] };
+    clearMetricsCache();
+    const completeDoctor = computeMetrics('d1', '2026-01');
+    const completeAggregate = aggregateDeptMonth('2026-01', 'all');
+    const completeDynamics = computeDeptDynamics('2026-01', 'all');
+    return {
+      incomplete: {
+        doctorWindow: incompleteDoctor.akb.primaryWin,
+        doctorComplete: incompleteDoctor.akb.primary.sourceWindowComplete,
+        aggregateComplete: incompleteAggregate.akb.primary.sourceWindowComplete,
+        lostInDynamics: incompleteDynamics.rows.some(row => row.key === 'lost'),
+      },
+      complete: {
+        doctorWindow: completeDoctor.akb.primaryWin,
+        doctorComplete: completeDoctor.akb.primary.sourceWindowComplete,
+        aggregateWindows: completeAggregate.akb.primary.windows,
+        aggregateLost: completeAggregate.akb.primary.seg.lost,
+        lostInDynamics: completeDynamics.rows.some(row => row.key === 'lost'),
+      },
+    };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.deepEqual(plain.incomplete, {
+    doctorWindow: 12,
+    doctorComplete: false,
+    aggregateComplete: false,
+    lostInDynamics: false,
+  });
+  assert.deepEqual(plain.complete, {
+    doctorWindow: 36,
+    doctorComplete: true,
+    aggregateWindows: [36],
+    aggregateLost: 1,
+    lostInDynamics: true,
+  });
 });
 
 test("client-base parser preserves patient identity for operational lists", () => {
@@ -121,7 +191,7 @@ test("score coverage requires exact windows and blocks incomplete ranking", () =
   assert.equal(result.complete.churn, 0);
 });
 
-test("course treatment uses only an exact window and schedule shows actual load", () => {
+test("course treatment uses an exact window and own 1C records are a visit percentage", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
     DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], dept: 'По умолчанию' } };

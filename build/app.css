@@ -154,6 +154,7 @@ main { padding: 20px 24px 60px; max-width: 1500px; margin: 0 auto; }
 .seg button:last-child { border-right: none; }
 .seg button:hover { color: var(--ink); background: var(--bg); }
 .seg button.active { background: var(--accent); color: #fff; }
+.seg button:disabled { opacity: .45; cursor: not-allowed; color: var(--muted); background: var(--bg); }
 .vhead { flex-wrap: wrap; gap: 8px; }
 .clinic-tree {
   display: grid;
@@ -384,6 +385,11 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .kpi .val { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .kpi .sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
 .kpi .delta { font-size: 12px; font-weight: 600; }
+.kpi.department-goal-good { background: var(--good-soft); border-color: #86d79c; box-shadow: inset 3px 0 0 var(--good); }
+.kpi.department-goal-good .val { color: var(--good); }
+.kpi.department-goal-bad { background: var(--bad-soft); border-color: #f3aaaa; box-shadow: inset 3px 0 0 var(--bad); }
+.kpi.department-goal-bad .val { color: var(--bad); }
+.kpi .department-goal-note { color: var(--ink); font-weight: 600; }
 .delta.up { color: var(--good); }
 .delta.down { color: var(--bad); }
 .delta.flat { color: var(--muted); }
@@ -502,12 +508,30 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .metric-highlight.goal-bad { background: var(--bad-soft); border-color: #f3aaaa; }
 .metric-highlight.goal-bad .metric-main { color: var(--bad); }
 .metric-history { margin-top: 9px; }
+.metric-history-note { margin-bottom: 6px; padding: 6px 7px; border-radius: 6px; background: #fff7d6; color: #8a5a00; font-size: 10px; line-height: 1.35; }
 .metric-history-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px dashed rgba(107,114,128,.28); font-size: 11px; }
 .metric-history-row > span:first-child { color: var(--muted); }
 .metric-history-result { text-align: right; }
 .metric-history-meta { color: var(--muted); font-size: 10px; margin-top: 2px; white-space: nowrap; }
+.compare-goal-head { min-width: 132px; }
+.compare-goal-target { color: var(--ink); font-weight: 700; white-space: nowrap; }
+.data td.compare-goal-cell.goal-good { background: var(--good-soft); color: var(--good); font-weight: 800; }
+.data td.compare-goal-cell.goal-bad { background: var(--bad-soft); color: var(--bad); font-weight: 800; }
+.score-chart-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.score-chart-choice.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.score-chart-choice:disabled { opacity: .4; cursor: not-allowed; }
+.doctor-goals-summary { padding: 12px 14px; }
+.doctor-goals-summary:not(.card) { margin-top: 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+.doctor-goals-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.doctor-goals-head h3 { margin: 0; font-size: 14px; }
+.doctor-goals-grid { display: grid; grid-template-columns: repeat(5, minmax(135px, 1fr)); gap: 6px; }
+.doctor-goal-item { min-width: 0; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: #f8fafc; }
+.doctor-goal-item span { display: block; color: var(--muted); font-size: 10px; line-height: 1.2; }
+.doctor-goal-item b { display: block; margin-top: 3px; color: var(--ink); font-size: 13px; white-space: nowrap; }
+@media (max-width: 1000px) { .doctor-goals-grid { grid-template-columns: repeat(3, minmax(135px, 1fr)); } }
+@media (max-width: 600px) { .doctor-goals-grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); } }
 .dyn-narrative { margin: 0 0 14px; padding: 13px 14px; border: 1px solid var(--line); border-radius: 10px; background: #f8fafc; }
-.dyn-narrative textarea { width: 100%; min-height: 126px; resize: vertical; line-height: 1.5; background: #fff; }
+.dyn-narrative textarea { width: 100%; min-height: 150px; resize: vertical; line-height: 1.6; background: #fff; color: var(--ink); font-family: "Segoe UI", system-ui, -apple-system, sans-serif; font-size: 14px; }
 .dyn-narrative .toolbar { margin-top: 8px; }
 @media (max-width: 700px) { .kb-dynamics { grid-template-columns: 1fr; } }
 .gauge-wrap { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
