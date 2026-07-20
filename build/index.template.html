@@ -123,10 +123,17 @@
     <span class="spacer"></span>
     <label>Кому: <select id="repScope" style="min-width:220px"></select></label>
     <label>Месяц: <select id="repMonth"></select></label>
-    <button class="btn primary" id="btnExportAllPdf" title="Создать полные PDF дашбордов отделений, специализаций и врачей со всеми графиками">📁 Выгрузить все PDF</button>
+    <button class="btn primary" id="btnExportAllPdf" title="Создать выбранные PDF дашбордов со всеми графиками">📁 Выгрузить PDF</button>
     <button class="btn" id="btnPrint">🖨 Печать</button>
   </div>
-  <div class="notice blue no-print">Кнопка «Выгрузить все PDF» сохраняет полные дашборды со всеми графиками. Структура результатов: месяц → Отделения → отделение → Специализации → специализация → Врачи. PDF отделения и специализации лежат на соответствующем уровне. Предпросмотр «Кому» и кнопка «Печать» работают для одного выбранного краткого отчёта.</div>
+  <div class="pdf-export-options no-print" role="group" aria-label="Состав PDF-выгрузки">
+    <b>Что выгружать:</b>
+    <label><input type="checkbox" id="pdfExportDepartments" onchange="setPdfExportOption('departments', this.checked)" checked> Отделения</label>
+    <label><input type="checkbox" id="pdfExportSpecializations" onchange="setPdfExportOption('specializations', this.checked)" checked> Специализации</label>
+    <label><input type="checkbox" id="pdfExportDoctors" onchange="setPdfExportOption('doctors', this.checked)" checked> Врачи</label>
+    <span class="small muted" id="pdfExportSelectionStatus">выбрано: 3 из 3</span>
+  </div>
+  <div class="notice blue no-print">Кнопка «Выгрузить PDF» сохраняет выбранные типы полных дашбордов со всеми графиками. Структура результатов остаётся прежней: месяц → Отделения → отделение → Специализации → специализация → Врачи. Предпросмотр «Кому» и кнопка «Печать» работают для одного выбранного краткого отчёта.</div>
   <div id="reportBody"></div>
 </section>
 

@@ -110,7 +110,7 @@ test("doctor visit coefficients use visits per unique patient for one and twelve
   assert.equal(result.annual, 4);
 });
 
-test("client-base source window follows the specialization loss threshold", () => {
+test("client-base source window defaults to a complete period but allows manual review", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
     const profile = { riskM: 12 };
@@ -118,14 +118,16 @@ test("client-base source window follows the specialization loss threshold", () =
       required: clientBaseRequiredWindow(profile),
       twelveIsEnough: clientBaseWindowSufficient(12, profile),
       thirtySixIsEnough: clientBaseWindowSufficient(36, profile),
-      selected: recommendedClientBaseWindow([12, 36], profile, 12),
+      selectedByDefault: recommendedClientBaseWindow([12, 36], profile),
+      selectedManually: recommendedClientBaseWindow([12, 36], profile, 12),
     };
   })()`, context);
   assert.deepEqual(JSON.parse(JSON.stringify(result)), {
     required: 13,
     twelveIsEnough: false,
     thirtySixIsEnough: true,
-    selected: 36,
+    selectedByDefault: 36,
+    selectedManually: 12,
   });
 });
 
@@ -345,6 +347,20 @@ test("legacy v1 database migrates to the current schema", () => {
   assert.equal(result.version, 3);
   assert.ok(result.months["2026-01"].naznach);
   assert.deepEqual(Object.keys(result.doctors), ["d1"]);
+});
+
+test("PDF export settings default to all levels and preserve an explicit selection", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    const defaults = normalizedPdfExportSettings();
+    DB.settings.pdfExport = { departments: false, doctors: false };
+    const upgraded = normalizeProfiles();
+    return { defaults, selected: DB.settings.pdfExport, upgraded };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.deepEqual(plain.defaults, { departments: true, specializations: true, doctors: true });
+  assert.deepEqual(plain.selected, { departments: false, specializations: true, doctors: false });
+  assert.equal(plain.upgraded, true);
 });
 
 test("default settings expose the clinic departments and hide the system fallback profile", () => {

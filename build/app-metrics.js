@@ -302,7 +302,7 @@ function recommendedClientBaseWindow(availableWins, profile, requestedWin = null
   if (!wins.length) return null;
   const sufficient = wins.filter(win => clientBaseWindowSufficient(win, profile));
   const requested = Number(requestedWin);
-  if (sufficient.includes(requested)) return requested;
+  if (wins.includes(requested)) return requested;
   return sufficient[0] || wins[wins.length - 1];
 }
 function selectedClientBaseSummary(result, profile, requestedWin = null) {
@@ -778,7 +778,7 @@ function dynMetricDefs(profile) {
     { key: "cross", name: "Доля выручки от перенаправлений", fmt: fmtPct, get: r => r.cross.crossShare, target: B.crossShare },
     { key: "nazConv", name: "Конверсия назначений (1 мес)", fmt: fmtPct, get: r => r.cross.naz[1] ? r.cross.naz[1].totals.conv : null, target: B.nazConv },
     { key: "nazFocus", name: "Доля выручки фокусов назначений (1 мес)", fmt: fmtPct, get: r => r.cross.naz[1] && r.cross.naz[1].focus ? r.cross.naz[1].focus.revenueShare : null, target: B.nazFocusShare },
-    { key: "akb", name: `Активная база (≤${fmtNum(activeM, 1)} мес.; окно по настройкам)`, fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb ? kb.seg.active : null; } },
+    { key: "akb", name: `Активная база (≤${fmtNum(activeM, 1)} мес.)`, fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb ? kb.seg.active : null; } },
     { key: "lost", name: `Потерянные (>${fmtNum(lostAfterM, 1)} мес.)`, fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb && kb.sourceWindowComplete ? kb.seg.lost : null; }, lower: true },
     { key: "score", name: "Общий балл", fmt: v => fmtNum(v, 0), get: r => DB.settings.showScores && r.scores ? r.scores.total : null },
   ];

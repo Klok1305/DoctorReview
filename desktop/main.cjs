@@ -227,6 +227,15 @@ function createWindow() {
                 name: 'Тестов Врач', aliases: [], structureManual: true,
                 department: 'Терапия', specialization: 'Кардиология', spec: 'Кардиолог'
               } };
+              DB.settings.depts['Кардиология'].crossFocus = {
+                title: 'Фокусы назначений',
+                items: [
+                  { name: 'Фокус А', syn: ['фокус а'], core: true },
+                  { name: 'Фокус Б', syn: ['фокус б'], core: true },
+                  { name: 'Фокус В', syn: ['фокус в'], core: true }
+                ],
+                rules: []
+              };
               DB.months = { '2026-01': emptyMonth(), '2026-02': emptyMonth(), '2026-03': emptyMonth() };
               for (const [index, mk] of Object.keys(DB.months).entries()) {
                 DB.months[mk].vyrabotka.d1 = {
@@ -236,9 +245,24 @@ function createWindow() {
                     { form: '', cat: 'Диагностика и процедуры', n: 'ЭхоКГ', q: 2 + index, sOwn: 30000 + index * 5000, sRef: 0, goods: false }
                   ]
                 };
+                DB.months[mk].naznach.d1 = { '3': { items: [
+                  { n: 'Фокус А — приём', a: 12, d: 3, sq: 2, ss: 20000 },
+                  { n: 'Фокус Б — анализы', a: 10, d: 4, sq: 3, ss: 30000 },
+                  { n: 'Фокус В — диагностика', a: 8, d: 2, sq: 1, ss: 15000 }
+                ] } };
               }
               UI.repMonth = '2026-03';
               clearMetricsCache();
+              switchTab('report');
+              await new Promise(resolve => setTimeout(resolve, 150));
+              document.getElementById('pdfExportDepartments').click();
+              document.getElementById('pdfExportSpecializations').click();
+              const doctorsOnlyTargets = pdfReportTargets('2026-03');
+              const pdfSelectionButtonsValid = doctorsOnlyTargets.length === 1
+                && doctorsOnlyTargets.every(target => target.kind === 'Врач')
+                && document.getElementById('pdfExportSelectionStatus').textContent.includes('1 из 3');
+              document.getElementById('pdfExportDepartments').click();
+              document.getElementById('pdfExportSpecializations').click();
               UI.deptMonth = '2026-03';
               UI.deptFilter = 'Кардиология';
               UI.subFilter = 'all';
@@ -266,6 +290,7 @@ function createWindow() {
                 saved,
                 sessionSaveStatus,
                 deptScoreChartCheck,
+                pdfSelectionButtonsValid,
                 pdfExport
               };
             })()`
@@ -297,6 +322,17 @@ function createWindow() {
               for (const mk of Object.keys(DB.months)) {
                 DB.months[mk].vyrabotka.d1 = { items: [{ form: '', cat: 'Прием', n: 'Прием врача', q: 5, sOwn: mk.endsWith('01') ? 100000 : 120000, sRef: 20000, goods: false }] };
                 DB.months[mk].vyrabotka.d2 = { items: [{ form: '', cat: 'Прием', n: 'Прием врача', q: 4, sOwn: mk.endsWith('01') ? 80000 : 90000, sRef: 10000, goods: false }] };
+                DB.months[mk].kb.d1 = {
+                  '12': { clients: [
+                    { name: 'Активный Пациент', patientId: '1', s: 50000, v: 3, r: 30 },
+                    { name: 'Пациент Риска', patientId: '2', s: 70000, v: 2, r: 210 }
+                  ] },
+                  '36': { clients: [
+                    { name: 'Активный Пациент', patientId: '1', s: 90000, v: 5, r: 30 },
+                    { name: 'Пациент Риска', patientId: '2', s: 100000, v: 3, r: 210 },
+                    { name: 'Потерянный Пациент', patientId: '3', s: 60000, v: 1, r: 500 }
+                  ] }
+                };
                 DB.months[mk].naznach.d1 = { '1': { items: [
                   { n: 'Фокус А услуга', a: 2, d: 1, sq: 1, ss: 10000 },
                   { n: 'Прочая услуга', a: 2, d: 0, sq: 1, ss: 10000 }
@@ -313,6 +349,19 @@ function createWindow() {
               UI.docMonth = '2026-02';
               switchTab('doctor');
               await new Promise(resolve => setTimeout(resolve, 300));
+              const shortWindowButton = [...document.querySelectorAll('#kbWinSeg button')].find(button => button.dataset.segmentValue === '12');
+              if (shortWindowButton) shortWindowButton.click();
+              await new Promise(resolve => setTimeout(resolve, 100));
+              const shortWindowSelected = document.querySelector('#kbWinSeg button.active')?.dataset.segmentValue === '12';
+              const fullWindowButton = [...document.querySelectorAll('#kbWinSeg button')].find(button => button.dataset.segmentValue === '36');
+              if (fullWindowButton) fullWindowButton.click();
+              await new Promise(resolve => setTimeout(resolve, 100));
+              const fullWindowSelected = document.querySelector('#kbWinSeg button.active')?.dataset.segmentValue === '36';
+              const riskActionButton = [...document.querySelectorAll('.kb-action-controls button')].find(button => button.textContent.includes('Группа риска'));
+              if (riskActionButton) riskActionButton.click();
+              await new Promise(resolve => setTimeout(resolve, 100));
+              const clientActionOpened = Boolean(document.getElementById('clientSegmentPatients')?.open)
+                && UI.clientSegment === 'risk';
               const doctorHeaderMetrics = [...document.querySelectorAll('#blkHead .kpi .lbl')].map(element => element.textContent.trim());
               const doctorHeaderMetricsValid = doctorHeaderMetrics.length === 5
                 && doctorHeaderMetrics.some(label => label.includes('Пациентов за месяц'))
@@ -399,6 +448,8 @@ function createWindow() {
                 doctorHeaderMetricsValid,
                 doctorHeaderCardRects,
                 doctorHeaderLayoutValid,
+                clientBaseButtonsValid: Boolean(shortWindowButton && fullWindowButton && riskActionButton)
+                  && shortWindowSelected && fullWindowSelected && clientActionOpened,
                 doctorGoalsSummaryValid,
                 doctorGoalCards,
                 mirrorRevenueChartValid,
@@ -469,8 +520,8 @@ function createWindow() {
         }
         process.stdout.write(`${JSON.stringify(result)}\n`);
         const passed = result.dataPage && result.optionalLibrariesDeferred && result.xlsx && result.chart && result.desktop
-          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.doctorGoalsSummaryValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.doctorMetricSettings))
-          && (!PDF_SMOKE_TEST || (result.saved && result.pdfExport && result.pdfExport.saved === 3
+          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.doctorMetricSettings))
+          && (!PDF_SMOKE_TEST || (result.saved && result.pdfSelectionButtonsValid && result.pdfExport && result.pdfExport.saved === 3
             && result.pdfExport.chartImages >= 3 && result.pdfFiles.length === 3
             && result.sessionSaveStatus && result.sessionSaveStatus.includes('Сохранено в рабочую базу SQLite')
             && result.deptScoreChartCheck && (result.deptScoreChartCheck.datasets > 0

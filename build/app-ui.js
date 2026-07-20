@@ -633,6 +633,11 @@ function deptKpiTrend(current, average, mode) {
   return `<span class="delta ${cls}" title="Отклонение от среднего по доступным месяцам года">${arrow} ${value}</span>`;
 }
 
+function compactBaseTrend(current, previous, lowerBetter = false) {
+  if (current == null || previous == null || isNaN(current) || isNaN(previous)) return "";
+  return `<div class="table-kpi-trend" title="К прошлому месяцу">${kbTrendMarkup(current, previous, lowerBetter, "relative")}</div>`;
+}
+
 function renderDept() {
   const months = monthKeysSorted();
   const sel = document.getElementById("deptMonth");
@@ -679,13 +684,15 @@ function renderDept() {
   };
   const avgPatientsYtd = meanKnown(ytdDept.map(r => r.traffic.patients));
   const avgActiveBasePctYtd = meanKnown(ytdDept.map(r => r.akb.primary ? r.akb.primary.activeBasePct : null));
+  const avgSalesYtd = meanKnown(ytdDept.map(r => r.econ.sales));
+  const avgRefYtd = meanKnown(ytdDept.map(r => r.econ.refRevenue));
   const avgLoadPctYtd = meanKnown(ytdDept.map(r => r.loyalty.sched ? r.loyalty.sched.pct : null));
 
   let html = `<div class="grid cols-5">
     <div class="kpi"><div class="lbl">Пациенты за месяц</div><div class="val">${fmtNum(currentPatients)} ${deptKpiTrend(currentPatients, avgPatientsYtd, "pct")}</div><div class="sub">среднее за ${year}: ${fmtNum(avgPatientsYtd)}</div></div>
-    <div class="kpi"><div class="lbl">Доля активной базы</div><div class="val">${fmtPct(currentActiveBasePct)} ${deptKpiTrend(currentActiveBasePct, avgActiveBasePctYtd, "pp")}</div><div class="sub">окно по настройкам${currentKb && !currentKb.sourceWindowComplete ? " · выгрузка неполная" : ""} · среднее за ${year}: ${fmtPct(avgActiveBasePctYtd)}</div></div>
-    <div class="kpi"><div class="lbl">Выручка</div><div class="val" style="font-size:19px">${fmtMoney(totalSales)}</div></div>
-    <div class="kpi"><div class="lbl">Выручка от перенаправлений</div><div class="val" style="font-size:19px">${fmtMoney(totalRef)}</div></div>
+    <div class="kpi"><div class="lbl">Доля активной базы</div><div class="val">${fmtPct(currentActiveBasePct)} ${deptKpiTrend(currentActiveBasePct, avgActiveBasePctYtd, "pp")}</div><div class="sub">${currentKb && !currentKb.sourceWindowComplete ? "выгрузка неполная · " : ""}среднее за ${year}: ${fmtPct(avgActiveBasePctYtd)}</div></div>
+    <div class="kpi"><div class="lbl">Выручка</div><div class="val" style="font-size:19px">${fmtMoney(totalSales)} ${deptKpiTrend(totalSales, avgSalesYtd, "pct")}</div><div class="sub">среднее за ${year}: ${fmtMoney(avgSalesYtd)}</div></div>
+    <div class="kpi"><div class="lbl">Выручка от перенаправлений</div><div class="val" style="font-size:19px">${fmtMoney(totalRef)} ${deptKpiTrend(totalRef, avgRefYtd, "pct")}</div><div class="sub">среднее за ${year}: ${fmtMoney(avgRefYtd)}</div></div>
     <div class="kpi"><div class="lbl">Загрузка отделения</div><div class="val">${fmtPct(currentLoadPct)} ${deptKpiTrend(currentLoadPct, avgLoadPctYtd, "pp")}</div><div class="sub">среднее за ${year}: ${fmtPct(avgLoadPctYtd)}</div></div>
   </div>`;
 
@@ -695,9 +702,9 @@ function renderDept() {
     { name: "Выручка", get: x => x.r.econ.sales, fmt: fmtMoney },
     { name: "С перенаправл.", get: x => x.r.econ.revenueWithRef, fmt: fmtMoney },
     { name: "Ср. чек пациента", get: x => x.r.econ.avgClient, fmt: fmtMoney },
-    { name: "Загрузка расписания", get: x => x.r.loyalty.sched ? x.r.loyalty.sched.pct : null, fmt: fmtPct },
-    { name: `Возвращаемость первички (${UI.pvSlice} мес.)`, get: x => { const pv = x.r.loyalty.pvSlices[UI.pvSlice]; return pv ? pv.pct : null; }, fmt: fmtPct },
-    { name: "Доля выручки от перенаправлений", get: x => x.r.cross.crossShare, fmt: fmtPct },
+    { name: "Загрузка расписания", header: "Загрузка<br>расписания", get: x => x.r.loyalty.sched ? x.r.loyalty.sched.pct : null, fmt: fmtPct },
+    { name: `Возвращаемость первички (${UI.pvSlice} мес.)`, header: `Возвращаемость первички<br>(${UI.pvSlice} мес.)`, get: x => { const pv = x.r.loyalty.pvSlices[UI.pvSlice]; return pv ? pv.pct : null; }, fmt: fmtPct },
+    { name: "Доля выручки от перенаправлений", header: "Доля выручки<br>от перенаправлений", get: x => x.r.cross.crossShare, fmt: fmtPct },
   ];
   for (const cd of colDefs) {
     const vals = rows.map(cd.get).filter(v => v != null && !isNaN(v));
@@ -711,8 +718,8 @@ function renderDept() {
     else if (v != null && cd.worst != null && v === cd.worst) st = "font-weight:700;color:var(--bad)";
     return `<td class="num" style="${st}">${v != null ? cd.fmt(v) : "—"}</td>`;
   };
-  html += `<div class="card"><h2>Сводная по специалистам <span class="small muted">(зелёным — лучший, красным — худший)</span> <span class="spacer"></span>${copyBtn("copyTable", "tblRating")}</h2><table class="data" id="tblRating">
-    <tr><th>#</th><th>Специалист</th>${showScCol ? '<th class="num">Балл<br><span class="small muted">из 100</span></th>' : ""}${colDefs.map(cd => `<th class="num">${cd.name}</th>`).join("")}</tr>`;
+  html += `<div class="card"><h2>Сводная по специалистам <span class="spacer"></span>${copyBtn("copyTable", "tblRating")}</h2><table class="data" id="tblRating">
+    <tr><th>#</th><th>Специалист</th>${showScCol ? '<th class="num">Балл<br><span class="small muted">из 100</span></th>' : ""}${colDefs.map(cd => `<th class="num">${cd.header || esc(cd.name)}</th>`).join("")}</tr>`;
   rows.forEach((x, i) => {
     html += `<tr style="cursor:pointer" onclick="openDoctor('${x.id}','${mk}')"><td class="muted">${i + 1}</td>
       <td><b>${esc(doctorName(x.id))}</b>${x.r.partial ? ' <span class="badge warn" title="нет: ' + esc(x.r.missing.join(", ")) + '">частично</span>' : ""}</td>
@@ -767,21 +774,28 @@ function renderDept() {
   // риск-мониторинг: у каждой специализации своё окно, достаточное для её порога потери
   const withKb = rows.map(x => ({ ...x, kb: selectedClientBaseSummary(x.r, profileForDoctor(x.id)), baseProfile: profileForDoctor(x.id) })).filter(x => x.kb);
   if (withKb.length) {
-    html += `<div class="card"><h2>🚨 Мониторинг базы — окна по настройкам специализаций <span class="spacer"></span>${copyBtn("copyTable", "tblRisk")}</h2><table class="data" id="tblRisk"><tr><th>Специалист</th><th>Настройки базы</th><th class="num">Окно выгрузки</th><th class="num">База</th><th class="num">Активная</th><th class="num">Риск</th><th class="num">Спящая</th><th class="num">Потерянная</th><th class="num">Лояльных</th><th class="num">Выручка под риском</th></tr>`;
+    const previousMonth = prevMonthKey(mk, 1);
+    const baseThresholdNotes = [...new Set(withKb.map(x => {
+      const p = x.baseProfile;
+      const scope = resolvedSpecializationName(x.id) || resolvedDepartmentName(x.id);
+      return `${scope}: активная ≤${fmtNum(p.activeM, 1)} мес., потерянная >${fmtNum(p.riskM, 1)} мес.`;
+    }))].join("; ");
+    html += `<div class="card"><h2>Клиентская база <span class="spacer"></span>${copyBtn("copyTable", "tblRisk")}</h2><table class="data" id="tblRisk"><tr><th>Специалист</th><th class="num">Окно выгрузки</th><th class="num">База</th><th class="num">Активная</th><th class="num">Риск</th><th class="num">Спящая</th><th class="num">Потерянная</th><th class="num">Лояльных</th><th class="num">Выручка под риском</th></tr>`;
     for (const x of withKb) {
-      const kb = x.kb, p = x.baseProfile;
+      const kb = x.kb;
+      const previousResult = computeMetrics(x.id, previousMonth);
+      const previousKb = previousResult && previousResult.akb ? previousResult.akb.wins[kb.window] : null;
       const windowStatus = kb.sourceWindowComplete ? `${fmtNum(kb.window)} мес.` : `${fmtNum(kb.window)} мес. · нужно ≥${fmtNum(kb.requiredWindowM)}`;
       html += `<tr><td>${esc(doctorName(x.id))}<br><span class="small muted">${esc(resolvedSpecializationName(x.id) || resolvedDepartmentName(x.id))}</span></td>
-        <td class="small">активная ≤${fmtNum(p.activeM, 1)} мес.<br>потерянная &gt;${fmtNum(p.riskM, 1)} мес.</td>
         <td class="num ${kb.sourceWindowComplete ? "" : "muted"}">${windowStatus}</td><td class="num">${fmtNum(kb.total)}</td>
-        <td class="num" style="color:var(--good)"><b>${fmtNum(kb.seg.active)}</b></td>
-        <td class="num" style="color:var(--warn)"><b>${fmtNum(kb.seg.risk)}</b></td>
+        <td class="num" style="color:var(--good)"><b>${fmtNum(kb.seg.active)}</b>${compactBaseTrend(kb.seg.active, previousKb ? previousKb.seg.active : null)}</td>
+        <td class="num" style="color:var(--warn)"><b>${fmtNum(kb.seg.risk)}</b>${compactBaseTrend(kb.seg.risk, previousKb ? previousKb.seg.risk : null, true)}</td>
         <td class="num muted">${fmtNum(kb.seg.sleep)}</td>
-        <td class="num" style="color:var(--bad)">${kb.sourceWindowComplete ? "" : "≥"}${fmtNum(kb.seg.lost)}</td>
+        <td class="num" style="color:var(--bad)"><b>${kb.sourceWindowComplete ? "" : "≥"}${fmtNum(kb.seg.lost)}</b>${compactBaseTrend(kb.sourceWindowComplete ? kb.seg.lost : null, previousKb && previousKb.sourceWindowComplete ? previousKb.seg.lost : null, true)}</td>
         <td class="num">${fmtNum(kb.loyalCount)}</td>
-        <td class="num">${fmtMoney(kb.revenueAtRisk)}</td></tr>`;
+        <td class="num">${fmtMoney(kb.revenueAtRisk)}${compactBaseTrend(kb.revenueAtRisk, previousKb ? previousKb.revenueAtRisk : null, true)}</td></tr>`;
     }
-    html += '</table><p class="small muted">Статус зависит от давности последнего визита и порогов специализации. Знак «≥» означает известный минимум: такая выгрузка короче требуемого окна и не используется как точное значение потерь в динамике.</p></div>';
+    html += `</table><p class="small muted">Пороги: ${esc(baseThresholdNotes)} «≥» — известный минимум при короткой выгрузке; такие значения не используются в динамике потерь.</p></div>`;
   }
 
   // профайлы специалистов — все врачи фильтра, метрики в строках
@@ -877,8 +891,8 @@ function renderCompare(mk, rows) {
       { name: "Фокусов назначений задействовано", fmt: r => { const nz = r.cross.naz[UI.nazSlice] || r.cross.naz[1] || r.cross.naz[3]; return nz && nz.focus ? `${nz.focus.used} из ${nz.focus.park}` : "—"; }, num: r => { const nz = r.cross.naz[UI.nazSlice] || r.cross.naz[1] || r.cross.naz[3]; return nz && nz.focus ? nz.focus.used : null; } },
       { name: "Доля выручки фокусов назначений", fmt: r => { const nz = r.cross.naz[UI.nazSlice] || r.cross.naz[1] || r.cross.naz[3]; return nz && nz.focus ? fmtPct(nz.focus.revenueShare) : "—"; }, num: r => { const nz = r.cross.naz[UI.nazSlice] || r.cross.naz[1] || r.cross.naz[3]; return nz && nz.focus ? nz.focus.revenueShare : null; }, targetKey: "nazFocusShare", targetFmt: fmtPct },
     ] : []),
-    { name: "Доля активной базы (окно по настройкам)", fmt: (r, id) => baseShareMarkup(r, id, "activeBasePct"), num: (r, id) => exactBaseShare(r, id, "activeBasePct"), targetKey: "akbShare", targetFmt: fmtPct },
-    { name: "Доля базы в зоне риска (окно по настройкам)", fmt: (r, id) => baseShareMarkup(r, id, "riskShare"), num: (r, id) => exactBaseShare(r, id, "riskShare"), targetKey: "riskShare", targetFmt: fmtPct, lower: true },
+    { name: "Доля активной базы", fmt: (r, id) => baseShareMarkup(r, id, "activeBasePct"), num: (r, id) => exactBaseShare(r, id, "activeBasePct"), targetKey: "akbShare", targetFmt: fmtPct },
+    { name: "Доля базы в зоне риска", fmt: (r, id) => baseShareMarkup(r, id, "riskShare"), num: (r, id) => exactBaseShare(r, id, "riskShare"), targetKey: "riskShare", targetFmt: fmtPct, lower: true },
     { name: `Потерянные (${goalProfile ? ">" + fmtNum(goalProfile.riskM, 1) + " мес." : "порог специализации"})`, fmt: (r, id) => { const kb = comparisonKb(r, id); return kb ? `${kb.sourceWindowComplete ? "" : "≥"}${fmtNum(kb.seg.lost)} чел.` : "—"; }, num: (r, id) => { const kb = comparisonKb(r, id); return kb && kb.sourceWindowComplete ? kb.seg.lost : null; }, lower: true },
     { name: "Потерянные за 3 года", fmt: r => r.akb.churn36 != null ? fmtPct(r.akb.churn36) : "—", num: r => r.akb.churn36, targetKey: "churn", targetFmt: fmtPct, lower: true },
     { name: "Средний рейтинг площадок", fmt: r => r.rep && r.rep.avgRating != null ? fmtNum(r.rep.avgRating, 2) + " ★" : "—", num: r => r.rep ? r.rep.avgRating : null, targetKey: "rating", targetFmt: v => fmtNum(v, 2) + " ★" },
@@ -1035,6 +1049,16 @@ function setClientSegment(v) {
     limit.hidden = clients.length <= 250;
   }
 }
+function openClientSegment(v) {
+  UI.openLists.clientSegmentPatients = true;
+  const block = document.getElementById("clientSegmentPatients");
+  if (block) block.open = true;
+  setClientSegment(v);
+  requestAnimationFrame(() => {
+    const currentBlock = document.getElementById("clientSegmentPatients");
+    if (currentBlock) currentBlock.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
 function toggleLabels() { UI.showLabels = !UI.showLabels; renderAll(); }
 
 function scoreBadge(score, eligible = true, coverage = null) {
@@ -1176,7 +1200,8 @@ function blockBtn(id) {
 }
 
 /* PDF из последовательных блоков полного дашборда. Короткие блоки упаковываются
-   на одну страницу, длинные режутся только если целиком не помещаются на A4. */
+   на одну страницу. Если смысловой фрагмент с графиком всё же выше A4, он
+   уменьшается целиком с сохранением пропорций, а не режется посередине графика. */
 async function buildPdfFromSlides(slides, onProgress) {
   if (!slides.length) throw new Error("в отчёте нет блоков");
   loadBundledLibrary("lib-html2canvas", "html2canvas");
@@ -1212,6 +1237,15 @@ async function buildPdfFromSlides(slides, onProgress) {
       if (!pageStarted || cursorY + scaledHeight > pageH - margin) startPage();
       pdf.addImage(canvas.toDataURL("image/jpeg", 0.94), "JPEG", margin, cursorY, imgW, scaledHeight);
       cursorY += scaledHeight + gap;
+      canvas.width = canvas.height = 0;
+      continue;
+    }
+    if (el.querySelector(".pdf-chart-image")) {
+      const fitScale = maxImgH / scaledHeight;
+      const fitW = imgW * fitScale;
+      startPage();
+      pdf.addImage(canvas.toDataURL("image/jpeg", 0.94), "JPEG", margin + (imgW - fitW) / 2, margin, fitW, maxImgH);
+      cursorY = pageH - margin + gap;
       canvas.width = canvas.height = 0;
       continue;
     }
@@ -1271,7 +1305,8 @@ async function writePdfToDirectory(directory, relativePath, fileName, pdf) {
   }
 }
 
-function pdfReportTargets(monthKey) {
+function pdfReportTargets(monthKey, exportOptions = DB.settings.pdfExport) {
+  const include = normalizedPdfExportSettings(exportOptions);
   const core = coreDoctorsInMonth(monthKey);
   const doctors = core.length ? core : doctorsInMonth(monthKey);
   const tree = new Map();
@@ -1288,7 +1323,7 @@ function pdfReportTargets(monthKey) {
   const targets = [];
   for (const departmentName of [...tree.keys()].sort((a, b) => a.localeCompare(b, "ru"))) {
     const departmentPath = ["Отделения", departmentName];
-    if (departmentGroups()[departmentName]) {
+    if (include.departments && departmentGroups()[departmentName]) {
       targets.push({
         kind: "Отделение", name: departmentName, tab: "department",
         departmentName, relativePath: departmentPath,
@@ -1299,14 +1334,17 @@ function pdfReportTargets(monthKey) {
     for (const specializationLabel of [...specializations.keys()].sort((a, b) => a.localeCompare(b, "ru"))) {
       const group = specializations.get(specializationLabel);
       const specializationPath = [...departmentPath, "Специализации", specializationLabel];
-      targets.push({
-        kind: "Специализация", name: specializationLabel, tab: "dept",
-        departmentName, specializationName: group.specializationName,
-        deptFilter: group.specializationName || departmentName,
-        relativePath: specializationPath,
-        fileBase: `Отчёт по специализации — ${specializationLabel} — ${monthKey}`,
-      });
+      if (include.specializations) {
+        targets.push({
+          kind: "Специализация", name: specializationLabel, tab: "dept",
+          departmentName, specializationName: group.specializationName,
+          deptFilter: group.specializationName || departmentName,
+          relativePath: specializationPath,
+          fileBase: `Отчёт по специализации — ${specializationLabel} — ${monthKey}`,
+        });
+      }
       for (const doctorId of group.doctors.sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru"))) {
+        if (!include.doctors) continue;
         targets.push({
           kind: "Врач", name: doctorName(doctorId), tab: "doctor", doctorId,
           departmentName, specializationName: group.specializationName,
@@ -1366,6 +1404,7 @@ async function cloneDashboardForPdf(source) {
     image.alt = canvas.getAttribute("aria-label") || "График";
     image.className = "pdf-chart-image";
     image.dataset.pdfChart = "true";
+    image.style.aspectRatio = `${canvas.width} / ${canvas.height}`;
     targetCanvas.replaceWith(image);
     chartImages++;
   });
@@ -1412,6 +1451,64 @@ function splitDynamicPdfSection(section) {
   });
 }
 
+const PDF_PAGE_CONTENT_RATIO = (210 - 16) / (297 - 16);
+
+function pdfSectionTitle(section) {
+  const heading = section.querySelector(":scope > .vhead h3, :scope > h1, :scope > h2, :scope > h3");
+  if (!heading) return "Раздел отчёта";
+  const directText = [...heading.childNodes]
+    .filter(node => node.nodeType === Node.TEXT_NODE)
+    .map(node => node.textContent)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return directText || heading.textContent.replace(/\s+/g, " ").trim();
+}
+
+/* Высокие карточки сначала делятся по прямым смысловым подблокам: заголовкам,
+   таблицам, сеткам и графикам. Так граница страницы не проходит через диаграмму. */
+function splitOversizedPdfSection(section) {
+  if (section.classList.contains("pdf-export-title")) return [section];
+  const width = section.getBoundingClientRect().width;
+  const maxHeight = width * PDF_PAGE_CONTENT_RATIO;
+  if (!width || section.getBoundingClientRect().height <= maxHeight || section.children.length < 2) return [section];
+
+  const parent = section.parentNode;
+  const children = [...section.children];
+  const title = pdfSectionTitle(section);
+  const fragments = [];
+  let fragment = null;
+  let contentCount = 0;
+
+  const startFragment = () => {
+    fragment = section.cloneNode(false);
+    fragment.innerHTML = "";
+    fragment.classList.add("exporting", "pdf-export-section");
+    if (fragments.length) {
+      const continuation = document.createElement("h3");
+      continuation.className = "pdf-continuation-title";
+      continuation.textContent = `${title} — продолжение`;
+      fragment.appendChild(continuation);
+    }
+    parent.insertBefore(fragment, section);
+    fragments.push(fragment);
+    contentCount = 0;
+  };
+
+  startFragment();
+  for (const child of children) {
+    fragment.appendChild(child);
+    contentCount++;
+    if (fragment.getBoundingClientRect().height <= maxHeight || contentCount === 1) continue;
+    fragment.removeChild(child);
+    startFragment();
+    fragment.appendChild(child);
+    contentCount = 1;
+  }
+  section.remove();
+  return fragments;
+}
+
 async function preparePdfDashboard(stage, target, monthKey) {
   const source = pdfTargetSource(target, monthKey);
   if (!source) throw new Error("не найден экран отчёта");
@@ -1424,14 +1521,18 @@ async function preparePdfDashboard(stage, target, monthKey) {
       stage.appendChild(section);
     }
   }
-  const sections = [...stage.children].filter(element => !element.classList.contains("no-print"));
+  void stage.offsetHeight;
+  const initialSections = [...stage.children].filter(element => !element.classList.contains("no-print"));
+  const sections = initialSections.flatMap(splitOversizedPdfSection);
   return { sections, chartImages };
 }
 
-/* Пакетная выгрузка: один PDF на врача и один PDF на специализацию, все в одной папке. */
+/* Пакетная выгрузка выбранных уровней с сохранением иерархии клиники. */
 async function exportAllReportsToFolder() {
   const mk = UI.repMonth;
   if (!mk || !DB.months[mk]) { toast("Сначала выберите месяц с данными", true); return; }
+  const targets = pdfReportTargets(mk);
+  if (!targets.length) { toast("Выберите хотя бы один тип PDF для выгрузки", true); return; }
   try {
     loadBundledLibrary("lib-html2canvas", "html2canvas");
     loadBundledLibrary("lib-jspdf", "jspdf");
@@ -1455,9 +1556,6 @@ async function exportAllReportsToFolder() {
       return;
     }
   }
-
-  const targets = pdfReportTargets(mk);
-  if (!targets.length) { toast("За выбранный месяц нет отчётов для выгрузки", true); return; }
 
   let exportBatch = null;
   if (useDesktopExport) {
@@ -1654,6 +1752,13 @@ function dynamicsMetricComment(row) {
   return `${row.name}: ${row.fmt(row.cur)}${details.length ? ` (${details.join("; ")})` : ""}`;
 }
 
+function dynamicsTargetBadges(row) {
+  if (!row || !row.belowTarget || row.target == null) return "";
+  const relation = row.lower ? "выше цели" : "ниже цели";
+  const target = `${row.lower ? "цель ≤ " : "цель ≥ "}${row.fmt(row.target)}`;
+  return ` <span class="dyn-target-badges"><span class="badge bad">${relation}</span><span class="badge info dyn-target-value">${target}</span></span>`;
+}
+
 function joinCommentParts(items) {
   const values = items.filter(Boolean);
   if (values.length < 2) return values[0] || "";
@@ -1784,13 +1889,13 @@ function dynamicsHtml(dyn, blkId, title, subtitle, noteKey) {
   const tblId = blkId + "_tbl";
   html += `<h3 class="small muted" style="margin:0 0 6px">ПОКАЗАТЕЛИ ПО МЕСЯЦАМ ${copyBtn("copyTable", tblId)}</h3>
     <p class="small muted" style="margin:0 0 6px">Ячейки: зелёным — лучший месяц, красным — худший. Мини-график: зелёный — последний месяц лучше среднего предыдущих месяцев, красный — хуже, серый — без изменений или нет данных.</p>
-    <table class="data" id="${tblId}"><tr><th>Метрика</th><th title="Цвет сравнивает последний месяц со средним предыдущих месяцев">Тренд</th>${dyn.months.map(k => `<th class="num">${monthLabel(k)}</th>`).join("")}<th class="num">Δ к прошл. мес.</th><th class="num" title="Среднее всех показанных месяцев без последнего">Δ к среднему прошлых мес.</th></tr>`;
+    <table class="data dynamics-table" id="${tblId}"><tr><th>Метрика</th><th title="Цвет сравнивает последний месяц со средним предыдущих месяцев">Тренд</th>${dyn.months.map(k => `<th class="num">${monthLabel(k)}</th>`).join("")}<th class="num" title="Изменение к предыдущему показанному месяцу">Δ к прошлому</th><th class="num" title="Изменение к среднему всех показанных месяцев без последнего">Δ к среднему</th></tr>`;
   for (const row of dyn.rows) {
     const nn = row.values.filter(v => v != null);
     const distinct = new Set(nn).size > 1;
     const bestV = distinct ? (row.lower ? Math.min(...nn) : Math.max(...nn)) : null;
     const worstV = distinct ? (row.lower ? Math.max(...nn) : Math.min(...nn)) : null;
-    html += `<tr><td class="mname">${esc(row.name)}${row.belowTarget ? ' <span class="badge bad" title="цель: ' + row.fmt(row.target) + (row.lower ? " и ниже" : "") + '">ниже цели</span>' : ""}</td>
+    html += `<tr><td class="mname">${esc(row.name)}${dynamicsTargetBadges(row)}</td>
       <td>${sparkSvg(row)}</td>
       ${row.values.map((v, i) => {
         let st = i === row.values.length - 1 ? "font-weight:700;" : "";
@@ -2329,7 +2434,7 @@ function renderDoctor() {
         html += `<tr><td>${esc(nm)}${coreSet.has(nm) ? "" : ' <span class="small muted">(вне парка)</span>'}</td><td class="num">${fmtNum(p.expert[nm].q)}</td><td class="num">${fmtMoney(p.expert[nm].s)}</td></tr>`;
       }
       const unusedDevs = [...coreSet].filter(nm => !p.expert[nm]);
-      if (unusedDevs.length) html += `<tr><td class="small muted" colspan="3">Не задействованы: ${unusedDevs.map(esc).join(", ")}</td></tr>`;
+      if (unusedDevs.length) html += `<tr><td class="unused-items" colspan="3">Не задействованы: ${unusedDevs.map(esc).join(", ")}</td></tr>`;
       html += `</table></div></details></div></div>`;
     }
     html += `</div>`;
@@ -2357,7 +2462,7 @@ function renderDoctor() {
         <div class="tracked-side"><div class="tracked-value">${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</div><div class="tracked-goal">${hasConvTarget ? `цель ≥ ${fmtPct(Number(convTarget))}` : "цель не установлена"}</div></div>
       </div>
       <details ${collapsibleListAttrs("appointmentDetails")}><summary class="collapsible-list-summary"><span>ДЕТАЛИ НАЗНАЧЕНИЙ</span><span class="collapse-hint"></span></summary>
-      <div class="collapsible-list-body"><table class="data" id="tblNaz"><tr><th>Тип направления</th><th class="num">Назначено, шт</th><th class="num">Выполнено, шт</th><th class="num">Продано, шт</th><th class="num">Выручка по отчёту «Назначения», ₽</th><th class="num">Конверсия</th></tr>`;
+      <div class="collapsible-list-body"><table class="data" id="tblNaz"><tr><th>Тип направления</th><th class="num">Назначено, шт</th><th class="num">Выполнено, шт</th><th class="num">Продано, шт</th><th class="num">Конверсия</th></tr>`;
     let ntIdx = 0;
     for (const t of REF_TYPES) {
       const b = nz.byType[t];
@@ -2367,13 +2472,13 @@ function renderDoctor() {
       const open = !!UI.openGroups[gKey];
       html += `<tr class="grp-head" data-g="${gKey}" ${itEntries.length ? `onclick="toggleGroup('${gKey}')" style="cursor:pointer"` : ""}>
         <td><span id="tri_${gKey}" class="muted">${itEntries.length ? (open ? "▾" : "▸") : "·"}</span> <b>${esc(t)}</b></td>
-        <td class="num"><b>${fmtNum(b.assigned)}</b></td><td class="num"><b>${fmtNum(b.done)}</b></td><td class="num"><b>${fmtNum(b.soldQ)}</b></td><td class="num"><b>${fmtMoney(b.soldSum)}</b></td><td class="num"><b>${b.conv != null ? fmtPct(b.conv) : "—"}</b></td></tr>`;
+        <td class="num"><b>${fmtNum(b.assigned)}</b></td><td class="num"><b>${fmtNum(b.done)}</b></td><td class="num"><b>${fmtNum(b.soldQ)}</b></td><td class="num"><b>${b.conv != null ? fmtPct(b.conv) : "—"}</b></td></tr>`;
       for (const [n, v] of itEntries.slice(0, 40)) {
         html += `<tr class="grp-sub ${gKey}" ${open ? "" : 'style="display:none"'}><td class="small muted" style="padding-left:26px">${esc(n.length > 70 ? n.slice(0, 70) + "…" : n)}</td>
-          <td class="num small muted">${fmtNum(v.assigned)}</td><td class="num small muted">${fmtNum(v.done)}</td><td class="num small muted">${fmtNum(v.soldQ)}</td><td class="num small muted">${fmtMoney(v.soldSum)}</td><td class="num small muted"></td></tr>`;
+          <td class="num small muted">${fmtNum(v.assigned)}</td><td class="num small muted">${fmtNum(v.done)}</td><td class="num small muted">${fmtNum(v.soldQ)}</td><td class="num small muted"></td></tr>`;
       }
     }
-    html += `<tr><td><b>Итого</b></td><td class="num"><b>${fmtNum(nz.totals.assigned)}</b></td><td class="num"><b>${fmtNum(nz.totals.done)}</b></td><td class="num"><b>${fmtNum(nz.totals.soldQ)}</b></td><td class="num"><b>${fmtMoney(nz.totals.soldSum)}</b></td><td class="num"><b>${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</b></td></tr></table></div></details>`;
+    html += `<tr><td><b>Итого</b></td><td class="num"><b>${fmtNum(nz.totals.assigned)}</b></td><td class="num"><b>${fmtNum(nz.totals.done)}</b></td><td class="num"><b>${fmtNum(nz.totals.soldQ)}</b></td><td class="num"><b>${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</b></td></tr></table></div></details>`;
     if (nz.focus) {
       const focusOrder = (docProfile.crossFocus.items || []).map(item => item.name);
       for (const name of Object.keys(nz.focus.items)) if (!focusOrder.includes(name)) focusOrder.push(name);
@@ -2397,7 +2502,7 @@ function renderDoctor() {
           <div><details ${collapsibleListAttrs("interdisciplinaryFocusPositions")}><summary class="collapsible-list-summary"><span>${focusTitle}: СПИСОК</span><span class="collapse-hint"></span></summary>
             <div class="collapsible-list-body"><div class="toolbar no-print">${copyBtn("copyTable", "tblNazFocus")}</div><table class="data" id="tblNazFocus"><tr><th>Фокус</th><th class="num">Продано, шт</th><th class="num">Выручка</th></tr>
             ${focusEntries.map(name => `<tr><td>${esc(name)}${focusCore.has(name) ? "" : ' <span class="small muted">(вне набора)</span>'}</td><td class="num">${fmtNum(nz.focus.items[name].soldQ)}</td><td class="num">${fmtMoney(nz.focus.items[name].soldSum)}</td></tr>`).join("")}
-            ${focusUnused.length ? `<tr><td class="small muted" colspan="3">Не задействованы: ${focusUnused.map(esc).join(", ")}</td></tr>` : ""}
+            ${focusUnused.length ? `<tr><td class="unused-items" colspan="3">Не задействованы: ${focusUnused.map(esc).join(", ")}</td></tr>` : ""}
             </table></div></details></div>
         </div>`;
     }
@@ -2408,7 +2513,7 @@ function renderDoctor() {
     if (nz && refWorkTotal != null) {
       const sourceDiff = nz.totals.soldSum - refWorkTotal;
       const sourceMatch = Math.abs(sourceDiff) < 0.5;
-      html += `<div class="source-compare ${sourceMatch ? "match" : ""}"><b>Сверка двух источников:</b> отчёт «Назначения» — ${fmtMoney(nz.totals.soldSum)}, отчёт «Выработка» — ${fmtMoney(refWorkTotal)}${sourceMatch ? ". Суммы совпадают." : `, разница — ${fmtMoney(Math.abs(sourceDiff))}. Это отдельные выгрузки; расхождение теперь показано явно и не скрывается одной итоговой цифрой.`}</div>`;
+      html += `<p class="source-compare">Сверка двух источников: отчёт «Назначения» — ${fmtMoney(nz.totals.soldSum)}, отчёт «Выработка» — ${fmtMoney(refWorkTotal)}${sourceMatch ? ". Суммы совпадают." : `, разница — ${fmtMoney(Math.abs(sourceDiff))}. Это отдельные выгрузки; расхождение теперь показано явно и не скрывается одной итоговой цифрой.`}</p>`;
     }
     html += `<div class="grid cols-2" style="margin-top:12px"><div>
       <details ${collapsibleListAttrs("completedReferralDetails")}><summary class="collapsible-list-summary"><span>ВЫПОЛНЕНИЕ НАПРАВЛЕНИЙ <span class="section-detail">· источник: «Выработка»</span></span><span class="collapse-hint"></span></summary>
@@ -2443,17 +2548,14 @@ function renderDoctor() {
   const kbWinCur = recommendedClientBaseWindow(kbAvail, docProfile, requestedKbWin);
   if (kbWinCur != null) UI.kbWin = kbWinCur;
   const kb = kbWinCur != null ? r.akb.wins[kbWinCur] : null;
-  const hasSufficientKbWindow = kbAvail.some(win => clientBaseWindowSufficient(win, docProfile));
-  const largestKbWindow = kbAvail.length ? kbAvail[kbAvail.length - 1] : null;
   const kbWindowOptions = kbAvail.map(win => {
     const sufficient = clientBaseWindowSufficient(win, docProfile);
     return {
       v: win,
       label: win >= 24 ? Math.round(win / 12) + " года" : win + " мес",
-      disabled: !sufficient && (hasSufficientKbWindow || win !== largestKbWindow),
       title: sufficient
-        ? `Окно достаточно для порога потери после ${docProfile.riskM} мес.`
-        : `Недостаточно: для потери после ${docProfile.riskM} мес. нужна выгрузка минимум за ${clientBaseRequiredWindow(docProfile)} мес.`,
+        ? `Полный расчёт базы с порогом потери после ${docProfile.riskM} мес.`
+        : `Короткий обзор: потерянные будут показаны как известный минимум.`,
     };
   });
   html += `<div class="card vector-card" id="blkV4" style="border-top-color:${VECTOR_META.v4.color}">
@@ -2463,12 +2565,10 @@ function renderDoctor() {
     html += '<p class="muted small">Нет выгрузок «Давность посещений» с окном от 6 месяцев.</p></div>';
   } else {
     const pr = kb.params;
-    const riskUntilM = kb.thresholds ? kb.thresholds.riskM : (pr.activeM + pr.riskM) / 2;
     const specializationName = resolvedSpecializationName(UI.docId);
     const settingsScope = specializationName
       ? `специализации «${specializationName}»`
       : `отделения «${resolvedDepartmentName(UI.docId)}»`;
-    const lostFromDay = kb.thresholds.lostDays + 1;
     const segmentOptions = [
       { v: "active", label: `Активная · ${kb.seg.active}` },
       { v: "risk", label: `Риск · ${kb.seg.risk}` },
@@ -2479,47 +2579,26 @@ function renderDoctor() {
     if (!segmentOptions.some(x => x.v === UI.clientSegment)) UI.clientSegment = "risk";
     const selectedClients = clientRowsForSegment(kb, UI.clientSegment);
     const kbDyn = clientBaseDynamics(UI.docId, mk, kbWinCur);
-    html += `<p class="small muted" style="margin-top:0">Источник: выгрузка «Давность посещений» за ${kb.window} мес (период ${periodStr(kb.period)}) — ${fmtNum(kb.total)} клиентов, ${fmtNum(kb.visits)} визитов.</p>
-    <div class="notice ${kb.sourceWindowComplete ? "blue" : "warn"}" style="margin:0 0 12px">
-      <b>Применены индивидуальные настройки ${esc(settingsScope)}:</b>
-      активная база ≤${pr.activeM} мес.; риск ${pr.activeM}–${fmtNum(riskUntilM, 1)} мес.; спящая ${fmtNum(riskUntilM, 1)}–${pr.riskM} мес.; потерянная &gt;${pr.riskM} мес. (с ${fmtNum(lostFromDay)}-го дня); лояльный — от ${pr.minVisits} визитов.
-      ${kb.sourceWindowComplete
-        ? `Приложение автоматически выбрало окно ${kb.window} мес., потому что оно длиннее срока потери.`
-        : `Текущая выгрузка неполная для расчёта потерянной базы: нужна минимум за ${kb.requiredWindowM} мес. Количество потерянных ниже показано только как известный минимум, доля не рассчитывается.`}
-      <a href="#" onclick="switchTab('settings');return false">Изменить настройки</a>.
+    const actionText = kb.reactivationCandidates
+      ? `Начните с группы риска (${fmtNum(kb.seg.risk)}), затем разберите спящих (${fmtNum(kb.seg.sleep)}). Пациенты в списках отсортированы по исторической выручке.`
+      : "Пациентов для реактивации сейчас нет.";
+    html += `<p class="kb-source">Период: ${periodStr(kb.period)} · окно ${fmtNum(kb.window)} мес. · Правила ${esc(settingsScope)}: активные ≤${fmtNum(pr.activeM)} мес., потерянные &gt;${fmtNum(pr.riskM)} мес. ${kb.sourceWindowComplete ? "" : '<span class="kb-window-warning">В коротком окне потерянные показаны как минимум; для точной доли выберите 3 года.</span>'} <a href="#" onclick="switchTab('settings');return false">Настройки</a></p>
+    <div class="kb-summary-grid">
+      <div class="kb-summary-card"><div class="kb-summary-label">Вся база</div><div class="kb-summary-value">${fmtNum(kb.total)} чел.</div><div class="kb-summary-meta">${fmtNum(kb.visits)} визитов · к прошлому месяцу ${kbTrendMarkup(kb.total, kbDyn.prev ? kbDyn.prev.total : null, false, "relative")}</div></div>
+      <div class="kb-summary-card good"><div class="kb-summary-label">Активные</div><div class="kb-summary-value">${fmtNum(kb.seg.active)} чел.</div><div class="kb-summary-meta">${fmtPct(kb.activeBasePct)} · были в последние ${fmtNum(pr.activeM)} мес.</div></div>
+      <div class="kb-summary-card warn"><div class="kb-summary-label">Вернуть сейчас</div><div class="kb-summary-value">${fmtNum(kb.reactivationCandidates)} чел.</div><div class="kb-summary-meta">${fmtMoney(kb.reactivationSum)} · группа риска и спящие</div></div>
+      <div class="kb-summary-card bad"><div class="kb-summary-label">Потерянные</div><div class="kb-summary-value">${kb.sourceWindowComplete ? fmtNum(kb.seg.lost) : "≥" + fmtNum(kb.seg.lost)} чел.</div><div class="kb-summary-meta">${kb.sourceWindowComplete ? `${fmtPct(kb.lostPct)} · к прошлому месяцу ${kbTrendMarkup(kb.lostPct, kbDyn.prev ? kbDyn.prev.lostPct : null, true, "pp")}` : `точная доля доступна в полном окне`}</div></div>
     </div>
-    <div class="kb-dynamics">
-      <div class="kb-dyn-card">
-        <div class="kb-dyn-title">Динамика клиентской базы</div>
-        <div class="kb-dyn-current">${fmtNum(kb.total)} чел.</div>
-        <div class="kb-dyn-row"><span>К прошлому месяцу</span><div class="kb-dyn-result">${kbTrendMarkup(kb.total, kbDyn.prev ? kbDyn.prev.total : null, false, "relative")}<div class="kb-dyn-meta">${kbDyn.prev ? `${monthLabel(kbDyn.prevKey)}: ${fmtNum(kbDyn.prev.total)} чел.` : `нет данных за ${monthLabel(kbDyn.prevKey)}`}</div></div></div>
-        <div class="kb-dyn-row"><span>К среднему с начала ${kbDyn.year} года</span><div class="kb-dyn-result">${kbTrendMarkup(kb.total, kbDyn.avgTotal, false, "relative")}<div class="kb-dyn-meta">${kbDyn.avgTotal != null ? `среднее за ${kbDyn.ytdCount} мес.: ${fmtNum(kbDyn.avgTotal, 1)} чел.` : "нет данных"}</div></div></div>
-      </div>
-      <div class="kb-dyn-card">
-        <div class="kb-dyn-title">Динамика снижения потерь</div>
-        <div class="kb-dyn-current">${fmtPct(kb.lostPct)}</div>
-        <div class="kb-dyn-row"><span>К прошлому месяцу</span><div class="kb-dyn-result">${kbTrendMarkup(kb.lostPct, kbDyn.prev ? kbDyn.prev.lostPct : null, true, "pp")}<div class="kb-dyn-meta">${kbDyn.prev ? `${monthLabel(kbDyn.prevKey)}: ${fmtPct(kbDyn.prev.lostPct)}` : `нет данных за ${monthLabel(kbDyn.prevKey)}`}</div></div></div>
-        <div class="kb-dyn-row"><span>К среднему с начала ${kbDyn.year} года</span><div class="kb-dyn-result">${kbTrendMarkup(kb.lostPct, kbDyn.avgLostPct, true, "pp")}<div class="kb-dyn-meta">${kbDyn.avgLostPct != null ? `среднее за ${kbDyn.ytdCount} мес.: ${fmtPct(kbDyn.avgLostPct)}` : "нет данных"}</div></div></div>
+    <div class="kb-action">
+      <div><div class="kb-action-title">Что сделать сейчас</div><div class="kb-action-text">${actionText}</div></div>
+      <div class="kb-action-controls no-print">
+        ${kb.seg.risk ? `<button class="btn mini primary" onclick="openClientSegment('risk')">Группа риска · ${fmtNum(kb.seg.risk)}</button>` : ""}
+        ${kb.seg.sleep ? `<button class="btn mini" onclick="openClientSegment('sleep')">Спящие · ${fmtNum(kb.seg.sleep)}</button>` : ""}
       </div>
     </div>
-    <div class="grid cols-2"><div>
-      ${metricRow("База за окно, всего", `<b>${fmtNum(kb.total)} чел.</b>`, fmtNum(kb.visits) + " визитов за " + kb.window + " мес")}
-      ${metricRow(`Активная: были ≤${pr.activeM} мес. назад`, `<b>${fmtNum(kb.seg.active)} чел. · ${fmtPct(kb.activeBasePct)}</b>`)}
-      ${metricRow(`В группе риска: не были ${pr.activeM}–${fmtNum(riskUntilM, 1)} мес.`, `<b style="color:var(--warn)">${fmtNum(kb.seg.risk)} чел.</b>`)}
-      ${metricRow(`Спящая: не были ${fmtNum(riskUntilM, 1)}–${pr.riskM} мес.`, fmtNum(kb.seg.sleep) + " чел.")}
-      ${metricRow(`Потерянная: не были >${pr.riskM} мес.`, `<b style="color:var(--bad)">${fmtNum(kb.seg.lost)} чел.${kb.sourceWindowComplete ? ` · ${fmtPct(kb.lostPct)}` : " минимум · доля н/д"}</b>`, `порог начинается с ${fmtNum(lostFromDay)}-го дня; ${kb.sourceWindowComplete ? `использовано достаточное окно ${kb.window} мес.` : `нужна выгрузка минимум за ${kb.requiredWindowM} мес.`}`)}
-      ${metricRow(`Лояльные: ≥${pr.minVisits} визитов`, `${fmtNum(kb.loyalCount)} чел. · ${fmtPct(kb.loyalPct)}`, "отдельный признак, не определяет статус активности")}
-      ${kb.seg.unknown ? metricRow("Без данных о давности", `${fmtNum(kb.seg.unknown)} чел.`, "не включены искусственно в активную базу") : ""}
-      ${metricRow("Выручка под риском возврата", `<b>${fmtMoney(kb.revenueAtRisk)}</b>`, "исторические покупки пациентов в группах риска, спящей и потерянной")}
-      ${metricRow("База для реактивации", `<b>${fmtNum(kb.reactivationCandidates)} чел. · ${fmtMoney(kb.reactivationSum)}</b>`, "группы риска и спящая; приоритетный список для регистратуры")}
-      ${metricRow("Выручка от потерянных", fmtMoney(kb.lostSum), `сумма покупок этих ${fmtNum(kb.seg.lost)} чел. за ${kb.window} мес`)}
-      ${metricRow(`Ядро базы: пациенты, давшие ${pr.corePct}% выручки (ABC)`, fmtNum(kb.core) + " чел.")}
-      ${r.akb.churn36 != null ? metricRow(`Отток: потерянные от всей базы за 3 года`, fmtPct(r.akb.churn36)) : ""}
-    </div>
-    <div><h3 class="small muted" style="margin-bottom:6px">СЕГМЕНТЫ БАЗЫ ${copyBtn("copyChart", "chSegments", "PNG")}</h3>
-      <div class="chart-box tall"><canvas id="chSegments"></canvas></div></div>
-    </div>
-    <div class="no-print" style="margin-top:14px"><details id="clientSegmentPatients" ${collapsibleListAttrs("clientSegmentPatients")}><summary class="collapsible-list-summary"><span>ПАЦИЕНТЫ ПО СЕГМЕНТУ <span class="badge mut" id="clientSegmentPatientCount">${fmtNum(selectedClients.length)}</span></span><span class="collapse-hint"></span></summary>
+    <div><h3 class="small muted" style="margin-bottom:6px">СОСТАВ БАЗЫ ${copyBtn("copyChart", "chSegments", "PNG")}</h3>
+      <div class="chart-box"><canvas id="chSegments"></canvas></div></div>
+    <div class="no-print" style="margin-top:12px"><details id="clientSegmentPatients" ${collapsibleListAttrs("clientSegmentPatients", false)}><summary class="collapsible-list-summary"><span>ПАЦИЕНТЫ ДЛЯ РАБОТЫ <span class="badge mut" id="clientSegmentPatientCount">${fmtNum(selectedClients.length)}</span></span><span class="collapse-hint"></span></summary>
       <div class="collapsible-list-body"><div class="vhead"><span class="small muted">Выберите сегмент базы</span>${segToggle("clientSegmentSeg", segmentOptions, UI.clientSegment, "setClientSegment")}</div>
       <div style="overflow-x:auto;margin-top:8px"><table class="data" id="tblClientSegment"><thead><tr><th>Пациент</th><th>Признак</th><th class="num">Визитов</th><th class="num">Дней с визита</th><th class="num">Историческая выручка</th></tr></thead><tbody id="clientSegmentRows">${clientSegmentRowsMarkup(selectedClients)}</tbody>
       </table><p class="small muted" id="clientSegmentLimitNote" ${selectedClients.length > 250 ? "" : "hidden"}>${clientSegmentLimitMarkup(selectedClients)}</p></div></div></details></div>
@@ -2863,12 +2942,42 @@ function saveManual6() {
 
 /* ================= СТРАНИЦА: ОТЧЁТ ================= */
 
+function renderPdfExportOptions() {
+  const options = normalizedPdfExportSettings(DB.settings.pdfExport);
+  DB.settings.pdfExport = options;
+  for (const [key, id] of Object.entries({
+    departments: "pdfExportDepartments",
+    specializations: "pdfExportSpecializations",
+    doctors: "pdfExportDoctors",
+  })) {
+    const checkbox = document.getElementById(id);
+    if (checkbox) checkbox.checked = options[key];
+  }
+  const selected = Object.values(options).filter(Boolean).length;
+  const status = document.getElementById("pdfExportSelectionStatus");
+  if (status) {
+    status.textContent = selected ? `выбрано: ${selected} из 3` : "выберите хотя бы один тип";
+    status.classList.toggle("error", !selected);
+  }
+  const button = document.getElementById("btnExportAllPdf");
+  if (button) button.disabled = !monthKeysSorted().length || !selected;
+}
+
+function setPdfExportOption(key, checked) {
+  if (!['departments', 'specializations', 'doctors'].includes(key)) return;
+  DB.settings.pdfExport = normalizedPdfExportSettings(DB.settings.pdfExport);
+  DB.settings.pdfExport[key] = Boolean(checked);
+  saveLocal();
+  renderPdfExportOptions();
+}
+
 function renderReport() {
   const months = monthKeysSorted();
   const mSel = document.getElementById("repMonth");
   const sSel = document.getElementById("repScope");
   const body = document.getElementById("reportBody");
   setControlsDisabled(["repMonth", "repScope", "btnExportAllPdf", "btnPrint"], !months.length);
+  renderPdfExportOptions();
   if (!months.length) {
     body.innerHTML = '<div class="card"><p class="muted">Загрузите данные на вкладке «Данные».</p></div>';
     mSel.innerHTML = ""; sSel.innerHTML = "";
@@ -2908,7 +3017,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
       <div class="kpi"><div class="lbl">Выручка</div><div class="val" style="font-size:18px">${fmtMoney(totalSales)}</div></div>
       <div class="kpi"><div class="lbl">Выручка от перенаправлений</div><div class="val" style="font-size:18px">${fmtMoney(totalRef)}</div></div>
     </div>
-    <table class="data" style="margin-top:12px"><tr><th>#</th><th>Специалист</th>${showSc ? '<th class="num">Балл</th>' : ""}<th class="num">Выручка</th><th class="num">С перенаправл.</th><th class="num">Ср. чек пациента</th><th class="num">Загрузка расписания</th><th class="num">Возвращаемость первички (${UI.pvSlice} мес.)</th><th class="num">Доля выручки от перенаправлений</th></tr>`;
+    <table class="data" style="margin-top:12px"><tr><th>#</th><th>Специалист</th>${showSc ? '<th class="num">Балл</th>' : ""}<th class="num">Выручка</th><th class="num">С перенаправл.</th><th class="num">Ср. чек пациента</th><th class="num">Загрузка<br>расписания</th><th class="num">Возвращаемость первички<br>(${UI.pvSlice} мес.)</th><th class="num">Доля выручки<br>от перенаправлений</th></tr>`;
   rows.forEach((x, i) => {
     const pv = x.r.loyalty.pvSlices[UI.pvSlice];
     html += `<tr><td class="muted">${i + 1}</td><td>${esc(doctorName(x.id))}</td>
@@ -2980,16 +3089,21 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
   /* Слайд 6: клиентская база */
   const withKb = rows.map(x => ({ ...x, kb: selectedClientBaseSummary(x.r, profileForDoctor(x.id)), baseProfile: profileForDoctor(x.id) })).filter(x => x.kb);
   if (withKb.length) {
-    html += `<div class="card slide"><h2>Клиентская база по настройкам специализаций · ${sub}</h2><table class="data"><tr><th>Специалист</th><th>Порог / окно</th><th class="num">База</th><th class="num">Активная база</th><th class="num">Риск</th><th class="num">Спящая</th><th class="num">Потерянные</th><th class="num">Выручка под риском</th><th class="num">Ядро</th><th class="num">Отток (3 г.)</th></tr>`;
+    const reportBaseThresholds = [...new Set(withKb.map(x => {
+      const p = x.baseProfile;
+      const scope = resolvedSpecializationName(x.id) || resolvedDepartmentName(x.id);
+      return `${scope}: активная ≤${fmtNum(p.activeM, 1)} мес., потерянная >${fmtNum(p.riskM, 1)} мес.`;
+    }))].join("; ");
+    html += `<div class="card slide"><h2>Клиентская база · ${sub}</h2><table class="data"><tr><th>Специалист</th><th class="num">Окно</th><th class="num">База</th><th class="num">Активная база</th><th class="num">Риск</th><th class="num">Спящая</th><th class="num">Потерянные</th><th class="num">Выручка под риском</th><th class="num">Ядро</th><th class="num">Отток (3 г.)</th></tr>`;
     for (const x of withKb) {
-      const kb = x.kb, p = x.baseProfile;
-      html += `<tr><td>${esc(doctorName(x.id))}</td><td class="small">&gt;${fmtNum(p.riskM, 1)} мес. / ${fmtNum(kb.window)} мес.${kb.sourceWindowComplete ? "" : " (неполное)"}</td><td class="num">${fmtNum(kb.total)}</td>
+      const kb = x.kb;
+      html += `<tr><td>${esc(doctorName(x.id))}</td><td class="num">${fmtNum(kb.window)} мес.${kb.sourceWindowComplete ? "" : " (неполное)"}</td><td class="num">${fmtNum(kb.total)}</td>
         <td class="num">${fmtNum(kb.seg.active)} (${fmtPct(kb.activeBasePct)})</td>
         <td class="num">${fmtNum(kb.seg.risk)}</td>
         <td class="num">${fmtNum(kb.seg.sleep)}</td><td class="num">${kb.sourceWindowComplete ? "" : "≥"}${fmtNum(kb.seg.lost)}</td><td class="num">${fmtMoney(kb.revenueAtRisk)}</td>
         <td class="num">${fmtNum(kb.core)}</td><td class="num">${x.r.akb.churn36 != null ? fmtPct(x.r.akb.churn36) : "—"}</td></tr>`;
     }
-    html += "</table></div>";
+    html += `</table><p class="small muted">Пороги: ${esc(reportBaseThresholds)}</p></div>`;
   }
 
   /* Слайд 7: лояльность */
@@ -3080,13 +3194,13 @@ function buildDoctorReport(docId, mk) {
   const nz = r.cross.naz[UI.nazSlice] || r.cross.naz[1] || r.cross.naz[3];
   if (nz) {
     html += `<div class="card slide"><h2>Назначения и направления (${nz.slice} мес) · ${monthLabel(mk)}</h2>
-      <table class="data"><tr><th>Тип</th><th class="num">Назначено</th><th class="num">Выполнено</th><th class="num">Продано</th><th class="num">Выручка</th><th class="num">Конверсия</th></tr>`;
+      <table class="data"><tr><th>Тип</th><th class="num">Назначено</th><th class="num">Выполнено</th><th class="num">Продано</th><th class="num">Конверсия</th></tr>`;
     for (const t of REF_TYPES) {
       const b = nz.byType[t];
       if (!b || (b.assigned === 0 && b.done === 0 && b.soldQ === 0)) continue;
-      html += `<tr><td>${esc(t)}</td><td class="num">${fmtNum(b.assigned)}</td><td class="num">${fmtNum(b.done)}</td><td class="num">${fmtNum(b.soldQ)}</td><td class="num">${fmtMoney(b.soldSum)}</td><td class="num">${b.conv != null ? fmtPct(b.conv) : "—"}</td></tr>`;
+      html += `<tr><td>${esc(t)}</td><td class="num">${fmtNum(b.assigned)}</td><td class="num">${fmtNum(b.done)}</td><td class="num">${fmtNum(b.soldQ)}</td><td class="num">${b.conv != null ? fmtPct(b.conv) : "—"}</td></tr>`;
     }
-    html += `<tr><td><b>Итого</b></td><td class="num"><b>${fmtNum(nz.totals.assigned)}</b></td><td class="num"><b>${fmtNum(nz.totals.done)}</b></td><td class="num"><b>${fmtNum(nz.totals.soldQ)}</b></td><td class="num"><b>${fmtMoney(nz.totals.soldSum)}</b></td><td class="num"><b>${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</b></td></tr></table>`;
+    html += `<tr><td><b>Итого</b></td><td class="num"><b>${fmtNum(nz.totals.assigned)}</b></td><td class="num"><b>${fmtNum(nz.totals.done)}</b></td><td class="num"><b>${fmtNum(nz.totals.soldQ)}</b></td><td class="num"><b>${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</b></td></tr></table>`;
     if (nz.focus) {
       const focusNames = (reportProfile.crossFocus.items || []).map(item => item.name).filter(name => nz.focus.items[name]);
       html += `<h3 style="margin-top:14px">${esc(nz.focus.title)} · проданные позиции</h3><table class="data"><tr><th>Фокус</th><th class="num">Штук</th><th class="num">Выручка</th></tr>

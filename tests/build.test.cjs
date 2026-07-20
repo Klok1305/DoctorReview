@@ -46,6 +46,10 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /function pdfReportTargets/);
   assert.match(actual, /function cloneDashboardForPdf/);
   assert.match(actual, /function splitDynamicPdfSection/);
+  assert.match(actual, /function splitOversizedPdfSection/);
+  assert.match(actual, /el\.querySelector\("\.pdf-chart-image"\)/);
+  assert.match(actual, /fitScale = maxImgH \/ scaledHeight/);
+  assert.match(actual, /image\.style\.aspectRatio/);
   assert.match(actual, /async function saveSessionState/);
   assert.match(actual, /Все изменения текущей сессии сохранены/);
   assert.match(actual, /Сохранить копию базы/);
@@ -55,7 +59,14 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /\["Отделения",\s*departmentName\]/);
   assert.match(actual, /"Специализации"/);
   assert.match(actual, /"Врачи"/);
-  assert.match(actual, /полные PDF дашбордов отделений, специализаций и врачей со всеми графиками/);
+  assert.match(actual, /Что выгружать:/);
+  assert.match(actual, /pdfExportDepartments/);
+  assert.match(actual, /pdfExportSpecializations/);
+  assert.match(actual, /pdfExportDoctors/);
+  assert.match(actual, /function setPdfExportOption/);
+  assert.match(actual, /if \(include\.departments/);
+  assert.match(actual, /if \(include\.specializations/);
+  assert.match(actual, /if \(!include\.doctors\) continue/);
   assert.match(actual, /data-tab="department">🏥 Отделение/);
   assert.match(actual, /data-tab="dept">🩺 Специализации/);
   assert.match(actual, /Нужны специализации/);
@@ -135,7 +146,7 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /chNazFocusMoney/);
   assert.match(actual, /nazFocusShare/);
   assert.match(actual, /const lower = lowerGoals\.has\(goal\.key\)/);
-  assert.match(actual, /ПАЦИЕНТЫ ПО СЕГМЕНТУ/);
+  assert.match(actual, /ПАЦИЕНТЫ ДЛЯ РАБОТЫ/);
   assert.match(actual, /collapsible-list-summary/);
   assert.match(actual, /rememberListToggle/);
   assert.match(actual, /clientSegmentPatients/);
@@ -143,7 +154,8 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /clientRowsForSegment/);
   assert.match(actual, /data-segment-value/);
   assert.match(actual, /aria-pressed/);
-  assert.match(actual, /Применены индивидуальные настройки/);
+  assert.match(actual, /Что сделать сейчас/);
+  assert.match(actual, /openClientSegment/);
   assert.match(actual, /Выгрузка базы подстраивается под эту специализацию/);
   assert.match(actual, /clientBaseRequiredWindow/);
   assert.match(actual, /kbWinByDoctor/);
@@ -169,6 +181,27 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /\.logo-work\s*\{\s*color:\s*#65a30d;/);
   assert.match(actual, /\.logo-doctors\s*\{\s*color:\s*#7c3aed;/);
   assert.doesNotMatch(actual, /Трафик: визиты за месяц/);
+});
+
+test("all rendered controls resolve their inline handlers and listener targets", () => {
+  const template = fs.readFileSync(path.join(build, "index.template.html"), "utf8");
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const source = `${template}\n${ui}`;
+  const handlers = [...source.matchAll(/(?:onclick|onchange|oninput|ondragstart|ondragend|ondragover|ondragleave|ondrop|ontoggle)="([A-Za-z_$][\w$]*)\s*\(/g)]
+    .map(match => match[1]);
+  const uniqueHandlers = [...new Set(handlers)];
+  assert.ok(uniqueHandlers.length >= 45);
+  for (const handler of uniqueHandlers) {
+    assert.match(source, new RegExp(`function\\s+${handler}\\s*\\(`), `missing inline handler: ${handler}`);
+  }
+
+  const listenerTargets = [...ui.matchAll(/document\.getElementById\("([^"]+)"\)\.addEventListener/g)]
+    .map(match => match[1]);
+  const uniqueTargets = [...new Set(listenerTargets)];
+  assert.ok(uniqueTargets.length >= 25);
+  for (const id of uniqueTargets) {
+    assert.ok(source.includes(`id="${id}"`) || source.includes(`id='${id}'`), `missing listener target: ${id}`);
+  }
 });
 
 test("segment toggles safely quote string values in inline handlers", () => {
@@ -244,4 +277,112 @@ test("empty states and imports expose safe, accessible controls", () => {
   assert.match(parsers, /aria-busy/);
   assert.match(core, /aria-live/);
   assert.match(css, /\.btn:disabled/);
+});
+
+test("unused product and focus positions are visually emphasized", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
+
+  assert.equal((ui.match(/class="unused-items"/g) || []).length, 2);
+  assert.match(css, /table\.data td\.unused-items\s*\{[^}]*background:\s*var\(--bad-soft\);[^}]*color:\s*var\(--bad\);[^}]*font-weight:\s*700;/s);
+});
+
+test("appointment details hide report revenue and render source comparison as plain text", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
+  const appointmentTable = ui.match(/id="tblNaz"[\s\S]*?if \(nz\.focus\)/);
+  const reportTable = ui.match(/\/\/ назначения[\s\S]*?if \(nz\.focus\)/);
+  const sourceCompareCss = css.match(/\.source-compare\s*\{([^}]*)\}/);
+
+  assert.ok(appointmentTable);
+  assert.doesNotMatch(appointmentTable[0], /Выручка|fmtMoney\(b\.soldSum\)|fmtMoney\(nz\.totals\.soldSum\)/);
+  assert.ok(reportTable);
+  assert.doesNotMatch(reportTable[0], /<th class="num">Выручка<\/th>|fmtMoney\(b\.soldSum\)|fmtMoney\(nz\.totals\.soldSum\)/);
+  assert.match(ui, /<p class="source-compare">Сверка двух источников:/);
+  assert.ok(sourceCompareCss);
+  assert.match(sourceCompareCss[1], /color:\s*var\(--muted\)/);
+  assert.doesNotMatch(sourceCompareCss[1], /background|border|padding/);
+});
+
+test("client-base vector keeps both periods clickable and focuses on next actions", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
+  const vector = ui.match(/\/\* ---- В4 Клиентская база ---- \*\/[\s\S]*?\/\* ---- В5 Лояльность ---- \*\//);
+
+  assert.ok(vector);
+  assert.doesNotMatch(vector[0], /disabled:/);
+  assert.equal((vector[0].match(/class="kb-summary-card(?:\s|\")/g) || []).length, 4);
+  for (const label of ["Вся база", "Активные", "Вернуть сейчас", "Потерянные", "Что сделать сейчас"]) {
+    assert.match(vector[0], new RegExp(label));
+  }
+  assert.match(vector[0], /openClientSegment\('risk'\)/);
+  assert.match(vector[0], /openClientSegment\('sleep'\)/);
+  assert.doesNotMatch(vector[0], /Динамика клиентской базы|Динамика снижения потерь|Выручка под риском возврата|Ядро базы/);
+  assert.match(css, /\.kb-summary-grid/);
+  assert.match(css, /\.kb-action/);
+});
+
+test("dynamics table shows explicit goals and uses compact comparison headings", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
+  const match = ui.match(/function dynamicsTargetBadges\(row\) \{[\s\S]*?\n\}/);
+
+  assert.ok(match);
+  const dynamicsTargetBadges = new Function(`${match[0]}; return dynamicsTargetBadges;`)();
+  const direct = dynamicsTargetBadges({ belowTarget: true, lower: false, target: 100, fmt: value => `${value} ₽` });
+  const lower = dynamicsTargetBadges({ belowTarget: true, lower: true, target: 30, fmt: value => `${value}%` });
+  assert.match(direct, />ниже цели<[^]*>цель ≥ 100 ₽</);
+  assert.match(lower, />выше цели<[^]*>цель ≤ 30%</);
+  assert.match(ui, />Δ к прошлому<\/th><th class="num"[^>]*>Δ к среднему<\/th>/);
+  assert.doesNotMatch(ui, /Δ к прошл\. мес\.|Δ к среднему прошлых мес\./);
+  assert.match(css, /\.dyn-target-badges/);
+});
+
+test("specialization revenue cards show yearly dynamics without window wording", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const metrics = fs.readFileSync(path.join(build, "app-metrics.js"), "utf8");
+
+  assert.match(ui, /const avgSalesYtd = meanKnown\(ytdDept\.map\(r => r\.econ\.sales\)\)/);
+  assert.match(ui, /const avgRefYtd = meanKnown\(ytdDept\.map\(r => r\.econ\.refRevenue\)\)/);
+  assert.match(ui, /deptKpiTrend\(totalSales, avgSalesYtd, "pct"\)/);
+  assert.match(ui, /deptKpiTrend\(totalRef, avgRefYtd, "pct"\)/);
+  assert.match(ui, /среднее за \$\{year\}: \$\{fmtMoney\(avgSalesYtd\)\}/);
+  assert.match(ui, /среднее за \$\{year\}: \$\{fmtMoney\(avgRefYtd\)\}/);
+  assert.doesNotMatch(ui + metrics, /окно по настройкам/);
+});
+
+test("specialist summary removes the color legend and wraps long headers", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const summary = ui.match(/Сводная по специалистам[\s\S]*?rows\.forEach/);
+
+  assert.ok(summary);
+  assert.doesNotMatch(summary[0], /зелёным — лучший, красным — худший/);
+  assert.match(ui, /header: "Загрузка<br>расписания"/);
+  assert.match(ui, /header: `Возвращаемость первички<br>\(\$\{UI\.pvSlice\} мес\.\)`/);
+  assert.match(ui, /header: "Доля выручки<br>от перенаправлений"/);
+  assert.match(ui, /<th class="num">Загрузка<br>расписания<\/th>/);
+  assert.match(ui, /<th class="num">Возвращаемость первички<br>\(\$\{UI\.pvSlice\} мес\.\)<\/th>/);
+  assert.match(ui, /<th class="num">Доля выручки<br>от перенаправлений<\/th>/);
+});
+
+test("client-base table moves thresholds to a note and shows monthly movement", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
+  const table = ui.match(/\/\/ риск-мониторинг:[\s\S]*?\/\/ профайлы специалистов/);
+  const trendMatch = ui.match(/function compactBaseTrend\(current, previous, lowerBetter = false\) \{[\s\S]*?\n\}/);
+
+  assert.ok(table);
+  assert.match(table[0], /<h2>Клиентская база /);
+  assert.doesNotMatch(table[0], /Мониторинг базы|<th>Настройки базы<\/th>/);
+  assert.match(table[0], /Пороги: \$\{esc\(baseThresholdNotes\)\}/);
+  assert.match(table[0], /compactBaseTrend\(kb\.seg\.active,/);
+  assert.match(table[0], /compactBaseTrend\(kb\.seg\.risk,[^]*true\)/);
+  assert.match(table[0], /compactBaseTrend\(kb\.sourceWindowComplete \? kb\.seg\.lost[^]*true\)/);
+  assert.match(table[0], /compactBaseTrend\(kb\.revenueAtRisk,[^]*true\)/);
+  assert.ok(trendMatch);
+  const compactBaseTrend = new Function("kbTrendMarkup", `${trendMatch[0]}; return compactBaseTrend;`)((current, previous, lower, mode) => `${current}|${previous}|${lower}|${mode}`);
+  assert.equal(compactBaseTrend(120, 100, true), '<div class="table-kpi-trend" title="К прошлому месяцу">120|100|true|relative</div>');
+  assert.equal(compactBaseTrend(120, null), "");
+  assert.match(css, /\.table-kpi-trend/);
+  assert.doesNotMatch(ui, /Клиентская база по настройкам специализаций|Порог \/ окно/);
 });

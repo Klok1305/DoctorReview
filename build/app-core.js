@@ -451,6 +451,7 @@ function knownDoctorStructure(rawName) {
 function defaultSettings() {
   return {
     showScores: true,
+    pdfExport: normalizedPdfExportSettings(),
     weightsV: 4, // версия схемы (v3-профили)
     structureV: CLINIC_STRUCTURE_VERSION,
     departments: JSON.parse(JSON.stringify(CLINIC_DEPARTMENT_SPECS)),
@@ -463,6 +464,17 @@ function defaultSettings() {
       "Гинекология": true,
     },
     depts: clinicSpecializationProfiles(),
+  };
+}
+
+/* Настройки состава пакетной PDF-выгрузки. Для старых баз отсутствие любого
+ * флага означает прежнее поведение: выгружать все уровни. */
+function normalizedPdfExportSettings(value) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return {
+    departments: source.departments !== false,
+    specializations: source.specializations !== false,
+    doctors: source.doctors !== false,
   };
 }
 
@@ -901,7 +913,7 @@ function migrateDB(parsed) {
     // данные не меняются; глобальные настройки v2 переносим в профили
     const old = parsed.settings || {};
     const def = defaultSettings();
-    const settings = { showScores: old.showScores !== false, weightsV: def.weightsV, depts: def.depts };
+    const settings = { showScores: old.showScores !== false, pdfExport: def.pdfExport, weightsV: def.weightsV, depts: def.depts };
     // косметологический профиль наследует ручные наработки v2
     const cosmo = settings.depts["Косметология"];
     if (Array.isArray(old.devices) && old.devices.length) {
@@ -1059,6 +1071,12 @@ function upgradeClinicStructure(defaults) {
    достроить отделение -> опциональные специализации. */
 function normalizeProfiles() {
   const defaults = defaultSettings();
+  const oldPdfExport = DB.settings.pdfExport;
+  DB.settings.pdfExport = normalizedPdfExportSettings(oldPdfExport);
+  const pdfExportUpgraded = !oldPdfExport
+    || oldPdfExport.departments == null
+    || oldPdfExport.specializations == null
+    || oldPdfExport.doctors == null;
   const structureUpgraded = upgradeClinicStructure(defaults);
   let metricScopeUpgraded = false;
   if (!DB.settings.depts || typeof DB.settings.depts !== "object") DB.settings.depts = defaults.depts;
@@ -1150,7 +1168,7 @@ function normalizeProfiles() {
     }
   }
   const rosterExpanded = ensureClinicDoctors();
-  return structureUpgraded || metricScopeUpgraded || rosterExpanded;
+  return structureUpgraded || metricScopeUpgraded || rosterExpanded || pdfExportUpgraded;
 }
 
 function applyLoadedDatabase(parsed) {
