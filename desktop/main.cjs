@@ -255,14 +255,18 @@ function createWindow() {
               clearMetricsCache();
               switchTab('report');
               await new Promise(resolve => setTimeout(resolve, 150));
-              document.getElementById('pdfExportDepartments').click();
-              document.getElementById('pdfExportSpecializations').click();
-              const doctorsOnlyTargets = pdfReportTargets('2026-03');
-              const pdfSelectionButtonsValid = doctorsOnlyTargets.length === 1
-                && doctorsOnlyTargets.every(target => target.kind === 'Врач')
-                && document.getElementById('pdfExportSelectionStatus').textContent.includes('1 из 3');
-              document.getElementById('pdfExportDepartments').click();
-              document.getElementById('pdfExportSpecializations').click();
+              document.getElementById('btnExportAllPdf').click();
+              const exportDialog = document.getElementById('pdfExportDialog');
+              const dialogOpenedBeforeExport = exportDialog.open;
+              document.getElementById('pdfExportClearAll').click();
+              const emptySelectionBlocked = document.getElementById('pdfExportDialogStart').disabled;
+              document.querySelector('label.pdf-choice-doctor input').click();
+              const doctorsOnlyTargets = selectedPdfExportTargets();
+              const exactSelectionValid = doctorsOnlyTargets.length === 1
+                && doctorsOnlyTargets[0].kind === 'Врач'
+                && document.getElementById('pdfExportDialogStatus').textContent.includes('Выбрано: 1 PDF');
+              document.getElementById('pdfExportSelectAll').click();
+              const allTargetsSelected = selectedPdfExportTargets().length === 3;
               UI.deptMonth = '2026-03';
               UI.deptFilter = 'Кардиология';
               UI.subFilter = 'all';
@@ -279,7 +283,7 @@ function createWindow() {
               };
               const saved = await saveSessionState();
               const sessionSaveStatus = document.getElementById('sessionSaveStatus').textContent;
-              const pdfExport = await exportAllReportsToFolder();
+              const pdfExport = await startPdfExportFromDialog();
               return {
                 title: document.title,
                 dataPage: Boolean(document.getElementById('page-data')),
@@ -290,7 +294,7 @@ function createWindow() {
                 saved,
                 sessionSaveStatus,
                 deptScoreChartCheck,
-                pdfSelectionButtonsValid,
+                pdfSelectionDialogValid: dialogOpenedBeforeExport && emptySelectionBlocked && exactSelectionValid && allTargetsSelected,
                 pdfExport
               };
             })()`
@@ -521,7 +525,7 @@ function createWindow() {
         process.stdout.write(`${JSON.stringify(result)}\n`);
         const passed = result.dataPage && result.optionalLibrariesDeferred && result.xlsx && result.chart && result.desktop
           && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.doctorMetricSettings))
-          && (!PDF_SMOKE_TEST || (result.saved && result.pdfSelectionButtonsValid && result.pdfExport && result.pdfExport.saved === 3
+          && (!PDF_SMOKE_TEST || (result.saved && result.pdfSelectionDialogValid && result.pdfExport && result.pdfExport.saved === 3
             && result.pdfExport.chartImages >= 3 && result.pdfFiles.length === 3
             && result.sessionSaveStatus && result.sessionSaveStatus.includes('Сохранено в рабочую базу SQLite')
             && result.deptScoreChartCheck && (result.deptScoreChartCheck.datasets > 0

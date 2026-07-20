@@ -349,20 +349,6 @@ test("legacy v1 database migrates to the current schema", () => {
   assert.deepEqual(Object.keys(result.doctors), ["d1"]);
 });
 
-test("PDF export settings default to all levels and preserve an explicit selection", () => {
-  const context = createContext();
-  const result = vm.runInContext(`(() => {
-    const defaults = normalizedPdfExportSettings();
-    DB.settings.pdfExport = { departments: false, doctors: false };
-    const upgraded = normalizeProfiles();
-    return { defaults, selected: DB.settings.pdfExport, upgraded };
-  })()`, context);
-  const plain = JSON.parse(JSON.stringify(result));
-  assert.deepEqual(plain.defaults, { departments: true, specializations: true, doctors: true });
-  assert.deepEqual(plain.selected, { departments: false, specializations: true, doctors: false });
-  assert.equal(plain.upgraded, true);
-});
-
 test("default settings expose the clinic departments and hide the system fallback profile", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {

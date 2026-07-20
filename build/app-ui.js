@@ -1305,8 +1305,7 @@ async function writePdfToDirectory(directory, relativePath, fileName, pdf) {
   }
 }
 
-function pdfReportTargets(monthKey, exportOptions = DB.settings.pdfExport) {
-  const include = normalizedPdfExportSettings(exportOptions);
+function pdfReportTargets(monthKey) {
   const core = coreDoctorsInMonth(monthKey);
   const doctors = core.length ? core : doctorsInMonth(monthKey);
   const tree = new Map();
@@ -1323,7 +1322,7 @@ function pdfReportTargets(monthKey, exportOptions = DB.settings.pdfExport) {
   const targets = [];
   for (const departmentName of [...tree.keys()].sort((a, b) => a.localeCompare(b, "ru"))) {
     const departmentPath = ["Отделения", departmentName];
-    if (include.departments && departmentGroups()[departmentName]) {
+    if (departmentGroups()[departmentName]) {
       targets.push({
         kind: "Отделение", name: departmentName, tab: "department",
         departmentName, relativePath: departmentPath,
@@ -1334,17 +1333,14 @@ function pdfReportTargets(monthKey, exportOptions = DB.settings.pdfExport) {
     for (const specializationLabel of [...specializations.keys()].sort((a, b) => a.localeCompare(b, "ru"))) {
       const group = specializations.get(specializationLabel);
       const specializationPath = [...departmentPath, "Специализации", specializationLabel];
-      if (include.specializations) {
-        targets.push({
-          kind: "Специализация", name: specializationLabel, tab: "dept",
-          departmentName, specializationName: group.specializationName,
-          deptFilter: group.specializationName || departmentName,
-          relativePath: specializationPath,
-          fileBase: `Отчёт по специализации — ${specializationLabel} — ${monthKey}`,
-        });
-      }
+      targets.push({
+        kind: "Специализация", name: specializationLabel, tab: "dept",
+        departmentName, specializationName: group.specializationName,
+        deptFilter: group.specializationName || departmentName,
+        relativePath: specializationPath,
+        fileBase: `Отчёт по специализации — ${specializationLabel} — ${monthKey}`,
+      });
       for (const doctorId of group.doctors.sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru"))) {
-        if (!include.doctors) continue;
         targets.push({
           kind: "Врач", name: doctorName(doctorId), tab: "doctor", doctorId,
           departmentName, specializationName: group.specializationName,
@@ -1528,11 +1524,10 @@ async function preparePdfDashboard(stage, target, monthKey) {
 }
 
 /* Пакетная выгрузка выбранных уровней с сохранением иерархии клиники. */
-async function exportAllReportsToFolder() {
+async function exportAllReportsToFolder(targets) {
   const mk = UI.repMonth;
   if (!mk || !DB.months[mk]) { toast("Сначала выберите месяц с данными", true); return; }
-  const targets = pdfReportTargets(mk);
-  if (!targets.length) { toast("Выберите хотя бы один тип PDF для выгрузки", true); return; }
+  if (!Array.isArray(targets) || !targets.length) { toast("Не выбраны отчёты для PDF-выгрузки", true); return; }
   try {
     loadBundledLibrary("lib-html2canvas", "html2canvas");
     loadBundledLibrary("lib-jspdf", "jspdf");
@@ -2942,33 +2937,101 @@ function saveManual6() {
 
 /* ================= СТРАНИЦА: ОТЧЁТ ================= */
 
-function renderPdfExportOptions() {
-  const options = normalizedPdfExportSettings(DB.settings.pdfExport);
-  DB.settings.pdfExport = options;
-  for (const [key, id] of Object.entries({
-    departments: "pdfExportDepartments",
-    specializations: "pdfExportSpecializations",
-    doctors: "pdfExportDoctors",
-  })) {
-    const checkbox = document.getElementById(id);
-    if (checkbox) checkbox.checked = options[key];
-  }
-  const selected = Object.values(options).filter(Boolean).length;
-  const status = document.getElementById("pdfExportSelectionStatus");
-  if (status) {
-    status.textContent = selected ? `выбрано: ${selected} из 3` : "выберите хотя бы один тип";
-    status.classList.toggle("error", !selected);
-  }
-  const button = document.getElementById("btnExportAllPdf");
-  if (button) button.disabled = !monthKeysSorted().length || !selected;
+let pendingPdfExportTargets = [];
+
+function groupPdfExportTargets(targets) {
+  const departments = new Map();
+  const ensureDepartment = name => {
+    if (!departments.has(name)) departments.set(name, { name, report: null, specializations: new Map() });
+    return departments.get(name);
+  };
+  const ensureSpecialization = (department, name) => {
+    if (!department.specializations.has(name)) department.specializations.set(name, { name, report: null, doctors: [] });
+    return department.specializations.get(name);
+  };
+  targets.forEach((target, index) => {
+    const department = ensureDepartment(target.departmentName || "Не распределено");
+    if (target.kind === "Отделение") {
+      department.report = { target, index };
+      return;
+    }
+    const specializationName = target.kind === "Специализация"
+      ? target.name
+      : (target.specializationName || "Без специализации");
+    const specialization = ensureSpecialization(department, specializationName);
+    if (target.kind === "Специализация") specialization.report = { target, index };
+    else specialization.doctors.push({ target, index });
+  });
+  return [...departments.values()];
 }
 
-function setPdfExportOption(key, checked) {
-  if (!['departments', 'specializations', 'doctors'].includes(key)) return;
-  DB.settings.pdfExport = normalizedPdfExportSettings(DB.settings.pdfExport);
-  DB.settings.pdfExport[key] = Boolean(checked);
-  saveLocal();
-  renderPdfExportOptions();
+function pdfExportChoice(index, title, subtitle, level) {
+  return `<label class="pdf-choice-item pdf-choice-${level}"><input type="checkbox" data-pdf-target-index="${index}" checked>
+    <span><b>${esc(title)}</b>${subtitle ? `<small>${esc(subtitle)}</small>` : ""}</span></label>`;
+}
+
+function pdfExportDialogMarkup(targets) {
+  return groupPdfExportTargets(targets).map(department => `<div class="pdf-choice-department-group">
+    <div class="pdf-choice-department-title">${esc(department.name)}</div>
+    ${department.report ? pdfExportChoice(department.report.index, "Отчёт отделения", department.name, "department") : ""}
+    ${[...department.specializations.values()].map(specialization => `<div class="pdf-choice-specialization-group">
+      <div class="pdf-choice-specialization-title">${esc(specialization.name)}</div>
+      ${specialization.report ? pdfExportChoice(specialization.report.index, "Отчёт специализации", specialization.name, "specialization") : ""}
+      ${specialization.doctors.length ? `<div class="pdf-choice-doctors">${specialization.doctors.map(doctor => pdfExportChoice(doctor.index, doctor.target.name, "Отчёт врача", "doctor")).join("")}</div>` : ""}
+    </div>`).join("")}
+  </div>`).join("");
+}
+
+function selectedPdfExportTargets() {
+  const list = document.getElementById("pdfExportDialogList");
+  if (!list) return [];
+  return [...list.querySelectorAll("input[data-pdf-target-index]:checked")]
+    .map(input => pendingPdfExportTargets[Number(input.dataset.pdfTargetIndex)])
+    .filter(Boolean);
+}
+
+function updatePdfExportDialogState() {
+  const selected = selectedPdfExportTargets();
+  const counts = { "Отделение": 0, "Специализация": 0, "Врач": 0 };
+  selected.forEach(target => { counts[target.kind]++; });
+  const status = document.getElementById("pdfExportDialogStatus");
+  if (status) status.textContent = selected.length
+    ? `Выбрано: ${selected.length} PDF · отделений ${counts["Отделение"]} · специализаций ${counts["Специализация"]} · врачей ${counts["Врач"]}`
+    : "Ничего не выбрано";
+  const start = document.getElementById("pdfExportDialogStart");
+  if (start) start.disabled = selected.length === 0;
+}
+
+function setAllPdfExportDialogChoices(checked) {
+  const list = document.getElementById("pdfExportDialogList");
+  if (!list) return;
+  list.querySelectorAll("input[data-pdf-target-index]").forEach(input => { input.checked = Boolean(checked); });
+  updatePdfExportDialogState();
+}
+
+function closePdfExportDialog() {
+  const dialog = document.getElementById("pdfExportDialog");
+  if (dialog && dialog.open) dialog.close();
+}
+
+function openPdfExportDialog() {
+  const mk = UI.repMonth;
+  if (!mk || !DB.months[mk]) { toast("Сначала выберите месяц с данными", true); return; }
+  pendingPdfExportTargets = pdfReportTargets(mk);
+  if (!pendingPdfExportTargets.length) { toast("За выбранный месяц нет отчётов для выгрузки", true); return; }
+  document.getElementById("pdfExportDialogMonth").textContent = `${monthLabel(mk)} · отметьте конкретные отчёты`;
+  const list = document.getElementById("pdfExportDialogList");
+  list.innerHTML = pdfExportDialogMarkup(pendingPdfExportTargets);
+  list.scrollTop = 0;
+  updatePdfExportDialogState();
+  document.getElementById("pdfExportDialog").showModal();
+}
+
+async function startPdfExportFromDialog() {
+  const targets = selectedPdfExportTargets();
+  if (!targets.length) { updatePdfExportDialogState(); return; }
+  closePdfExportDialog();
+  return exportAllReportsToFolder(targets);
 }
 
 function renderReport() {
@@ -2977,7 +3040,6 @@ function renderReport() {
   const sSel = document.getElementById("repScope");
   const body = document.getElementById("reportBody");
   setControlsDisabled(["repMonth", "repScope", "btnExportAllPdf", "btnPrint"], !months.length);
-  renderPdfExportOptions();
   if (!months.length) {
     body.innerHTML = '<div class="card"><p class="muted">Загрузите данные на вкладке «Данные».</p></div>';
     mSel.innerHTML = ""; sSel.innerHTML = "";
@@ -4220,7 +4282,13 @@ async function initApp() {
   document.getElementById("repMonth").addEventListener("change", e => { UI.repMonth = e.target.value; renderReport(); });
   document.getElementById("repScope").addEventListener("change", e => { UI.repScope = e.target.value; renderReport(); });
   document.getElementById("btnPrint").addEventListener("click", () => window.print());
-  document.getElementById("btnExportAllPdf").addEventListener("click", exportAllReportsToFolder);
+  document.getElementById("btnExportAllPdf").addEventListener("click", openPdfExportDialog);
+  document.getElementById("pdfExportDialogList").addEventListener("change", updatePdfExportDialogState);
+  document.getElementById("pdfExportSelectAll").addEventListener("click", () => setAllPdfExportDialogChoices(true));
+  document.getElementById("pdfExportClearAll").addEventListener("click", () => setAllPdfExportDialogChoices(false));
+  document.getElementById("pdfExportDialogClose").addEventListener("click", closePdfExportDialog);
+  document.getElementById("pdfExportDialogCancel").addEventListener("click", closePdfExportDialog);
+  document.getElementById("pdfExportDialogStart").addEventListener("click", () => { startPdfExportFromDialog(); });
   document.getElementById("btnSaveSession").addEventListener("click", saveSessionState);
   document.getElementById("btnExport").addEventListener("click", exportDB);
   document.getElementById("btnImport").addEventListener("click", () => document.getElementById("importInput").click());

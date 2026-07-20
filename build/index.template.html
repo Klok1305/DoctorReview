@@ -123,19 +123,31 @@
     <span class="spacer"></span>
     <label>Кому: <select id="repScope" style="min-width:220px"></select></label>
     <label>Месяц: <select id="repMonth"></select></label>
-    <button class="btn primary" id="btnExportAllPdf" title="Создать выбранные PDF дашбордов со всеми графиками">📁 Выгрузить PDF</button>
+    <button class="btn primary" id="btnExportAllPdf" title="Выбрать отделения, специализации и врачей для PDF-выгрузки">📁 Выгрузить PDF</button>
     <button class="btn" id="btnPrint">🖨 Печать</button>
   </div>
-  <div class="pdf-export-options no-print" role="group" aria-label="Состав PDF-выгрузки">
-    <b>Что выгружать:</b>
-    <label><input type="checkbox" id="pdfExportDepartments" onchange="setPdfExportOption('departments', this.checked)" checked> Отделения</label>
-    <label><input type="checkbox" id="pdfExportSpecializations" onchange="setPdfExportOption('specializations', this.checked)" checked> Специализации</label>
-    <label><input type="checkbox" id="pdfExportDoctors" onchange="setPdfExportOption('doctors', this.checked)" checked> Врачи</label>
-    <span class="small muted" id="pdfExportSelectionStatus">выбрано: 3 из 3</span>
-  </div>
-  <div class="notice blue no-print">Кнопка «Выгрузить PDF» сохраняет выбранные типы полных дашбордов со всеми графиками. Структура результатов остаётся прежней: месяц → Отделения → отделение → Специализации → специализация → Врачи. Предпросмотр «Кому» и кнопка «Печать» работают для одного выбранного краткого отчёта.</div>
+  <div class="notice blue no-print">Нажмите «Выгрузить PDF», затем в открывшемся окне отметьте конкретные отделения, специализации и врачей. Экспорт начнётся только после подтверждения выбора. Предпросмотр «Кому» и кнопка «Печать» работают для одного выбранного краткого отчёта.</div>
   <div id="reportBody"></div>
 </section>
+
+<dialog class="pdf-export-dialog no-print" id="pdfExportDialog" aria-labelledby="pdfExportDialogTitle">
+  <div class="pdf-export-dialog-shell">
+    <div class="pdf-export-dialog-head">
+      <div><h2 id="pdfExportDialogTitle">Что выгружать в PDF</h2><p class="small muted" id="pdfExportDialogMonth"></p></div>
+      <button class="btn mini" type="button" id="pdfExportDialogClose" aria-label="Закрыть окно">✕</button>
+    </div>
+    <div class="pdf-export-dialog-tools">
+      <button class="btn mini" type="button" id="pdfExportSelectAll">Выбрать всё</button>
+      <button class="btn mini" type="button" id="pdfExportClearAll">Снять всё</button>
+      <span class="small muted" id="pdfExportDialogStatus" aria-live="polite"></span>
+    </div>
+    <div class="pdf-export-dialog-list" id="pdfExportDialogList"></div>
+    <div class="pdf-export-dialog-actions">
+      <button class="btn" type="button" id="pdfExportDialogCancel">Отмена</button>
+      <button class="btn primary" type="button" id="pdfExportDialogStart">Начать выгрузку</button>
+    </div>
+  </div>
+</dialog>
 
 <section id="page-settings" class="page">
   <h2>Настройки расчёта</h2>

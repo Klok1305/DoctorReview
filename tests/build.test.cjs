@@ -59,14 +59,13 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /\["Отделения",\s*departmentName\]/);
   assert.match(actual, /"Специализации"/);
   assert.match(actual, /"Врачи"/);
-  assert.match(actual, /Что выгружать:/);
-  assert.match(actual, /pdfExportDepartments/);
-  assert.match(actual, /pdfExportSpecializations/);
-  assert.match(actual, /pdfExportDoctors/);
-  assert.match(actual, /function setPdfExportOption/);
-  assert.match(actual, /if \(include\.departments/);
-  assert.match(actual, /if \(include\.specializations/);
-  assert.match(actual, /if \(!include\.doctors\) continue/);
+  assert.match(actual, /id="pdfExportDialog"/);
+  assert.match(actual, /Что выгружать в PDF/);
+  assert.match(actual, /function openPdfExportDialog/);
+  assert.match(actual, /function selectedPdfExportTargets/);
+  assert.match(actual, /function startPdfExportFromDialog/);
+  assert.match(actual, /exportAllReportsToFolder\(targets\)/);
+  assert.doesNotMatch(actual, /pdfExportDepartments|pdfExportSpecializations|pdfExportDoctors|function setPdfExportOption/);
   assert.match(actual, /data-tab="department">🏥 Отделение/);
   assert.match(actual, /data-tab="dept">🩺 Специализации/);
   assert.match(actual, /Нужны специализации/);
@@ -202,6 +201,26 @@ test("all rendered controls resolve their inline handlers and listener targets",
   for (const id of uniqueTargets) {
     assert.ok(source.includes(`id="${id}"`) || source.includes(`id='${id}'`), `missing listener target: ${id}`);
   }
+});
+
+test("PDF export waits for a modal selection of exact reports", () => {
+  const template = fs.readFileSync(path.join(build, "index.template.html"), "utf8");
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+
+  assert.match(template, /<dialog[^>]+id="pdfExportDialog"/);
+  assert.match(template, /id="pdfExportSelectAll"/);
+  assert.match(template, /id="pdfExportClearAll"/);
+  assert.match(template, /id="pdfExportDialogCancel"/);
+  assert.match(template, /id="pdfExportDialogStart"/);
+  assert.match(template, /Экспорт начнётся только после подтверждения выбора/);
+  assert.match(ui, /btnExportAllPdf"\)\.addEventListener\("click", openPdfExportDialog\)/);
+  assert.doesNotMatch(ui, /btnExportAllPdf"\)\.addEventListener\("click", exportAllReportsToFolder\)/);
+  assert.match(ui, /data-pdf-target-index/);
+  assert.match(ui, /pdf-choice-department/);
+  assert.match(ui, /pdf-choice-specialization/);
+  assert.match(ui, /pdf-choice-doctor/);
+  assert.match(ui, /start\.disabled = selected\.length === 0/);
+  assert.match(ui, /return exportAllReportsToFolder\(targets\)/);
 });
 
 test("segment toggles safely quote string values in inline handlers", () => {
