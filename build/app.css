@@ -666,6 +666,14 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 }
 .dpi-ring .num b { font-size: 34px; }
 .dpi-ring .num i { font-size: 11px; color: var(--muted); font-style: normal; }
+.report-index-block {
+  display: inline-flex; align-items: center; gap: 14px;
+  margin: 0 0 14px; padding: 10px 16px 10px 10px;
+  border: 1px solid var(--line); border-radius: 14px; background: #fff;
+}
+.report-index-ring { width: 112px; height: 112px; flex: 0 0 112px; }
+.report-index-ring .num b { font-size: 30px; line-height: 1; }
+.report-index-label { font-size: 18px; font-weight: 800; }
 .heat-cell { text-align: center; border-radius: 6px; font-variant-numeric: tabular-nums; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }

@@ -17,6 +17,16 @@ function safeReason(reason) {
     .slice(0, 40) || "автоматическая";
 }
 
+function isSqliteSidecar(filePath) {
+  return /(?:^|[._-])(shm|wal)$/i.test(path.basename(String(filePath || "")));
+}
+
+function assertRestorableDatabase(filePath) {
+  if (isSqliteSidecar(filePath)) {
+    throw new Error("Выбран служебный файл SQLite (SHM/WAL). Он не содержит полную базу и не восстанавливается отдельно. Выберите основной файл .sqlite, .db или .ovbackup; если копию прислали комплектом, положите рядом также WAL/SHM и выбирайте основной файл.");
+  }
+}
+
 class BackupService {
   constructor({ database, configStore, logger = () => {} }) {
     this.database = database;
@@ -42,10 +52,12 @@ class BackupService {
   }
 
   preview(sourcePath) {
+    assertRestorableDatabase(sourcePath);
     return Object.assign({ path: path.resolve(sourcePath) }, DatabaseService.inspect(sourcePath));
   }
 
   async restore(sourcePath) {
+    assertRestorableDatabase(sourcePath);
     const source = path.resolve(sourcePath);
     const preview = DatabaseService.inspect(source);
     if (!preview.ok) throw new Error(`Резервная копия повреждена: ${preview.error || preview.integrity}`);
@@ -118,4 +130,4 @@ class BackupService {
   }
 }
 
-module.exports = { BackupService, timestamp };
+module.exports = { BackupService, timestamp, isSqliteSidecar };

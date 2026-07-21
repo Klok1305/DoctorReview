@@ -133,3 +133,15 @@ test("portable SQLite backup restores data after later changes", async t => {
   assert.equal(fs.existsSync(restored.safetyBackup), true);
   assert.equal(DatabaseService.inspect(restored.safetyBackup).ok, true);
 });
+
+test("SQLite sidecar files are rejected with an actionable restore message", () => {
+  const backups = new BackupService({ database: {}, configStore: {} });
+  assert.throws(
+    () => backups.preview("оценка_врачей_перед_импортом_sqlite_shm"),
+    /служебный файл SQLite.*основной файл/s,
+  );
+  assert.throws(
+    () => backups.preview("оценка-врачей.sqlite-wal"),
+    /не восстанавливается отдельно/,
+  );
+});

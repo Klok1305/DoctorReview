@@ -65,7 +65,7 @@ function defaultScoring() {
 function defaultProfile() {
   return {
     // нормативы сегментации базы и курсового
-    minVisits: 3, activeM: 6, riskM: 12, courseX: 4, courseM: 6, corePct: 80,
+    minVisits: 3, activeM: 6, riskM: 9, lostM: 12, courseX: 4, courseM: 6, corePct: 80,
     pervichkaM: 3, // период возвращаемости первички для балла и динамики (мес)
     // «Экспертность» (Вектор 2): mode: devices | services | none
     expertise: {
@@ -153,7 +153,8 @@ function profileGynecology() {
   const p = defaultProfile();
   // Плановые наблюдения чаще имеют годовой цикл.
   p.activeM = 12;
-  p.riskM = 24;
+  p.riskM = 18;
+  p.lostM = 24;
   p.matchers = ["гинеколог"];
   p.expertise = {
     title: "Аппараты", mode: "devices", group: "Аппараты",
@@ -298,7 +299,8 @@ function profilePhysiotherapy() {
   // Курсовые услуги предполагают более короткий цикл возврата.
   p.minVisits = 4;
   p.activeM = 3;
-  p.riskM = 6;
+  p.riskM = 5;
+  p.lostM = 6;
   p.matchers = ["физио", "массаж", "остеопат", "реабилит", "мануальн"];
   p.expertise = {
     title: "Аппараты", mode: "devices", group: "Аппараты",
@@ -919,8 +921,14 @@ function migrateDB(parsed) {
     for (const [dn, oldD] of Object.entries(old.depts || {})) {
       if (!settings.depts[dn]) settings.depts[dn] = Object.assign(defaultProfile(), { }); // новое отделение из v2
       const p = settings.depts[dn];
-      for (const k of ["minVisits", "activeM", "riskM", "courseX", "courseM", "corePct"]) {
+      for (const k of ["minVisits", "activeM", "courseX", "courseM", "corePct"]) {
         if (oldD[k] != null) p[k] = oldD[k];
+      }
+      if (oldD.riskM != null) {
+        // До v1.0.17 riskM был сроком потери. Сохраняем прежнюю границу как F,
+        // а новую границу сна E ставим посередине, чтобы старые базы не меняли смысл.
+        p.lostM = Number(oldD.riskM);
+        p.riskM = Math.round((Number(p.activeM) + p.lostM) / 2);
       }
       if (oldD.hasDevices === false) p.expertise = Object.assign({}, p.expertise, { mode: "none" });
     }
@@ -991,7 +999,19 @@ function normalizeProfileRecord(raw, inherited) {
   if (!Array.isArray(p.subdivisions)) p.subdivisions = [];
   if (!Array.isArray(p.matchers)) p.matchers = [];
   p.activeM = Number(p.activeM) > 0 ? Number(p.activeM) : def.activeM;
-  p.riskM = Number(p.riskM) > p.activeM ? Number(p.riskM) : Math.max(p.activeM + 1, p.activeM * 2);
+  const hasExplicitLostM = Number(source.lostM) > 0;
+  if (hasExplicitLostM) {
+    p.riskM = Number(p.riskM) > p.activeM ? Number(p.riskM) : Math.max(p.activeM + 1, Number(def.riskM) || p.activeM + 1);
+    p.lostM = Number(p.lostM) > p.riskM ? Number(p.lostM) : Math.max(p.riskM + 1, Number(def.lostM) || p.riskM + 1);
+  } else {
+    // Совместимость с профилями v1.0.16: прежний riskM означал «потерян после».
+    const legacyLostM = Number(source.riskM) > p.activeM
+      ? Number(source.riskM)
+      : (Number(def.lostM) > p.activeM ? Number(def.lostM) : Math.max(p.activeM + 2, p.activeM * 2));
+    p.lostM = legacyLostM;
+    p.riskM = Math.max(p.activeM + 1, Math.round((p.activeM + p.lostM) / 2));
+    if (p.riskM >= p.lostM) p.lostM = p.riskM + 1;
+  }
   p.minVisits = Number(p.minVisits) >= 2 ? Number(p.minVisits) : def.minVisits;
   p.courseX = Number(p.courseX) >= 2 ? Number(p.courseX) : def.courseX;
   p.courseM = Number(p.courseM) > 0 ? Number(p.courseM) : def.courseM;

@@ -666,7 +666,10 @@ function registerIpc() {
       title: "Выберите резервную копию",
       defaultPath: configStore.publicConfig().backupDir,
       properties: ["openFile"],
-      filters: [{ name: "Резервные копии", extensions: ["ovbackup", "sqlite"] }],
+      filters: [
+        { name: "Резервные копии SQLite", extensions: ["ovbackup", "sqlite", "db", "backup"] },
+        { name: "Все файлы", extensions: ["*"] },
+      ],
     });
     if (selected.canceled || !selected.filePaths[0]) return { canceled: true };
     const source = selected.filePaths[0];

@@ -60,6 +60,7 @@ test("patient-base statuses depend on recency while loyalty stays separate", () 
       { name: 'Риск Лояльный', s: 200, v: 5, r: 200 },
       { name: 'Спящий Разовый', s: 300, v: 1, r: 300 },
       { name: 'Потерянный Лояльный', s: 400, v: 5, r: 400 },
+      { name: 'Потерянный Разовый', s: 600, v: 2, r: 400 },
       { name: 'Без Давности', s: 500, v: 2, r: null }
     ] } };
     clearMetricsCache();
@@ -69,13 +70,13 @@ test("patient-base statuses depend on recency while loyalty stays separate", () 
   const plain = JSON.parse(JSON.stringify(result));
   assert.deepEqual(
     { active: plain.seg.active, risk: plain.seg.risk, sleep: plain.seg.sleep, lost: plain.seg.lost, unknown: plain.seg.unknown },
-    { active: 1, risk: 1, sleep: 1, lost: 1, unknown: 1 },
+    { active: 1, risk: 1, sleep: 2, lost: 1, unknown: 1 },
   );
   assert.equal(plain.activeBase, 1);
   assert.equal(plain.loyalCount, 2);
-  assert.equal(plain.revenueAtRisk, 900);
-  assert.equal(plain.sourceWindowComplete, false);
-  assert.equal(plain.lostPct, null);
+  assert.equal(plain.revenueAtRisk, 1500);
+  assert.equal(plain.sourceWindowComplete, true);
+  assert.equal(plain.lostPct, 1 / 6 * 100);
   assert.equal(plain.rows[0].name, "Активный Разовый");
   assert.equal(plain.rows[0].loyal, false);
 });
@@ -110,28 +111,30 @@ test("doctor visit coefficients use visits per unique patient for one and twelve
   assert.equal(result.annual, 4);
 });
 
-test("client-base source window defaults to a complete period but allows manual review", () => {
+test("client-base source window always respects the exact selected period", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
-    const profile = { riskM: 12 };
+    const profile = { riskM: 18, lostM: 24 };
     return {
       required: clientBaseRequiredWindow(profile),
       twelveIsEnough: clientBaseWindowSufficient(12, profile),
       thirtySixIsEnough: clientBaseWindowSufficient(36, profile),
       selectedByDefault: recommendedClientBaseWindow([12, 36], profile),
       selectedManually: recommendedClientBaseWindow([12, 36], profile, 12),
+      missingExactPeriod: recommendedClientBaseWindow([12, 36], profile, 24),
     };
   })()`, context);
   assert.deepEqual(JSON.parse(JSON.stringify(result)), {
-    required: 13,
+    required: 24,
     twelveIsEnough: false,
     thirtySixIsEnough: true,
-    selectedByDefault: 36,
+    selectedByDefault: 12,
     selectedManually: 12,
+    missingExactPeriod: null,
   });
 });
 
-test("doctor and specialization aggregates use the configured client-base window", () => {
+test("doctor and specialization aggregates never replace the default 12-month period", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
     DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], dept: 'По умолчанию' } };
@@ -139,9 +142,9 @@ test("doctor and specialization aggregates use the configured client-base window
     const patient = { name: 'Потерянный Пациент', patientId: 'P-1', s: 1000, v: 2, r: 400 };
     DB.months['2026-01'].kb.d1 = { '12': { clients: [patient] } };
     clearMetricsCache();
-    const incompleteDoctor = computeMetrics('d1', '2026-01');
-    const incompleteAggregate = aggregateDeptMonth('2026-01', 'all');
-    const incompleteDynamics = computeDeptDynamics('2026-01', 'all');
+    const initialDoctor = computeMetrics('d1', '2026-01');
+    const initialAggregate = aggregateDeptMonth('2026-01', 'all');
+    const initialDynamics = computeDeptDynamics('2026-01', 'all');
 
     DB.months['2026-01'].kb.d1['36'] = { clients: [patient] };
     clearMetricsCache();
@@ -149,34 +152,36 @@ test("doctor and specialization aggregates use the configured client-base window
     const completeAggregate = aggregateDeptMonth('2026-01', 'all');
     const completeDynamics = computeDeptDynamics('2026-01', 'all');
     return {
-      incomplete: {
-        doctorWindow: incompleteDoctor.akb.primaryWin,
-        doctorComplete: incompleteDoctor.akb.primary.sourceWindowComplete,
-        aggregateComplete: incompleteAggregate.akb.primary.sourceWindowComplete,
-        lostInDynamics: incompleteDynamics.rows.some(row => row.key === 'lost'),
+      initial: {
+        doctorWindow: initialDoctor.akb.primaryWin,
+        doctorComplete: initialDoctor.akb.primary.sourceWindowComplete,
+        aggregateComplete: initialAggregate.akb.primary.sourceWindowComplete,
+        lostInDynamics: initialDynamics.rows.some(row => row.key === 'lost'),
       },
-      complete: {
+      afterAdding36: {
         doctorWindow: completeDoctor.akb.primaryWin,
         doctorComplete: completeDoctor.akb.primary.sourceWindowComplete,
         aggregateWindows: completeAggregate.akb.primary.windows,
         aggregateLost: completeAggregate.akb.primary.seg.lost,
         lostInDynamics: completeDynamics.rows.some(row => row.key === 'lost'),
+        manual36Window: selectedClientBaseSummary(completeDoctor, profileForDoctor('d1'), 36).window,
       },
     };
   })()`, context);
   const plain = JSON.parse(JSON.stringify(result));
-  assert.deepEqual(plain.incomplete, {
+  assert.deepEqual(plain.initial, {
     doctorWindow: 12,
-    doctorComplete: false,
-    aggregateComplete: false,
-    lostInDynamics: false,
-  });
-  assert.deepEqual(plain.complete, {
-    doctorWindow: 36,
     doctorComplete: true,
-    aggregateWindows: [36],
+    aggregateComplete: true,
+    lostInDynamics: true,
+  });
+  assert.deepEqual(plain.afterAdding36, {
+    doctorWindow: 12,
+    doctorComplete: true,
+    aggregateWindows: [12],
     aggregateLost: 1,
     lostInDynamics: true,
+    manual36Window: 36,
   });
 });
 

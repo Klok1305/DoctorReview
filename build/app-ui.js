@@ -15,6 +15,7 @@ const UI = {
   checkMonth: null,
   repMonth: null,
   repScope: "dept",
+  repKbWin: 12,
   cmp: [null, null, null],
   staffFilter: "",
   openGroups: {},
@@ -22,7 +23,7 @@ const UI = {
   setDoctor: null,
   pvSlice: 3,     // тогл первички: 3/6/12
   nazSlice: 1,    // тогл назначений: 1/3
-  kbWin: 12,      // тогл окна базы: 12/36
+  kbWin: 12,      // выбранный период анализа базы: 12/24/36
   kbWinByDoctor: {},
   clientSegment: "risk",
   showLabels: true, // цифры на графиках
@@ -425,12 +426,8 @@ function renderCompleteness() {
     missOf("выработка", id => !m.vyrabotka[id]);
     missOf("давность за месяц", id => !(m.kb[id] && m.kb[id]["1"]));
     missOf("давность ровно 12 мес для индекса возвращаемости", id => !(m.kb[id] && m.kb[id]["12"]));
-    missOf("достаточное окно клиентской базы по настройкам специализации", id => {
-      const wins = m.kb[id] ? Object.keys(m.kb[id]).map(Number) : [];
-      const selected = recommendedClientBaseWindow(wins, profileForDoctor(id));
-      return selected == null || !clientBaseWindowSufficient(selected, profileForDoctor(id));
-    });
-    missOf("давность 3 года", id => !(m.kb[id] && Object.keys(m.kb[id]).some(w => Number(w) >= 24)));
+    missOf("давность ровно 24 мес", id => !(m.kb[id] && m.kb[id]["24"]));
+    missOf("давность ровно 36 мес", id => !(m.kb[id] && m.kb[id]["36"]));
     missOf("назначения", id => !(m.naznach && m.naznach[id] && Object.keys(m.naznach[id]).length));
     if (!missBlocks.length) {
       html += `<p><span class="badge ok">Всё на месте</span> <span class="small muted">по всем ${ids.length} отслеживаемым врачам загружен полный комплект</span></p>`;
@@ -587,7 +584,7 @@ function renderDepartment() {
     <table class="data" id="tblDepartmentSpecs"><tr><th>Профиль</th><th class="num">Врачей</th><th class="num">Выручка</th><th class="num">С перенаправлениями</th><th class="num">Доля перенапр.</th><th class="num">Первичка 3 мес.</th><th class="num">Первичка 6 мес.</th><th class="num">Активная база</th><th class="num">Потерянная база</th><th class="num">Загрузка</th></tr>`;
   for (const row of specRows) {
     const r = row.r, kb = r && r.akb.primary;
-    const lost = kb ? `${kb.sourceWindowComplete ? "" : "≥"}${fmtNum(kb.seg.lost)}` : "—";
+    const lost = kb && (!kb.applicable || kb.applicable.lost) ? fmtNum(kb.seg.lost) : "";
     html += `<tr><td><b>${esc(row.spec)}</b></td><td class="num">${r ? fmtNum(r.doctors) : "—"}</td><td class="num">${r ? fmtMoney(r.econ.sales) : "—"}</td><td class="num">${r ? fmtMoney(r.econ.revenueWithRef) : "—"}</td><td class="num">${r ? fmtPct(r.cross.crossShare) : "—"}</td><td class="num">${r && r.loyalty.pvSlices[3] ? fmtPct(r.loyalty.pvSlices[3].pct) : "—"}</td><td class="num">${r && r.loyalty.pvSlices[6] ? fmtPct(r.loyalty.pvSlices[6].pct) : "—"}</td><td class="num">${kb ? fmtNum(kb.seg.active) : "—"}</td><td class="num">${lost}</td><td class="num">${r && r.loyalty.sched ? fmtPct(r.loyalty.sched.pct) : "—"}</td></tr>`;
   }
   html += "</table></div>";
@@ -772,30 +769,30 @@ function renderDept() {
   }
 
   // риск-мониторинг: у каждой специализации своё окно, достаточное для её порога потери
-  const withKb = rows.map(x => ({ ...x, kb: selectedClientBaseSummary(x.r, profileForDoctor(x.id)), baseProfile: profileForDoctor(x.id) })).filter(x => x.kb);
+  const withKb = rows.map(x => ({ ...x, kb: selectedClientBaseSummary(x.r, profileForDoctor(x.id), 12), baseProfile: profileForDoctor(x.id) })).filter(x => x.kb);
   if (withKb.length) {
     const previousMonth = prevMonthKey(mk, 1);
     const baseThresholdNotes = [...new Set(withKb.map(x => {
       const p = x.baseProfile;
       const scope = resolvedSpecializationName(x.id) || resolvedDepartmentName(x.id);
-      return `${scope}: активная ≤${fmtNum(p.activeM, 1)} мес., потерянная >${fmtNum(p.riskM, 1)} мес.`;
+      return `${scope}: активная ≤${fmtNum(p.activeM, 1)} мес., спящая >${fmtNum(p.riskM, 1)} мес., потерянная >${fmtNum(p.lostM, 1)} мес. (1–2 визита)`;
     }))].join("; ");
     html += `<div class="card"><h2>Клиентская база <span class="spacer"></span>${copyBtn("copyTable", "tblRisk")}</h2><table class="data" id="tblRisk"><tr><th>Специалист</th><th class="num">Окно выгрузки</th><th class="num">База</th><th class="num">Активная</th><th class="num">Риск</th><th class="num">Спящая</th><th class="num">Потерянная</th><th class="num">Лояльных</th><th class="num">Выручка под риском</th></tr>`;
     for (const x of withKb) {
       const kb = x.kb;
       const previousResult = computeMetrics(x.id, previousMonth);
       const previousKb = previousResult && previousResult.akb ? previousResult.akb.wins[kb.window] : null;
-      const windowStatus = kb.sourceWindowComplete ? `${fmtNum(kb.window)} мес.` : `${fmtNum(kb.window)} мес. · нужно ≥${fmtNum(kb.requiredWindowM)}`;
+      const windowStatus = `${fmtNum(kb.window)} мес.`;
       html += `<tr><td>${esc(doctorName(x.id))}<br><span class="small muted">${esc(resolvedSpecializationName(x.id) || resolvedDepartmentName(x.id))}</span></td>
-        <td class="num ${kb.sourceWindowComplete ? "" : "muted"}">${windowStatus}</td><td class="num">${fmtNum(kb.total)}</td>
+        <td class="num">${windowStatus}</td><td class="num">${fmtNum(kb.total)}</td>
         <td class="num" style="color:var(--good)"><b>${fmtNum(kb.seg.active)}</b>${compactBaseTrend(kb.seg.active, previousKb ? previousKb.seg.active : null)}</td>
         <td class="num" style="color:var(--warn)"><b>${fmtNum(kb.seg.risk)}</b>${compactBaseTrend(kb.seg.risk, previousKb ? previousKb.seg.risk : null, true)}</td>
-        <td class="num muted">${fmtNum(kb.seg.sleep)}</td>
-        <td class="num" style="color:var(--bad)"><b>${kb.sourceWindowComplete ? "" : "≥"}${fmtNum(kb.seg.lost)}</b>${compactBaseTrend(kb.sourceWindowComplete ? kb.seg.lost : null, previousKb && previousKb.sourceWindowComplete ? previousKb.seg.lost : null, true)}</td>
+        <td class="num muted">${!kb.applicable || kb.applicable.sleep ? fmtNum(kb.seg.sleep) : ""}</td>
+        <td class="num" style="color:var(--bad)">${!kb.applicable || kb.applicable.lost ? `<b>${fmtNum(kb.seg.lost)}</b>${compactBaseTrend(kb.seg.lost, previousKb && (!previousKb.applicable || previousKb.applicable.lost) ? previousKb.seg.lost : null, true)}` : ""}</td>
         <td class="num">${fmtNum(kb.loyalCount)}</td>
         <td class="num">${fmtMoney(kb.revenueAtRisk)}${compactBaseTrend(kb.revenueAtRisk, previousKb ? previousKb.revenueAtRisk : null, true)}</td></tr>`;
     }
-    html += `</table><p class="small muted">Пороги: ${esc(baseThresholdNotes)} «≥» — известный минимум при короткой выгрузке; такие значения не используются в динамике потерь.</p></div>`;
+    html += `</table><p class="small muted">Пороги: ${esc(baseThresholdNotes)} Группы с порогом больше 12 месяцев оставлены пустыми, без нулей.</p></div>`;
   }
 
   // профайлы специалистов — все врачи фильтра, метрики в строках
@@ -846,15 +843,15 @@ function renderCompare(mk, rows) {
     const focus = profileForDoctor(row.id).crossFocus;
     return Boolean(focus && focus.items && focus.items.length);
   });
-  const comparisonKb = (r, doctorId) => selectedClientBaseSummary(r, profileForDoctor(doctorId));
+  const comparisonKb = (r, doctorId) => selectedClientBaseSummary(r, profileForDoctor(doctorId), 12);
   const exactBaseShare = (r, doctorId, key) => {
     const kb = comparisonKb(r, doctorId);
-    return kb && kb.sourceWindowComplete ? kb[key] : null;
+    return kb ? kb[key] : null;
   };
   const baseShareMarkup = (r, doctorId, key) => {
     const kb = comparisonKb(r, doctorId);
     if (!kb) return "—";
-    return kb.sourceWindowComplete ? fmtPct(kb[key]) : `н/д · окно ${fmtNum(kb.window)} мес.`;
+    return fmtPct(kb[key]);
   };
   const hasGoal = value => value != null && value !== "" && !isNaN(value) && Number(value) > 0;
   const targetFor = def => def.targetKey && specializationGoals && hasGoal(specializationGoals[def.targetKey])
@@ -893,7 +890,7 @@ function renderCompare(mk, rows) {
     ] : []),
     { name: "Доля активной базы", fmt: (r, id) => baseShareMarkup(r, id, "activeBasePct"), num: (r, id) => exactBaseShare(r, id, "activeBasePct"), targetKey: "akbShare", targetFmt: fmtPct },
     { name: "Доля базы в зоне риска", fmt: (r, id) => baseShareMarkup(r, id, "riskShare"), num: (r, id) => exactBaseShare(r, id, "riskShare"), targetKey: "riskShare", targetFmt: fmtPct, lower: true },
-    { name: `Потерянные (${goalProfile ? ">" + fmtNum(goalProfile.riskM, 1) + " мес." : "порог специализации"})`, fmt: (r, id) => { const kb = comparisonKb(r, id); return kb ? `${kb.sourceWindowComplete ? "" : "≥"}${fmtNum(kb.seg.lost)} чел.` : "—"; }, num: (r, id) => { const kb = comparisonKb(r, id); return kb && kb.sourceWindowComplete ? kb.seg.lost : null; }, lower: true },
+    { name: `Потерянные 1–2 визита (${goalProfile ? ">" + fmtNum(goalProfile.lostM, 1) + " мес." : "порог специализации"})`, fmt: (r, id) => { const kb = comparisonKb(r, id); return kb && (!kb.applicable || kb.applicable.lost) ? `${fmtNum(kb.seg.lost)} чел.` : ""; }, num: (r, id) => { const kb = comparisonKb(r, id); return kb && (!kb.applicable || kb.applicable.lost) ? kb.seg.lost : null; }, lower: true },
     { name: "Потерянные за 3 года", fmt: r => r.akb.churn36 != null ? fmtPct(r.akb.churn36) : "—", num: r => r.akb.churn36, targetKey: "churn", targetFmt: fmtPct, lower: true },
     { name: "Средний рейтинг площадок", fmt: r => r.rep && r.rep.avgRating != null ? fmtNum(r.rep.avgRating, 2) + " ★" : "—", num: r => r.rep ? r.rep.avgRating : null, targetKey: "rating", targetFmt: v => fmtNum(v, 2) + " ★" },
     { name: "NPS", fmt: r => r.rep && r.rep.nps != null ? fmtPct(r.rep.nps) : "—", num: r => r.rep ? r.rep.nps : null, targetKey: "nps", targetFmt: fmtPct },
@@ -932,7 +929,7 @@ async function exportDeptXlsx() {
   const aoa = [["Сводная по векторам за " + monthLabel(mk)], [], header];
   const num = v => (v == null || isNaN(v)) ? null : Math.round(v * 100) / 100;
   for (const x of rows) {
-    const r = x.r, baseProfile = profileForDoctor(x.id), kb = selectedClientBaseSummary(r, baseProfile), pv = r.loyalty.pvSlices[UI.pvSlice], nz = r.cross.naz[UI.nazSlice];
+    const r = x.r, baseProfile = profileForDoctor(x.id), kb = selectedClientBaseSummary(r, baseProfile, 12), pv = r.loyalty.pvSlices[UI.pvSlice], nz = r.cross.naz[UI.nazSlice];
     aoa.push([
       doctorName(x.id), resolvedDepartmentName(x.id), resolvedSpecializationName(x.id) || "—",
       r.scores ? num(r.scores.total) : null,
@@ -947,10 +944,10 @@ async function exportDeptXlsx() {
       r.loyalty.ownRec ? r.loyalty.ownRec.count : null,
       r.loyalty.ownRec ? num(r.loyalty.ownRec.pct) : null,
       num(r.loyalty.courseIdx),
-      `активная ≤${fmtNum(baseProfile.activeM, 1)} мес.; потерянная >${fmtNum(baseProfile.riskM, 1)} мес.`,
+      `активная ≤${fmtNum(baseProfile.activeM, 1)} мес.; спящая >${fmtNum(baseProfile.riskM, 1)} мес.; потерянная >${fmtNum(baseProfile.lostM, 1)} мес. (1–2 визита)`,
       kb ? kb.window : null, kb ? (kb.sourceWindowComplete ? "да" : "нет") : null,
-      kb ? kb.total : null, kb ? kb.seg.active : null, kb ? kb.seg.lost : null,
-      kb ? (kb.sourceWindowComplete ? "нет" : "да") : null, kb ? kb.core : null,
+      kb ? kb.total : null, kb ? kb.seg.active : null, kb && (!kb.applicable || kb.applicable.lost) ? kb.seg.lost : null,
+      kb && (!kb.applicable || kb.applicable.lost) ? "нет" : null, kb ? kb.core : null,
       r.product ? r.product.devicesUsed : null,
       nz && nz.totals.conv != null ? num(nz.totals.conv) : null,
       num(r.cross.crossShare),
@@ -993,6 +990,10 @@ function setKbWin(v) {
   if (UI.docId) UI.kbWinByDoctor[UI.docId] = UI.kbWin;
   renderAll();
 }
+function setReportKbWin(v) {
+  UI.repKbWin = Number(v);
+  renderReport();
+}
 function clientRowsForSegment(kb, segment) {
   return (kb && kb.clientRows ? kb.clientRows : [])
     .filter(client => client.status === segment)
@@ -1022,12 +1023,11 @@ function setClientSegment(v) {
   }
 
   const result = computeMetrics(UI.docId, UI.docMonth);
-  const availableWins = result && result.akb ? result.akb.availableWins : [];
   const requestedWin = Object.prototype.hasOwnProperty.call(UI.kbWinByDoctor, UI.docId)
     ? UI.kbWinByDoctor[UI.docId]
-    : null;
-  const currentWin = recommendedClientBaseWindow(availableWins, profileForDoctor(UI.docId), requestedWin);
-  if (currentWin != null) UI.kbWin = currentWin;
+    : UI.kbWin;
+  const currentWin = Number(requestedWin) || 12;
+  UI.kbWin = currentWin;
   const kb = currentWin != null && result && result.akb ? result.akb.wins[currentWin] : null;
   if (!kb) {
     renderDoctor();
@@ -2293,11 +2293,14 @@ function renderDoctor() {
   const circ = 2 * Math.PI * 54;
   const scColor = totalScore == null ? "var(--line)" : totalScore >= 70 ? "var(--good)" : totalScore >= 40 ? "var(--warn)" : "var(--bad)";
   const scoreEligible = !r.scores || r.scores.rankEligible;
-  const activeBase = selectedClientBaseSummary(r, docProfile);
+  const selectedDoctorKbWin = Object.prototype.hasOwnProperty.call(UI.kbWinByDoctor, UI.docId)
+    ? UI.kbWinByDoctor[UI.docId]
+    : UI.kbWin;
+  const activeBase = selectedClientBaseSummary(r, docProfile, selectedDoctorKbWin);
   const activeBaseWin = activeBase ? activeBase.window : null;
   const activeBaseValue = activeBase ? activeBase.activeBasePct : null;
   const activeBaseDyn = doctorMetricDynamics(UI.docId, mk, rr => (
-    selectedClientBaseSummary(rr, docProfile) ? selectedClientBaseSummary(rr, docProfile).activeBasePct : null
+    selectedClientBaseSummary(rr, docProfile, selectedDoctorKbWin) ? selectedClientBaseSummary(rr, docProfile, selectedDoctorKbWin).activeBasePct : null
   ));
   const schedule = r.loyalty.sched;
   const monthlyVisitRate = r.traffic.freq;
@@ -2539,27 +2542,28 @@ function renderDoctor() {
   const kbAvail = r.akb.availableWins;
   const requestedKbWin = Object.prototype.hasOwnProperty.call(UI.kbWinByDoctor, UI.docId)
     ? UI.kbWinByDoctor[UI.docId]
-    : null;
-  const kbWinCur = recommendedClientBaseWindow(kbAvail, docProfile, requestedKbWin);
-  if (kbWinCur != null) UI.kbWin = kbWinCur;
-  const kb = kbWinCur != null ? r.akb.wins[kbWinCur] : null;
-  const kbWindowOptions = kbAvail.map(win => {
-    const sufficient = clientBaseWindowSufficient(win, docProfile);
-    return {
-      v: win,
-      label: win >= 24 ? Math.round(win / 12) + " года" : win + " мес",
-      title: sufficient
-        ? `Полный расчёт базы с порогом потери после ${docProfile.riskM} мес.`
-        : `Короткий обзор: потерянные будут показаны как известный минимум.`,
-    };
-  });
+    : UI.kbWin;
+  const kbWinCur = Number(requestedKbWin) || 12;
+  UI.kbWin = kbWinCur;
+  const kb = r.akb.wins[kbWinCur] || null;
+  const kbWindowOptions = [
+    { v: 12, label: "1 год" },
+    { v: 24, label: "2 года" },
+    { v: 36, label: "3 года" },
+  ].map(option => ({
+    ...option,
+    title: kbAvail.includes(option.v)
+      ? `Анализировать выгрузку ровно за ${option.v} месяцев`
+      : `Выгрузка ровно за ${option.v} месяцев ещё не загружена`,
+  }));
   html += `<div class="card vector-card" id="blkV4" style="border-top-color:${VECTOR_META.v4.color}">
     <div class="vhead"><h3 class="mt0">Вектор 4. Работа с клиентской базой <span class="badge ${VECTOR_META.v4.cls}">${VECTOR_META.v4.tag}</span></h3>
-    <span>${vecBadge("v4", r, docProfile)} ${blockBtn("blkV4")} ${kbAvail.length ? segToggle("kbWinSeg", kbWindowOptions, kbWinCur, "setKbWin") : ""}</span></div>`;
+    <span>${vecBadge("v4", r, docProfile)} ${blockBtn("blkV4")} ${segToggle("kbWinSeg", kbWindowOptions, kbWinCur, "setKbWin")}</span></div>`;
   if (!kb) {
-    html += '<p class="muted small">Нет выгрузок «Давность посещений» с окном от 6 месяцев.</p></div>';
+    html += `<p class="muted small">Нет выгрузки «Давность посещений» ровно за ${fmtNum(kbWinCur)} месяцев. Выбранный период не заменяется другой выгрузкой автоматически.</p></div>`;
   } else {
     const pr = kb.params;
+    const applicable = kb.applicable || { sleep: true, lost: kb.sourceWindowComplete };
     const specializationName = resolvedSpecializationName(UI.docId);
     const settingsScope = specializationName
       ? `специализации «${specializationName}»`
@@ -2567,28 +2571,32 @@ function renderDoctor() {
     const segmentOptions = [
       { v: "active", label: `Активная · ${kb.seg.active}` },
       { v: "risk", label: `Риск · ${kb.seg.risk}` },
-      { v: "sleep", label: `Спящая · ${kb.seg.sleep}` },
-      { v: "lost", label: `Потерянная · ${kb.seg.lost}` },
     ];
+    if (applicable.sleep) segmentOptions.push({ v: "sleep", label: `Спящая · ${kb.seg.sleep}` });
+    if (applicable.lost) segmentOptions.push({ v: "lost", label: `Потерянная · ${kb.seg.lost}` });
     if (kb.seg.unknown) segmentOptions.push({ v: "unknown", label: `Без давности · ${kb.seg.unknown}` });
     if (!segmentOptions.some(x => x.v === UI.clientSegment)) UI.clientSegment = "risk";
     const selectedClients = clientRowsForSegment(kb, UI.clientSegment);
     const kbDyn = clientBaseDynamics(UI.docId, mk, kbWinCur);
     const actionText = kb.reactivationCandidates
-      ? `Начните с группы риска (${fmtNum(kb.seg.risk)}), затем разберите спящих (${fmtNum(kb.seg.sleep)}). Пациенты в списках отсортированы по исторической выручке.`
+      ? `Начните с группы риска (${fmtNum(kb.seg.risk)})${applicable.sleep ? `, затем разберите спящих (${fmtNum(kb.seg.sleep)})` : ""}. Пациенты в списках отсортированы по исторической выручке.`
       : "Пациентов для реактивации сейчас нет.";
-    html += `<p class="kb-source">Период: ${periodStr(kb.period)} · окно ${fmtNum(kb.window)} мес. · Правила ${esc(settingsScope)}: активные ≤${fmtNum(pr.activeM)} мес., потерянные &gt;${fmtNum(pr.riskM)} мес. ${kb.sourceWindowComplete ? "" : '<span class="kb-window-warning">В коротком окне потерянные показаны как минимум; для точной доли выберите 3 года.</span>'} <a href="#" onclick="switchTab('settings');return false">Настройки</a></p>
+    const omittedGroups = [
+      !applicable.sleep ? `«Спящие» (E = ${fmtNum(pr.riskM)} мес.)` : "",
+      !applicable.lost ? `«Потерянные» (F = ${fmtNum(pr.lostM)} мес.)` : "",
+    ].filter(Boolean);
+    html += `<p class="kb-source">Период: ${periodStr(kb.period)} · анализ ровно за ${fmtNum(kb.window)} мес. · Правила ${esc(settingsScope)}: активные ≤${fmtNum(pr.activeM)} мес., спящие после ${fmtNum(pr.riskM)} мес., потерянные после ${fmtNum(pr.lostM)} мес. (только пациенты с 1–2 визитами). ${omittedGroups.length ? `<span class="kb-window-warning">Не показываем ${omittedGroups.join(" и ")}: порог больше выбранного периода.</span>` : ""} <a href="#" onclick="switchTab('settings');return false">Настройки</a></p>
     <div class="kb-summary-grid">
       <div class="kb-summary-card"><div class="kb-summary-label">Вся база</div><div class="kb-summary-value">${fmtNum(kb.total)} чел.</div><div class="kb-summary-meta">${fmtNum(kb.visits)} визитов · к прошлому месяцу ${kbTrendMarkup(kb.total, kbDyn.prev ? kbDyn.prev.total : null, false, "relative")}</div></div>
       <div class="kb-summary-card good"><div class="kb-summary-label">Активные</div><div class="kb-summary-value">${fmtNum(kb.seg.active)} чел.</div><div class="kb-summary-meta">${fmtPct(kb.activeBasePct)} · были в последние ${fmtNum(pr.activeM)} мес.</div></div>
-      <div class="kb-summary-card warn"><div class="kb-summary-label">Вернуть сейчас</div><div class="kb-summary-value">${fmtNum(kb.reactivationCandidates)} чел.</div><div class="kb-summary-meta">${fmtMoney(kb.reactivationSum)} · группа риска и спящие</div></div>
-      <div class="kb-summary-card bad"><div class="kb-summary-label">Потерянные</div><div class="kb-summary-value">${kb.sourceWindowComplete ? fmtNum(kb.seg.lost) : "≥" + fmtNum(kb.seg.lost)} чел.</div><div class="kb-summary-meta">${kb.sourceWindowComplete ? `${fmtPct(kb.lostPct)} · к прошлому месяцу ${kbTrendMarkup(kb.lostPct, kbDyn.prev ? kbDyn.prev.lostPct : null, true, "pp")}` : `точная доля доступна в полном окне`}</div></div>
+      <div class="kb-summary-card warn"><div class="kb-summary-label">Вернуть сейчас</div><div class="kb-summary-value">${fmtNum(kb.reactivationCandidates)} чел.</div><div class="kb-summary-meta">${fmtMoney(kb.reactivationSum)} · группа риска${applicable.sleep ? " и спящие" : ""}</div></div>
+      ${applicable.lost ? `<div class="kb-summary-card bad"><div class="kb-summary-label">Потерянные</div><div class="kb-summary-value">${fmtNum(kb.seg.lost)} чел.</div><div class="kb-summary-meta">${fmtPct(kb.lostPct)} · 1–2 визита · к прошлому месяцу ${kbTrendMarkup(kb.lostPct, kbDyn.prev && (!kbDyn.prev.applicable || kbDyn.prev.applicable.lost) ? kbDyn.prev.lostPct : null, true, "pp")}</div></div>` : ""}
     </div>
     <div class="kb-action">
       <div><div class="kb-action-title">Что сделать сейчас</div><div class="kb-action-text">${actionText}</div></div>
       <div class="kb-action-controls no-print">
         ${kb.seg.risk ? `<button class="btn mini primary" onclick="openClientSegment('risk')">Группа риска · ${fmtNum(kb.seg.risk)}</button>` : ""}
-        ${kb.seg.sleep ? `<button class="btn mini" onclick="openClientSegment('sleep')">Спящие · ${fmtNum(kb.seg.sleep)}</button>` : ""}
+        ${applicable.sleep && kb.seg.sleep ? `<button class="btn mini" onclick="openClientSegment('sleep')">Спящие · ${fmtNum(kb.seg.sleep)}</button>` : ""}
       </div>
     </div>
     <div><h3 class="small muted" style="margin-bottom:6px">СОСТАВ БАЗЫ ${copyBtn("copyChart", "chSegments", "PNG")}</h3>
@@ -2781,11 +2789,12 @@ function renderDoctor() {
     }
   }
   if (kb) {
+    const applicable = kb.applicable || { sleep: true, lost: kb.sourceWindowComplete };
     const segData = [
       ["Активная", kb.seg.active, "#16a34a"],
       ["В группе риска", kb.seg.risk, "#d97706"],
-      ["Спящая", kb.seg.sleep, "#94a3b8"],
-      [kb.sourceWindowComplete ? "Потерянная" : "Потерянная (минимум)", kb.seg.lost, "#dc2626"],
+      ...(applicable.sleep ? [["Спящая", kb.seg.sleep, "#94a3b8"]] : []),
+      ...(applicable.lost ? [["Потерянная", kb.seg.lost, "#dc2626"]] : []),
       ["Без давности", kb.seg.unknown, "#64748b"],
     ].filter(x => x[1] > 0);
     chart("chSegments", {
@@ -3039,6 +3048,10 @@ function renderReport() {
   const mSel = document.getElementById("repMonth");
   const sSel = document.getElementById("repScope");
   const body = document.getElementById("reportBody");
+  const kbControl = document.getElementById("repKbWinControl");
+  if (kbControl) kbControl.innerHTML = `<span class="small muted">База:</span> ${segToggle("repKbWinSeg", [
+    { v: 12, label: "1 год" }, { v: 24, label: "2 года" }, { v: 36, label: "3 года" },
+  ], UI.repKbWin, "setReportKbWin")}`;
   setControlsDisabled(["repMonth", "repScope", "btnExportAllPdf", "btnPrint"], !months.length);
   if (!months.length) {
     body.innerHTML = '<div class="card"><p class="muted">Загрузите данные на вкладке «Данные».</p></div>';
@@ -3061,18 +3074,37 @@ function reportHeader(title, subtitle) {
     <div class="muted">${subtitle} · отчёт сформирован ${new Date().toLocaleDateString("ru-RU")}</div></div>`;
 }
 
+function reportOverallIndex(score, label = "Общий индекс", detail = "") {
+  const value = score == null || isNaN(score) ? null : Math.max(0, Math.min(100, Number(score)));
+  const radius = 45;
+  const circ = 2 * Math.PI * radius;
+  const color = value == null ? "var(--line)" : value >= 70 ? "var(--good)" : value >= 40 ? "var(--warn)" : "var(--bad)";
+  return `<div class="report-index-block" aria-label="${esc(label)}: ${value == null ? "нет данных" : fmtNum(value, 0)}">
+    <div class="dpi-ring report-index-ring">
+      <svg width="112" height="112" viewBox="0 0 112 112"><circle cx="56" cy="56" r="${radius}" fill="none" stroke="var(--line)" stroke-width="11"/>
+      <circle cx="56" cy="56" r="${radius}" fill="none" stroke="${color}" stroke-width="11" stroke-linecap="round" stroke-dasharray="${(circ * (value || 0) / 100).toFixed(1)} ${circ.toFixed(1)}"/></svg>
+      <div class="num"><b>${value == null ? "—" : fmtNum(value, 0)}</b><i>из 100</i></div>
+    </div>
+    <div><div class="report-index-label">${esc(label)}</div>${detail ? `<div class="small muted">${esc(detail)}</div>` : ""}</div>
+  </div>`;
+}
+
 function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilter) {
   const { rows } = deptRows(mk, deptFilter, subFilter);
   if (!rows.length) return '<div class="card"><p class="muted">Нет данных за месяц.</p></div>';
   const showSc = DB.settings.showScores;
   const totalSales = rows.reduce((a, x) => a + (x.r.econ.sales || 0), 0);
   const totalRef = rows.reduce((a, x) => a + (x.r.econ.refRevenue || 0), 0);
-  const scAvgArr = rows.map(x => x.r.scores && x.r.scores.rankEligible ? x.r.scores.total : null).filter(v => v != null);
-  const scAvg = scAvgArr.length ? scAvgArr.reduce((a, b) => a + b, 0) / scAvgArr.length : null;
+  const eligibleScores = rows.map(x => x.r.scores && x.r.scores.rankEligible ? x.r.scores.total : null).filter(v => v != null);
+  const allScores = rows.map(x => x.r.scores ? x.r.scores.total : null).filter(v => v != null);
+  const scoreSource = eligibleScores.length ? eligibleScores : allScores;
+  const scAvg = scoreSource.length ? scoreSource.reduce((a, b) => a + b, 0) / scoreSource.length : null;
+  const scAvgPreliminary = !eligibleScores.length && allScores.length > 0;
   const sub = monthLabel(mk) + (deptFilter !== "all" ? " · " + esc(deptFilter) : "");
 
   /* Слайд 1: итоги + сводная */
   let html = `<div class="card slide">${reportHeader("Отчёт по специализации", sub)}
+    ${reportOverallIndex(scAvg, "Общий индекс", scAvgPreliminary ? "предварительный: полнота данных ниже 80%" : `среднее по ${eligibleScores.length || allScores.length} специалистам`)}
     <div class="grid cols-4">
       <div class="kpi"><div class="lbl">Специалистов</div><div class="val">${rows.length}</div></div>
       ${showSc && scAvg != null ? `<div class="kpi"><div class="lbl">Средний балл</div><div class="val">${fmtNum(scAvg, 1)} / 100</div></div>` : ""}
@@ -3149,23 +3181,28 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
   }
 
   /* Слайд 6: клиентская база */
-  const withKb = rows.map(x => ({ ...x, kb: selectedClientBaseSummary(x.r, profileForDoctor(x.id)), baseProfile: profileForDoctor(x.id) })).filter(x => x.kb);
+  const withKb = rows.map(x => ({ ...x, kb: selectedClientBaseSummary(x.r, profileForDoctor(x.id), UI.repKbWin), baseProfile: profileForDoctor(x.id) })).filter(x => x.kb);
   if (withKb.length) {
+    const showSleep = withKb.some(x => !x.kb.applicable || x.kb.applicable.sleep);
+    const showLost = withKb.some(x => !x.kb.applicable || x.kb.applicable.lost);
     const reportBaseThresholds = [...new Set(withKb.map(x => {
       const p = x.baseProfile;
       const scope = resolvedSpecializationName(x.id) || resolvedDepartmentName(x.id);
-      return `${scope}: активная ≤${fmtNum(p.activeM, 1)} мес., потерянная >${fmtNum(p.riskM, 1)} мес.`;
+      return `${scope}: активная ≤${fmtNum(p.activeM, 1)} мес., спящая >${fmtNum(p.riskM, 1)} мес., потерянная >${fmtNum(p.lostM, 1)} мес. (1–2 визита)`;
     }))].join("; ");
-    html += `<div class="card slide"><h2>Клиентская база · ${sub}</h2><table class="data"><tr><th>Специалист</th><th class="num">Окно</th><th class="num">База</th><th class="num">Активная база</th><th class="num">Риск</th><th class="num">Спящая</th><th class="num">Потерянные</th><th class="num">Выручка под риском</th><th class="num">Ядро</th><th class="num">Отток (3 г.)</th></tr>`;
+    html += `<div class="card slide"><h2>Клиентская база · ${sub} · ${fmtNum(UI.repKbWin)} мес.</h2><table class="data"><tr><th>Специалист</th><th class="num">Период</th><th class="num">База</th><th class="num">Активная база</th><th class="num">Риск</th>${showSleep ? '<th class="num">Спящая</th>' : ""}${showLost ? '<th class="num">Потерянные</th>' : ""}<th class="num">Выручка под риском</th><th class="num">Ядро</th><th class="num">Отток (3 г.)</th></tr>`;
     for (const x of withKb) {
       const kb = x.kb;
-      html += `<tr><td>${esc(doctorName(x.id))}</td><td class="num">${fmtNum(kb.window)} мес.${kb.sourceWindowComplete ? "" : " (неполное)"}</td><td class="num">${fmtNum(kb.total)}</td>
+      const applicable = kb.applicable || { sleep: true, lost: kb.sourceWindowComplete };
+      html += `<tr><td>${esc(doctorName(x.id))}</td><td class="num">${fmtNum(kb.window)} мес.</td><td class="num">${fmtNum(kb.total)}</td>
         <td class="num">${fmtNum(kb.seg.active)} (${fmtPct(kb.activeBasePct)})</td>
         <td class="num">${fmtNum(kb.seg.risk)}</td>
-        <td class="num">${fmtNum(kb.seg.sleep)}</td><td class="num">${kb.sourceWindowComplete ? "" : "≥"}${fmtNum(kb.seg.lost)}</td><td class="num">${fmtMoney(kb.revenueAtRisk)}</td>
+        ${showSleep ? `<td class="num">${applicable.sleep ? fmtNum(kb.seg.sleep) : ""}</td>` : ""}${showLost ? `<td class="num">${applicable.lost ? fmtNum(kb.seg.lost) : ""}</td>` : ""}<td class="num">${fmtMoney(kb.revenueAtRisk)}</td>
         <td class="num">${fmtNum(kb.core)}</td><td class="num">${x.r.akb.churn36 != null ? fmtPct(x.r.akb.churn36) : "—"}</td></tr>`;
     }
-    html += `</table><p class="small muted">Пороги: ${esc(reportBaseThresholds)}</p></div>`;
+    html += `</table><p class="small muted">Пороги: ${esc(reportBaseThresholds)} Группы с порогом больше выбранного периода не включены в отчёт.</p></div>`;
+  } else {
+    html += `<div class="card slide"><h2>Клиентская база · ${sub} · ${fmtNum(UI.repKbWin)} мес.</h2><p class="muted">Нет выгрузки ровно за выбранный период. Другой период автоматически не подставляется.</p></div>`;
   }
 
   /* Слайд 7: лояльность */
@@ -3208,7 +3245,9 @@ function buildDoctorReport(docId, mk) {
   const e = r.econ;
   const reportProfile = profileForDoctor(docId);
   const reportNaz = r.cross.naz[UI.nazSlice] || r.cross.naz[1] || r.cross.naz[3];
+  const reportKb = selectedClientBaseSummary(r, reportProfile, UI.repKbWin);
   let html = `<div class="card slide">${reportHeader(esc(doctorName(docId)), monthLabel(mk) + " · " + esc(doctorStructureLabel(docId)))}
+    ${reportOverallIndex(r.scores ? r.scores.total : null, "Общий индекс", r.scores && !r.scores.rankEligible ? `предварительный · полнота ${fmtPct(r.scores.coveragePct)}` : "итоговый индекс специалиста")}
     <div class="grid cols-4">
       ${DB.settings.showScores && r.scores && r.scores.total != null ? `<div class="kpi"><div class="lbl">${r.scores.rankEligible ? "Общий балл" : "Предварительный балл"}</div><div class="val" style="font-size:17px">${fmtNum(r.scores.total, 0)} / 100</div><div class="sub">полнота ${fmtPct(r.scores.coveragePct)}</div></div>` : ""}
       <div class="kpi"><div class="lbl">Выручка</div><div class="val" style="font-size:17px">${fmtMoney(e.sales)}</div></div>
@@ -3234,6 +3273,20 @@ function buildDoctorReport(docId, mk) {
     ${reportNaz && reportNaz.focus ? metricRow("Фокусы назначений", `${reportNaz.focus.used} из ${reportNaz.focus.park}`, `доля выручки ${fmtPct(reportNaz.focus.revenueShare)}`) : ""}
     </div></div>
     ${r.partial ? `<p class="small muted" style="margin-top:10px">⚠ Не загружено: ${esc(r.missing.join(", "))}.</p>` : ""}</div>`;
+
+  if (reportKb) {
+    const applicable = reportKb.applicable || { sleep: true, lost: reportKb.sourceWindowComplete };
+    html += `<div class="card slide"><h2>Клиентская база · ${fmtNum(reportKb.window)} мес.</h2>
+      <div class="grid cols-4">
+        <div class="kpi"><div class="lbl">Вся база</div><div class="val">${fmtNum(reportKb.total)}</div></div>
+        <div class="kpi"><div class="lbl">Активные</div><div class="val">${fmtNum(reportKb.seg.active)}</div></div>
+        <div class="kpi"><div class="lbl">Группа риска</div><div class="val">${fmtNum(reportKb.seg.risk)}</div></div>
+        ${applicable.sleep ? `<div class="kpi"><div class="lbl">Спящие</div><div class="val">${fmtNum(reportKb.seg.sleep)}</div></div>` : ""}
+        ${applicable.lost ? `<div class="kpi"><div class="lbl">Потерянные · 1–2 визита</div><div class="val">${fmtNum(reportKb.seg.lost)}</div></div>` : ""}
+      </div><p class="small muted">Пороги: активные ≤${fmtNum(reportProfile.activeM)} мес., спящие после ${fmtNum(reportProfile.riskM)} мес., потерянные после ${fmtNum(reportProfile.lostM)} мес. Группы с порогом больше выбранного периода не показываются.</p></div>`;
+  } else {
+    html += `<div class="card slide"><h2>Клиентская база · ${fmtNum(UI.repKbWin)} мес.</h2><p class="muted">Нет выгрузки ровно за выбранный период. Другой период автоматически не подставляется.</p></div>`;
+  }
 
   // категории выручки
   if (r.product) {
@@ -3522,21 +3575,23 @@ function renderSettings() {
     <table class="data wtable" style="margin-top:10px"><tr>
       <th class="num" title="Отдельный признак лояльности, не меняет статус активности">Лояльный: от, виз.</th>
       <th class="num" title="Ожидаемый срок возврата T: был не позднее — активный">Ожидаемый возврат T, мес.</th>
-      <th class="num" title="После этого срока пациент считается потерянным; граница риска и сна рассчитывается посередине">Потерян после, мес.</th>
+      <th class="num" title="E — после этого срока пациент относится к спящим">E — Спящий после, мес.</th>
+      <th class="num" title="F — после этого срока пациент с 1–2 визитами считается потерянным">F — Потерян после, мес.</th>
       <th class="num" title="Курсовое лечение: минимум визитов…">Курсовое: от, виз.</th>
       <th class="num" title="…за последние сколько месяцев">Курсовое: за, мес</th>
       <th class="num" title="Ядро базы: пациенты, дающие этот % выручки">Ядро: %</th>
       <th class="num" title="Какой срез первички идёт в балл и динамику (3/6/12)">Первичка: срез, мес</th></tr>
     <tr>
       <td class="num"><input type="number" id="np_minVisits" value="${p.minVisits}" min="2" max="20"></td>
-      <td class="num"><input type="number" id="np_activeM" value="${p.activeM}" min="1" max="24"></td>
-      <td class="num"><input type="number" id="np_riskM" value="${p.riskM}" min="2" max="36"></td>
+      <td class="num"><input type="number" id="np_activeM" value="${p.activeM}" min="1" max="120"></td>
+      <td class="num"><input type="number" id="np_riskM" value="${p.riskM}" min="2" max="120"></td>
+      <td class="num"><input type="number" id="np_lostM" value="${p.lostM}" min="3" max="120"></td>
       <td class="num"><input type="number" id="np_courseX" value="${p.courseX}" min="2" max="20"></td>
       <td class="num"><input type="number" id="np_courseM" value="${p.courseM}" min="1" max="36"></td>
       <td class="num"><input type="number" id="np_corePct" value="${p.corePct}" min="50" max="95"></td>
       <td class="num"><input type="number" id="np_pervichkaM" value="${p.pervichkaM || 3}" min="1" max="12"></td></tr></table>
-    <p class="small muted">Статусы считаются по давности: активная ≤ T; риск — от T до середины между T и сроком потери; спящая — от середины до срока потери; потерянная — позже срока потери. Количество визитов определяет лояльность отдельно.</p>
-    <div class="notice blue" style="margin:8px 0 10px"><b>Выгрузка базы подстраивается под эту специализацию:</b> окно «Давности посещений» должно быть длиннее срока потери. При текущем пороге &gt;${p.riskM} мес. приложение требует минимум ${clientBaseRequiredWindow(p)} мес. и автоматически выбирает самое короткое подходящее из загруженных окон${p.riskM >= 12 ? " (из стандартных 12 мес./3 года — 3 года)" : ""}.</div>
+    <p class="small muted">Статусы считаются по давности: активная ≤ T; риск — от T до E; спящая — после E; потерянная — после F и только для пациентов с 1–2 визитами. Лояльные пациенты после F остаются в группе «Спящие».</p>
+    <div class="notice blue" style="margin:8px 0 10px"><b>Период анализа выбирается вручную:</b> 1 год, 2 года или 3 года. Приложение не подменяет выбранную выгрузку более длинной. Если E или F больше выбранного периода, соответствующая группа в интерфейсе и отчёте не показывается — ноль не выводится.</div>
     <div class="grid cols-2" style="margin-top:10px">
       <label class="fld"><span>Дополнительные группы внутри текущего профиля (по одной в строке) — назначаются врачам в «Сотрудниках»</span>
         <textarea id="np_subdivisions" placeholder="по одному в строке" style="min-height:70px">${esc((p.subdivisions || []).join("\n"))}</textarea>
@@ -3896,15 +3951,15 @@ function saveDeptBasics() {
   }
   const p = curSetProfile();
   const values = {};
-  for (const k of ["minVisits", "activeM", "riskM", "courseX", "courseM", "corePct", "pervichkaM"]) {
+  for (const k of ["minVisits", "activeM", "riskM", "lostM", "courseX", "courseM", "corePct", "pervichkaM"]) {
     const el = document.getElementById("np_" + k);
     if (el) {
       const v = parseInt(el.value);
       if (!isNaN(v)) values[k] = v;
     }
   }
-  if (!(values.activeM > 0) || !(values.riskM > values.activeM)) {
-    toast("Срок потери должен быть больше ожидаемого срока возврата T", true);
+  if (!(values.activeM > 0) || !(values.riskM > values.activeM) || !(values.lostM > values.riskM)) {
+    toast("Нужно соблюдать порядок порогов: T < E (спящие) < F (потерянные)", true);
     return;
   }
   Object.assign(p, values);

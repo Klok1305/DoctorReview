@@ -291,8 +291,7 @@ function kbAvailableWindows(docId, monthKey) {
   return Object.keys(m.kb[docId]).map(Number).sort((a, b) => a - b);
 }
 function clientBaseRequiredWindow(profile) {
-  const lostAfterM = Number(profile && profile.riskM) || 12;
-  return Math.floor(lostAfterM) + 1;
+  return Number(profile && profile.lostM) || 12;
 }
 function clientBaseWindowSufficient(win, profile) {
   return Number(win) >= clientBaseRequiredWindow(profile);
@@ -300,10 +299,8 @@ function clientBaseWindowSufficient(win, profile) {
 function recommendedClientBaseWindow(availableWins, profile, requestedWin = null) {
   const wins = [...new Set((availableWins || []).map(Number).filter(Number.isFinite))].sort((a, b) => a - b);
   if (!wins.length) return null;
-  const sufficient = wins.filter(win => clientBaseWindowSufficient(win, profile));
-  const requested = Number(requestedWin);
-  if (wins.includes(requested)) return requested;
-  return sufficient[0] || wins[wins.length - 1];
+  const requested = requestedWin == null ? 12 : Number(requestedWin);
+  return wins.includes(requested) ? requested : null;
 }
 function selectedClientBaseSummary(result, profile, requestedWin = null) {
   if (!result || !result.akb) return null;
@@ -315,11 +312,15 @@ function kbSummary(docId, monthKey, win) {
   const kb = kbWindow(docId, monthKey, win);
   if (!kb) return null;
   const p = deptParams(docId);
-  const sourceWindowComplete = clientBaseWindowSufficient(win, p);
+  const applicable = {
+    sleep: Number(p.riskM) <= Number(win),
+    lost: Number(p.lostM) <= Number(win),
+  };
+  const sourceWindowComplete = applicable.lost;
   const requiredWindowM = clientBaseRequiredWindow(p);
   const dActive = Math.round(p.activeM * 30.44);
-  const dLost = Math.round(Math.max(p.riskM, p.activeM + 1) * 30.44);
-  const dSleep = Math.round((p.activeM + Math.max(p.riskM, p.activeM + 1)) / 2 * 30.44);
+  const dSleep = Math.round(Math.max(p.riskM, p.activeM + 1) * 30.44);
+  const dLost = Math.round(Math.max(p.lostM, p.riskM + 1) * 30.44);
   const seg = {
     active: 0, risk: 0, sleep: 0, lost: 0, unknown: 0,
     loyalActive: 0, loyalRisk: 0, loyalSleep: 0, loyalLost: 0, loyalUnknown: 0,
@@ -338,7 +339,7 @@ function kbSummary(docId, monthKey, win) {
     if (c.r != null && !isNaN(c.r)) {
       if (c.r <= dActive) status = "active";
       else if (c.r <= dSleep) status = "risk";
-      else if (c.r <= dLost) status = "sleep";
+      else if (c.r <= dLost || loyal) status = "sleep";
       else status = "lost";
     }
     seg[status]++;
@@ -364,13 +365,13 @@ function kbSummary(docId, monthKey, win) {
   }
   const courseCnt = kb.clients.filter(c => c.v >= p.courseX).length;
   return {
-    window: Number(win), period: kb.period, params: p, sourceWindowComplete, requiredWindowM,
-    thresholds: { activeDays: dActive, riskDays: dSleep, lostDays: dLost, riskM: dSleep / 30.44 },
+    window: Number(win), period: kb.period, params: p, applicable, sourceWindowComplete, requiredWindowM,
+    thresholds: { activeDays: dActive, riskDays: dSleep, lostDays: dLost, riskM: p.riskM, lostM: p.lostM },
     total, known: total - seg.unknown, seg, totalSum, totalVisits,
     activeSum: statusSums.active, riskSum: statusSums.risk, sleepSum: statusSums.sleep,
     lostSum: statusSums.lost, revenueAtRisk: statusSums.risk + statusSums.sleep + statusSums.lost,
-    reactivationCandidates: seg.risk + seg.sleep,
-    reactivationSum: statusSums.risk + statusSums.sleep,
+    reactivationCandidates: seg.risk + (applicable.sleep ? seg.sleep : 0),
+    reactivationSum: statusSums.risk + (applicable.sleep ? statusSums.sleep : 0),
     clientRows,
     visits: totalVisits, patients: total,
     freq: total ? totalVisits / total : null,
@@ -381,9 +382,9 @@ function kbSummary(docId, monthKey, win) {
     loyalPct: total ? loyalCount / total * 100 : null,
     activeBase: seg.active,
     activeBasePct: total ? seg.active / total * 100 : null,
-    lostPct: sourceWindowComplete && total ? seg.lost / total * 100 : null,
+    lostPct: applicable.lost && total ? seg.lost / total * 100 : null,
     riskShare: total ? seg.risk / total * 100 : null,
-    sleepRiskShare: total ? (seg.risk + seg.sleep) / total * 100 : null,
+    sleepRiskShare: applicable.sleep && total ? (seg.risk + seg.sleep) / total * 100 : null,
     core,
     courseCnt,
     courseIdx: total ? courseCnt / total * 100 : null,
@@ -668,7 +669,7 @@ function computeMetricsRaw(docId, monthKey) {
   if (!vy) missing.push("выработка");
   if (!kb1) missing.push("давность за месяц");
   if (!kb12) missing.push("давность ровно 12 мес для индекса возвращаемости");
-  if (!akb.primary || !akb.primary.sourceWindowComplete) missing.push(`давность минимум ${clientBaseRequiredWindow(profile)} мес для клиентской базы`);
+  if (!akb.primary) missing.push("давность ровно 12 мес для клиентской базы");
   if (!kb36) missing.push("давность 3 года");
   if (!naz1 && !naz3) missing.push("назначения");
   if (!prostoy) missing.push("загрузка расписания");
@@ -760,7 +761,7 @@ function dynMetricDefs(profile) {
   const pvM = (profile && profile.pervichkaM) || 3;
   const exTitle = (profile && profile.expertise && profile.expertise.title) || "экспертных услуг";
   const activeM = Number(profile && profile.activeM) || 6;
-  const lostAfterM = Number(profile && profile.riskM) || 12;
+  const lostAfterM = Number(profile && profile.lostM) || 12;
   const base = r => selectedClientBaseSummary(r, profile);
   return [
     { key: "sales", name: "Выручка", fmt: fmtMoney, get: r => r.econ.sales, target: B.revenue },
@@ -779,7 +780,7 @@ function dynMetricDefs(profile) {
     { key: "nazConv", name: "Конверсия назначений (1 мес)", fmt: fmtPct, get: r => r.cross.naz[1] ? r.cross.naz[1].totals.conv : null, target: B.nazConv },
     { key: "nazFocus", name: "Доля выручки фокусов назначений (1 мес)", fmt: fmtPct, get: r => r.cross.naz[1] && r.cross.naz[1].focus ? r.cross.naz[1].focus.revenueShare : null, target: B.nazFocusShare },
     { key: "akb", name: `Активная база (≤${fmtNum(activeM, 1)} мес.)`, fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb ? kb.seg.active : null; } },
-    { key: "lost", name: `Потерянные (>${fmtNum(lostAfterM, 1)} мес.)`, fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb && kb.sourceWindowComplete ? kb.seg.lost : null; }, lower: true },
+    { key: "lost", name: `Потерянные 1–2 визита (>${fmtNum(lostAfterM, 1)} мес.)`, fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb && kb.applicable && kb.applicable.lost ? kb.seg.lost : null; }, lower: true },
     { key: "score", name: "Общий балл", fmt: v => fmtNum(v, 0), get: r => DB.settings.showScores && r.scores ? r.scores.total : null },
   ];
 }
@@ -874,10 +875,14 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
       if (c.loyal) loyalCount++;
     }
     const total = clients.size;
-    const sourceWindowComplete = baseRows.length === expectedCount && baseRows.every(kb => kb.sourceWindowComplete);
+    const applicable = {
+      sleep: baseRows.length === expectedCount && baseRows.every(kb => !kb.applicable || kb.applicable.sleep),
+      lost: baseRows.length === expectedCount && baseRows.every(kb => !kb.applicable || kb.applicable.lost),
+    };
+    const sourceWindowComplete = applicable.lost;
     const windows = [...new Set(baseRows.map(kb => Number(kb.window)).filter(Number.isFinite))].sort((a, b) => a - b);
     return {
-      total, seg, clientRows: [...clients.values()], visits, totalSum, loyalCount,
+      total, seg, clientRows: [...clients.values()], visits, totalSum, loyalCount, applicable,
       activeBasePct: total ? seg.active / total * 100 : null,
       riskShare: total ? seg.risk / total * 100 : null,
       lostPct: sourceWindowComplete && total ? seg.lost / total * 100 : null,

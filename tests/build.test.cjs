@@ -155,9 +155,13 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /aria-pressed/);
   assert.match(actual, /Что сделать сейчас/);
   assert.match(actual, /openClientSegment/);
-  assert.match(actual, /Выгрузка базы подстраивается под эту специализацию/);
+  assert.match(actual, /Период анализа выбирается вручную/);
   assert.match(actual, /clientBaseRequiredWindow/);
   assert.match(actual, /kbWinByDoctor/);
+  assert.match(actual, /E — Спящий после/);
+  assert.match(actual, /F — Потерян после/);
+  assert.match(actual, /function reportOverallIndex/);
+  assert.match(actual, /Общий индекс/);
   assert.match(actual, /appointmentDetails/);
   assert.doesNotMatch(actual, /primaryReturnDetails/);
   assert.doesNotMatch(actual, /ДЕТАЛИ ВОЗВРАЩАЕМОСТИ ПЕРВИЧКИ/);
@@ -323,7 +327,7 @@ test("appointment details hide report revenue and render source comparison as pl
   assert.doesNotMatch(sourceCompareCss[1], /background|border|padding/);
 });
 
-test("client-base vector keeps both periods clickable and focuses on next actions", () => {
+test("client-base vector keeps all three exact periods clickable and focuses on next actions", () => {
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
   const vector = ui.match(/\/\* ---- В4 Клиентская база ---- \*\/[\s\S]*?\/\* ---- В5 Лояльность ---- \*\//);
@@ -331,6 +335,7 @@ test("client-base vector keeps both periods clickable and focuses on next action
   assert.ok(vector);
   assert.doesNotMatch(vector[0], /disabled:/);
   assert.equal((vector[0].match(/class="kb-summary-card(?:\s|\")/g) || []).length, 4);
+  for (const period of ["1 год", "2 года", "3 года"]) assert.match(vector[0], new RegExp(period));
   for (const label of ["Вся база", "Активные", "Вернуть сейчас", "Потерянные", "Что сделать сейчас"]) {
     assert.match(vector[0], new RegExp(label));
   }
@@ -396,7 +401,7 @@ test("client-base table moves thresholds to a note and shows monthly movement", 
   assert.match(table[0], /Пороги: \$\{esc\(baseThresholdNotes\)\}/);
   assert.match(table[0], /compactBaseTrend\(kb\.seg\.active,/);
   assert.match(table[0], /compactBaseTrend\(kb\.seg\.risk,[^]*true\)/);
-  assert.match(table[0], /compactBaseTrend\(kb\.sourceWindowComplete \? kb\.seg\.lost[^]*true\)/);
+  assert.match(table[0], /compactBaseTrend\(kb\.seg\.lost,[^]*true\)/);
   assert.match(table[0], /compactBaseTrend\(kb\.revenueAtRisk,[^]*true\)/);
   assert.ok(trendMatch);
   const compactBaseTrend = new Function("kbTrendMarkup", `${trendMatch[0]}; return compactBaseTrend;`)((current, previous, lower, mode) => `${current}|${previous}|${lower}|${mode}`);
