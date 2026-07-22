@@ -343,6 +343,32 @@ test("doctor and report pages use the same doctor metrics header component", () 
   assert.match(report[0], /blockId: "reportDoctorMetrics", slide: true/);
 });
 
+test("department and specialization reports show every doctor in a score leaderboard", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
+  const leaderboard = ui.match(/function doctorScoreLeaderboardHtml\(rows, mk, scopeLabel = ""\) \{[\s\S]*?\n\}/);
+  const department = ui.match(/function renderDepartment\(\) \{[\s\S]*?\n\}\n\n\/\* ================= СТРАНИЦА: СПЕЦИАЛИЗАЦИЯ/);
+  const specialization = ui.match(/function renderDept\(\) \{[\s\S]*?\n\}\n\nfunction renderCompare/);
+  const report = ui.match(/function buildDeptReport\(mk, deptFilter = UI\.deptFilter, subFilter = UI\.subFilter\) \{[\s\S]*?\n\}\n\nfunction buildDoctorReport/);
+
+  assert.ok(leaderboard, "shared doctor score leaderboard must be present");
+  assert.ok(department, "department renderer must be present");
+  assert.ok(specialization, "specialization renderer must be present");
+  assert.ok(report, "specialization report renderer must be present");
+  assert.match(leaderboard[0], /const ranked = \[\.\.\.rows\]\.sort/);
+  assert.doesNotMatch(leaderboard[0], /\.slice\(/, "the leaderboard must not truncate the doctor list");
+  assert.match(leaderboard[0], /value >= 70 \? "good" : value >= 40 \? "warn" : "bad"/);
+  assert.match(leaderboard[0], /data-score-state="\$\{state\}"/);
+  assert.match(leaderboard[0], /Лидерборд врачей/);
+  assert.match(leaderboard[0], /все \$\{ranked\.length\}/);
+  assert.match(department[0], /departmentDoctorRows\(mk, UI\.departmentFilter\)/);
+  assert.match(department[0], /doctorScoreLeaderboardHtml\(scoreRows, mk, scope\)/);
+  assert.match(specialization[0], /doctorScoreLeaderboardHtml\(rows, mk, scoreScope\)/);
+  assert.match(report[0], /doctorScoreLeaderboardHtml\(rows, mk,/);
+  assert.match(css, /\.doctor-score-leaderboard-grid\s*\{[^}]*repeat\(auto-fill,\s*minmax\(126px,\s*150px\)\)/s);
+  assert.match(css, /\.doctor-score-leader-ring\s*\{[^}]*width:\s*88px/s);
+});
+
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
