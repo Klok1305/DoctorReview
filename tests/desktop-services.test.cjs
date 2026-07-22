@@ -15,9 +15,9 @@ function makeTemp(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-function makeSnapshot(name) {
+function makeSnapshot(name, version = 4) {
   return {
-    version: 3,
+    version,
     settings: { showScores: true, marker: name, depts: {} },
     doctors: { d1: { name, aliases: [] } },
     months: { "2026-01": { vyrabotka: {}, kb: {}, naznach: {}, pervichka: {}, prostoy: {}, zapis: {}, manual6: {} } },
@@ -34,6 +34,9 @@ test("packaged application contains the public GitHub update feed", () => {
     resourcesPath: path.join(__dirname, "..", "resources"),
   });
   assert.equal(updateService.getStatus().configured, true);
+  const source = fs.readFileSync(path.join(__dirname, "..", "desktop", "services", "update-service.cjs"), "utf8");
+  assert.match(source, /autoUpdater\.logger\s*=/);
+  assert.doesNotMatch(source, /console\.(?:info|log|warn|error)/);
 });
 
 test("workspace settings can be restored without losing custom folders", t => {
@@ -132,6 +135,33 @@ test("portable SQLite backup restores data after later changes", async t => {
   assert.equal(database.loadSnapshot().doctors.d1.name, "Первая версия");
   assert.equal(fs.existsSync(restored.safetyBackup), true);
   assert.equal(DatabaseService.inspect(restored.safetyBackup).ok, true);
+});
+
+test("future snapshot versions are rejected before restore can replace current data", async t => {
+  const root = makeTemp("doctor-app-future-backup-");
+  const store = new ConfigStore({ userDataDir: path.join(root, "config"), documentsDir: path.join(root, "documents") });
+  store.setWorkspaceRoot(path.join(root, "workspace"));
+  const database = new DatabaseService(store.databasePath());
+  t.after(() => {
+    database.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const backups = new BackupService({ database, configStore: store });
+  database.saveSnapshot(makeSnapshot("Текущая версия"));
+  assert.throws(() => database.saveSnapshot(makeSnapshot("Будущая версия", 99)), /Неподдерживаемая версия данных/);
+
+  const future = path.join(root, "future.ovbackup");
+  await backups.createPortable(future);
+  const futureDatabase = new DatabaseService(future);
+  futureDatabase.db.prepare("UPDATE app_meta SET data_json = '99' WHERE key = 'version'").run();
+  futureDatabase.close();
+
+  const preview = backups.preview(future);
+  assert.equal(preview.ok, true);
+  assert.equal(preview.compatible, false);
+  assert.throws(() => new DatabaseService(future), /не поддерживается/);
+  await assert.rejects(() => backups.restore(future), /не поддерживается/);
+  assert.equal(database.loadSnapshot().doctors.d1.name, "Текущая версия");
 });
 
 test("SQLite sidecar files are rejected with an actionable restore message", () => {

@@ -91,13 +91,33 @@ function findRowIdx(rows, pred, from = 0, to = 80) {
  *   позиции в колонке A, колонки: Количество, Сумма услуги, Сумма товары,
  *   Сумма услуги/товары «прочее участие» (= выполненные направления врача).
  *
- * Итог: items [{form, cat, n, q, sOwn, sRef, goods}], где
- *   form  — форма участия ('' = основной исполнитель, 'Ассистент' и т.п.),
+ * Итог: items [{form, sourceForm, cat, n, q, sOwn, sRef, goods}], где
+ *   form  — форма участия ('' = врач выполнил сам, включая «По направлению»;
+ *           'Ассистент' и т.п. = прочее участие),
+ *   sourceForm — исходный блок 1С: «Сотрудник», «Направление» или
+ *                «По направлению»; нужен и для строк с нулевой суммой,
  *   sOwn  — собственная выручка позиции, sRef — выручка по направлениям,
  *   goods — товарная позиция (для классификации).
  * ============================================================ */
 
-const VY_LEVEL_NAMES = ["Сотрудник", "Филиал", "Форма участия", "Категория выработки", "Специализация"];
+function isVyrabotkaReferralForm(form) {
+  return cellStr(form).toLowerCase() === "направление";
+}
+
+function isVyrabotkaOwnReferralForm(form) {
+  return cellStr(form).toLowerCase() === "по направлению";
+}
+
+function normalizeVyrabotkaOwnForm(form) {
+  return isVyrabotkaOwnReferralForm(form) ? "" : cellStr(form);
+}
+
+function vyrabotkaSourceForm(form) {
+  const value = cellStr(form);
+  if (isVyrabotkaReferralForm(value)) return "Направление";
+  if (isVyrabotkaOwnReferralForm(value)) return "По направлению";
+  return value || "Сотрудник";
+}
 
 function parseVyrabotka(rows, info, ws) {
   // --- шапка: строка с «Номенклатура» и колонки по названиям ---
@@ -206,9 +226,10 @@ function buildItemsApril(data, cols, nomenCol, info, readSums) {
     const q = parseRuNumber(r[cols.qty]);
     if (nomen) {
       const sums = readSums(r);
-      const isRefForm = form === "Направление";
+      const isRefForm = isVyrabotkaReferralForm(form);
       items.push({
-        form: isRefForm ? "" : form,
+        form: isRefForm ? "" : normalizeVyrabotkaOwnForm(form),
+        sourceForm: vyrabotkaSourceForm(form),
         cat: a || "",
         n: nomen, q: q || 0,
         sOwn: isRefForm ? 0 : sums.sOwn,
@@ -218,7 +239,8 @@ function buildItemsApril(data, cols, nomenCol, info, readSums) {
       continue;
     }
     if (!a) { form = form || ""; continue; } // пустая строка формы участия = основной исполнитель
-    if (a === "Направление") { form = "Направление"; continue; }
+    if (isVyrabotkaReferralForm(a)) { form = "Направление"; continue; }
+    if (isVyrabotkaOwnReferralForm(a)) { form = "По направлению"; continue; }
     if (a === "Товар") { sectionGoods = true; continue; }
     if (a === "Услуги") { sectionGoods = false; continue; }
     if (doctorRaw && fioScore(a, doctorRaw) >= 0.85) { doctorRaw = a; continue; }
@@ -251,9 +273,10 @@ function buildItemsJune(data, cols, readSums, info, getLv) {
         // лист
         const sums = readSums(row.r);
         const form = stack[maxLv - 2] != null ? stack[maxLv - 2] : "";
-        const isRefForm = form === "Направление";
+        const isRefForm = isVyrabotkaReferralForm(form);
         items.push({
-          form: isRefForm ? "" : form,
+          form: isRefForm ? "" : normalizeVyrabotkaOwnForm(form),
+          sourceForm: vyrabotkaSourceForm(form),
           cat: stack[maxLv - 1] || "",
           n: row.a, q: q || 0,
           sOwn: isRefForm ? 0 : sums.sOwn,
@@ -277,9 +300,10 @@ function buildItemsJune(data, cols, readSums, info, getLv) {
     const q = parseRuNumber(r[cols.qty]);
     if (a && looksLeaf(a)) {
       const sums = readSums(r);
-      const isRefForm = form === "Направление";
+      const isRefForm = isVyrabotkaReferralForm(form);
       items.push({
-        form: isRefForm ? "" : form,
+        form: isRefForm ? "" : normalizeVyrabotkaOwnForm(form),
+        sourceForm: vyrabotkaSourceForm(form),
         cat, n: a, q: q || 0,
         sOwn: isRefForm ? 0 : sums.sOwn,
         sRef: (isRefForm ? sums.sOwn : 0) + sums.sRef,
@@ -288,7 +312,8 @@ function buildItemsJune(data, cols, readSums, info, getLv) {
       continue;
     }
     if (!a) { if (q != null) form = ""; continue; } // безымянная форма участия
-    if (a === "Направление") { form = "Направление"; continue; }
+    if (isVyrabotkaReferralForm(a)) { form = "Направление"; continue; }
+    if (isVyrabotkaOwnReferralForm(a)) { form = "По направлению"; continue; }
     if (doctorRaw && fioScore(a, doctorRaw) >= 0.85) { doctorRaw = a; continue; }
     if (looksFilial(a)) { form = ""; continue; }
     if (["Ассистент", "Направил", "Прочее участие"].includes(a)) { form = a; continue; }
@@ -299,10 +324,61 @@ function buildItemsJune(data, cols, readSums, info, getLv) {
 
 /* ============================================================
  * НАЗНАЧЕНИЯ (по врачу, за 1 или 3 месяца)
- * Иерархия: Направивший врач > Номенклатура > документы.
+ * Иерархия: Направивший врач > [необязательные группы] > Номенклатура > документы.
  * Колонки: Количество назначено | Количество выполнено | Продажи (Кол-во, Сумма)
  * ============================================================ */
-function parseNaznacheniya(rows, info) {
+function naznachTotalsMatch(items, totals) {
+  if (!totals) return false;
+  const sums = items.reduce((acc, item) => {
+    acc.assigned += item.a;
+    acc.done += item.d;
+    acc.soldQ += item.sq;
+    acc.soldSum += item.ss;
+    return acc;
+  }, { assigned: 0, done: 0, soldQ: 0, soldSum: 0 });
+  return Math.abs(sums.assigned - totals.assigned) < 0.5
+    && Math.abs(sums.done - totals.done) < 0.5
+    && Math.abs(sums.soldQ - totals.soldQ) < 0.5
+    && Math.abs(sums.soldSum - totals.soldSum) < 1;
+}
+
+function selectNaznachItems(candidates, detailItems, ws, totals) {
+  const variants = [];
+  const fromDetails = [...detailItems.values()];
+  if (fromDetails.length) variants.push(fromDetails);
+
+  const levels = ws ? getRowLevels(ws) : null;
+  let deepest = null;
+  if (levels) {
+    for (const shift of [0, 1]) {
+      const byLevel = new Map();
+      for (const row of candidates) {
+        const level = levels[row.i + shift] || 0;
+        if (!byLevel.has(level)) byLevel.set(level, []);
+        byLevel.get(level).push(row.item);
+      }
+      const orderedLevels = [...byLevel.keys()].sort((a, b) => b - a);
+      for (const level of orderedLevels) {
+        const items = byLevel.get(level);
+        if (!deepest && items.length) deepest = items;
+        variants.push(items);
+      }
+    }
+  }
+
+  const all = candidates.map(row => row.item);
+  variants.push(all);
+  return variants.find(items => naznachTotalsMatch(items, totals))
+    || fromDetails
+    || deepest
+    || all;
+}
+
+function isNaznachGoodsGroup(value) {
+  return /^товары(?:\s|\(|$)/i.test(cellStr(value));
+}
+
+function parseNaznacheniya(rows, info, ws) {
   const hIdx = findRowIdx(rows, r => rowText(r).includes("Количество назначено"));
   if (hIdx < 0) throw new Error("не найдена шапка «Количество назначено»");
   const hr = (rows[hIdx] || []).map(cellStr);
@@ -315,18 +391,58 @@ function parseNaznacheniya(rows, info) {
   const sub = (rows[hIdx + 1] || []).map(cellStr);
   const subQ = sub.findIndex((v, i) => i >= cP && v === "Количество");
   if (subQ >= 0) { cPQ = subQ; cPS = sub.findIndex((v, i) => i > subQ && v === "Сумма"); if (cPS < 0) cPS = subQ + 1; }
+  let cDetailNomen = -1;
+  for (let i = hIdx; i <= Math.min(hIdx + 3, rows.length - 1) && cDetailNomen < 0; i++) {
+    cDetailNomen = (rows[i] || []).map(cellStr).findIndex(v => v === "Номенклатура");
+  }
 
   const detailRe = /^(Прием|Оказание услуг|Заявка|Событие|Документ|Обращение|Чек|Счет|Лист)\s/;
   let doctorRaw = info.otborName || null;
   let docTotals = null;
-  const items = [];
+  const candidates = [];
+  // В новых вариантах отчёта промежуточные группы тоже содержат итоги.
+  // Строки документов хранят фактическую номенклатуру — агрегируем их в первую очередь.
+  const detailItems = new Map();
+  const levels = ws ? getRowLevels(ws) : null;
+  const hierarchy = {};
+  const rememberHierarchy = (rowIndex, label) => {
+    const level = levels ? (levels[rowIndex] || 0) : 0;
+    for (const key of Object.keys(hierarchy)) {
+      if (Number(key) >= level) delete hierarchy[key];
+    }
+    hierarchy[level] = label;
+  };
+  const inGoodsGroup = () => Object.values(hierarchy).some(isNaznachGoodsGroup);
+  const sourceGroupPath = nomenclature => Object.entries(hierarchy)
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
+    .map(([, label]) => cellStr(label))
+    .filter(label => label
+      && label !== nomenclature
+      && !(doctorRaw && fioScore(label, doctorRaw) >= 0.85));
   for (let i = hIdx + 1; i < rows.length; i++) {
     const r = rows[i] || [];
     const a = cellStr(r[0]);
     if (!a) continue;
     if (a === "Итого") break;
     if (a === "Номенклатура/Специализация" || a === "Документ" || a === "Направивший врач") continue;
+    const detailNomen = cDetailNomen >= 0 ? cellStr(r[cDetailNomen]) : "";
+    if (detailNomen) {
+      const goods = inGoodsGroup();
+      const groupPath = sourceGroupPath(detailNomen);
+      const detailKey = `${goods ? "goods" : "service"}\u0000${groupPath.join("\u0001")}\u0000${detailNomen}`;
+      let item = detailItems.get(detailKey);
+      if (!item) {
+        item = { n: detailNomen, a: 0, d: 0, sq: 0, ss: 0, goods, groupPath };
+        detailItems.set(detailKey, item);
+      }
+      item.a += parseRuNumber(r[cA]) || 0;
+      item.d += parseRuNumber(r[cD]) || 0;
+      item.sq += parseRuNumber(r[cPQ]) || 0;
+      item.ss += parseRuNumber(r[cPS]) || 0;
+      continue;
+    }
     if (detailRe.test(a)) continue;
+    rememberHierarchy(i, a);
     const assigned = parseRuNumber(r[cA]) || 0;
     const done = parseRuNumber(r[cD]) || 0;
     const soldQ = parseRuNumber(r[cPQ]) || 0;
@@ -338,18 +454,13 @@ function parseNaznacheniya(rows, info) {
       continue;
     }
     if (assigned === 0 && done === 0 && soldQ === 0 && soldSum === 0) continue;
-    items.push({ n: a, a: assigned, d: done, sq: soldQ, ss: soldSum });
+    const candidate = { i, item: { n: a, a: assigned, d: done, sq: soldQ, ss: soldSum, goods: inGoodsGroup(), groupPath: sourceGroupPath(a) } };
+    candidates.push(candidate);
   }
   if (!doctorRaw) throw new Error("не удалось определить направившего врача");
+  const items = selectNaznachItems(candidates, detailItems, ws, docTotals);
   if (!items.length) throw new Error("не найдено ни одной позиции назначений");
-  // сверка с итогами врача
-  let checked = false;
-  if (docTotals) {
-    const sa = items.reduce((x, it) => x + it.a, 0);
-    const sd = items.reduce((x, it) => x + it.d, 0);
-    const ss = items.reduce((x, it) => x + it.ss, 0);
-    checked = Math.abs(sa - docTotals.assigned) < 0.5 && Math.abs(sd - docTotals.done) < 0.5 && Math.abs(ss - docTotals.soldSum) < 1;
-  }
+  const checked = naznachTotalsMatch(items, docTotals);
   return { doctorRaw, items, totals: docTotals, checked };
 }
 
@@ -568,7 +679,7 @@ async function processFile(file) {
       log.status = "загружено";
       log.note = `позиций: ${res.items.length}` + (res.checked ? " ✓ сверено с «Итого»" : " ⚠ не сошлось с «Итого» — проверьте");
     } else if (type === "naznach") {
-      const res = parseNaznacheniya(rows, info);
+      const res = parseNaznacheniya(rows, info, ws);
       const docId = resolveDoctor(res.doctorRaw);
       log.doctor = doctorName(docId);
       const slice = String(nMonths);
@@ -768,7 +879,7 @@ async function handleFilesBatch(fileList) {
     const unique = [];
     for (const file of files) {
       const source = await ensureDesktopFileSource(file);
-      if ((source.imported || await DESKTOP_API.hasImportedSource(source.sha256))) duplicateSkipped++;
+      if (!file.__forceReimport && (source.imported || await DESKTOP_API.hasImportedSource(source.sha256))) duplicateSkipped++;
       else unique.push(file);
     }
     files = unique;

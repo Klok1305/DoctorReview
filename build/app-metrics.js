@@ -26,8 +26,7 @@ function deptParams(docId) {
   return profileForDoctor(docId); // профиль содержит плоские нормативы (minVisits, activeM, …)
 }
 
-/* ---------- классификация позиции по ПРОФИЛЮ отделения ----------
-   Возвращает { group, sub, expertItem, devCandidate, unmapped, showQty } */
+/* ---------- классификация позиции по ПРОФИЛЮ отделения ---------- */
 function classifyItem(profile, cat, n, goods) {
   const c = (cat || "").toLowerCase();
   const nl = (n || "").toLowerCase();
@@ -124,9 +123,7 @@ function classifyItem(profile, cat, n, goods) {
   }
   group = canonGroup(group);
   sub = canonSub(group, sub);
-  // 3. показывать ли штуки на графиках экспертности
-  const showQty = ov && ov.showQty != null ? ov.showQty : (ex.mode === "devices");
-  return { group, sub: sub || "", expertItem, devCandidate, unmapped, showQty };
+  return { group, sub: sub || "", expertItem, devCandidate, unmapped };
 }
 
 /* Тип направления/назначения (Вектор 3 — междисциплинарный) */
@@ -148,23 +145,52 @@ function vyrabotkaSummary(docId, monthKey) {
     profile,
     ownSum: 0, ownQty: 0, assistSum: 0, assistQty: 0, refSum: 0, refQty: 0,
     byGroup: {},        // собственная выручка: группа -> {s, q, subs}
-    expert: { items: {}, sum: 0 },  // экспертные позиции: имя -> {q, s, qShow}
+    expert: { items: {}, sum: 0 },  // экспертные позиции: имя -> {q, s}
     devCandidates: {},  // «похоже на экспертное, но не привязано»
     unmapped: {},       // нераспознанное: n -> {cat, q, s, goods}
     refByType: {},      // направления по типам -> {s, q, items: {n: {s, q}}}
   };
-  for (const it of v.items) {
+  const items = v.items || [];
+  // В старых сохранённых импортах sourceForm ещё отсутствует. Положительные
+  // позиции «Направления» уже отмечены через sRef; нулевые строки между ними
+  // относятся к тому же непрерывному блоку и не должны попадать в В2.
+  const legacyReferralIndexes = items
+    .map((item, index) => (!item.sourceForm && (item.sRef || 0) > 0 && !(item.sOwn || 0) ? index : -1))
+    .filter(index => index >= 0);
+  const legacyReferralStart = legacyReferralIndexes.length ? legacyReferralIndexes[0] : -1;
+  const legacyReferralEnd = legacyReferralIndexes.length ? legacyReferralIndexes[legacyReferralIndexes.length - 1] : -1;
+  for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+    const it = items[itemIndex];
     const cls = classifyItem(profile, it.cat, it.n, it.goods);
-    const own = it.form === "" ? (it.sOwn || 0) : 0;
-    const assist = it.form !== "" ? (it.sOwn || 0) : 0;
+    const sourceForm = cellStr(it.sourceForm).toLowerCase();
+    const rawOwn = it.sOwn || 0;
     const ref = it.sRef || 0;
-    const qOwn = own > 0 || (!assist && !ref) ? (it.q || 0) : 0;
+    const legacyZeroReferral = !sourceForm
+      && !rawOwn && !ref
+      && itemIndex >= legacyReferralStart && itemIndex <= legacyReferralEnd;
+    const fromReferralBlock = sourceForm === "направление" || legacyZeroReferral;
+    const fromOwnBlock = sourceForm === "сотрудник" || sourceForm === "по направлению";
+    // sourceForm появился после исправления разноса блоков. Для старых импортов
+    // сохраняем прежнее определение по form и ненулевой сумме направления.
+    const ownForm = fromOwnBlock || (!sourceForm && it.form === "");
+    const assistForm = sourceForm
+      ? !fromReferralBlock && !fromOwnBlock
+      : it.form !== "";
+    const own = ownForm && !fromReferralBlock ? rawOwn : 0;
+    const assist = assistForm ? rawOwn : 0;
+    const quantity = it.q || 0;
+    const qRef = fromReferralBlock
+      ? quantity
+      : (ref > 0 && own <= 0 ? quantity : 0);
+    const qOwn = fromReferralBlock
+      ? 0
+      : (own > 0 || (!assist && !ref) ? quantity : 0);
     out.ownSum += own;
     out.assistSum += assist;
     out.refSum += ref;
     out.ownQty += qOwn;
-    if (ref > 0) out.refQty += (own > 0 ? 0 : (it.q || 0));
-    if (assist > 0) out.assistQty += it.q || 0;
+    out.refQty += qRef;
+    if (assist > 0) out.assistQty += quantity;
     if (own > 0 || (qOwn > 0 && !ref && !assist)) {
       if (!out.byGroup[cls.group]) out.byGroup[cls.group] = { s: 0, q: 0, subs: {} };
       const g = out.byGroup[cls.group];
@@ -175,11 +201,10 @@ function vyrabotkaSummary(docId, monthKey) {
       g.subs[sub].s += own;
       g.subs[sub].q += qOwn;
       if (cls.expertItem) {
-        if (!out.expert.items[cls.expertItem]) out.expert.items[cls.expertItem] = { q: 0, s: 0, qShow: 0 };
+        if (!out.expert.items[cls.expertItem]) out.expert.items[cls.expertItem] = { q: 0, s: 0 };
         const e = out.expert.items[cls.expertItem];
         e.q += qOwn;
         e.s += own;
-        if (cls.showQty) e.qShow += qOwn;
         out.expert.sum += own;
       }
       if (cls.devCandidate) {
@@ -198,7 +223,6 @@ function vyrabotkaSummary(docId, monthKey) {
       if (!out.refByType[t]) out.refByType[t] = { s: 0, q: 0, items: {} };
       const bt = out.refByType[t];
       bt.s += ref;
-      const qRef = own > 0 ? 0 : (it.q || 0);
       bt.q += qRef;
       if (!bt.items[it.n]) bt.items[it.n] = { s: 0, q: 0 };
       bt.items[it.n].s += ref;
@@ -233,48 +257,83 @@ function naznachSummary(docId, monthKey, slice) {
   };
   const out = {
     slice: Number(slice), period: nz.period,
-    totals: { assigned: 0, done: 0, soldQ: 0, soldSum: 0 }, byType: {},
+    totals: { assigned: 0, done: 0, soldQ: 0, soldSum: 0, resultQ: 0 }, byType: {},
+    sourceGroups: [],
     focus: focusItems.length ? {
       title: focusConfig.title || "Фокусы междисциплинарного подхода",
       items: {}, park: coreFocusNames.length, used: 0, usedNames: [],
-      soldQ: 0, soldSum: 0, qtyShare: null, revenueShare: null,
+      assigned: 0, done: 0, soldQ: 0, resultQ: 0,
     } : null,
   };
-  for (const t of REF_TYPES) out.byType[t] = { assigned: 0, done: 0, soldQ: 0, soldSum: 0, items: {} };
+  const sourceGroupMap = new Map();
+  let hasExplicitSourceGroups = false;
+  for (const t of REF_TYPES) out.byType[t] = { assigned: 0, done: 0, soldQ: 0, soldSum: 0, resultQ: 0, items: {} };
   for (const it of nz.items) {
-    const cls = classifyItem(profile, "", it.n, false);
+    const goods = Boolean(it.goods);
+    const done = goods ? 0 : (it.d || 0);
+    const soldQ = it.sq || 0;
+    const resultQ = done + soldQ;
+    const cls = classifyItem(profile, "", it.n, goods);
     const t = refTypeOf(cls);
     const b = out.byType[t];
-    b.assigned += it.a; b.done += it.d; b.soldQ += it.sq; b.soldSum += it.ss;
-    if (!b.items[it.n]) b.items[it.n] = { assigned: 0, done: 0, soldQ: 0, soldSum: 0 };
+    b.assigned += it.a; b.done += done; b.soldQ += soldQ; b.soldSum += it.ss; b.resultQ += resultQ;
+    if (!b.items[it.n]) b.items[it.n] = { assigned: 0, done: 0, soldQ: 0, soldSum: 0, resultQ: 0, goods };
     const bi = b.items[it.n];
-    bi.assigned += it.a; bi.done += it.d; bi.soldQ += it.sq; bi.soldSum += it.ss;
-    out.totals.assigned += it.a; out.totals.done += it.d; out.totals.soldQ += it.sq; out.totals.soldSum += it.ss;
+    bi.assigned += it.a; bi.done += done; bi.soldQ += soldQ; bi.soldSum += it.ss; bi.resultQ += resultQ;
+    out.totals.assigned += it.a; out.totals.done += done; out.totals.soldQ += soldQ; out.totals.soldSum += it.ss; out.totals.resultQ += resultQ;
+    const groupPath = Array.isArray(it.groupPath) ? it.groupPath.map(cellStr).filter(Boolean) : [];
+    if (groupPath.length) hasExplicitSourceGroups = true;
+    const groupKey = groupPath.length ? JSON.stringify(groupPath) : "__ungrouped__";
+    if (!sourceGroupMap.has(groupKey)) {
+      sourceGroupMap.set(groupKey, {
+        path: groupPath.length ? groupPath : ["Без вида услуги / специализации в исходном отчёте"],
+        assigned: 0, done: 0, soldQ: 0, soldSum: 0, resultQ: 0,
+        items: {},
+      });
+    }
+    const sourceGroup = sourceGroupMap.get(groupKey);
+    sourceGroup.assigned += it.a;
+    sourceGroup.done += done;
+    sourceGroup.soldQ += soldQ;
+    sourceGroup.soldSum += it.ss;
+    sourceGroup.resultQ += resultQ;
+    if (!sourceGroup.items[it.n]) sourceGroup.items[it.n] = { assigned: 0, done: 0, soldQ: 0, soldSum: 0, resultQ: 0, goods };
+    const sourceItem = sourceGroup.items[it.n];
+    sourceItem.assigned += it.a;
+    sourceItem.done += done;
+    sourceItem.soldQ += soldQ;
+    sourceItem.soldSum += it.ss;
+    sourceItem.resultQ += resultQ;
     if (out.focus) {
       const focusName = matchFocus(it.n);
       if (focusName) {
-        if (!out.focus.items[focusName]) out.focus.items[focusName] = { assigned: 0, done: 0, soldQ: 0, soldSum: 0 };
+        if (!out.focus.items[focusName]) out.focus.items[focusName] = { assigned: 0, done: 0, soldQ: 0, resultQ: 0 };
         const fi = out.focus.items[focusName];
-        fi.assigned += it.a; fi.done += it.d; fi.soldQ += it.sq; fi.soldSum += it.ss;
-        out.focus.soldQ += it.sq;
-        out.focus.soldSum += it.ss;
+        fi.assigned += it.a; fi.done += done; fi.soldQ += soldQ; fi.resultQ += resultQ;
+        out.focus.assigned += it.a;
+        out.focus.done += done;
+        out.focus.soldQ += soldQ;
+        out.focus.resultQ += resultQ;
       }
     }
   }
   for (const t of REF_TYPES) {
     const b = out.byType[t];
-    b.valid = b.assigned >= 0 && b.done >= 0 && b.soldQ >= 0 && b.done + b.soldQ <= b.assigned;
+    b.valid = b.assigned >= 0 && b.done >= 0 && b.soldQ >= 0 && b.resultQ <= b.assigned;
     b.issue = b.valid ? null : "выполнено + продано больше назначенного";
-    b.conv = b.valid && b.assigned > 0 ? (b.done + b.soldQ) / b.assigned * 100 : null;
+    b.conv = b.valid && b.assigned > 0 ? b.resultQ / b.assigned * 100 : null;
   }
-  out.totals.valid = out.totals.assigned >= 0 && out.totals.done >= 0 && out.totals.soldQ >= 0 && out.totals.done + out.totals.soldQ <= out.totals.assigned;
+  out.sourceGroups = hasExplicitSourceGroups ? [...sourceGroupMap.values()] : [];
+  for (const group of out.sourceGroups) {
+    group.valid = group.assigned >= 0 && group.done >= 0 && group.soldQ >= 0 && group.resultQ <= group.assigned;
+    group.conv = group.valid && group.assigned > 0 ? group.resultQ / group.assigned * 100 : null;
+  }
+  out.totals.valid = out.totals.assigned >= 0 && out.totals.done >= 0 && out.totals.soldQ >= 0 && out.totals.resultQ <= out.totals.assigned;
   out.totals.issue = out.totals.valid ? null : "выполнено + продано больше назначенного";
-  out.totals.conv = out.totals.valid && out.totals.assigned > 0 ? (out.totals.done + out.totals.soldQ) / out.totals.assigned * 100 : null;
+  out.totals.conv = out.totals.valid && out.totals.assigned > 0 ? out.totals.resultQ / out.totals.assigned * 100 : null;
   if (out.focus) {
-    out.focus.usedNames = coreFocusNames.filter(name => out.focus.items[name] && out.focus.items[name].soldQ > 0);
+    out.focus.usedNames = coreFocusNames.filter(name => out.focus.items[name] && out.focus.items[name].resultQ > 0);
     out.focus.used = out.focus.usedNames.length;
-    out.focus.qtyShare = out.totals.soldQ > 0 ? out.focus.soldQ / out.totals.soldQ * 100 : null;
-    out.focus.revenueShare = out.totals.soldSum > 0 ? out.focus.soldSum / out.totals.soldSum * 100 : null;
   }
   return out;
 }
@@ -290,17 +349,46 @@ function kbAvailableWindows(docId, monthKey) {
   if (!m || !m.kb[docId]) return [];
   return Object.keys(m.kb[docId]).map(Number).sort((a, b) => a - b);
 }
+function clientBaseThresholds(profile) {
+  const p = profile || {};
+  return {
+    loyalVisits: Math.max(1, Number(p.loyalVisits) || Number(p.minVisits) || 3),
+    loyalM: Math.max(1, Number(p.loyalM) || 12),
+    activeVisits: Math.max(1, Number(p.activeVisits) || 3),
+    activeM: Math.max(1, Number(p.activeM) || 6),
+    newRiskVisits: Math.max(1, Number(p.newRiskVisits) || 2),
+    newRiskM: Math.max(1, Number(p.newRiskM) || 6),
+    sleepVisits: Math.max(1, Number(p.sleepVisits) || Number(p.loyalVisits) || Number(p.minVisits) || 3),
+    sleepM: Math.max(1, Number(p.sleepM) || 6),
+    lostVisits: Math.max(1, Number(p.lostVisits) || 2),
+    lostM: Math.max(1, Number(p.lostM) || Number(p.riskM) || 12),
+  };
+}
 function clientBaseRequiredWindow(profile) {
-  return Number(profile && profile.lostM) || 12;
+  const t = clientBaseThresholds(profile);
+  return Math.max(t.loyalM, t.activeM, t.newRiskM, t.sleepM, t.lostM);
 }
 function clientBaseWindowSufficient(win, profile) {
   return Number(win) >= clientBaseRequiredWindow(profile);
 }
+function clientBaseGroupAvailability(win, profile) {
+  const windowM = Number(win) || 0;
+  const t = clientBaseThresholds(profile);
+  return {
+    loyal: windowM >= t.loyalM,
+    active: windowM >= t.activeM,
+    newRisk: windowM >= t.newRiskM,
+    loyalSleep: windowM >= t.sleepM,
+    lost: windowM >= t.lostM,
+  };
+}
 function recommendedClientBaseWindow(availableWins, profile, requestedWin = null) {
   const wins = [...new Set((availableWins || []).map(Number).filter(Number.isFinite))].sort((a, b) => a - b);
   if (!wins.length) return null;
-  const requested = requestedWin == null ? 12 : Number(requestedWin);
-  return wins.includes(requested) ? requested : null;
+  const requested = Number(requestedWin);
+  if (wins.includes(requested)) return requested;
+  // Переключение периода ручное: по умолчанию показываем 12 месяцев, а не подменяем его большим окном.
+  return wins.includes(12) ? 12 : wins[0];
 }
 function selectedClientBaseSummary(result, profile, requestedWin = null) {
   if (!result || !result.akb) return null;
@@ -312,49 +400,55 @@ function kbSummary(docId, monthKey, win) {
   const kb = kbWindow(docId, monthKey, win);
   if (!kb) return null;
   const p = deptParams(docId);
-  const applicable = {
-    sleep: Number(p.riskM) <= Number(win),
-    lost: Number(p.lostM) <= Number(win),
-  };
-  const sourceWindowComplete = applicable.lost;
+  const t = clientBaseThresholds(p);
+  const groupAvailable = clientBaseGroupAvailability(win, p);
+  const sourceWindowComplete = clientBaseWindowSufficient(win, p);
   const requiredWindowM = clientBaseRequiredWindow(p);
-  const dActive = Math.round(p.activeM * 30.44);
-  const dSleep = Math.round(Math.max(p.riskM, p.activeM + 1) * 30.44);
-  const dLost = Math.round(Math.max(p.lostM, p.riskM + 1) * 30.44);
+  const dActive = Math.round(t.activeM * 30.44);
+  const dLoyal = Math.round(t.loyalM * 30.44);
+  const dNewRisk = Math.round(t.newRiskM * 30.44);
+  const dSleep = Math.round(t.sleepM * 30.44);
+  const dLost = Math.round(t.lostM * 30.44);
   const seg = {
-    active: 0, risk: 0, sleep: 0, lost: 0, unknown: 0,
-    loyalActive: 0, loyalRisk: 0, loyalSleep: 0, loyalLost: 0, loyalUnknown: 0,
-    newActive: 0, newRisk: 0, newSleep: 0, newLost: 0, newUnknown: 0,
+    loyal: 0, active: 0, newRisk: 0, loyalSleep: 0, lost: 0, unknown: 0,
   };
-  const statusSums = { active: 0, risk: 0, sleep: 0, lost: 0, unknown: 0 };
+  const groupSums = { loyal: 0, active: 0, newRisk: 0, loyalSleep: 0, lost: 0 };
   let totalSum = 0, totalVisits = 0, loyalCount = 0;
   const clientRows = kb.clients.map((c, index) => {
     const sum = Number(c.s) || 0;
     const visits = Number(c.v) || 0;
     totalSum += sum;
     totalVisits += visits;
-    const loyal = visits >= p.minVisits;
-    if (loyal) loyalCount++;
-    let status = "unknown";
-    if (c.r != null && !isNaN(c.r)) {
-      if (c.r <= dActive) status = "active";
-      else if (c.r <= dSleep) status = "risk";
-      else if (c.r <= dLost || loyal) status = "sleep";
-      else status = "lost";
+    const recency = c.r == null || isNaN(c.r) ? null : Number(c.r);
+    const loyal = groupAvailable.loyal && recency != null && visits >= t.loyalVisits && recency <= dLoyal;
+    const groups = [];
+    if (loyal) groups.push("loyal");
+    if (groupAvailable.active && recency != null && visits >= t.activeVisits && recency <= dActive) groups.push("active");
+    if (groupAvailable.newRisk && recency != null && visits >= 1 && visits <= t.newRiskVisits && recency > dNewRisk) groups.push("newRisk");
+    if (groupAvailable.loyalSleep && recency != null && visits >= t.sleepVisits && recency > dSleep) groups.push("loyalSleep");
+    if (groupAvailable.lost && recency != null && visits >= 1 && visits <= t.lostVisits && recency > dLost) groups.push("lost");
+    if (recency == null) seg.unknown++;
+    for (const group of groups) {
+      seg[group]++;
+      groupSums[group] += sum;
     }
-    seg[status]++;
-    seg[(loyal ? "loyal" : "new") + status[0].toUpperCase() + status.slice(1)]++;
-    statusSums[status] += sum;
+    if (loyal) loyalCount++;
     const normalizedName = normFio(c.name || "");
     const normalizedId = String(c.patientId || "").trim().toLowerCase();
     return {
       key: normalizedId ? "id:" + normalizedId : (normalizedName ? "name:" + normalizedName : `doctor:${docId}:row:${index}`),
       patientId: c.patientId || null,
       name: c.name || `Пациент ${index + 1}`,
-      s: sum, v: visits, r: c.r == null || isNaN(c.r) ? null : Number(c.r),
-      loyal, status,
+      s: sum, v: visits, r: recency,
+      loyal, groups,
     };
   });
+  for (const group of ["active", "newRisk", "loyalSleep", "lost"]) {
+    if (!groupAvailable[group]) seg[group] = null;
+  }
+  // Старые имена оставлены как алиасы для совместимости остальных экранов.
+  seg.risk = seg.newRisk;
+  seg.sleep = seg.loyalSleep;
   const total = kb.clients.length;
   const sorted = [...kb.clients].sort((a, b) => b.s - a.s);
   const coreShare = (p.corePct || 80) / 100;
@@ -364,14 +458,19 @@ function kbSummary(docId, monthKey, win) {
     acc += c.s; core++;
   }
   const courseCnt = kb.clients.filter(c => c.v >= p.courseX).length;
+  const availableReactivationRows = clientRows.filter(c => c.groups.includes("newRisk") || c.groups.includes("loyalSleep"));
+  const availableRiskRows = clientRows.filter(c => c.groups.includes("newRisk") || c.groups.includes("loyalSleep") || c.groups.includes("lost"));
   return {
-    window: Number(win), period: kb.period, params: p, applicable, sourceWindowComplete, requiredWindowM,
-    thresholds: { activeDays: dActive, riskDays: dSleep, lostDays: dLost, riskM: p.riskM, lostM: p.lostM },
+    window: Number(win), period: kb.period, params: p, sourceWindowComplete, requiredWindowM, groupAvailable,
+    thresholds: { ...t, loyalDays: dLoyal, activeDays: dActive, newRiskDays: dNewRisk, sleepDays: dSleep, lostDays: dLost },
     total, known: total - seg.unknown, seg, totalSum, totalVisits,
-    activeSum: statusSums.active, riskSum: statusSums.risk, sleepSum: statusSums.sleep,
-    lostSum: statusSums.lost, revenueAtRisk: statusSums.risk + statusSums.sleep + statusSums.lost,
-    reactivationCandidates: seg.risk + (applicable.sleep ? seg.sleep : 0),
-    reactivationSum: statusSums.risk + (applicable.sleep ? statusSums.sleep : 0),
+    activeSum: groupAvailable.active ? groupSums.active : null,
+    riskSum: groupAvailable.newRisk ? groupSums.newRisk : null,
+    sleepSum: groupAvailable.loyalSleep ? groupSums.loyalSleep : null,
+    lostSum: groupAvailable.lost ? groupSums.lost : null,
+    revenueAtRisk: availableRiskRows.reduce((sum, c) => sum + c.s, 0),
+    reactivationCandidates: availableReactivationRows.length,
+    reactivationSum: availableReactivationRows.reduce((sum, c) => sum + c.s, 0),
     clientRows,
     visits: totalVisits, patients: total,
     freq: total ? totalVisits / total : null,
@@ -380,11 +479,15 @@ function kbSummary(docId, monthKey, win) {
     one2: total - loyalCount,
     loyalCount,
     loyalPct: total ? loyalCount / total * 100 : null,
-    activeBase: seg.active,
-    activeBasePct: total ? seg.active / total * 100 : null,
-    lostPct: applicable.lost && total ? seg.lost / total * 100 : null,
-    riskShare: total ? seg.risk / total * 100 : null,
-    sleepRiskShare: applicable.sleep && total ? (seg.risk + seg.sleep) / total * 100 : null,
+    activeBase: groupAvailable.active ? seg.active : null,
+    activeBasePct: groupAvailable.active && total ? seg.active / total * 100 : null,
+    newRiskPct: groupAvailable.newRisk && total ? seg.newRisk / total * 100 : null,
+    loyalSleepPct: groupAvailable.loyalSleep && total ? seg.loyalSleep / total * 100 : null,
+    lostPct: groupAvailable.lost && total ? seg.lost / total * 100 : null,
+    riskShare: groupAvailable.newRisk && total ? seg.newRisk / total * 100 : null,
+    sleepRiskShare: groupAvailable.newRisk && groupAvailable.loyalSleep && total
+      ? clientRows.filter(c => c.groups.includes("newRisk") || c.groups.includes("loyalSleep")).length / total * 100
+      : null,
     core,
     courseCnt,
     courseIdx: total ? courseCnt / total * 100 : null,
@@ -446,7 +549,9 @@ function computeMetricsRaw(docId, monthKey) {
 
   /* В1 Экономика */
   const sales = vy ? vy.ownSum : null;
-  const refRevenue = vy && vy.refSum > 0 ? vy.refSum : (naz1 ? naz1.totals.soldSum : (vy ? vy.refSum : null));
+  // Выручка от выполненных направлений берётся только из «Выработки».
+  // «Назначения» остаются источником количества и конверсии, но не денег KPI.
+  const refRevenue = vy ? vy.refSum : null;
   const revenueWithRef = sales != null ? sales + (refRevenue || 0) : null;
   const avgClient = (sales != null && traffic.patients) ? sales / traffic.patients : null;
   const avgVisit = (sales != null && traffic.visits) ? sales / traffic.visits : null;
@@ -489,7 +594,7 @@ function computeMetricsRaw(docId, monthKey) {
     byGroup: vy.byGroup,
     mode: ex.mode,
     title: ex.title || "Экспертность",
-    expert: vy.expert.items,          // имя -> {q, s, qShow}
+    expert: vy.expert.items,          // имя -> {q, s}
     devicesUsed: usedNames.length,
     park: coreNames.length,
     expertShare: vy.ownSum > 0 ? vy.expertShareSum / vy.ownSum * 100 : null,
@@ -498,7 +603,7 @@ function computeMetricsRaw(docId, monthKey) {
   } : null;
 
   /* В3 АКБ */
-  const akb = { wins: {}, availableWins: kbWins.filter(w => w >= 6) };
+  const akb = { wins: {}, availableWins: kbWins.filter(w => [12, 24, 36].includes(w)) };
   for (const w of kbWins) akb.wins[w] = kbSummary(docId, monthKey, w);
   akb.primaryWin = recommendedClientBaseWindow(akb.availableWins, profile);
   akb.primary = akb.primaryWin == null ? null : (akb.wins[akb.primaryWin] || null);
@@ -578,9 +683,6 @@ function computeMetricsRaw(docId, monthKey) {
   };
   const expertSharePct = product ? product.expertShare : null;
   const nazBest = naz1 || naz3;
-  const configuredFocusItems = (profile.crossFocus && profile.crossFocus.items) || [];
-  const focusShareApplicable = configuredFocusItems.length > 0;
-  const focusBreadthApplicable = configuredFocusItems.some(item => item.core !== false);
   const component = (value, target, lower = false, applicable = true) => ({
     expected: applicable && hasTarget(target),
     score: applicable && hasTarget(target) ? achieve(value, target, lower) : null,
@@ -594,8 +696,6 @@ function computeMetricsRaw(docId, monthKey) {
   const v3ComponentsForNaz = nz => [
     component(cross.crossShare, B.crossShare),
     component(nz && nz.totals.valid !== false ? nz.totals.conv : null, B.nazConv),
-    component(nz && nz.totals.valid !== false && nz.focus ? nz.focus.revenueShare : null, B.nazFocusShare, false, focusShareApplicable),
-    intrinsic(nz && nz.totals.valid !== false && nz.focus && nz.focus.park ? nz.focus.used / nz.focus.park : null, focusBreadthApplicable),
   ];
   const v3ScoreForNaz = nz => componentsScore(v3ComponentsForNaz(nz));
   const v3ByNaz = {
@@ -669,7 +769,7 @@ function computeMetricsRaw(docId, monthKey) {
   if (!vy) missing.push("выработка");
   if (!kb1) missing.push("давность за месяц");
   if (!kb12) missing.push("давность ровно 12 мес для индекса возвращаемости");
-  if (!akb.primary) missing.push("давность ровно 12 мес для клиентской базы");
+  if (!akb.primary) missing.push("давность за 12, 24 или 36 мес для клиентской базы");
   if (!kb36) missing.push("давность 3 года");
   if (!naz1 && !naz3) missing.push("назначения");
   if (!prostoy) missing.push("загрузка расписания");
@@ -735,15 +835,6 @@ function collectDeptItems(deptName) {
 function collectDeviceCandidates(deptName) {
   return collectDeptItems(deptName).filter(e => e.cls.devCandidate);
 }
-/* Отделения, по которым есть выработки (для настроек) */
-function deptsWithData() {
-  const set = new Set();
-  for (const m of Object.values(DB.months)) {
-    for (const docId of Object.keys(m.vyrabotka)) set.add(resolvedDeptName(docId));
-  }
-  return [...set];
-}
-
 function deptListForMonth(monthKey, ids) {
   const set = new Set();
   for (const id of ids) set.add(doctorDept(id));
@@ -760,8 +851,7 @@ function dynMetricDefs(profile) {
   const B = (profile && profile.scoring && profile.scoring.benchmarks) || defaultBenchmarks();
   const pvM = (profile && profile.pervichkaM) || 3;
   const exTitle = (profile && profile.expertise && profile.expertise.title) || "экспертных услуг";
-  const activeM = Number(profile && profile.activeM) || 6;
-  const lostAfterM = Number(profile && profile.lostM) || 12;
+  const baseThresholds = clientBaseThresholds(profile);
   const base = r => selectedClientBaseSummary(r, profile);
   return [
     { key: "sales", name: "Выручка", fmt: fmtMoney, get: r => r.econ.sales, target: B.revenue },
@@ -776,11 +866,12 @@ function dynMetricDefs(profile) {
     { key: "ownRec", name: "Собственная запись в 1С", fmt: fmtPct, get: r => r.loyalty.ownRec ? r.loyalty.ownRec.pct : null, target: B.ownRecords },
     { key: "course", name: "Курсовое лечение", fmt: fmtPct, get: r => r.loyalty.courseIdx, target: B.courseIdx },
     { key: "hw", name: `Доля: ${exTitle}`, fmt: fmtPct, get: r => r.product ? r.product.expertShare : null, target: B.hwShare },
-    { key: "cross", name: "Доля выручки от перенаправлений", fmt: fmtPct, get: r => r.cross.crossShare, target: B.crossShare },
+    { key: "cross", name: "Доля выручки от выполненных направлений", fmt: fmtPct, get: r => r.cross.crossShare, target: B.crossShare },
     { key: "nazConv", name: "Конверсия назначений (1 мес)", fmt: fmtPct, get: r => r.cross.naz[1] ? r.cross.naz[1].totals.conv : null, target: B.nazConv },
-    { key: "nazFocus", name: "Доля выручки фокусов назначений (1 мес)", fmt: fmtPct, get: r => r.cross.naz[1] && r.cross.naz[1].focus ? r.cross.naz[1].focus.revenueShare : null, target: B.nazFocusShare },
-    { key: "akb", name: `Активная база (≤${fmtNum(activeM, 1)} мес.)`, fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb ? kb.seg.active : null; } },
-    { key: "lost", name: `Потерянные 1–2 визита (>${fmtNum(lostAfterM, 1)} мес.)`, fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb && kb.applicable && kb.applicable.lost ? kb.seg.lost : null; }, lower: true },
+    { key: "nazFocusAssigned", name: "Назначено по фокусам (1 мес)", fmt: v => fmtNum(v) + " шт.", get: r => r.cross.naz[1] && r.cross.naz[1].focus ? r.cross.naz[1].focus.assigned : null },
+    { key: "nazFocusResult", name: "Выполнено + продано по фокусам (1 мес)", fmt: v => fmtNum(v) + " шт.", get: r => r.cross.naz[1] && r.cross.naz[1].focus ? r.cross.naz[1].focus.resultQ : null },
+    { key: "akb", name: `Активные (≥${fmtNum(baseThresholds.activeVisits)} виз. за ${fmtNum(baseThresholds.activeM)} мес.)`, fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb && kb.groupAvailable.active ? kb.seg.active : null; } },
+    { key: "lost", name: `Потерянные (1–2 виз., отсутствуют >${fmtNum(baseThresholds.lostM)} мес.)`, fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb && kb.groupAvailable.lost ? kb.seg.lost : null; }, lower: true },
     { key: "score", name: "Общий балл", fmt: v => fmtNum(v, 0), get: r => DB.settings.showScores && r.scores ? r.scores.total : null },
   ];
 }
@@ -846,48 +937,50 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
   const avg = get => { const xs = rs.map(get).filter(v => v != null && !isNaN(v)); return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null; };
   const uniqueClientBase = (baseRows, expectedCount = baseRows.length) => {
     const clients = new Map();
-    const statusRank = { active: 0, risk: 1, sleep: 2, lost: 3, unknown: 4 };
     for (const kb of baseRows) {
       for (const c of kb.clientRows) {
         const old = clients.get(c.key);
-        if (!old) clients.set(c.key, { ...c });
+        if (!old) clients.set(c.key, { ...c, groups: [...(c.groups || [])] });
         else {
           old.v += c.v || 0;
           old.s += c.s || 0;
-          if (c.r != null && (old.r == null || c.r < old.r || (c.r === old.r && (statusRank[c.status] ?? 4) < (statusRank[old.status] ?? 4)))) {
-            old.r = c.r;
-            old.status = c.status;
-          }
+          if (c.r != null && (old.r == null || c.r < old.r)) old.r = c.r;
           old.loyal = old.loyal || c.loyal;
+          old.groups = [...new Set([...(old.groups || []), ...(c.groups || [])])];
         }
       }
     }
     if (!baseRows.length) return null;
-    const seg = { active: 0, risk: 0, sleep: 0, lost: 0, unknown: 0 };
-    const statusSums = { active: 0, risk: 0, sleep: 0, lost: 0, unknown: 0 };
+    const groupNames = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+    const allDoctorsCovered = baseRows.length === expectedCount;
+    const groupAvailable = Object.fromEntries(groupNames.map(group => [group, allDoctorsCovered && baseRows.every(kb => kb.groupAvailable && kb.groupAvailable[group])]));
+    const seg = { loyal: 0, active: 0, newRisk: 0, loyalSleep: 0, lost: 0, unknown: 0 };
     let visits = 0, totalSum = 0, loyalCount = 0;
     for (const c of clients.values()) {
-      const status = c.status || "unknown";
-      seg[status]++;
-      statusSums[status] += c.s || 0;
+      for (const group of (c.groups || [])) if (Object.prototype.hasOwnProperty.call(seg, group)) seg[group]++;
+      if (c.r == null) seg.unknown++;
       visits += c.v || 0;
       totalSum += c.s || 0;
       if (c.loyal) loyalCount++;
     }
+    for (const group of groupNames) if (!groupAvailable[group]) seg[group] = null;
+    seg.risk = seg.newRisk;
+    seg.sleep = seg.loyalSleep;
     const total = clients.size;
-    const applicable = {
-      sleep: baseRows.length === expectedCount && baseRows.every(kb => !kb.applicable || kb.applicable.sleep),
-      lost: baseRows.length === expectedCount && baseRows.every(kb => !kb.applicable || kb.applicable.lost),
-    };
-    const sourceWindowComplete = applicable.lost;
+    const sourceWindowComplete = allDoctorsCovered && baseRows.every(kb => kb.sourceWindowComplete);
     const windows = [...new Set(baseRows.map(kb => Number(kb.window)).filter(Number.isFinite))].sort((a, b) => a - b);
+    const clientRows = [...clients.values()];
+    const atRiskRows = clientRows.filter(c => (c.groups || []).some(group => ["newRisk", "loyalSleep", "lost"].includes(group)));
     return {
-      total, seg, clientRows: [...clients.values()], visits, totalSum, loyalCount, applicable,
-      activeBasePct: total ? seg.active / total * 100 : null,
-      riskShare: total ? seg.risk / total * 100 : null,
-      lostPct: sourceWindowComplete && total ? seg.lost / total * 100 : null,
-      revenueAtRisk: statusSums.risk + statusSums.sleep + statusSums.lost,
-      sourceWindowComplete,
+      total, seg, clientRows, visits, totalSum, loyalCount,
+      loyalPct: groupAvailable.loyal && total ? loyalCount / total * 100 : null,
+      activeBasePct: groupAvailable.active && total ? seg.active / total * 100 : null,
+      newRiskPct: groupAvailable.newRisk && total ? seg.newRisk / total * 100 : null,
+      loyalSleepPct: groupAvailable.loyalSleep && total ? seg.loyalSleep / total * 100 : null,
+      riskShare: groupAvailable.newRisk && total ? seg.newRisk / total * 100 : null,
+      lostPct: groupAvailable.lost && total ? seg.lost / total * 100 : null,
+      revenueAtRisk: atRiskRows.reduce((sum, c) => sum + (c.s || 0), 0),
+      sourceWindowComplete, groupAvailable,
       requiredWindowM: baseRows.reduce((max, kb) => Math.max(max, Number(kb.requiredWindowM) || 0), 0),
       windows,
       coveredDoctors: baseRows.length,
@@ -919,7 +1012,7 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
   const schedFact = sum(r => r.loyalty.sched ? r.loyalty.sched.factMin : null);
   const schedAvg = avg(r => r.loyalty.sched ? r.loyalty.sched.pct : null);
   const nazA = sum(r => r.cross.naz[1] && r.cross.naz[1].totals.valid !== false ? r.cross.naz[1].totals.assigned : null);
-  const nazD = sum(r => r.cross.naz[1] && r.cross.naz[1].totals.valid !== false ? r.cross.naz[1].totals.done + r.cross.naz[1].totals.soldQ : null);
+  const nazD = sum(r => r.cross.naz[1] && r.cross.naz[1].totals.valid !== false ? r.cross.naz[1].totals.resultQ : null);
   const ownRecords = sum(r => r.loyalty.ownRec ? r.loyalty.ownRec.count : null);
   const courseCnt = sum(r => r.loyalty.courseCnt);
   const courseBase = sum(r => r.loyalty.courseBase);

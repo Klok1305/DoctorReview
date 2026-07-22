@@ -52,7 +52,8 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /image\.style\.aspectRatio/);
   assert.match(actual, /async function saveSessionState/);
   assert.match(actual, /Все изменения текущей сессии сохранены/);
-  assert.match(actual, /Сохранить копию базы/);
+  assert.match(actual, /Экспорт данных в JSON/);
+  assert.match(actual, /Полная копия для переноса/);
   assert.match(actual, /pdf-chart-image/);
   assert.match(actual, /pdf-continuation-title/);
   assert.match(actual, /relativePath:\s*target\.relativePath/);
@@ -124,14 +125,20 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /function scoreChartPicker/);
   assert.match(actual, /function setScoreChartMode/);
   assert.match(actual, /Показать график:/);
-  assert.match(actual, /В1 Экономика/);
-  assert.match(actual, /В6 Репутация/);
+  assert.match(actual, /В1 Экономическая результативность/);
+  assert.match(actual, /В6 Репутация и NPS/);
   assert.match(actual, /scoreChartSources/);
   assert.match(actual, /mode !== "all" \|\| ctx\.dataset\.label === "Общий балл"/);
   assert.match(actual, /\.score-chart-choice\.active[^}]*var\(--accent\)/);
   assert.match(actual, /function doctorGoalsSummaryHtml/);
   assert.match(actual, /🎯 Цели врача/);
   assert.match(actual, /doctor-goals-grid/);
+  assert.match(actual, /doctor-goals-vector-column/);
+  assert.match(actual, /VECTOR_META\[vector\]\.name/);
+  assert.match(actual, /grid-template-columns:\s*repeat\(6,\s*minmax\(0,\s*1fr\)\)/);
+  assert.doesNotMatch(actual, /VECTOR_META\[vk\]\.name\.split\(" "\)\[0\]/);
+  assert.match(actual, /hasTarget \? `\$\{lower \? "≤" : "≥"\}/);
+  assert.doesNotMatch(actual, /\}\)\)\.filter\(column => column\.goals\.length\)/);
   assert.match(actual, /индивидуальные цели/);
   assert.match(actual, /doctorGoalsSummaryHtml\(docId, reportProfile, false, r\)/);
   assert.match(actual, /const DOCTOR_GOAL_VECTORS/);
@@ -141,9 +148,22 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /doctor-goal-item \$\{state\}/);
   assert.match(actual, /saveCrossFocusSettings/);
   assert.match(actual, /Фокусы междисциплинарного подхода \(Вектор 3\)/);
-  assert.match(actual, /chNazFocusQty/);
-  assert.match(actual, /chNazFocusMoney/);
-  assert.match(actual, /nazFocusShare/);
+  assert.match(actual, /chNazFocusAssigned/);
+  assert.match(actual, /chNazFocusResult/);
+  assert.match(actual, /nz\.focus\.items\[name\]\.resultQ/);
+  assert.match(actual, /Услуги: выполнено \+ продано; товары: продано/);
+  assert.match(actual, /Наименование услуги/);
+  assert.match(actual, /Назначено, шт/);
+  assert.match(actual, /Выполнено \+ продано, шт/);
+  assert.doesNotMatch(actual, /chNazFocusMoney|Доля выручки фокусов|nazFocusShare/);
+  assert.match(actual, /id="completedReferralShare"/);
+  assert.match(actual, /Доля выручки от выполненных направлений/);
+  assert.match(actual, /источник: отчёт «Выработка»/);
+  const focusBlockPosition = actual.indexOf("focusTitle = esc");
+  const completedReferralSharePosition = actual.indexOf('id="completedReferralShare"');
+  const completedReferralDetailsPosition = actual.indexOf('completedReferralDetails');
+  assert.ok(focusBlockPosition < completedReferralSharePosition, "revenue share card must be below the focus block");
+  assert.ok(completedReferralSharePosition < completedReferralDetailsPosition, "revenue share card must precede completed-referral details");
   assert.match(actual, /const lower = lowerGoals\.has\(goal\.key\)/);
   assert.match(actual, /ПАЦИЕНТЫ ДЛЯ РАБОТЫ/);
   assert.match(actual, /collapsible-list-summary/);
@@ -155,13 +175,17 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /aria-pressed/);
   assert.match(actual, /Что сделать сейчас/);
   assert.match(actual, /openClientSegment/);
-  assert.match(actual, /Период анализа выбирается вручную/);
+  assert.match(actual, /Окна 12 \/ 24 \/ 36 месяцев переключаются вручную/);
+  for (const field of ["np_loyalVisits", "np_loyalM", "np_activeVisits", "np_activeM", "np_newRiskVisits", "np_newRiskM", "np_sleepVisits", "np_sleepM", "np_lostVisits", "np_lostM"]) assert.match(actual, new RegExp(field));
+  assert.match(actual, /У каждой группы есть два собственных параметра/);
   assert.match(actual, /clientBaseRequiredWindow/);
   assert.match(actual, /kbWinByDoctor/);
-  assert.match(actual, /E — Спящий после/);
-  assert.match(actual, /F — Потерян после/);
+  assert.match(actual, /E · Лояльные, спящие/);
+  assert.match(actual, /F · Потерянные/);
   assert.match(actual, /function reportOverallIndex/);
   assert.match(actual, /Общий индекс/);
+  assert.match(actual, /onPrepareClose/);
+  assert.match(actual, /confirmCloseSaved/);
   assert.match(actual, /appointmentDetails/);
   assert.doesNotMatch(actual, /primaryReturnDetails/);
   assert.doesNotMatch(actual, /ДЕТАЛИ ВОЗВРАЩАЕМОСТИ ПЕРВИЧКИ/);
@@ -271,6 +295,52 @@ test("doctor goal cards color facts for direct and lower-is-better targets", () 
   assert.equal(doctorGoalState(34, 30, true), "goal-warn");
   assert.equal(doctorGoalState(40, 30, true), "goal-bad");
   assert.equal(doctorGoalState(null, 100), "goal-na");
+  assert.equal(doctorGoalState(80, ""), "goal-na");
+});
+
+test("doctor coefficients stay grouped under all six vectors with full block names", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
+  const summary = ui.match(/function doctorGoalsSummaryHtml\(docId, profile, standalone = true, result = null\) \{[\s\S]*?\n\}/);
+
+  assert.ok(summary, "doctorGoalsSummaryHtml source must be present");
+  for (const label of [
+    "В1 Экономическая результативность",
+    "В2 Экспертность и продукт",
+    "В3 Междисциплинарный подход",
+    "В4 Работа с клиентской базой",
+    "В5 Лояльность и удержание",
+    "В6 Репутация и NPS",
+  ]) assert.match(ui, new RegExp(label));
+  for (const vector of ["v1", "v2", "v3", "v4", "v5", "v6"]) {
+    assert.match(summary[0], new RegExp(`"${vector}"`));
+  }
+  assert.doesNotMatch(summary[0], /filter\(column => column\.goals\.length\)/);
+  assert.match(summary[0], /Цель: <b>\$\{hasTarget \?/);
+  assert.match(css, /\.vec-scores\s*\{[^}]*grid-template-columns:\s*repeat\(6,\s*minmax\(0,\s*1fr\)\)/s);
+  assert.match(css, /\.doctor-goals-grid\s*\{[^}]*grid-template-columns:\s*repeat\(6,\s*minmax\(0,\s*1fr\)\)/s);
+});
+
+test("doctor and report pages use the same doctor metrics header component", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const header = ui.match(/function doctorMetricsHeaderHtml\(docId, mk, r,[\s\S]*?\n\}\n\nfunction renderDoctor/);
+  const doctor = ui.match(/function renderDoctor\(\) \{[\s\S]*?\n\}\n\nfunction saveManual6/);
+  const report = ui.match(/function buildDoctorReport\(docId, mk\) \{[\s\S]*?\n\}\n\n\/\* ================= СТРАНИЦА: НАСТРОЙКИ/);
+
+  assert.ok(header, "shared doctor metrics header must be present");
+  assert.ok(doctor, "doctor page renderer must be present");
+  assert.ok(report, "doctor report renderer must be present");
+  for (const label of [
+    "Пациентов за месяц",
+    "Загрузка расписания",
+    "Коэффициент визитов на пациента за месяц",
+    "Коэффициент визитов на пациента за 12 мес.",
+    "Объём активной клиентской базы",
+  ]) assert.match(header[0], new RegExp(label));
+  assert.match(header[0], /\["v1", "v2", "v3", "v4", "v5", "v6"\]/);
+  assert.match(doctor[0], /doctorMetricsHeaderHtml\(UI\.docId, mk, r,/);
+  assert.match(report[0], /doctorMetricsHeaderHtml\(docId, mk, r,/);
+  assert.match(report[0], /blockId: "reportDoctorMetrics", slide: true/);
 });
 
 test("first-run folder prompt is attached to a visible application window", () => {
@@ -302,11 +372,11 @@ test("empty states and imports expose safe, accessible controls", () => {
   assert.match(css, /\.btn:disabled/);
 });
 
-test("unused product and focus positions are visually emphasized", () => {
+test("unused product positions remain visually emphasized", () => {
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
 
-  assert.equal((ui.match(/class="unused-items"/g) || []).length, 2);
+  assert.equal((ui.match(/class="unused-items"/g) || []).length, 1);
   assert.match(css, /table\.data td\.unused-items\s*\{[^}]*background:\s*var\(--bad-soft\);[^}]*color:\s*var\(--bad\);[^}]*font-weight:\s*700;/s);
 });
 
@@ -327,22 +397,45 @@ test("appointment details hide report revenue and render source comparison as pl
   assert.doesNotMatch(sourceCompareCss[1], /background|border|padding/);
 });
 
-test("client-base vector keeps all three exact periods clickable and focuses on next actions", () => {
+test("appointment details preserve grouped 1C service hierarchy with a flat-report fallback", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const parsers = fs.readFileSync(path.join(build, "app-parsers.js"), "utf8");
+  const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
+
+  assert.match(ui, /nz\.sourceGroups && nz\.sourceGroups\.length/);
+  assert.match(ui, /Вид услуги \/ специализация \/ номенклатура/);
+  assert.match(ui, /: "Тип направления"/);
+  assert.match(ui, /const sourceTree = new Map\(\)/);
+  assert.match(ui, /renderSourceNodes\(node\.children, depth \+ 1\)/);
+  assert.match(ui, /class="source-group-path"/);
+  assert.match(ui, /class="small muted source-nomenclature"/);
+  assert.match(css, /\.source-group-path\s*\{/);
+  assert.match(css, /table\.data \.source-group-depth-0 td\s*\{/);
+  assert.match(css, /table\.data td\.source-nomenclature\s*\{/);
+  assert.match(ui, /desktopDescriptorsToFiles\(descriptors, true\)/);
+  assert.match(parsers, /!file\.__forceReimport/);
+});
+
+test("client-base vector keeps 12/24/36 manual and hides unavailable overlapping groups", () => {
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
   const vector = ui.match(/\/\* ---- В4 Клиентская база ---- \*\/[\s\S]*?\/\* ---- В5 Лояльность ---- \*\//);
 
   assert.ok(vector);
   assert.doesNotMatch(vector[0], /disabled:/);
-  assert.equal((vector[0].match(/class="kb-summary-card(?:\s|\")/g) || []).length, 4);
-  for (const period of ["1 год", "2 года", "3 года"]) assert.match(vector[0], new RegExp(period));
-  for (const label of ["Вся база", "Активные", "Вернуть сейчас", "Потерянные", "Что сделать сейчас"]) {
+  assert.match(vector[0], /const groupOrder = \["loyal", "active", "newRisk", "loyalSleep", "lost"\]/);
+  assert.match(vector[0], /filter\(group => kb\.groupAvailable\[group\]\)/);
+  for (const label of ["Общая база", "Что сделать сейчас", "Группы могут пересекаться", "не показываются"]) {
     assert.match(vector[0], new RegExp(label));
   }
-  assert.match(vector[0], /openClientSegment\('risk'\)/);
-  assert.match(vector[0], /openClientSegment\('sleep'\)/);
+  for (const label of ["Лояльные", "Активные", "Новые, риск", "Лояльные, спящие", "Потерянные"]) assert.match(ui, new RegExp(label));
+  assert.match(vector[0], /openClientSegment\('newRisk'\)/);
+  assert.match(vector[0], /openClientSegment\('loyalSleep'\)/);
+  assert.match(ui, /chart\("chSegments", \{\s*type: "bar"/);
+  assert.doesNotMatch(vector[0], /Потерянная \(минимум\)|"≥" \+ fmtNum\(kb\.seg\.lost\)/);
   assert.doesNotMatch(vector[0], /Динамика клиентской базы|Динамика снижения потерь|Выручка под риском возврата|Ядро базы/);
   assert.match(css, /\.kb-summary-grid/);
+  assert.match(css, /\.kb-group-rules/);
   assert.match(css, /\.kb-action/);
 });
 
@@ -360,6 +453,29 @@ test("dynamics table shows explicit goals and uses compact comparison headings",
   assert.match(ui, />Δ к прошлому<\/th><th class="num"[^>]*>Δ к среднему<\/th>/);
   assert.doesNotMatch(ui, /Δ к прошл\. мес\.|Δ к среднему прошлых мес\./);
   assert.match(css, /\.dyn-target-badges/);
+  assert.match(ui, />ВЫРУЧКА \$\{copyBtn\("copyChart", blkId \+ "_money", "PNG"\)\}/);
+  assert.match(ui, />ПАЦИЕНТЫ \/ ВИЗИТЫ \$\{copyBtn\("copyChart", blkId \+ "_traffic", "PNG"\)\}/);
+  assert.match(ui, />ЛОЯЛЬНОСТЬ И ПЕРЕНАПРАВЛЕНИЯ, % \$\{copyBtn\("copyChart", blkId \+ "_pct", "PNG"\)\}/);
+  assert.match(ui, />КЛИЕНТСКАЯ БАЗА \$\{copyBtn\("copyChart", blkId \+ "_base", "PNG"\)\}/);
+  assert.doesNotMatch(ui, />ДЕНЬГИ \$\{copyBtn|>ТРАФИК \$\{copyBtn|>УДЕРЖАНИЕ И КОМАНДА/);
+});
+
+test("doctor current-month dynamics is the final block after vectors and charts", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const renderDoctor = ui.match(/function renderDoctor\(\) \{[\s\S]*?\n\}\n\nfunction saveManual6/);
+
+  assert.ok(renderDoctor);
+  const source = renderDoctor[0];
+  const vector6 = source.indexOf('id="blkV6"');
+  const lastVectorChart = source.indexOf('id="blkStack"');
+  const dynamics = source.indexOf('dynamicsHtml(docDyn, "blkDyn", "Динамика текущего месяца: точки роста и риска"');
+  const render = source.indexOf("body.innerHTML = html");
+
+  assert.ok(vector6 >= 0 && lastVectorChart > vector6);
+  assert.ok(dynamics > lastVectorChart);
+  assert.ok(render > dynamics);
+  assert.doesNotMatch(source, /dynamicsHtml\(docDyn, "blkDyn", "Динамика: точки роста и риска"/);
+  assert.match(ui, /<h2>Динамика текущего месяца: точки роста и риска · \$\{esc\(doctorName\(docId\)\)\}<\/h2>/);
 });
 
 test("specialization revenue cards show yearly dynamics without window wording", () => {
@@ -389,20 +505,22 @@ test("specialist summary removes the color legend and wraps long headers", () =>
   assert.match(ui, /<th class="num">Доля выручки<br>от перенаправлений<\/th>/);
 });
 
-test("client-base table moves thresholds to a note and shows monthly movement", () => {
+test("client-base table shows overlapping groups and omits unavailable values", () => {
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
-  const table = ui.match(/\/\/ риск-мониторинг:[\s\S]*?\/\/ профайлы специалистов/);
+  const table = ui.match(/\/\/ Клиентская база: период выбирается вручную[\s\S]*?\/\/ профайлы специалистов/);
   const trendMatch = ui.match(/function compactBaseTrend\(current, previous, lowerBetter = false\) \{[\s\S]*?\n\}/);
 
   assert.ok(table);
   assert.match(table[0], /<h2>Клиентская база /);
   assert.doesNotMatch(table[0], /Мониторинг базы|<th>Настройки базы<\/th>/);
-  assert.match(table[0], /Пороги: \$\{esc\(baseThresholdNotes\)\}/);
-  assert.match(table[0], /compactBaseTrend\(kb\.seg\.active,/);
-  assert.match(table[0], /compactBaseTrend\(kb\.seg\.risk,[^]*true\)/);
-  assert.match(table[0], /compactBaseTrend\(kb\.seg\.lost,[^]*true\)/);
-  assert.match(table[0], /compactBaseTrend\(kb\.revenueAtRisk,[^]*true\)/);
+  assert.match(table[0], /visibleGroups/);
+  assert.match(table[0], /clientBaseProfileDescription\(p, visibleGroups\)/);
+  assert.match(table[0], /kb\.groupAvailable\[group\]/);
+  assert.match(table[0], /fmtPct\(clientBaseGroupPct\(kb, group\)\)/);
+  assert.match(table[0], /Группы могут пересекаться/);
+  assert.match(table[0], /ноль не подставляется/);
+  assert.match(table[0], /compactBaseTrend\(kb\.total,/);
   assert.ok(trendMatch);
   const compactBaseTrend = new Function("kbTrendMarkup", `${trendMatch[0]}; return compactBaseTrend;`)((current, previous, lower, mode) => `${current}|${previous}|${lower}|${mode}`);
   assert.equal(compactBaseTrend(120, 100, true), '<div class="table-kpi-trend" title="К прошлому месяцу">120|100|true|relative</div>');

@@ -69,6 +69,7 @@ jobs:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
         run: |
           $version = (Get-Content -Raw package.json | ConvertFrom-Json).version
+          $displayVersion = $version -replace '\.0$', ''
           $assets = @(
             "dist/DoctorReview-Setup-$version-x64.exe",
             "dist/DoctorReview-Setup-$version-x64.exe.blockmap",
@@ -79,10 +80,10 @@ jobs:
             if (-not (Test-Path -LiteralPath $asset)) { throw "Не найден файл релиза: $asset" }
           }
 
-          $existingIds = @(gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" --paginate --jq ".[] | select(.tag_name == `"$env:RELEASE_TAG`") | .id")
-          foreach ($releaseId in $existingIds) {
-            gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/releases/$releaseId"
+          gh release view $env:RELEASE_TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw "Релиз $env:RELEASE_TAG уже существует. Опубликованные релизы не перезаписываются."
           }
 
-          gh release create $env:RELEASE_TAG @assets --draft --verify-tag --title $version --generate-notes
+          gh release create $env:RELEASE_TAG @assets --draft --verify-tag --title $displayVersion --generate-notes
           gh release edit $env:RELEASE_TAG --draft=false --latest

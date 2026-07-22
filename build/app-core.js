@@ -3,7 +3,7 @@
  * ЯДРО: состояние, хранилище, утилиты, сопоставление ФИО
  * ============================================================ */
 
-const APP_VERSION = 3;
+const APP_VERSION = 4;
 const LS_KEY = "dpi_app_db_v1"; // ключ не меняем — миграция по полю version
 const DESKTOP_API = window.desktopAPI || null;
 let DESKTOP_STATE = null;
@@ -49,7 +49,6 @@ function defaultBenchmarks() {
     hwShare: 35,        // % доля экспертной группы в выручке
     crossShare: 8,      // % доля выручки от перенаправлений
     nazConv: 30,        // % конверсия назначений
-    nazFocusShare: 30,  // % доля выручки настроенных фокусов в назначениях
     rating: 4.8, nps: 70, reviews: 5,
   };
 }
@@ -65,7 +64,14 @@ function defaultScoring() {
 function defaultProfile() {
   return {
     // нормативы сегментации базы и курсового
-    minVisits: 3, activeM: 6, riskM: 9, lostM: 12, courseX: 4, courseM: 6, corePct: 80,
+    // A — фактическая общая база. Каждая группа B–F имеет собственные
+    // настраиваемые пороги количества визитов и длительности.
+    loyalVisits: 3, loyalM: 12,
+    activeVisits: 3, activeM: 6,
+    newRiskVisits: 2, newRiskM: 6,
+    sleepVisits: 3, sleepM: 6,
+    lostVisits: 2, lostM: 12,
+    courseX: 4, courseM: 6, corePct: 80,
     pervichkaM: 3, // период возвращаемости первички для балла и динамики (мес)
     // «Экспертность» (Вектор 2): mode: devices | services | none
     expertise: {
@@ -106,7 +112,7 @@ function defaultProfile() {
       ["процедур", "Процедуры", "", "услуга"],
     ],
     // ручные переопределения номенклатуры (редактор в настройках):
-    // ключ = точное имя позиции (lower) -> {type, group, sub, expertItem, showQty}
+    // ключ = точное имя позиции (lower) -> {type, group, sub, expertItem}
     overrides: {},
     scoring: defaultScoring(),
     subdivisions: [],   // подразделения внутри отделения (УЗИ, Маммологи…)
@@ -153,7 +159,8 @@ function profileGynecology() {
   const p = defaultProfile();
   // Плановые наблюдения чаще имеют годовой цикл.
   p.activeM = 12;
-  p.riskM = 18;
+  p.newRiskM = 12;
+  p.sleepM = 18;
   p.lostM = 24;
   p.matchers = ["гинеколог"];
   p.expertise = {
@@ -266,7 +273,6 @@ function profileTherapy() {
     "Приемы": [],
     "Функциональная диагностика": ["УЗИ", "ЭхоКГ", "Велоэргометрия", "Прочая ФД"],
     "Неврологические процедуры": ["Ботулинотерапия", "Бруксизм", "Прочие"],
-    "Гинекологические процедуры": [],
     "Анализы": [],
     "Товары": ["Аптека и процедурка", "Косметика", "БАДы"],
     "Другие услуги": ["Прочие"],
@@ -281,7 +287,6 @@ function profileTherapy() {
     ["биоимпеданс", "Функциональная диагностика", "Прочая ФД", ""],
     ["бруксизм", "Неврологические процедуры", "Бруксизм", ""],
     ["ботулин", "Неврологические процедуры", "Ботулинотерапия", ""],
-    ["гинеколог", "Гинекологические процедуры", "", "услуга"],
     ["анализ", "Анализы", "", ""],
     ["взятие крови", "Анализы", "", ""],
     ["прием", "Приемы", "", ""],
@@ -297,9 +302,11 @@ function profileTherapy() {
 function profilePhysiotherapy() {
   const p = defaultProfile();
   // Курсовые услуги предполагают более короткий цикл возврата.
-  p.minVisits = 4;
+  p.loyalVisits = 4;
+  p.sleepVisits = 4;
   p.activeM = 3;
-  p.riskM = 5;
+  p.newRiskM = 3;
+  p.sleepM = 4;
   p.lostM = 6;
   p.matchers = ["физио", "массаж", "остеопат", "реабилит", "мануальн"];
   p.expertise = {
@@ -891,10 +898,10 @@ function ensureMonth(key) {
   return m;
 }
 
-/* Миграция базы: v1 → v3 и v2 → v3 (данные месяцев v2 совместимы с v3) */
+/* Миграция базы: старые снимки обновляются без изменения исходных отчётов. */
 function migrateDB(parsed) {
   if (!parsed || !parsed.months) return null;
-  if (parsed.version === APP_VERSION) {
+  if (parsed.version === APP_VERSION || parsed.version === 3) {
     if (!parsed.dynamicNotes || typeof parsed.dynamicNotes !== "object") parsed.dynamicNotes = {};
     return parsed;
   }
@@ -921,15 +928,10 @@ function migrateDB(parsed) {
     for (const [dn, oldD] of Object.entries(old.depts || {})) {
       if (!settings.depts[dn]) settings.depts[dn] = Object.assign(defaultProfile(), { }); // новое отделение из v2
       const p = settings.depts[dn];
-      for (const k of ["minVisits", "activeM", "courseX", "courseM", "corePct"]) {
+      for (const k of ["minVisits", "loyalVisits", "loyalM", "activeVisits", "activeM", "newRiskVisits", "newRiskM", "sleepVisits", "sleepM", "lostVisits", "lostM", "courseX", "courseM", "corePct"]) {
         if (oldD[k] != null) p[k] = oldD[k];
       }
-      if (oldD.riskM != null) {
-        // До v1.0.17 riskM был сроком потери. Сохраняем прежнюю границу как F,
-        // а новую границу сна E ставим посередине, чтобы старые базы не меняли смысл.
-        p.lostM = Number(oldD.riskM);
-        p.riskM = Math.round((Number(p.activeM) + p.lostM) / 2);
-      }
+      if (oldD.lostM == null && oldD.riskM != null) p.lostM = oldD.riskM;
       if (oldD.hasDevices === false) p.expertise = Object.assign({}, p.expertise, { mode: "none" });
     }
     return { version: APP_VERSION, settings, doctors: parsed.doctors || {}, months: parsed.months, dynamicNotes: parsed.dynamicNotes || {}, fileLog: parsed.fileLog || [] };
@@ -998,21 +1000,35 @@ function normalizeProfileRecord(raw, inherited) {
   };
   if (!Array.isArray(p.subdivisions)) p.subdivisions = [];
   if (!Array.isArray(p.matchers)) p.matchers = [];
+  const legacyLoyalVisits = Number(source.minVisits);
+  p.loyalVisits = Number(source.loyalVisits) >= 1
+    ? Number(source.loyalVisits)
+    : (legacyLoyalVisits >= 1 ? legacyLoyalVisits : Number(def.loyalVisits) || 3);
+  p.loyalM = Number(source.loyalM) > 0 ? Number(source.loyalM) : Number(def.loyalM) || 12;
+  p.activeVisits = Number(p.activeVisits) >= 1 ? Number(p.activeVisits) : def.activeVisits;
   p.activeM = Number(p.activeM) > 0 ? Number(p.activeM) : def.activeM;
-  const hasExplicitLostM = Number(source.lostM) > 0;
-  if (hasExplicitLostM) {
-    p.riskM = Number(p.riskM) > p.activeM ? Number(p.riskM) : Math.max(p.activeM + 1, Number(def.riskM) || p.activeM + 1);
-    p.lostM = Number(p.lostM) > p.riskM ? Number(p.lostM) : Math.max(p.riskM + 1, Number(def.lostM) || p.riskM + 1);
-  } else {
-    // Совместимость с профилями v1.0.16: прежний riskM означал «потерян после».
-    const legacyLostM = Number(source.riskM) > p.activeM
-      ? Number(source.riskM)
-      : (Number(def.lostM) > p.activeM ? Number(def.lostM) : Math.max(p.activeM + 2, p.activeM * 2));
-    p.lostM = legacyLostM;
-    p.riskM = Math.max(p.activeM + 1, Math.round((p.activeM + p.lostM) / 2));
-    if (p.riskM >= p.lostM) p.lostM = p.riskM + 1;
+  p.newRiskVisits = Number(source.newRiskVisits) >= 1 ? Number(source.newRiskVisits) : Number(def.newRiskVisits) || 2;
+  const legacyLostM = Number(source.riskM);
+  p.lostM = Number(source.lostM) > 0
+    ? Number(source.lostM)
+    : (legacyLostM > 0 ? legacyLostM : Number(def.lostM) || 12);
+  p.newRiskM = Number(source.newRiskM) > 0
+    ? Number(source.newRiskM)
+    : Math.min(p.activeM, p.lostM);
+  p.sleepM = Number(source.sleepM) > 0
+    ? Number(source.sleepM)
+    : Math.max(p.activeM, Math.round((p.activeM + p.lostM) / 2));
+  p.sleepVisits = Number(source.sleepVisits) >= 1
+    ? Number(source.sleepVisits)
+    : p.loyalVisits;
+  p.lostVisits = Number(source.lostVisits) >= 1 ? Number(source.lostVisits) : Number(def.lostVisits) || 2;
+  // Совместимость со старыми сохранениями и внешними проверками: riskM раньше означал срок потери.
+  p.riskM = p.lostM;
+  // minVisits оставляем только как совместимый псевдоним для старых пользовательских снимков.
+  p.minVisits = p.loyalVisits;
+  for (const override of Object.values(p.overrides)) {
+    if (override && typeof override === "object") delete override.showQty;
   }
-  p.minVisits = Number(p.minVisits) >= 2 ? Number(p.minVisits) : def.minVisits;
   p.courseX = Number(p.courseX) >= 2 ? Number(p.courseX) : def.courseX;
   p.courseM = Number(p.courseM) > 0 ? Number(p.courseM) : def.courseM;
   p.pervichkaM = Number(p.pervichkaM) > 0 ? Number(p.pervichkaM) : def.pervichkaM;
@@ -1176,11 +1192,13 @@ function normalizeProfiles() {
 function applyLoadedDatabase(parsed) {
   const db = migrateDB(parsed);
   if (!db) return false;
+  const versionUpgraded = db.version !== APP_VERSION;
   DB = db;
+  DB.version = APP_VERSION;
   if (DB.settings.showScores == null) DB.settings.showScores = true;
   const normalized = normalizeProfiles();
   for (const mk of Object.keys(DB.months)) ensureMonth(mk);
-  if (normalized) setTimeout(() => { saveLocal(); }, 0);
+  if (normalized || versionUpgraded) setTimeout(() => { saveLocal(); }, 0);
   return true;
 }
 
@@ -1262,7 +1280,9 @@ function loadLocal() {
 async function loadDesktopDatabase() {
   if (!DESKTOP_API) return null;
   DESKTOP_STATE = await DESKTOP_API.initialize();
-  if (DESKTOP_STATE.snapshot) applyLoadedDatabase(DESKTOP_STATE.snapshot);
+  if (DESKTOP_STATE.snapshot && !applyLoadedDatabase(DESKTOP_STATE.snapshot)) {
+    throw new Error("Рабочая база создана несовместимой версией приложения");
+  }
   setAutosaveStatus(`SQLite · ${DESKTOP_STATE.config.databasePath}`);
   return DESKTOP_STATE;
 }
@@ -1516,6 +1536,7 @@ async function flushAutosaveQueue() {
 async function exportDB() {
   if (DESKTOP_API) {
     try {
+      if (!await saveLocal()) throw new Error("Текущие изменения не записаны в SQLite");
       const result = await DESKTOP_API.exportJson(JSON.stringify(DB, null, 1));
       if (!result.canceled) toast("JSON-копия сохранена: " + result.path);
     } catch (error) {
@@ -1537,12 +1558,13 @@ function importDBFile(file) {
   reader.onload = async () => {
     try {
       const parsed = JSON.parse(reader.result);
-      const db = migrateDB(parsed);
-      if (!db) throw new Error("не похоже на файл базы");
-      if (DESKTOP_API) await DESKTOP_API.createBackup();
-      DB = db;
-      normalizeProfiles();
-      await saveLocal();
+      if (!migrateDB(parsed)) throw new Error("не похоже на файл базы или версия данных не поддерживается");
+      if (DESKTOP_API) {
+        if (!await saveLocal()) throw new Error("текущая база не сохранена; импорт отменён");
+        await DESKTOP_API.createBackup();
+      }
+      if (!applyLoadedDatabase(parsed)) throw new Error("версия данных не поддерживается");
+      if (!await saveLocal()) throw new Error("импортированные данные не удалось записать");
       renderAll();
       toast("База загружена: месяцев — " + Object.keys(DB.months).length + ", врачей — " + Object.keys(DB.doctors).length);
     } catch (e) {
@@ -1556,6 +1578,7 @@ async function clearDB() {
   if (!confirm("Удалить все загруженные данные и начать заново? Настройки сохранятся.")) return;
   if (DESKTOP_API) {
     try {
+      if (!await saveLocal()) throw new Error("последние изменения не записаны");
       await DESKTOP_API.createBackup();
     } catch (error) {
       toast("Очистка отменена: не удалось создать резервную копию — " + error.message, true);

@@ -50,35 +50,66 @@ test("core date and doctor-name helpers preserve legacy behavior", () => {
   assert.equal(vm.runInContext("isFullMonthPeriod(extractPeriod('02.01.2026 - 31.03.2026'))", context), false);
 });
 
-test("patient-base statuses depend on recency while loyalty stays separate", () => {
+test("client-base groups use B-F thresholds and may overlap", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
     DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], dept: 'По умолчанию' } };
     DB.months = { '2026-01': emptyMonth() };
     DB.months['2026-01'].kb.d1 = { '12': { clients: [
-      { name: 'Активный Разовый', s: 100, v: 1, r: 30 },
-      { name: 'Риск Лояльный', s: 200, v: 5, r: 200 },
-      { name: 'Спящий Разовый', s: 300, v: 1, r: 300 },
-      { name: 'Потерянный Лояльный', s: 400, v: 5, r: 400 },
-      { name: 'Потерянный Разовый', s: 600, v: 2, r: 400 },
+      { name: 'Лояльный Активный', s: 100, v: 5, r: 30 },
+      { name: 'Новый Риск', s: 200, v: 2, r: 200 },
+      { name: 'Лояльный Спящий', s: 300, v: 5, r: 300 },
+      { name: 'Потерянный', s: 400, v: 1, r: 400 },
       { name: 'Без Давности', s: 500, v: 2, r: null }
     ] } };
     clearMetricsCache();
     const kb = kbSummary('d1', '2026-01', 12);
-    return { seg: kb.seg, activeBase: kb.activeBase, loyalCount: kb.loyalCount, revenueAtRisk: kb.revenueAtRisk, rows: kb.clientRows, lostPct: kb.lostPct, sourceWindowComplete: kb.sourceWindowComplete };
+    return { seg: kb.seg, activeBase: kb.activeBase, loyalCount: kb.loyalCount, revenueAtRisk: kb.revenueAtRisk, rows: kb.clientRows, lostPct: kb.lostPct, sourceWindowComplete: kb.sourceWindowComplete, groupAvailable: kb.groupAvailable };
   })()`, context);
   const plain = JSON.parse(JSON.stringify(result));
   assert.deepEqual(
-    { active: plain.seg.active, risk: plain.seg.risk, sleep: plain.seg.sleep, lost: plain.seg.lost, unknown: plain.seg.unknown },
-    { active: 1, risk: 1, sleep: 2, lost: 1, unknown: 1 },
+    { loyal: plain.seg.loyal, active: plain.seg.active, newRisk: plain.seg.newRisk, loyalSleep: plain.seg.loyalSleep, lost: plain.seg.lost, unknown: plain.seg.unknown },
+    { loyal: 2, active: 1, newRisk: 2, loyalSleep: 1, lost: 1, unknown: 1 },
   );
   assert.equal(plain.activeBase, 1);
   assert.equal(plain.loyalCount, 2);
-  assert.equal(plain.revenueAtRisk, 1500);
+  assert.equal(plain.revenueAtRisk, 900);
   assert.equal(plain.sourceWindowComplete, true);
-  assert.equal(plain.lostPct, 1 / 6 * 100);
-  assert.equal(plain.rows[0].name, "Активный Разовый");
-  assert.equal(plain.rows[0].loyal, false);
+  assert.equal(plain.lostPct, 20);
+  assert.deepEqual(plain.rows[0].groups, ["loyal", "active"]);
+  assert.deepEqual(plain.rows[3].groups, ["newRisk", "lost"]);
+});
+
+test("every client-base group uses its own visit and duration thresholds", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], dept: 'По умолчанию' } };
+    const p = DB.settings.depts['По умолчанию'];
+    Object.assign(p, {
+      loyalVisits: 6, loyalM: 12,
+      activeVisits: 4, activeM: 2,
+      newRiskVisits: 2, newRiskM: 6,
+      sleepVisits: 4, sleepM: 6,
+      lostVisits: 1, lostM: 12
+    });
+    DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].kb.d1 = { '12': { clients: [
+      { name: 'Активный', s: 100, v: 5, r: 30 },
+      { name: 'Спящий', s: 200, v: 5, r: 300 },
+      { name: 'Риск', s: 300, v: 2, r: 400 },
+      { name: 'Потерянный', s: 400, v: 1, r: 400 }
+    ] } };
+    const kb = kbSummary('d1', '2026-01', 12);
+    return { seg: kb.seg, rows: kb.clientRows.map(row => ({ name: row.name, groups: row.groups })) };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.deepEqual(
+    { loyal: plain.seg.loyal, active: plain.seg.active, newRisk: plain.seg.newRisk, loyalSleep: plain.seg.loyalSleep, lost: plain.seg.lost },
+    { loyal: 0, active: 1, newRisk: 2, loyalSleep: 1, lost: 1 },
+  );
+  assert.deepEqual(plain.rows[1].groups, ["loyalSleep"]);
+  assert.deepEqual(plain.rows[2].groups, ["newRisk"]);
+  assert.deepEqual(plain.rows[3].groups, ["newRisk", "lost"]);
 });
 
 test("doctor visit coefficients use visits per unique patient for one and twelve months", () => {
@@ -111,77 +142,79 @@ test("doctor visit coefficients use visits per unique patient for one and twelve
   assert.equal(result.annual, 4);
 });
 
-test("client-base source window always respects the exact selected period", () => {
+test("client-base period stays manual and exposes availability per group", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
-    const profile = { riskM: 18, lostM: 24 };
+    const profile = { loyalVisits: 3, loyalM: 18, activeVisits: 3, activeM: 6, newRiskVisits: 2, newRiskM: 18, sleepVisits: 3, sleepM: 18, lostVisits: 2, lostM: 30 };
     return {
       required: clientBaseRequiredWindow(profile),
       twelveIsEnough: clientBaseWindowSufficient(12, profile),
       thirtySixIsEnough: clientBaseWindowSufficient(36, profile),
-      selectedByDefault: recommendedClientBaseWindow([12, 36], profile),
-      selectedManually: recommendedClientBaseWindow([12, 36], profile, 12),
-      missingExactPeriod: recommendedClientBaseWindow([12, 36], profile, 24),
+      twelveGroups: clientBaseGroupAvailability(12, profile),
+      twentyFourGroups: clientBaseGroupAvailability(24, profile),
+      selectedByDefault: recommendedClientBaseWindow([12, 24, 36], profile),
+      selectedManually: recommendedClientBaseWindow([12, 24, 36], profile, 24),
     };
   })()`, context);
   assert.deepEqual(JSON.parse(JSON.stringify(result)), {
-    required: 24,
+    required: 30,
     twelveIsEnough: false,
     thirtySixIsEnough: true,
+    twelveGroups: { loyal: false, active: true, newRisk: false, loyalSleep: false, lost: false },
+    twentyFourGroups: { loyal: true, active: true, newRisk: true, loyalSleep: true, lost: false },
     selectedByDefault: 12,
-    selectedManually: 12,
-    missingExactPeriod: null,
+    selectedManually: 24,
   });
 });
 
-test("doctor and specialization aggregates never replace the default 12-month period", () => {
+test("long-threshold groups are absent at 12 months and available at 36 months", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
     DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], dept: 'По умолчанию' } };
+    const profile = DB.settings.depts['По умолчанию'];
+    profile.newRiskM = 18;
+    profile.sleepM = 18;
+    profile.lostM = 18;
+    profile.riskM = 18;
     DB.months = { '2026-01': emptyMonth() };
-    const patient = { name: 'Потерянный Пациент', patientId: 'P-1', s: 1000, v: 2, r: 400 };
+    const patient = { name: 'Потерянный Пациент', patientId: 'P-1', s: 1000, v: 2, r: 600 };
     DB.months['2026-01'].kb.d1 = { '12': { clients: [patient] } };
     clearMetricsCache();
-    const initialDoctor = computeMetrics('d1', '2026-01');
-    const initialAggregate = aggregateDeptMonth('2026-01', 'all');
-    const initialDynamics = computeDeptDynamics('2026-01', 'all');
+    const shortDoctor = computeMetrics('d1', '2026-01');
+    const shortAggregate = aggregateDeptMonth('2026-01', 'all');
 
     DB.months['2026-01'].kb.d1['36'] = { clients: [patient] };
     clearMetricsCache();
-    const completeDoctor = computeMetrics('d1', '2026-01');
-    const completeAggregate = aggregateDeptMonth('2026-01', 'all');
-    const completeDynamics = computeDeptDynamics('2026-01', 'all');
+    const bothDoctor = computeMetrics('d1', '2026-01');
     return {
-      initial: {
-        doctorWindow: initialDoctor.akb.primaryWin,
-        doctorComplete: initialDoctor.akb.primary.sourceWindowComplete,
-        aggregateComplete: initialAggregate.akb.primary.sourceWindowComplete,
-        lostInDynamics: initialDynamics.rows.some(row => row.key === 'lost'),
+      short: {
+        doctorWindow: shortDoctor.akb.primaryWin,
+        lostAvailable: shortDoctor.akb.primary.groupAvailable.lost,
+        lostCount: shortDoctor.akb.primary.seg.lost,
+        aggregateLostAvailable: shortAggregate.akb.primary.groupAvailable.lost,
       },
-      afterAdding36: {
-        doctorWindow: completeDoctor.akb.primaryWin,
-        doctorComplete: completeDoctor.akb.primary.sourceWindowComplete,
-        aggregateWindows: completeAggregate.akb.primary.windows,
-        aggregateLost: completeAggregate.akb.primary.seg.lost,
-        lostInDynamics: completeDynamics.rows.some(row => row.key === 'lost'),
-        manual36Window: selectedClientBaseSummary(completeDoctor, profileForDoctor('d1'), 36).window,
+      both: {
+        primaryWindow: bothDoctor.akb.primaryWin,
+        shortLostAvailable: bothDoctor.akb.wins[12].groupAvailable.lost,
+        longLostAvailable: bothDoctor.akb.wins[36].groupAvailable.lost,
+        shortLost: bothDoctor.akb.wins[12].seg.lost,
+        longLost: bothDoctor.akb.wins[36].seg.lost,
       },
     };
   })()`, context);
   const plain = JSON.parse(JSON.stringify(result));
-  assert.deepEqual(plain.initial, {
+  assert.deepEqual(plain.short, {
     doctorWindow: 12,
-    doctorComplete: true,
-    aggregateComplete: true,
-    lostInDynamics: true,
+    lostAvailable: false,
+    lostCount: null,
+    aggregateLostAvailable: false,
   });
-  assert.deepEqual(plain.afterAdding36, {
-    doctorWindow: 12,
-    doctorComplete: true,
-    aggregateWindows: [12],
-    aggregateLost: 1,
-    lostInDynamics: true,
-    manual36Window: 36,
+  assert.deepEqual(plain.both, {
+    primaryWindow: 12,
+    shortLostAvailable: false,
+    longLostAvailable: true,
+    shortLost: null,
+    longLost: 1,
   });
 });
 
@@ -194,6 +227,192 @@ test("client-base parser preserves patient identity for operational lists", () =
   const plain = JSON.parse(JSON.stringify(result));
   assert.equal(plain.clients[0].name, "Иванова Анна");
   assert.equal(plain.clients[0].patientId, "P-42");
+});
+
+test("doctor work parser adds 'По направлению' to own work and keeps 'Направление' as colleague work", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    const info = { otborName: 'Пан Константин Александрович' };
+    const aprilRows = [
+      ['Форма участия', null, null, null, null, 'Количество', 'Сумма'],
+      ['Сотрудник'],
+      ['Специализация', null, null, 'Номенклатура'],
+      [null, null, null, null, null, 87, 472318],
+      ['Пан Константин Александрович', null, null, null, null, 38, 263953],
+      ['Услуги', null, null, null, null, 38, 263953],
+      ['Приемы', null, null, 'Прием кардиолога', null, 23, 153200],
+      ['Функциональная диагностика', null, null, 'ЭхоКГ', null, 10, 69840],
+      ['Функциональная диагностика', null, null, 'Велоэргометрия', null, 2, 22000],
+      ['Товар', null, null, null, null, 3, 18913],
+      ['Аптека', null, null, 'Кардиологический БАД', null, 3, 18913],
+      ['Направление', null, null, null, null, 38, 168365],
+      ['Пан Константин Александрович', null, null, null, null, 38, 168365],
+      ['Услуги', null, null, null, null, 38, 168365],
+      ['Товары', null, null, 'Направление на товар', null, 5, 20000],
+      ['Приемы', null, null, 'Прием гинеколога', null, 1, 0],
+      ['Приемы', null, null, 'Повторный прием кардиолога', null, 9, 0],
+      ['Анализы', null, null, 'Назначения сотрудника коллегам', null, 23, 148365],
+      ['По направлению', null, null, null, null, 11, 40000],
+      ['Пан Константин Александрович', null, null, null, null, 11, 40000],
+      ['Услуги', null, null, null, null, 11, 40000],
+      ['Приемы', null, null, 'Прием кардиолога по направлению', null, 11, 40000],
+      ['Итого', null, null, null, null, 87, 472318]
+    ];
+    const april = parseVyrabotka(aprilRows, info, {});
+
+    const juneRows = [
+      ['Форма участия'],
+      ['Сотрудник'],
+      ['Специализация'],
+      ['Номенклатура', null, null, null, null, 'Количество', 'Сумма услуги', 'Сумма товары', 'Сумма услуги прочее участие', 'Сумма товары прочее участие'],
+      ['Пан Константин Александрович', null, null, null, null, 87, 453405, 18913, 0, 0],
+      ['ООО Клиника', null, null, null, null, 87, 453405, 18913, 0, 0],
+      [null, null, null, null, null, 38, 245040, 18913, 0, 0],
+      ['Приемы', null, null, null, null, 23, 153200, 0, 0, 0],
+      ['Прием кардиолога (001)', null, null, null, null, 23, 153200, 0, 0, 0],
+      ['Функциональная диагностика', null, null, null, null, 12, 91840, 0, 0, 0],
+      ['ЭхоКГ (002)', null, null, null, null, 10, 69840, 0, 0, 0],
+      ['Велоэргометрия (003)', null, null, null, null, 2, 22000, 0, 0, 0],
+      ['Аптека', null, null, null, null, 3, 0, 18913, 0, 0],
+      ['Кардиологический БАД (004)', null, null, null, null, 3, 0, 18913, 0, 0],
+      ['Направление', null, null, null, null, 38, 168365, 0, 0, 0],
+      ['Приемы', null, null, null, null, 38, 168365, 0, 0, 0],
+      ['Направление на товар (005)', null, null, null, null, 5, 20000, 0, 0, 0],
+      ['Прием гинеколога (006)', null, null, null, null, 1, 0, 0, 0, 0],
+      ['Повторный прием кардиолога (007)', null, null, null, null, 9, 0, 0, 0, 0],
+      ['Назначения сотрудника коллегам (008)', null, null, null, null, 23, 148365, 0, 0, 0],
+      ['По направлению', null, null, null, null, 11, 40000, 0, 0, 0],
+      ['Приемы', null, null, null, null, 11, 40000, 0, 0, 0],
+      ['Прием кардиолога по направлению (009)', null, null, null, null, 11, 40000, 0, 0, 0],
+      ['Итого', null, null, null, null, 87, 453405, 18913, 0, 0]
+    ];
+    const juneWs = { '!rows': [
+      {}, {}, {}, {}, { level: 0 }, { level: 1 }, { level: 2 }, { level: 3 }, { level: 4 },
+      { level: 3 }, { level: 4 }, { level: 4 }, { level: 3 }, { level: 4 },
+      { level: 2 }, { level: 3 }, { level: 4 }, { level: 4 }, { level: 4 }, { level: 4 },
+      { level: 2 }, { level: 3 }, { level: 4 }, { level: 0 }
+    ] };
+    const june = parseVyrabotka(juneRows, info, juneWs);
+
+    DB.doctors = { d1: { name: 'Пан Константин Александрович', aliases: [], dept: 'По умолчанию' } };
+    DB.months = { '2026-06': emptyMonth() };
+    DB.months['2026-06'].vyrabotka.d1 = { items: april.items };
+    clearMetricsCache();
+    const summary = vyrabotkaSummary('d1', '2026-06');
+    DB.months['2026-06'].vyrabotka.d1 = {
+      items: april.items.map(({ sourceForm, ...item }) => item)
+    };
+    clearMetricsCache();
+    const legacySummary = vyrabotkaSummary('d1', '2026-06');
+    return { april, june, summary, legacySummary };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  for (const parsed of [plain.april, plain.june]) {
+    assert.equal(parsed.checked, true);
+    assert.deepEqual(parsed.items.map(item => item.form), ["", "", "", "", "", "", "", "", ""]);
+    assert.deepEqual(parsed.items.map(item => item.sourceForm), [
+      "Сотрудник", "Сотрудник", "Сотрудник", "Сотрудник",
+      "Направление", "Направление", "Направление", "Направление", "По направлению",
+    ]);
+    assert.deepEqual(parsed.items.map(item => item.q), [23, 10, 2, 3, 5, 1, 9, 23, 11]);
+    assert.deepEqual(parsed.items.map(item => item.sOwn), [153200, 69840, 22000, 18913, 0, 0, 0, 0, 40000]);
+    assert.deepEqual(parsed.items.map(item => item.sRef), [0, 0, 0, 0, 20000, 0, 0, 148365, 0]);
+  }
+  for (const summary of [plain.summary, plain.legacySummary]) {
+    assert.deepEqual(
+      { ownSum: summary.ownSum, ownQty: summary.ownQty, refSum: summary.refSum, refQty: summary.refQty, assistSum: summary.assistSum },
+      { ownSum: 303953, ownQty: 49, refSum: 168365, refQty: 38, assistSum: 0 },
+    );
+    assert.equal(summary.byGroup["Гинекологические процедуры"], undefined);
+    assert.equal(summary.byGroup["Приемы"].q, 34);
+  }
+});
+
+test("appointments parser supports flat and deeply grouped 1C reports", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    const header = [
+      ['Направивший врач', null, null, null, null, null, null, null, 'Количество назначено', 'Количество выполнено', 'Продажи', null],
+      ['Номенклатура/Специализация', null, null, null, null, null, null, null, null, null, 'Количество', 'Сумма'],
+      ['Документ', null, null, 'Клиент', null, 'Направивший врач', 'Врач - исполнитель', 'Номенклатура']
+    ];
+    const info = { otborName: 'Пан Константин Александрович' };
+    const flatRows = header.concat([
+      ['Пан Константин Александрович', null, null, null, null, null, null, null, 3, 1, 2, 1500],
+      ['Анализ крови', null, null, null, null, null, null, null, 2, 1, 1, 1000],
+      ['Прием 1', null, null, 'Пациент 1', null, 'Пан Константин Александрович', null, 'Анализ крови', 2, 1, 1, 1000],
+      ['УЗИ сердца', null, null, null, null, null, null, null, 1, 0, 1, 500],
+      ['Прием 2', null, null, 'Пациент 2', null, 'Пан Константин Александрович', null, 'УЗИ сердца', 1, 0, 1, 500],
+      ['Итого', null, null, null, null, null, null, null, 3, 1, 2, 1500]
+    ]);
+    const flatWs = { '!rows': [null, null, null, {}, { level: 1 }, { level: 2 }, { level: 1 }, { level: 2 }] };
+
+    const groupedRows = header.concat([
+      ['Пан Константин Александрович', null, null, null, null, null, null, null, 3, 1, 2, 1500],
+      ['Клиника', null, null, null, null, null, null, null, 3, 1, 2, 1500],
+      ['Диагностика', null, null, null, null, null, null, null, 3, 1, 2, 1500],
+      ['Лаборатория', null, null, null, null, null, null, null, 2, 1, 1, 1000],
+      ['Анализ крови', null, null, null, null, null, null, null, 2, 1, 1, 1000],
+      ['Прием 1', null, null, 'Пациент 1', null, 'Пан Константин Александрович', null, 'Анализ крови', 2, 1, 1, 1000],
+      ['Инструментальная диагностика', null, null, null, null, null, null, null, 1, 0, 1, 500],
+      ['Прием 2', null, null, 'Пациент 2', null, 'Пан Константин Александрович', null, 'УЗИ сердца', 1, 0, 1, 500],
+      ['Итого', null, null, null, null, null, null, null, 3, 1, 2, 1500]
+    ]);
+    const groupedWs = { '!rows': [null, null, null, {}, { level: 1 }, { level: 2 }, { level: 3 }, { level: 4 }, { level: 5 }, { level: 3 }, { level: 4 }] };
+
+    const flat = parseNaznacheniya(flatRows, info, flatWs);
+    const grouped = parseNaznacheniya(groupedRows, info, groupedWs);
+    DB.doctors = { d1: { name: 'Пан Константин Александрович', aliases: [], dept: 'По умолчанию' } };
+    DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].naznach.d1 = { '1': { items: grouped.items.concat([
+      { n: 'Номенклатура без группы', a: 1, d: 0, sq: 0, ss: 0, goods: false, groupPath: [] }
+    ]) } };
+    const summary = naznachSummary('d1', '2026-01', 1);
+    return { flat, grouped, sourceGroups: summary.sourceGroups };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  const withoutGroupPath = items => items.map(({ groupPath, ...item }) => item);
+  assert.deepEqual(withoutGroupPath(plain.flat.items), withoutGroupPath(plain.grouped.items));
+  assert.deepEqual(plain.grouped.items.map(item => item.n), ["Анализ крови", "УЗИ сердца"]);
+  assert.deepEqual(plain.flat.items.map(item => item.groupPath), [[], []]);
+  assert.deepEqual(plain.grouped.items.map(item => item.groupPath), [
+    ["Клиника", "Диагностика", "Лаборатория"],
+    ["Клиника", "Диагностика", "Инструментальная диагностика"],
+  ]);
+  assert.deepEqual(plain.sourceGroups.map(group => group.path), [
+    ...plain.grouped.items.map(item => item.groupPath),
+    ["Без вида услуги / специализации в исходном отчёте"],
+  ]);
+  assert.deepEqual(plain.sourceGroups.map(group => Object.keys(group.items)), [
+    ["Анализ крови"], ["УЗИ сердца"], ["Номенклатура без группы"],
+  ]);
+  assert.equal(plain.sourceGroups.reduce((sum, group) => sum + group.assigned, 0), 4);
+  assert.equal(plain.flat.checked, true);
+  assert.equal(plain.grouped.checked, true);
+});
+
+test("appointments parser marks nomenclature inside the 1C goods group", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    const rows = [
+      ['Направивший врач', null, null, null, null, null, null, null, 'Количество назначено', 'Количество выполнено', 'Продажи', null],
+      ['Номенклатура/Специализация', null, null, null, null, null, null, null, null, null, 'Количество', 'Сумма'],
+      ['Документ', null, null, 'Клиент', null, 'Направивший врач', 'Врач - исполнитель', 'Номенклатура'],
+      ['Пан Константин Александрович', null, null, null, null, null, null, null, 3, 2, 1, 500],
+      ['Товары (00000000334)', null, null, null, null, null, null, null, 3, 2, 1, 500],
+      ['Аптека МДЛП', null, null, null, null, null, null, null, 3, 2, 1, 500],
+      ['Кардиологический БАД', null, null, null, null, null, null, null, 3, 2, 1, 500],
+      ['Оказание услуг 1', null, null, 'Пациент', null, 'Пан Константин Александрович', null, 'Кардиологический БАД', 3, 2, 1, 500],
+      ['Итого', null, null, null, null, null, null, null, 3, 2, 1, 500]
+    ];
+    const ws = { '!rows': [null, null, null, {}, { level: 1 }, { level: 2 }, { level: 3 }, { level: 4 }] };
+    return parseNaznacheniya(rows, { otborName: 'Пан Константин Александрович' }, ws);
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.equal(plain.checked, true);
+  assert.equal(plain.items.length, 1);
+  assert.equal(plain.items[0].goods, true);
+  assert.equal(plain.items[0].d, 2);
 });
 
 test("score coverage requires exact windows and blocks incomplete ranking", () => {
@@ -275,7 +494,7 @@ test("reputation rating uses SberHealth and ignores legacy Yandex Maps values", 
   assert.equal(result.legacyYandexOnly, null);
 });
 
-test("interdisciplinary focuses add revenue share and breadth to vector 3 scoring", () => {
+test("interdisciplinary focuses expose assigned and completed counts without changing vector 3 scoring", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
     DB.doctors = { d1: { name: 'Focus Doctor', aliases: [], dept: 'По умолчанию' } };
@@ -290,7 +509,6 @@ test("interdisciplinary focuses add revenue share and breadth to vector 3 scorin
     };
     profile.scoring.benchmarks.crossShare = 10;
     profile.scoring.benchmarks.nazConv = 50;
-    profile.scoring.benchmarks.nazFocusShare = 50;
     DB.months = { '2026-01': emptyMonth() };
     DB.months['2026-01'].vyrabotka.d1 = { items: [
       { form: '', cat: 'Приемы', n: 'Own and referral revenue', q: 1, sOwn: 100, sRef: 100, goods: false }
@@ -313,11 +531,49 @@ test("interdisciplinary focuses add revenue share and breadth to vector 3 scorin
   const plain = JSON.parse(JSON.stringify(result));
   assert.equal(plain.focus.park, 2);
   assert.equal(plain.focus.used, 1);
+  assert.equal(plain.focus.assigned, 2);
   assert.equal(plain.focus.soldQ, 1);
-  assert.equal(plain.focus.soldSum, 100);
-  assert.equal(plain.focus.revenueShare, 50);
-  assert.equal(plain.scoreWithFocus, 87.5);
+  assert.equal(plain.focus.resultQ, 2);
+  assert.deepEqual(
+    { assigned: plain.focus.items["Focus A"].assigned, resultQ: plain.focus.items["Focus A"].resultQ },
+    { assigned: 2, resultQ: 2 },
+  );
+  assert.equal(plain.scoreWithFocus, 100);
   assert.equal(plain.scoreWithoutFocus, 100);
+});
+
+test("appointment conversion ignores completed count for goods but keeps it for services", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Goods Doctor', aliases: [], dept: 'По умолчанию' } };
+    const profile = DB.settings.depts['По умолчанию'];
+    profile.crossFocus = {
+      title: 'Focus referrals',
+      items: [
+        { name: 'Goods focus', syn: ['goods focus'], core: true },
+        { name: 'Service focus', syn: ['service focus'], core: true }
+      ],
+      rules: []
+    };
+    DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].naznach.d1 = { '1': { items: [
+      { n: 'Goods focus product', a: 4, d: 3, sq: 2, ss: 100, goods: true },
+      { n: 'Прием Service focus', a: 4, d: 1, sq: 1, ss: 200, goods: false }
+    ] } };
+    return naznachSummary('d1', '2026-01', 1);
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.deepEqual(
+    { assigned: plain.totals.assigned, done: plain.totals.done, soldQ: plain.totals.soldQ, resultQ: plain.totals.resultQ, conv: plain.totals.conv },
+    { assigned: 8, done: 1, soldQ: 3, resultQ: 4, conv: 50 },
+  );
+  assert.deepEqual(
+    { done: plain.byType["Товары"].done, soldQ: plain.byType["Товары"].soldQ, resultQ: plain.byType["Товары"].resultQ, conv: plain.byType["Товары"].conv },
+    { done: 0, soldQ: 2, resultQ: 2, conv: 50 },
+  );
+  assert.equal(plain.focus.resultQ, 4);
+  assert.equal(plain.focus.assigned, 8);
+  assert.equal(plain.focus.used, 2);
 });
 
 test("department ratios are weighted and patients are deduplicated by stable identity", () => {
@@ -349,7 +605,7 @@ test("legacy v1 database migrates to the current schema", () => {
     months: { '2026-01': { vyrabotka: {}, kb: {}, pervichka: {}, prostoy: {}, zapis: {}, manual6: {} } },
     fileLog: []
   })`, context);
-  assert.equal(result.version, 3);
+  assert.equal(result.version, 4);
   assert.ok(result.months["2026-01"].naznach);
   assert.deepEqual(Object.keys(result.doctors), ["d1"]);
 });
@@ -666,6 +922,32 @@ test("metric engine calculates a deterministic synthetic month", () => {
   assert.equal(result.sales, 100000);
   assert.equal(result.revenueWithRef, 120000);
   assert.equal(result.visits, null);
+});
+
+test("completed-referral revenue uses only the doctor-work report", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], dept: 'По умолчанию' } };
+    DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].naznach.d1 = { '1': { items: [
+      { n: 'Назначенная услуга', a: 1, d: 1, sq: 1, ss: 500, goods: false }
+    ] } };
+    clearMetricsCache();
+    const withoutWork = computeMetrics('d1', '2026-01');
+
+    DB.months['2026-01'].vyrabotka.d1 = { items: [
+      { form: '', sourceForm: 'Сотрудник', cat: 'Прием', n: 'Прием врача', q: 1, sOwn: 100, sRef: 0, goods: false }
+    ] };
+    clearMetricsCache();
+    const withWork = computeMetrics('d1', '2026-01');
+    return {
+      withoutWork: { refRevenue: withoutWork.econ.refRevenue, share: withoutWork.cross.crossShare },
+      withWork: { refRevenue: withWork.econ.refRevenue, revenueWithRef: withWork.econ.revenueWithRef, share: withWork.cross.crossShare },
+    };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.deepEqual(plain.withoutWork, { refRevenue: null, share: null });
+  assert.deepEqual(plain.withWork, { refRevenue: 0, revenueWithRef: 100, share: 0 });
 });
 
 test("personal doctor goal is used by the score calculation", () => {

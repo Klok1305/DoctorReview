@@ -50,6 +50,9 @@ let database = null;
 let backupService = null;
 let fileService = null;
 let updateService = null;
+let closeSaveRequested = false;
+let closeAllowed = false;
+let closeSaveTimer = null;
 
 function logEvent(event, details = {}) {
   const record = JSON.stringify({ time: new Date().toISOString(), event, details });
@@ -213,7 +216,29 @@ function createWindow() {
       });
     });
   });
-  mainWindow.on("closed", () => { mainWindow = null; });
+  mainWindow.on("close", event => {
+    if (SMOKE_TEST || closeAllowed) return;
+    event.preventDefault();
+    if (closeSaveRequested) return;
+    closeSaveRequested = true;
+    mainWindow.webContents.send("app:prepare-close");
+    closeSaveTimer = setTimeout(() => {
+      closeSaveRequested = false;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        dialog.showMessageBox(mainWindow, {
+          type: "warning",
+          title: APP_NAME,
+          message: "Закрытие отменено: приложение не подтвердило сохранение данных",
+          detail: "Повторите закрытие. Если ошибка повторится, создайте переносимую копию базы и только затем завершите приложение.",
+          buttons: ["Понятно"],
+        }).catch(() => {});
+      }
+    }, 15000);
+  });
+  mainWindow.on("closed", () => {
+    if (closeSaveTimer) clearTimeout(closeSaveTimer);
+    mainWindow = null;
+  });
 
   if (SMOKE_TEST) {
     mainWindow.webContents.once("did-finish-load", async () => {
@@ -322,7 +347,10 @@ function createWindow() {
                 ],
                 rules: []
               };
-              DB.settings.depts['Косметология'].scoring.benchmarks.nazFocusShare = 50;
+              DB.settings.depts['Косметология'].newRiskM = 6;
+              DB.settings.depts['Косметология'].sleepM = 18;
+              DB.settings.depts['Косметология'].lostM = 18;
+              DB.settings.depts['Косметология'].riskM = 18;
               for (const mk of Object.keys(DB.months)) {
                 DB.months[mk].vyrabotka.d1 = { items: [{ form: '', cat: 'Прием', n: 'Прием врача', q: 5, sOwn: mk.endsWith('01') ? 100000 : 120000, sRef: 20000, goods: false }] };
                 DB.months[mk].vyrabotka.d2 = { items: [{ form: '', cat: 'Прием', n: 'Прием врача', q: 4, sOwn: mk.endsWith('01') ? 80000 : 90000, sRef: 10000, goods: false }] };
@@ -330,6 +358,11 @@ function createWindow() {
                   '12': { clients: [
                     { name: 'Активный Пациент', patientId: '1', s: 50000, v: 3, r: 30 },
                     { name: 'Пациент Риска', patientId: '2', s: 70000, v: 2, r: 210 }
+                  ] },
+                  '24': { clients: [
+                    { name: 'Активный Пациент', patientId: '1', s: 70000, v: 4, r: 30 },
+                    { name: 'Пациент Риска', patientId: '2', s: 85000, v: 2, r: 210 },
+                    { name: 'Потерянный Пациент', patientId: '3', s: 50000, v: 1, r: 500 }
                   ] },
                   '36': { clients: [
                     { name: 'Активный Пациент', patientId: '1', s: 90000, v: 5, r: 30 },
@@ -357,15 +390,21 @@ function createWindow() {
               if (shortWindowButton) shortWindowButton.click();
               await new Promise(resolve => setTimeout(resolve, 100));
               const shortWindowSelected = document.querySelector('#kbWinSeg button.active')?.dataset.segmentValue === '12';
+              const shortLostHidden = ![...document.querySelectorAll('.kb-summary-label')].some(element => element.textContent.trim() === 'Потерянные');
+              const mediumWindowButton = [...document.querySelectorAll('#kbWinSeg button')].find(button => button.dataset.segmentValue === '24');
+              if (mediumWindowButton) mediumWindowButton.click();
+              await new Promise(resolve => setTimeout(resolve, 100));
+              const mediumWindowSelected = document.querySelector('#kbWinSeg button.active')?.dataset.segmentValue === '24';
+              const mediumLostVisible = [...document.querySelectorAll('.kb-summary-label')].some(element => element.textContent.trim() === 'Потерянные');
               const fullWindowButton = [...document.querySelectorAll('#kbWinSeg button')].find(button => button.dataset.segmentValue === '36');
               if (fullWindowButton) fullWindowButton.click();
               await new Promise(resolve => setTimeout(resolve, 100));
               const fullWindowSelected = document.querySelector('#kbWinSeg button.active')?.dataset.segmentValue === '36';
-              const riskActionButton = [...document.querySelectorAll('.kb-action-controls button')].find(button => button.textContent.includes('Группа риска'));
+              const riskActionButton = [...document.querySelectorAll('.kb-action-controls button')].find(button => button.textContent.includes('Новые, риск'));
               if (riskActionButton) riskActionButton.click();
               await new Promise(resolve => setTimeout(resolve, 100));
               const clientActionOpened = Boolean(document.getElementById('clientSegmentPatients')?.open)
-                && UI.clientSegment === 'risk';
+                && UI.clientSegment === 'newRisk';
               const doctorHeaderMetrics = [...document.querySelectorAll('#blkHead .kpi .lbl')].map(element => element.textContent.trim());
               const doctorHeaderMetricsValid = doctorHeaderMetrics.length === 5
                 && doctorHeaderMetrics.some(label => label.includes('Пациентов за месяц'))
@@ -384,7 +423,7 @@ function createWindow() {
               const doctorGoalCards = [...document.querySelectorAll('#doctorGoalsSummary .doctor-goal-item')].map(element => ({
                 key: element.dataset.goalKey,
                 vector: element.dataset.goalVector,
-                vectorLabel: element.querySelector('.doctor-goal-vector')?.textContent.trim() || '',
+                vectorLabel: element.closest('.doctor-goals-vector-column')?.querySelector('.doctor-goals-vector-head b')?.textContent.trim() || '',
                 target: element.querySelector('.doctor-goal-target')?.textContent.trim() || '',
                 fact: element.querySelector('.doctor-goal-fact')?.textContent.trim() || '',
                 state: ['goal-good', 'goal-warn', 'goal-bad', 'goal-na'].find(name => element.classList.contains(name)) || ''
@@ -422,7 +461,7 @@ function createWindow() {
               const focusResult = computeMetrics('d1', '2026-02');
               const interdisciplinaryFocusDetails = {
                 block: document.getElementById('blkV3').textContent.includes('ФОКУСЫ НАЗНАЧЕНИЙ'),
-                charts: Boolean(UI.charts.chNazFocusQty && UI.charts.chNazFocusMoney),
+                charts: Boolean(UI.charts.chNazFocusAssigned && UI.charts.chNazFocusResult),
                 used: focusResult.cross.naz[1].focus ? focusResult.cross.naz[1].focus.used : null,
                 park: focusResult.cross.naz[1].focus ? focusResult.cross.naz[1].focus.park : null,
                 score: focusResult.scores.vec.v3
@@ -431,7 +470,7 @@ function createWindow() {
                 && interdisciplinaryFocusDetails.charts
                 && interdisciplinaryFocusDetails.used === 1
                 && interdisciplinaryFocusDetails.park === 2
-                && interdisciplinaryFocusDetails.score === 87.5;
+                && interdisciplinaryFocusDetails.score === 100;
               UI.setDoctor = 'd1';
               switchTab('settings');
               enableDoctorMetricSettings();
@@ -452,8 +491,8 @@ function createWindow() {
                 doctorHeaderMetricsValid,
                 doctorHeaderCardRects,
                 doctorHeaderLayoutValid,
-                clientBaseButtonsValid: Boolean(shortWindowButton && fullWindowButton && riskActionButton)
-                  && shortWindowSelected && fullWindowSelected && clientActionOpened,
+                clientBaseButtonsValid: Boolean(shortWindowButton && mediumWindowButton && fullWindowButton && riskActionButton)
+                  && shortWindowSelected && mediumWindowSelected && fullWindowSelected && shortLostHidden && mediumLostVisible && clientActionOpened,
                 doctorGoalsSummaryValid,
                 doctorGoalCards,
                 mirrorRevenueChartValid,
@@ -542,6 +581,25 @@ function createWindow() {
 }
 
 function registerIpc() {
+  ipcMain.on("app:close-ready", (event, saved) => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents || !closeSaveRequested) return;
+    if (closeSaveTimer) clearTimeout(closeSaveTimer);
+    closeSaveTimer = null;
+    closeSaveRequested = false;
+    if (!saved) {
+      dialog.showMessageBox(mainWindow, {
+        type: "error",
+        title: APP_NAME,
+        message: "Закрытие отменено: последние изменения не сохранены",
+        detail: "Исправьте ошибку сохранения или создайте переносимую копию базы перед закрытием.",
+        buttons: ["Понятно"],
+      }).catch(() => {});
+      return;
+    }
+    closeAllowed = true;
+    mainWindow.close();
+  });
+
   ipcMain.handle("app:initialize", () => ({
     app: { name: APP_NAME, version: app.getVersion(), packaged: app.isPackaged, smokeTest: SMOKE_TEST },
     config: configStore.publicConfig(),
@@ -675,11 +733,12 @@ function registerIpc() {
     const source = selected.filePaths[0];
     const preview = backupService.preview(source);
     if (!preview.ok) throw new Error(`Копия повреждена: ${preview.error || preview.integrity}`);
+    if (!preview.compatible) throw new Error(`Копия создана более новой версией приложения (версия данных ${preview.snapshotVersion})`);
     const confirmation = await dialog.showMessageBox(mainWindow, {
       type: "warning",
       title: "Восстановление базы",
       message: "Заменить текущую базу выбранной резервной копией?",
-      detail: `В копии: месяцев — ${preview.months}, врачей — ${preview.doctors}, импортов — ${preview.imports}. Текущая база будет предварительно сохранена.`,
+      detail: `В копии: месяцев — ${preview.months}, врачей — ${preview.doctors}, импортов — ${preview.imports}, версия данных — ${preview.snapshotVersion || "без версии"}. Текущая база будет предварительно сохранена.`,
       buttons: ["Восстановить", "Отмена"],
       defaultId: 1,
       cancelId: 1,
@@ -732,6 +791,6 @@ if (!gotLock) {
 }
 
 app.on("window-all-closed", () => app.quit());
-app.on("before-quit", () => {
+app.on("will-quit", () => {
   try { if (database) database.close(); } catch (_) { /* best effort */ }
 });
