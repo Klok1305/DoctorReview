@@ -155,36 +155,53 @@ function vyrabotkaSummary(docId, monthKey) {
   // позиции «Направления» уже отмечены через sRef; нулевые строки между ними
   // относятся к тому же непрерывному блоку и не должны попадать в В2.
   const legacyReferralIndexes = items
-    .map((item, index) => (!item.sourceForm && (item.sRef || 0) > 0 && !(item.sOwn || 0) ? index : -1))
+    .map((item, index) => (!item.sourceForm
+      && !isVyrabotkaOwnReferralForm(item.form)
+      && (item.sRef || 0) > 0
+      && !(item.sOwn || 0) ? index : -1))
     .filter(index => index >= 0);
   const legacyReferralStart = legacyReferralIndexes.length ? legacyReferralIndexes[0] : -1;
   const legacyReferralEnd = legacyReferralIndexes.length ? legacyReferralIndexes[legacyReferralIndexes.length - 1] : -1;
   for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
     const it = items[itemIndex];
     const cls = classifyItem(profile, it.cat, it.n, it.goods);
-    const sourceForm = cellStr(it.sourceForm).toLowerCase();
+    const explicitSourceForm = cellStr(it.sourceForm).toLowerCase();
+    const legacyForm = cellStr(it.form).toLowerCase();
+    // В старом формате блок «По направлению» сохранялся в form, а его сумма —
+    // ошибочно в sRef. Восстанавливаем исходный блок до расчёта метрик.
+    const sourceForm = explicitSourceForm
+      || (isVyrabotkaOwnReferralForm(legacyForm) ? "по направлению" : "");
     const rawOwn = it.sOwn || 0;
-    const ref = it.sRef || 0;
+    const rawRef = it.sRef || 0;
     const legacyZeroReferral = !sourceForm
-      && !rawOwn && !ref
+      && !rawOwn && !rawRef
       && itemIndex >= legacyReferralStart && itemIndex <= legacyReferralEnd;
     const fromReferralBlock = sourceForm === "направление" || legacyZeroReferral;
     const fromOwnBlock = sourceForm === "сотрудник" || sourceForm === "по направлению";
-    // sourceForm появился после исправления разноса блоков. Для старых импортов
-    // сохраняем прежнее определение по form и ненулевой сумме направления.
-    const ownForm = fromOwnBlock || (!sourceForm && it.form === "");
-    const assistForm = sourceForm
-      ? !fromReferralBlock && !fromOwnBlock
-      : it.form !== "";
-    const own = ownForm && !fromReferralBlock ? rawOwn : 0;
-    const assist = assistForm ? rawOwn : 0;
+    let own = 0, ref = 0, assist = 0;
+    if (fromReferralBlock) {
+      // В3: врач направил пациента коллеге.
+      ref = rawOwn + rawRef;
+    } else if (fromOwnBlock) {
+      // В2: собственная выработка врача. Сюда входят как основной блок
+      // «Сотрудник», так и выполненные им услуги «По направлению».
+      own = rawOwn + rawRef;
+    } else if (!sourceForm && legacyForm === "") {
+      // Старый импорт без sourceForm: поля сумм уже разделяли собственную
+      // выработку и блок «Направление».
+      own = rawOwn;
+      ref = rawRef;
+    } else {
+      assist = rawOwn;
+      ref = rawRef;
+    }
     const quantity = it.q || 0;
     const qRef = fromReferralBlock
       ? quantity
       : (ref > 0 && own <= 0 ? quantity : 0);
-    const qOwn = fromReferralBlock
-      ? 0
-      : (own > 0 || (!assist && !ref) ? quantity : 0);
+    const qOwn = fromOwnBlock
+      ? quantity
+      : (fromReferralBlock ? 0 : (own > 0 || (!assist && !ref) ? quantity : 0));
     out.ownSum += own;
     out.assistSum += assist;
     out.refSum += ref;
