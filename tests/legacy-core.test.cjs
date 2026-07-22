@@ -328,6 +328,52 @@ test("doctor work parser adds 'По направлению' to own work and keep
   }
 });
 
+test("legacy doctor work recalculates 'По направлению' as own revenue", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], dept: 'По умолчанию' } };
+    DB.months = { '2026-06': emptyMonth() };
+    DB.months['2026-06'].vyrabotka.d1 = { items: [
+      { form: '', cat: 'Диагностика', n: 'Собственная услуга', q: 1, sOwn: 100, sRef: 0 },
+      { form: '', cat: 'Диагностика', n: 'Направленная услуга 1', q: 1, sOwn: 0, sRef: 70 },
+      { form: '', cat: 'Диагностика', n: 'Направленная услуга 2', q: 1, sOwn: 0, sRef: 30 },
+      { form: 'По направлению', cat: 'Кардиология приемы', n: 'Консультация', q: 4, sOwn: 0, sRef: 0 },
+      { form: 'По направлению', cat: 'Приемы', n: 'Выполненная услуга 1', q: 3, sOwn: 0, sRef: 400 },
+      { form: 'По направлению', cat: 'Приемы', n: 'Выполненная услуга 2', q: 2, sOwn: 0, sRef: 200 }
+    ] };
+    DB.months['2026-06'].kb.d1 = { '1': { clients: [
+      { name: 'Пациент 1', s: 1, v: 1, r: 1 },
+      { name: 'Пациент 2', s: 1, v: 1, r: 1 },
+      { name: 'Пациент 3', s: 1, v: 1, r: 1 },
+      { name: 'Пациент 4', s: 1, v: 1, r: 1 },
+      { name: 'Пациент 5', s: 1, v: 1, r: 1 },
+      { name: 'Пациент 6', s: 1, v: 1, r: 1 },
+      { name: 'Пациент 7', s: 1, v: 1, r: 1 },
+      { name: 'Пациент 8', s: 1, v: 1, r: 1 },
+      { name: 'Пациент 9', s: 1, v: 1, r: 1 },
+      { name: 'Пациент 10', s: 1, v: 1, r: 1 }
+    ] } };
+    clearMetricsCache();
+    const metrics = computeMetrics('d1', '2026-06');
+    return {
+      ownSum: metrics.econ.sales,
+      ownQty: metrics.extras.vy.ownQty,
+      refSum: metrics.econ.refRevenue,
+      refQty: metrics.extras.vy.refQty,
+      avgClient: metrics.econ.avgClient,
+      assistSum: metrics.econ.assistSum
+    };
+  })()`, context);
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    ownSum: 700,
+    ownQty: 10,
+    refSum: 100,
+    refQty: 2,
+    avgClient: 70,
+    assistSum: 0,
+  });
+});
+
 test("appointments parser supports flat and deeply grouped 1C reports", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {

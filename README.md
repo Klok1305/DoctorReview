@@ -6,7 +6,7 @@
 
 ### Файл 1 — portable-версия: запустить сразу
 
-[⬇️ Скачать DoctorReview Portable 1.18](https://github.com/Klok1305/DoctorReview/releases/download/v1.18.0/DoctorReview-Portable-1.18.0-x64.exe)
+[⬇️ Скачать DoctorReview Portable 1.18.1](https://github.com/Klok1305/DoctorReview/releases/download/v1.18.1/DoctorReview-Portable-1.18.1-x64.exe)
 
 После скачивания дважды щёлкните по `.exe` — приложение запустится без установки.
 Этот вариант нужен для быстрого запуска, проверки программы или использования с
@@ -15,7 +15,7 @@
 
 ### Файл 2 — установщик: для постоянной работы
 
-[⬇️ Скачать установщик DoctorReview 1.18](https://github.com/Klok1305/DoctorReview/releases/download/v1.18.0/DoctorReview-Setup-1.18.0-x64.exe)
+[⬇️ Скачать установщик DoctorReview 1.18.1](https://github.com/Klok1305/DoctorReview/releases/download/v1.18.1/DoctorReview-Setup-1.18.1-x64.exe)
 
 Это рекомендуемый вариант. Установщик сам устанавливает программу и все необходимые
 компоненты — отдельно устанавливать Node.js или другие программы не нужно. Он создаёт
