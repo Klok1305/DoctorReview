@@ -52,6 +52,17 @@ class UpdateService {
     }
     const { autoUpdater } = require("electron-updater");
     this.autoUpdater = autoUpdater;
+    // У electron-updater по умолчанию консольный логгер. У Windows GUI stdout
+    // может быть уже закрыт, и попытка записи тогда завершает процесс с EPIPE.
+    const writeUpdateLog = (level, values) => this.logger(`update-${level}`, {
+      message: values.map(value => value instanceof Error ? value.message : String(value)).join(" "),
+    });
+    autoUpdater.logger = {
+      info: (...values) => writeUpdateLog("info", values),
+      warn: (...values) => writeUpdateLog("warn", values),
+      error: (...values) => writeUpdateLog("error", values),
+      debug: (...values) => writeUpdateLog("debug", values),
+    };
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.setFeedURL({ provider: "generic", url });

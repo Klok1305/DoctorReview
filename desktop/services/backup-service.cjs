@@ -61,15 +61,16 @@ class BackupService {
     const source = path.resolve(sourcePath);
     const preview = DatabaseService.inspect(source);
     if (!preview.ok) throw new Error(`Резервная копия повреждена: ${preview.error || preview.integrity}`);
+    if (!preview.compatible) throw new Error(`Версия данных ${preview.snapshotVersion} не поддерживается установленной версией приложения`);
 
     const safety = await this.createAutomatic("перед-восстановлением");
     const target = this.database.databasePath;
     const temp = `${target}.restore-${Date.now()}`;
     fs.copyFileSync(source, temp);
     const copiedPreview = DatabaseService.inspect(temp);
-    if (!copiedPreview.ok) {
+    if (!copiedPreview.ok || !copiedPreview.compatible) {
       fs.rmSync(temp, { force: true });
-      throw new Error("Проверка скопированной базы не пройдена");
+      throw new Error("Проверка совместимости скопированной базы не пройдена");
     }
 
     this.database.close();

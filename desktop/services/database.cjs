@@ -6,6 +6,8 @@ const path = require("node:path");
 const { backup, DatabaseSync } = require("node:sqlite");
 
 const SCHEMA_VERSION = 1;
+const SNAPSHOT_VERSION = 4;
+const MIN_SNAPSHOT_VERSION = 1;
 
 function stableJson(value) {
   return JSON.stringify(value == null ? null : value);
@@ -35,7 +37,14 @@ class DatabaseService {
     this.db.exec("PRAGMA synchronous = FULL");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.db.exec("PRAGMA busy_timeout = 5000");
-    this.#migrate();
+    try {
+      this.#migrate();
+      this.#assertSnapshotCompatible();
+    } catch (error) {
+      try { this.db.close(); } catch (_) { /* preserve the validation error */ }
+      this.db = null;
+      throw error;
+    }
   }
 
   close() {
@@ -155,6 +164,17 @@ class DatabaseService {
     }
   }
 
+  #assertSnapshotCompatible() {
+    const hasMeta = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_meta'").get();
+    if (!hasMeta) return;
+    const row = this.db.prepare("SELECT data_json FROM app_meta WHERE key = 'version'").get();
+    if (!row) return;
+    const version = Number(parseJson(row.data_json, null));
+    if (!Number.isInteger(version) || version < MIN_SNAPSHOT_VERSION || version > SNAPSHOT_VERSION) {
+      throw new Error(`Версия данных ${version || "не определена"} не поддерживается этой версией приложения (поддерживаются ${MIN_SNAPSHOT_VERSION}–${SNAPSHOT_VERSION})`);
+    }
+  }
+
   loadSnapshot() {
     const settingsRow = this.db.prepare("SELECT data_json FROM app_settings WHERE id = 1").get();
     if (!settingsRow) return null;
@@ -183,6 +203,10 @@ class DatabaseService {
   saveSnapshot(snapshot) {
     if (!snapshot || typeof snapshot !== "object" || !snapshot.settings || !snapshot.months || !snapshot.doctors) {
       throw new Error("Некорректный снимок базы");
+    }
+    const snapshotVersion = Number(snapshot.version);
+    if (!Number.isInteger(snapshotVersion) || snapshotVersion < MIN_SNAPSHOT_VERSION || snapshotVersion > SNAPSHOT_VERSION) {
+      throw new Error(`Неподдерживаемая версия данных: ${snapshot.version}`);
     }
     const now = new Date().toISOString();
     const upsertSettings = this.db.prepare(`
@@ -246,7 +270,7 @@ class DatabaseService {
       }
 
       const metadata = {
-        version: Number(snapshot.version || 3),
+        version: snapshotVersion,
         dynamicNotes: snapshot.dynamicNotes || {},
         fileLog: Array.isArray(snapshot.fileLog) ? snapshot.fileLog.slice(0, 300) : [],
       };
@@ -398,9 +422,17 @@ class DatabaseService {
         return { ok: false, integrity: String(integrity) };
       }
       const tableExists = name => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
+      const versionRow = tableExists("app_meta")
+        ? db.prepare("SELECT data_json FROM app_meta WHERE key = 'version'").get()
+        : null;
+      const snapshotVersion = versionRow ? Number(parseJson(versionRow.data_json, null)) : null;
+      const compatible = snapshotVersion == null
+        || (Number.isInteger(snapshotVersion) && snapshotVersion >= MIN_SNAPSHOT_VERSION && snapshotVersion <= SNAPSHOT_VERSION);
       return {
         ok: true,
         integrity: "ok",
+        compatible,
+        snapshotVersion,
         schemaVersion: tableExists("schema_migrations")
           ? db.prepare("SELECT COALESCE(MAX(version), 0) AS n FROM schema_migrations").get().n
           : 0,
@@ -417,4 +449,4 @@ class DatabaseService {
   }
 }
 
-module.exports = { DatabaseService, SCHEMA_VERSION, contentHash };
+module.exports = { DatabaseService, SCHEMA_VERSION, SNAPSHOT_VERSION, MIN_SNAPSHOT_VERSION, contentHash };

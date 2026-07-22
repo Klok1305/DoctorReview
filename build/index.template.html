@@ -44,8 +44,8 @@
   <div class="toolbar" style="margin-top:14px">
     <button class="btn primary" id="btnSaveSession" title="Зафиксировать текущее состояние рабочей базы со всеми изменениями этой сессии">💾 Сохранить изменения</button>
     <span class="small muted" id="sessionSaveStatus" role="status" aria-live="polite"></span>
-    <button class="btn" id="btnExport">⇓ Сохранить копию базы</button>
-    <button class="btn" id="btnImport">📂 Загрузить базу из файла</button>
+    <button class="btn" id="btnExport">⇓ Экспорт данных в JSON</button>
+    <button class="btn" id="btnImport">📂 Импорт данных из JSON</button>
     <input type="file" id="importInput" accept=".json" class="hidden">
     <button class="btn" id="btnAutosave" title="База будет автоматически записываться в выбранный файл при каждом изменении (Chrome/Edge)">⚡ Автосохранение в файл</button>
     <span class="small muted" id="autosaveStatus"></span>
@@ -71,9 +71,9 @@
       <div class="workspace-path-row"><b>Рабочая база</b><code id="databasePath"></code><span></span><button class="btn mini" data-open-path="database">открыть</button></div>
     </div>
     <div class="toolbar compact-toolbar">
-      <button class="btn" id="btnBackupNow">🛡 Создать копию</button>
-      <button class="btn" id="btnExportBackup">⇓ Переносимая копия</button>
-      <button class="btn" id="btnRestoreBackup">↺ Восстановить</button>
+      <button class="btn" id="btnBackupNow">🛡 Локальная резервная копия</button>
+      <button class="btn" id="btnExportBackup">⇓ Полная копия для переноса</button>
+      <button class="btn" id="btnRestoreBackup">↺ Восстановить полную копию</button>
       <span class="spacer"></span>
       <span class="small muted" id="updateStatus"></span>
       <button class="btn" id="btnCheckUpdates">Проверить обновления</button>

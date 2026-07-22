@@ -29,6 +29,13 @@ contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   createBackup: () => invoke("backup:create"),
   exportBackup: () => invoke("backup:export"),
   restoreBackup: () => invoke("backup:restore"),
+  confirmCloseSaved: saved => ipcRenderer.send("app:close-ready", saved === true),
+  onPrepareClose: callback => {
+    if (typeof callback !== "function") return () => {};
+    const listener = () => callback();
+    ipcRenderer.on("app:prepare-close", listener);
+    return () => ipcRenderer.removeListener("app:prepare-close", listener);
+  },
 
   checkUpdates: () => invoke("update:check"),
   installDownloadedUpdate: () => invoke("update:install-downloaded"),
