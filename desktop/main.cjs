@@ -336,6 +336,14 @@ function createWindow() {
                   structureManual: true,
                   spec: 'Косметолог'
                 },
+                d3: {
+                  name: 'Примерова Косметолог',
+                  aliases: [],
+                  department: 'Косметология',
+                  specialization: 'Косметология',
+                  structureManual: true,
+                  spec: 'Косметолог'
+                },
                 d2: { name: 'Тестов Терапевт', aliases: [], dept: 'Терапия', spec: 'Терапевт' }
               };
               DB.months = { '2026-01': emptyMonth(), '2026-02': emptyMonth() };
@@ -353,6 +361,7 @@ function createWindow() {
               DB.settings.depts['Косметология'].riskM = 18;
               for (const mk of Object.keys(DB.months)) {
                 DB.months[mk].vyrabotka.d1 = { items: [{ form: '', cat: 'Прием', n: 'Прием врача', q: 5, sOwn: mk.endsWith('01') ? 100000 : 120000, sRef: 20000, goods: false }] };
+                DB.months[mk].vyrabotka.d3 = { items: [{ form: '', cat: 'Прием', n: 'Прием врача', q: 3, sOwn: mk.endsWith('01') ? 70000 : 75000, sRef: 5000, goods: false }] };
                 DB.months[mk].vyrabotka.d2 = { items: [{ form: '', cat: 'Прием', n: 'Прием врача', q: 4, sOwn: mk.endsWith('01') ? 80000 : 90000, sRef: 10000, goods: false }] };
                 DB.months[mk].kb.d1 = {
                   '12': { clients: [
@@ -382,6 +391,35 @@ function createWindow() {
               await new Promise(resolve => setTimeout(resolve, 300));
               const departmentPage = document.getElementById('page-department').classList.contains('active');
               const departmentCharts = Boolean(UI.charts.chDepartmentRevenue && UI.charts.chDepartmentRates && UI.charts.chDepartmentBase);
+              const departmentAllLeaderboardCount = document.querySelectorAll('#departmentBody .doctor-score-leader').length;
+              UI.departmentFilter = 'Косметология';
+              renderDepartment();
+              await new Promise(resolve => setTimeout(resolve, 150));
+              const departmentFilteredLeaderboardCount = document.querySelectorAll('#departmentBody .doctor-score-leader').length;
+              UI.deptMonth = '2026-02';
+              UI.deptFilter = 'Косметология';
+              UI.subFilter = 'all';
+              switchTab('dept');
+              await new Promise(resolve => setTimeout(resolve, 150));
+              const specializationLeaderboardCount = document.querySelectorAll('#deptBody .doctor-score-leader').length;
+              UI.repMonth = '2026-02';
+              UI.repScope = 'dept';
+              switchTab('report');
+              await new Promise(resolve => setTimeout(resolve, 150));
+              const reportLeaderboardCount = document.querySelectorAll('#reportBody .doctor-score-leader').length;
+              const leaderboardFixture = document.createElement('div');
+              leaderboardFixture.innerHTML = doctorScoreLeaderboardHtml([
+                { id: 'd1', r: { scores: { total: 82, rankEligible: true } } },
+                { id: 'd1', r: { scores: { total: 55, rankEligible: true } } },
+                { id: 'd1', r: { scores: { total: 20, rankEligible: true } } }
+              ], '2026-02', 'Проверка цветов');
+              const leaderboardColorStates = [...leaderboardFixture.querySelectorAll('.doctor-score-leader')]
+                .map(element => element.dataset.scoreState).sort();
+              const reportLeaderboardsValid = departmentAllLeaderboardCount === 3
+                && departmentFilteredLeaderboardCount === 2
+                && specializationLeaderboardCount === 2
+                && reportLeaderboardCount === 2
+                && leaderboardColorStates.join(',') === 'bad,good,warn';
               UI.docId = 'd1';
               UI.docMonth = '2026-02';
               switchTab('doctor');
@@ -487,6 +525,14 @@ function createWindow() {
                 optionalLibrariesDeferred,
                 departmentPage,
                 departmentCharts,
+                reportLeaderboardsValid,
+                reportLeaderboardDetails: {
+                  departmentAllLeaderboardCount,
+                  departmentFilteredLeaderboardCount,
+                  specializationLeaderboardCount,
+                  reportLeaderboardCount,
+                  leaderboardColorStates
+                },
                 doctorHeaderMetrics,
                 doctorHeaderMetricsValid,
                 doctorHeaderCardRects,
@@ -527,6 +573,18 @@ function createWindow() {
           if (!mirrorScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок зеркального графика');
           fs.writeFileSync(mirrorScreenshotPath, Buffer.from(mirrorScreenshot.slice('data:image/png;base64,'.length), 'base64'));
           result.mirrorScreenshot = mirrorScreenshotPath;
+          const leaderboardScreenshotPath = path.join(artifactRoot, "report-leaderboard-smoke.png");
+          const leaderboardScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            UI.deptMonth = '2026-02'; UI.deptFilter = 'Косметология'; UI.subFilter = 'all'; switchTab('dept');
+            await new Promise(resolve => setTimeout(resolve, 150));
+            const element = document.querySelector('#deptBody .doctor-score-leaderboard');
+            if (!element) return '';
+            const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.5, logging: false, windowWidth: 1400 });
+            return canvas.toDataURL('image/png');
+          })()`);
+          if (!leaderboardScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок лидерборда врачей');
+          fs.writeFileSync(leaderboardScreenshotPath, Buffer.from(leaderboardScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.leaderboardScreenshot = leaderboardScreenshotPath;
           await mainWindow.webContents.executeJavaScript(`(() => {
             UI.docId = 'd1'; UI.docMonth = '2026-02'; switchTab('doctor');
             document.getElementById('blkHead')?.scrollIntoView({ block: 'start' });
@@ -563,7 +621,7 @@ function createWindow() {
         }
         process.stdout.write(`${JSON.stringify(result)}\n`);
         const passed = result.dataPage && result.optionalLibrariesDeferred && result.xlsx && result.chart && result.desktop
-          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.doctorMetricSettings))
+          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.reportLeaderboardsValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.doctorMetricSettings))
           && (!PDF_SMOKE_TEST || (result.saved && result.pdfSelectionDialogValid && result.pdfExport && result.pdfExport.saved === 3
             && result.pdfExport.chartImages >= 3 && result.pdfFiles.length === 3
             && result.sessionSaveStatus && result.sessionSaveStatus.includes('Сохранено в рабочую базу SQLite')

@@ -585,7 +585,9 @@ function renderDepartment() {
     return;
   }
 
+  const scoreRows = departmentDoctorRows(mk, UI.departmentFilter);
   let html = `<div class="notice blue"><b>${esc(scope)}</b>: расчетные профили — ${specs.map(esc).join(", ") || "не настроены"}. Стрелки сравнивают месяц с предыдущим календарным месяцем и со средним значением прошлых месяцев ${year} года.${goalProfile ? " Итоговое значение зелёное, если цель отделения выполнена, красное — если не выполнена; без сопоставимой цели цвет нейтральный." : " Для сводной по всем отделениям единая цель не применяется."}</div>`;
+  html += doctorScoreLeaderboardHtml(scoreRows, mk, scope);
   html += '<div class="grid cols-4">' + defs.map(def => {
     const cur = def.get(current);
     const prev = def.get(previous);
@@ -635,6 +637,53 @@ function deptRows(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilter) {
   }
   rows.sort((a, b) => (b.r.econ.sales ?? -1) - (a.r.econ.sales ?? -1));
   return { rows, allIds: docIds };
+}
+
+function departmentDoctorRows(mk, departmentFilter = UI.departmentFilter) {
+  const core = coreDoctorsInMonth(mk);
+  const docIds = core.length ? core : doctorsInMonth(mk);
+  const filtered = departmentFilter === "all"
+    ? docIds
+    : docIds.filter(id => resolvedDepartmentName(id) === departmentFilter);
+  return filtered.map(id => ({ id, r: computeMetrics(id, mk) })).filter(x => x.r);
+}
+
+function doctorScoreLeaderboardHtml(rows, mk, scopeLabel = "") {
+  if (!DB.settings.showScores || !rows.length) return "";
+  const radius = 35;
+  const circ = 2 * Math.PI * radius;
+  const ranked = [...rows].sort((a, b) => {
+    const aScore = a.r.scores && a.r.scores.total != null ? Number(a.r.scores.total) : -1;
+    const bScore = b.r.scores && b.r.scores.total != null ? Number(b.r.scores.total) : -1;
+    const aEligible = Boolean(a.r.scores && a.r.scores.rankEligible);
+    const bEligible = Boolean(b.r.scores && b.r.scores.rankEligible);
+    return Number(bEligible) - Number(aEligible) || bScore - aScore || doctorName(a.id).localeCompare(doctorName(b.id), "ru");
+  });
+  let eligibleRank = 0;
+  const items = ranked.map(x => {
+    const rawScore = x.r.scores && x.r.scores.total != null ? Number(x.r.scores.total) : null;
+    const value = rawScore == null || isNaN(rawScore) ? null : Math.max(0, Math.min(100, rawScore));
+    const state = value == null ? "empty" : value >= 70 ? "good" : value >= 40 ? "warn" : "bad";
+    const color = state === "good" ? "var(--good)" : state === "warn" ? "var(--warn)" : state === "bad" ? "var(--bad)" : "var(--line)";
+    const eligible = Boolean(x.r.scores && x.r.scores.rankEligible);
+    const place = eligible ? ++eligibleRank : null;
+    const scoreLabel = value == null ? "нет данных" : `${fmtNum(value, 0)} из 100${eligible ? "" : ", предварительный"}`;
+    return `<div class="doctor-score-leader" data-doctor-id="${esc(x.id)}" data-score-state="${state}" aria-label="${esc(doctorName(x.id))}: ${esc(scoreLabel)}">
+      <div class="dpi-ring doctor-score-leader-ring">
+        <svg width="88" height="88" viewBox="0 0 88 88"><circle cx="44" cy="44" r="${radius}" fill="none" stroke="var(--line)" stroke-width="9"/>
+        <circle cx="44" cy="44" r="${radius}" fill="none" stroke="${color}" stroke-width="9" stroke-linecap="round" stroke-dasharray="${(circ * (value || 0) / 100).toFixed(1)} ${circ.toFixed(1)}"/></svg>
+        <div class="num"><b>${value == null ? "—" : fmtNum(value, 0)}</b><i>${value == null ? "без балла" : eligible ? `место ${place}` : "предв."}</i></div>
+      </div>
+      <div class="doctor-score-leader-name">${esc(doctorName(x.id))}</div>
+    </div>`;
+  }).join("");
+  return `<section class="card doctor-score-leaderboard" aria-label="Лидерборд врачей">
+    <div class="doctor-score-leaderboard-head">
+      <div><h2>Лидерборд врачей <span class="small muted">· все ${ranked.length}</span></h2>${scopeLabel ? `<p class="small muted">${esc(scopeLabel)} · ${monthLabel(mk)}</p>` : ""}</div>
+      <div class="doctor-score-legend" aria-label="Цвета баллов"><span class="good">70–100</span><span class="warn">40–69</span><span class="bad">0–39</span></div>
+    </div>
+    <div class="doctor-score-leaderboard-grid">${items}</div>
+  </section>`;
 }
 
 function deptKpiTrend(current, average, mode) {
@@ -703,7 +752,9 @@ function renderDept() {
   const avgRefYtd = meanKnown(ytdDept.map(r => r.econ.refRevenue));
   const avgLoadPctYtd = meanKnown(ytdDept.map(r => r.loyalty.sched ? r.loyalty.sched.pct : null));
 
-  let html = `<div class="grid cols-5">
+  const scoreScope = UI.deptFilter === "all" ? "Все специализации" : UI.subFilter !== "all" ? `${UI.deptFilter} · ${UI.subFilter}` : UI.deptFilter;
+  let html = doctorScoreLeaderboardHtml(rows, mk, scoreScope);
+  html += `<div class="grid cols-5">
     <div class="kpi"><div class="lbl">Пациенты за месяц</div><div class="val">${fmtNum(currentPatients)} ${deptKpiTrend(currentPatients, avgPatientsYtd, "pct")}</div><div class="sub">среднее за ${year}: ${fmtNum(avgPatientsYtd)}</div></div>
     <div class="kpi"><div class="lbl">Доля активных</div><div class="val">${fmtPct(currentActiveBasePct)} ${deptKpiTrend(currentActiveBasePct, avgActiveBasePctYtd, "pp")}</div><div class="sub">среднее за ${year}: ${fmtPct(avgActiveBasePctYtd)}</div></div>
     <div class="kpi"><div class="lbl">Выручка</div><div class="val" style="font-size:19px">${fmtMoney(totalSales)} ${deptKpiTrend(totalSales, avgSalesYtd, "pct")}</div><div class="sub">среднее за ${year}: ${fmtMoney(avgSalesYtd)}</div></div>
@@ -3221,6 +3272,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
 
   /* Слайд 1: итоги + сводная */
   let html = `<div class="card slide">${reportHeader("Отчёт по специализации", sub)}
+    ${doctorScoreLeaderboardHtml(rows, mk, deptFilter !== "all" ? deptFilter : "Все специализации")}
     ${reportOverallIndex(scAvg, "Общий индекс", scAvgPreliminary ? "предварительный: полнота данных ниже 80%" : `среднее по ${eligibleScores.length || allScores.length} специалистам`)}
     <div class="grid cols-4">
       <div class="kpi"><div class="lbl">Специалистов</div><div class="val">${rows.length}</div></div>
