@@ -203,7 +203,7 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /Обратите внимание:/);
   assert.match(actual, /Вероятная связь показателей:/);
   assert.match(actual, /Обновить выводы по показателям/);
-  assert.match(actual, /\.dyn-narrative textarea[^}]*font-family:\s*"Segoe UI"/);
+  assert.match(actual, /\.dyn-narrative-editor[^}]*font-family:\s*"Segoe UI"/);
   assert.doesNotMatch(actual, /Описание по цифрам|автоописание|Автоматическое описание|Вернуть автоописание/);
   assert.match(actual, /\.logo-work\s*\{\s*color:\s*#65a30d;/);
   assert.match(actual, /\.logo-doctors\s*\{\s*color:\s*#7c3aed;/);
@@ -337,6 +337,17 @@ test("doctor and report pages use the same doctor metrics header component", () 
     "Коэффициент визитов на пациента за 12 мес.",
     "Объём активной клиентской базы",
   ]) assert.match(header[0], new RegExp(label));
+  for (const dynamics of [
+    /const patientsDyn = doctorMetricDynamics\(docId, mk, rr => rr\.traffic\.patients\)/,
+    /const scheduleDyn = doctorMetricDynamics\(docId, mk, rr => rr\.loyalty\.sched \? rr\.loyalty\.sched\.pct : null\)/,
+    /const monthlyVisitRateDyn = doctorMetricDynamics\(docId, mk, rr => rr\.traffic\.freq\)/,
+    /const annualVisitRateDyn = doctorMetricDynamics\(docId, mk, rr => rr\.loyalty\.freq12\)/,
+  ]) assert.match(header[0], dynamics);
+  assert.equal((header[0].match(/\$\{metricHistoryMarkup\(/g) || []).length, 5, "every doctor header KPI must show history");
+  assert.match(header[0], /metricHistoryMarkup\(r\.traffic\.patients, patientsDyn, "relative"/);
+  assert.match(header[0], /metricHistoryMarkup\(schedule \? schedule\.pct : null, scheduleDyn, "pp"/);
+  assert.match(header[0], /metricHistoryMarkup\(monthlyVisitRate, monthlyVisitRateDyn, "absolute"/);
+  assert.match(header[0], /metricHistoryMarkup\(annualVisitRate, annualVisitRateDyn, "absolute"/);
   assert.match(header[0], /\["v1", "v2", "v3", "v4", "v5", "v6"\]/);
   assert.match(doctor[0], /doctorMetricsHeaderHtml\(UI\.docId, mk, r,/);
   assert.match(report[0], /doctorMetricsHeaderHtml\(docId, mk, r,/);
@@ -359,6 +370,11 @@ test("department and specialization reports show every doctor in a score leaderb
   assert.doesNotMatch(leaderboard[0], /\.slice\(/, "the leaderboard must not truncate the doctor list");
   assert.match(leaderboard[0], /value >= 70 \? "good" : value >= 40 \? "warn" : "bad"/);
   assert.match(leaderboard[0], /data-score-state="\$\{state\}"/);
+  assert.match(ui, /function doctorAverageScoreToMonth\(docId, mk\)/);
+  assert.match(ui, /eligibleMonths\.length \? eligibleMonths : scoredMonths/);
+  assert.match(leaderboard[0], /data-average-score="\$\{average\.value\.toFixed\(1\)\}"/);
+  assert.match(leaderboard[0], /doctor-score-leader-average/);
+  assert.match(leaderboard[0], /ср\. \$\{fmtNum\(average\.value, 0\)\}/);
   assert.match(leaderboard[0], /Лидерборд врачей/);
   assert.match(leaderboard[0], /все \$\{ranked\.length\}/);
   assert.match(department[0], /departmentDoctorRows\(mk, UI\.departmentFilter\)/);
@@ -367,6 +383,34 @@ test("department and specialization reports show every doctor in a score leaderb
   assert.match(report[0], /doctorScoreLeaderboardHtml\(rows, mk,/);
   assert.match(css, /\.doctor-score-leaderboard-grid\s*\{[^}]*repeat\(auto-fill,\s*minmax\(126px,\s*150px\)\)/s);
   assert.match(css, /\.doctor-score-leader-ring\s*\{[^}]*width:\s*88px/s);
+  assert.match(css, /\.doctor-score-leader-average\s*\{[^}]*position:\s*absolute[^}]*right:\s*7px[^}]*bottom:\s*6px/s);
+});
+
+test("specialization and department comparisons include aggregate totals with stable columns", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const metrics = fs.readFileSync(path.join(build, "app-metrics.js"), "utf8");
+  const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
+  const compare = ui.match(/function renderCompare\(mk, rows\) \{[\s\S]*?\n\}\n\nasync function exportDeptXlsx/);
+  const department = ui.match(/function renderDepartment\(\) \{[\s\S]*?\n\}\n\n\/\* ================= СТРАНИЦА: СПЕЦИАЛИЗАЦИЯ/);
+
+  assert.ok(compare, "specialization comparison renderer must be present");
+  assert.ok(department, "department renderer must be present");
+  assert.match(compare[0], /const aggregateResult = aggregateDeptMonth\(mk, UI\.deptFilter, UI\.subFilter\)/);
+  assert.match(compare[0], /Итог специализации/);
+  assert.match(compare[0], /compare-total-cell/);
+  assert.match(compare[0], /<col class="compare-metric-col">/);
+  assert.match(compare[0], /<col class="compare-summary-col">/);
+  assert.match(compare[0], /<col class="compare-doctor-col">/);
+  assert.match(department[0], /department-total-row/);
+  assert.match(department[0], /Итого по \$\{UI\.departmentFilter === "all" \? "всем отделениям" : "отделению"\}/);
+  assert.match(metrics, /avgVisit:\s*\(sales != null && visits\) \? sales \/ visits : null/);
+  assert.match(metrics, /naz:\s*\{\s*1:\s*naz1,\s*3:\s*naz3\s*\}/);
+  assert.match(metrics, /churn36:\s*unique36 \? unique36\.lostPct : null/);
+  assert.match(css, /\.compare-table\s*\{[^}]*table-layout:\s*fixed/s);
+  assert.match(css, /\.compare-table \.compare-metric-col\s*\{[^}]*width:\s*250px/s);
+  assert.match(css, /\.compare-table \.compare-summary-col\s*\{[^}]*width:\s*158px/s);
+  assert.match(css, /\.compare-table \.compare-doctor-col\s*\{[^}]*width:\s*132px/s);
+  assert.match(css, /\.department-profiles-table\s*\{[^}]*table-layout:\s*fixed/s);
 });
 
 test("first-run folder prompt is attached to a visible application window", () => {
@@ -451,6 +495,13 @@ test("client-base vector keeps 12/24/36 manual and hides unavailable overlapping
   assert.doesNotMatch(vector[0], /disabled:/);
   assert.match(vector[0], /const groupOrder = \["loyal", "active", "newRisk", "loyalSleep", "lost"\]/);
   assert.match(vector[0], /filter\(group => kb\.groupAvailable\[group\]\)/);
+  assert.match(vector[0], /kb-summary-share/);
+  assert.match(vector[0], /К предыдущему месяцу/);
+  assert.match(vector[0], /К среднему за \$\{kbDyn\.year\}/);
+  assert.match(vector[0], /kbDyn\.avgGroupPct\[group\]/);
+  assert.match(vector[0], /group === "active" \|\| group === "lost"/);
+  assert.match(vector[0], /group === "newRisk" \|\| group === "loyalSleep" \|\| group === "lost"/);
+  assert.match(vector[0], /рост доли активных пациентов и снижение доли потерянных/);
   for (const label of ["Общая база", "Что сделать сейчас", "Группы могут пересекаться", "не показываются"]) {
     assert.match(vector[0], new RegExp(label));
   }
@@ -458,6 +509,8 @@ test("client-base vector keeps 12/24/36 manual and hides unavailable overlapping
   assert.match(vector[0], /openClientSegment\('newRisk'\)/);
   assert.match(vector[0], /openClientSegment\('loyalSleep'\)/);
   assert.match(ui, /chart\("chSegments", \{\s*type: "bar"/);
+  assert.match(css, /\.kb-summary-card\.key-indicator/);
+  assert.match(css, /\.kb-summary-trends > div/);
   assert.doesNotMatch(vector[0], /Потерянная \(минимум\)|"≥" \+ fmtNum\(kb\.seg\.lost\)/);
   assert.doesNotMatch(vector[0], /Динамика клиентской базы|Динамика снижения потерь|Выручка под риском возврата|Ядро базы/);
   assert.match(css, /\.kb-summary-grid/);
@@ -486,7 +539,7 @@ test("dynamics table shows explicit goals and uses compact comparison headings",
   assert.doesNotMatch(ui, />ДЕНЬГИ \$\{copyBtn|>ТРАФИК \$\{copyBtn|>УДЕРЖАНИЕ И КОМАНДА/);
 });
 
-test("doctor current-month dynamics is the final block after vectors and charts", () => {
+test("doctor multi-month dynamics follows vectors and charts", () => {
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const renderDoctor = ui.match(/function renderDoctor\(\) \{[\s\S]*?\n\}\n\nfunction saveManual6/);
 
@@ -494,14 +547,76 @@ test("doctor current-month dynamics is the final block after vectors and charts"
   const source = renderDoctor[0];
   const vector6 = source.indexOf('id="blkV6"');
   const lastVectorChart = source.indexOf('id="blkStack"');
-  const dynamics = source.indexOf('dynamicsHtml(docDyn, "blkDyn", "Динамика текущего месяца: точки роста и риска"');
+  const dynamics = source.indexOf('dynamicsHtml(docDyn, "blkDyn", "Динамика показателей по месяцам"');
   const render = source.indexOf("body.innerHTML = html");
 
   assert.ok(vector6 >= 0 && lastVectorChart > vector6);
   assert.ok(dynamics > lastVectorChart);
   assert.ok(render > dynamics);
-  assert.doesNotMatch(source, /dynamicsHtml\(docDyn, "blkDyn", "Динамика: точки роста и риска"/);
+  assert.doesNotMatch(source, /dynamicsHtml\(docDyn, "blkDyn", "Динамика текущего месяца: точки роста и риска"/);
   assert.match(ui, /<h2>Динамика текущего месяца: точки роста и риска · \$\{esc\(doctorName\(docId\)\)\}<\/h2>/);
+});
+
+test("doctor profile is split into four collapsible semantic sections", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
+  const renderDoctor = ui.match(/function renderDoctor\(\) \{[\s\S]*?\n\}\n\nfunction saveManual6/);
+
+  assert.ok(renderDoctor);
+  const source = renderDoctor[0];
+  const section1 = source.indexOf('doctorSemanticSectionOpen(1, "Итоговый рейтинговый балл"');
+  const header = source.indexOf("doctorMetricsHeaderHtml(");
+  const section2 = source.indexOf('doctorSemanticSectionOpen(2, "Расшифровка векторов"');
+  const goals = source.indexOf("doctorGoalsSummaryHtml(");
+  const vector1 = source.indexOf('id="blkV1"');
+  const vector6 = source.indexOf('id="blkV6"');
+  const section3 = source.indexOf('doctorSemanticSectionOpen(3, "Годовая динамика показателей"');
+  const stack = source.indexOf('id="blkStack"');
+  const dynamics = source.indexOf('dynamicsHtml(docDyn, "blkDyn"');
+  const section4 = source.indexOf('doctorSemanticSectionOpen(4, "Выводы и фокусы развития"');
+  const outcome = source.indexOf('id="blkDynOutcome"');
+  const render = source.indexOf("body.innerHTML = html");
+
+  assert.ok(section1 >= 0 && header > section1);
+  assert.ok(section2 > header && goals > section2 && vector1 > goals && vector6 > vector1);
+  assert.ok(section3 > vector6 && stack > section3 && dynamics > stack);
+  assert.ok(section4 > dynamics && outcome > section4 && render > outcome);
+  assert.match(source, /dynamicsHtml\(docDyn,[\s\S]*?doctorScoresHtml,\s*false\)/);
+  assert.match(ui, /function rememberDoctorSectionToggle\(/);
+  assert.match(ui, /function setDoctorSemanticSections\(/);
+  assert.match(ui, />Развернуть все<\/button>/);
+  assert.match(ui, />Свернуть все<\/button>/);
+  assert.match(css, /\.doctor-semantic-section\s*\{/);
+  assert.match(css, /\.doctor-semantic-summary\s*\{/);
+  assert.match(css, /\.doctor-semantic-section\s*>\s*\.doctor-semantic-body\s*\{\s*display:\s*block\s*!important;/);
+});
+
+test("dynamics conclusion is last, visually prominent, and supports rich saved comments", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
+  const dynamics = ui.match(/function dynamicsHtml\([\s\S]*?\n\}\n\n\/\* Адаптивная шкала/);
+
+  assert.ok(dynamics);
+  const source = dynamics[0];
+  const detailsTable = source.indexOf('const tblId = blkId + "_tbl"');
+  const optionalScoreDetail = source.indexOf("html += detailTailHtml");
+  const finalOutcome = source.indexOf("html += dynamicsOutcomeHtml");
+  assert.ok(detailsTable >= 0);
+  assert.ok(optionalScoreDetail > detailsTable);
+  assert.ok(finalOutcome > optionalScoreDetail);
+  assert.match(ui, /Ключевой итог отчёта/);
+  assert.match(ui, /class="dyn-narrative-editor\$\{narrative\.manual/);
+  assert.match(ui, /contenteditable="true"/);
+  assert.match(ui, /formatDynamicNarrative\('\$\{blkId\}','bold'\)/);
+  assert.match(ui, /formatDynamicNarrativeColor\('\$\{blkId\}','\$\{item\.color\}'\)/);
+  assert.match(ui, /format:\s*"rich-v1"/);
+  assert.match(ui, /sanitizeDynamicNarrativeHtml/);
+  assert.match(ui, /const repNarrative = dynamicNarrativeValue\(`doctor\|\$\{mk\}\|\$\{docId\}`/);
+  assert.match(ui, /<div class="dyn-narrative-display">\$\{repNarrative\.html\}<\/div>/);
+  assert.match(css, /\.dynamics-final-card\s*\{/);
+  assert.match(css, /\.dynamic-report-outcome\s*\{/);
+  assert.match(css, /\.dyn-narrative-editor\s*\{[^}]*overflow:\s*visible;/);
+  assert.match(css, /\.dyn-color-swatch\s*\{/);
 });
 
 test("specialization revenue cards show yearly dynamics without window wording", () => {
@@ -524,11 +639,27 @@ test("specialist summary removes the color legend and wraps long headers", () =>
   assert.ok(summary);
   assert.doesNotMatch(summary[0], /зелёным — лучший, красным — худший/);
   assert.match(ui, /header: "Загрузка<br>расписания"/);
-  assert.match(ui, /header: `Возвращаемость первички<br>\(\$\{UI\.pvSlice\} мес\.\)`/);
+  assert.match(ui, /header: `Возвращаемость<br>первички \(\$\{UI\.pvSlice\} мес\.\)`/);
   assert.match(ui, /header: "Доля выручки<br>от перенаправлений"/);
   assert.match(ui, /<th class="num">Загрузка<br>расписания<\/th>/);
-  assert.match(ui, /<th class="num">Возвращаемость первички<br>\(\$\{UI\.pvSlice\} мес\.\)<\/th>/);
+  assert.match(ui, /<th class="num">Возвращаемость<br>первички \(\$\{UI\.pvSlice\} мес\.\)<\/th>/);
   assert.match(ui, /<th class="num">Доля выручки<br>от перенаправлений<\/th>/);
+});
+
+test("specialization heatmap gives every focus an equal-width column", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
+  const heatmap = ui.match(/\/\/ тепловая карта экспертных позиций[\s\S]*?\/\/ Клиентская база:/);
+
+  assert.ok(heatmap);
+  assert.match(heatmap[0], /class="heatmap-scroll"/);
+  assert.match(heatmap[0], /class="data heatmap-table"/);
+  assert.match(heatmap[0], /--heat-table-min:\$\{300 \+ devs\.length \* 150\}px/);
+  assert.match(heatmap[0], /devs\.map\(\(\) => '<col class="heatmap-focus-col">'\)/);
+  assert.match(heatmap[0], /class="num heatmap-focus-cell"/);
+  assert.match(css, /\.heatmap-table \{[\s\S]*?table-layout: fixed;/);
+  assert.match(css, /\.heatmap-table \.heatmap-focus-col \{ width: 150px; \}/);
+  assert.match(css, /\.heat-cell \{[\s\S]*?width: 100%;/);
 });
 
 test("client-base table shows overlapping groups and omits unavailable values", () => {
@@ -542,8 +673,11 @@ test("client-base table shows overlapping groups and omits unavailable values", 
   assert.doesNotMatch(table[0], /Мониторинг базы|<th>Настройки базы<\/th>/);
   assert.match(table[0], /visibleGroups/);
   assert.match(table[0], /clientBaseProfileDescription\(p, visibleGroups\)/);
+  assert.match(table[0], /clientBaseProfileDescriptionMarkup\(item\.profile, visibleGroups\)/);
   assert.match(table[0], /kb\.groupAvailable\[group\]/);
   assert.match(table[0], /fmtPct\(clientBaseGroupPct\(kb, group\)\)/);
+  assert.doesNotMatch(table[0], /от A|база A/);
+  assert.match(table[0], /Все проценты рассчитаны от общей клиентской базы/);
   assert.match(table[0], /Группы могут пересекаться/);
   assert.match(table[0], /ноль не подставляется/);
   assert.match(table[0], /compactBaseTrend\(kb\.total,/);
@@ -552,5 +686,6 @@ test("client-base table shows overlapping groups and omits unavailable values", 
   assert.equal(compactBaseTrend(120, 100, true), '<div class="table-kpi-trend" title="К прошлому месяцу">120|100|true|relative</div>');
   assert.equal(compactBaseTrend(120, null), "");
   assert.match(css, /\.table-kpi-trend/);
+  assert.match(css, /\.client-base-description-list li \+ li/);
   assert.doesNotMatch(ui, /Клиентская база по настройкам специализаций|Порог \/ окно/);
 });

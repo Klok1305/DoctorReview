@@ -355,15 +355,38 @@ function createWindow() {
                 ],
                 rules: []
               };
+              DB.settings.depts['Косметология'].expertise = {
+                title: 'Фокусы специализации',
+                mode: 'services',
+                group: '',
+                items: [
+                  { name: 'ЭхоКГ', syn: ['эхокг'], core: true },
+                  { name: 'Велоэргометрия', syn: ['велоэргометрия'], core: true }
+                ],
+                rules: [],
+                hints: []
+              };
               DB.settings.depts['Косметология'].newRiskM = 6;
               DB.settings.depts['Косметология'].sleepM = 18;
               DB.settings.depts['Косметология'].lostM = 18;
               DB.settings.depts['Косметология'].riskM = 18;
               for (const mk of Object.keys(DB.months)) {
-                DB.months[mk].vyrabotka.d1 = { items: [{ form: '', cat: 'Прием', n: 'Прием врача', q: 5, sOwn: mk.endsWith('01') ? 100000 : 120000, sRef: 20000, goods: false }] };
-                DB.months[mk].vyrabotka.d3 = { items: [{ form: '', cat: 'Прием', n: 'Прием врача', q: 3, sOwn: mk.endsWith('01') ? 70000 : 75000, sRef: 5000, goods: false }] };
+                DB.months[mk].vyrabotka.d1 = { items: [
+                  { form: '', cat: 'Прием', n: 'Прием врача', q: 5, sOwn: mk.endsWith('01') ? 100000 : 120000, sRef: 20000, goods: false },
+                  { form: '', cat: 'Диагностика и процедуры', n: 'ЭхоКГ', q: 12, sOwn: 12000, sRef: 0, goods: false },
+                  { form: '', cat: 'Диагностика и процедуры', n: 'Велоэргометрия', q: 2, sOwn: 4000, sRef: 0, goods: false }
+                ] };
+                DB.months[mk].vyrabotka.d3 = { items: [
+                  { form: '', cat: 'Прием', n: 'Прием врача', q: 3, sOwn: mk.endsWith('01') ? 70000 : 75000, sRef: 5000, goods: false },
+                  { form: '', cat: 'Диагностика и процедуры', n: 'ЭхоКГ', q: 1, sOwn: 1000, sRef: 0, goods: false }
+                ] };
                 DB.months[mk].vyrabotka.d2 = { items: [{ form: '', cat: 'Прием', n: 'Прием врача', q: 4, sOwn: mk.endsWith('01') ? 80000 : 90000, sRef: 10000, goods: false }] };
                 DB.months[mk].kb.d1 = {
+                  '1': { clients: [
+                    { name: 'Месячный пациент 1', patientId: 'm1', s: 50000, v: 2, r: 10 },
+                    { name: 'Месячный пациент 2', patientId: 'm2', s: 40000, v: 1, r: 15 },
+                    ...(mk.endsWith('02') ? [{ name: 'Месячный пациент 3', patientId: 'm3', s: 30000, v: 1, r: 8 }] : [])
+                  ] },
                   '12': { clients: [
                     { name: 'Активный Пациент', patientId: '1', s: 50000, v: 3, r: 30 },
                     { name: 'Пациент Риска', patientId: '2', s: 70000, v: 2, r: 210 }
@@ -376,7 +399,10 @@ function createWindow() {
                   '36': { clients: [
                     { name: 'Активный Пациент', patientId: '1', s: 90000, v: 5, r: 30 },
                     { name: 'Пациент Риска', patientId: '2', s: 100000, v: 3, r: 210 },
-                    { name: 'Потерянный Пациент', patientId: '3', s: 60000, v: 1, r: 500 }
+                    { name: 'Потерянный Пациент', patientId: '3', s: 60000, v: 1, r: 500 },
+                    ...(mk.endsWith('02')
+                      ? [{ name: 'Новый Активный', patientId: '4', s: 40000, v: 4, r: 20 }]
+                      : [{ name: 'Второй Потерянный', patientId: '5', s: 30000, v: 1, r: 600 }])
                   ] }
                 };
                 DB.months[mk].naznach.d1 = { '1': { items: [
@@ -396,12 +422,46 @@ function createWindow() {
               renderDepartment();
               await new Promise(resolve => setTimeout(resolve, 150));
               const departmentFilteredLeaderboardCount = document.querySelectorAll('#departmentBody .doctor-score-leader').length;
+              const departmentTotalRow = document.querySelector('#tblDepartmentSpecs .department-total-row');
+              const departmentTotalValid = Boolean(departmentTotalRow)
+                && departmentTotalRow.cells.length === document.querySelectorAll('#tblDepartmentSpecs tr:first-child th').length
+                && departmentTotalRow.cells[0]?.textContent.includes('Итого по отделению')
+                && departmentTotalRow.cells[2]?.textContent.includes('₽');
               UI.deptMonth = '2026-02';
               UI.deptFilter = 'Косметология';
               UI.subFilter = 'all';
               switchTab('dept');
               await new Promise(resolve => setTimeout(resolve, 150));
               const specializationLeaderboardCount = document.querySelectorAll('#deptBody .doctor-score-leader').length;
+              const comparisonTable = document.getElementById('tblCompare');
+              const comparisonHeaders = comparisonTable
+                ? [...comparisonTable.querySelectorAll('tr:first-child th')].map(cell => cell.textContent.trim())
+                : [];
+              const comparisonRows = comparisonTable ? [...comparisonTable.querySelectorAll('tr')].slice(1) : [];
+              const comparisonHeaderWidths = comparisonTable
+                ? [...comparisonTable.querySelectorAll('tr:first-child th')].map(cell => Math.round(cell.getBoundingClientRect().width))
+                : [];
+              const specializationSummaryValid = comparisonHeaders.includes('Цель специализации')
+                && comparisonHeaders.includes('Итог специализации')
+                && comparisonRows.length > 0
+                && comparisonRows.every(row => row.cells.length === comparisonHeaders.length)
+                && comparisonRows.some(row => row.cells[0]?.textContent.trim() === 'Выручка'
+                  && row.querySelector('.compare-total-cell')?.textContent.includes('₽'))
+                && comparisonHeaderWidths.length === 5
+                && Math.abs(comparisonHeaderWidths[1] - comparisonHeaderWidths[2]) <= 2
+                && Math.abs(comparisonHeaderWidths[3] - comparisonHeaderWidths[4]) <= 2;
+              const specializationPrimaryReturnHeader = [...document.querySelectorAll('#tblRating th')]
+                .find(cell => cell.textContent.includes('Возвращаемость'));
+              const specializationPrimaryReturnHeaderValid = Boolean(specializationPrimaryReturnHeader)
+                && specializationPrimaryReturnHeader.innerHTML === 'Возвращаемость<br>первички (3 мес.)';
+              const heatmapFocusWidths = [...document.querySelectorAll('#tblHeat .heatmap-focus-heading')]
+                .map(cell => Math.round(cell.getBoundingClientRect().width));
+              const heatmapCellWidths = [...document.querySelectorAll('#tblHeat tr:nth-child(2) .heat-cell')]
+                .map(cell => Math.round(cell.getBoundingClientRect().width));
+              const heatmapLayoutValid = heatmapFocusWidths.length === 2
+                && heatmapCellWidths.length === 2
+                && Math.max(...heatmapFocusWidths) - Math.min(...heatmapFocusWidths) <= 2
+                && Math.max(...heatmapCellWidths) - Math.min(...heatmapCellWidths) <= 2;
               UI.repMonth = '2026-02';
               UI.repScope = 'dept';
               switchTab('report');
@@ -428,16 +488,29 @@ function createWindow() {
               if (shortWindowButton) shortWindowButton.click();
               await new Promise(resolve => setTimeout(resolve, 100));
               const shortWindowSelected = document.querySelector('#kbWinSeg button.active')?.dataset.segmentValue === '12';
-              const shortLostHidden = ![...document.querySelectorAll('.kb-summary-label')].some(element => element.textContent.trim() === 'Потерянные');
+              const shortLostHidden = !document.querySelector('#blkV4 [data-client-base-group="lost"]');
               const mediumWindowButton = [...document.querySelectorAll('#kbWinSeg button')].find(button => button.dataset.segmentValue === '24');
               if (mediumWindowButton) mediumWindowButton.click();
               await new Promise(resolve => setTimeout(resolve, 100));
               const mediumWindowSelected = document.querySelector('#kbWinSeg button.active')?.dataset.segmentValue === '24';
-              const mediumLostVisible = [...document.querySelectorAll('.kb-summary-label')].some(element => element.textContent.trim() === 'Потерянные');
+              const mediumLostVisible = Boolean(document.querySelector('#blkV4 [data-client-base-group="lost"]'));
               const fullWindowButton = [...document.querySelectorAll('#kbWinSeg button')].find(button => button.dataset.segmentValue === '36');
               if (fullWindowButton) fullWindowButton.click();
               await new Promise(resolve => setTimeout(resolve, 100));
               const fullWindowSelected = document.querySelector('#kbWinSeg button.active')?.dataset.segmentValue === '36';
+              const clientBaseCards = [...document.querySelectorAll('#blkV4 .kb-summary-card')];
+              const clientBaseCard = group => clientBaseCards.find(card => card.dataset.clientBaseGroup === group);
+              const activeBaseCard = clientBaseCard('active');
+              const lostBaseCard = clientBaseCard('lost');
+              const totalBaseCard = clientBaseCard('total');
+              const clientBaseDynamicsValid = clientBaseCards.length >= 6
+                && clientBaseCards.every(card => Boolean(card.querySelector('.kb-summary-share'))
+                  && card.querySelectorAll('.kb-summary-trends > div').length === 2)
+                && totalBaseCard?.querySelector('.kb-summary-share')?.textContent.trim() === '100%'
+                && activeBaseCard?.classList.contains('key-indicator')
+                && lostBaseCard?.classList.contains('key-indicator')
+                && activeBaseCard?.querySelector('.kb-summary-trends .kb-trend.good')?.textContent.includes('▲')
+                && lostBaseCard?.querySelector('.kb-summary-trends .kb-trend.good')?.textContent.includes('▼');
               const riskActionButton = [...document.querySelectorAll('.kb-action-controls button')].find(button => button.textContent.includes('Новые, риск'));
               if (riskActionButton) riskActionButton.click();
               await new Promise(resolve => setTimeout(resolve, 100));
@@ -475,6 +548,64 @@ function createWindow() {
                 && doctorGoalCards.some(goal => goal.fact !== 'Факт: нет данных')
                 && doctorGoalCards.some(goal => goal.state === 'goal-good')
                 && doctorGoalCards.some(goal => goal.state === 'goal-bad');
+              const dynamicsCard = document.getElementById('blkDyn');
+              const dynamicsTable = document.getElementById('blkDyn_tbl');
+              const dynamicsOutcome = document.querySelector('#blkDynOutcome .dynamic-report-outcome');
+              const dynamicsEditor = document.getElementById('blkDyn_narrative');
+              const doctorReferralAverageDynamicsRow = dynamicsTable
+                ? [...dynamicsTable.querySelectorAll('tr')].find(row => row.cells[0]?.textContent.trim() === 'Средний чек пациента с перенаправлениями')
+                : null;
+              const doctorReferralAverageDynamicsResult = computeMetrics('d1', '2026-02');
+              const doctorReferralAverageDynamicsData = computeDoctorDynamics('d1', '2026-02');
+              const doctorReferralAverageDynamicsDetails = {
+                sourceWindow: Boolean(DB.months['2026-02']?.kb?.d1?.['1']),
+                patients: doctorReferralAverageDynamicsResult?.traffic?.patients,
+                revenueWithRef: doctorReferralAverageDynamicsResult?.econ?.revenueWithRef,
+                avgClientRef: doctorReferralAverageDynamicsResult?.econ?.avgClientRef,
+                rowNames: doctorReferralAverageDynamicsData?.rows?.map(row => row.name) || []
+              };
+              const doctorReferralAverageDynamicsValid = Boolean(doctorReferralAverageDynamicsRow)
+                && doctorReferralAverageDynamicsRow.cells.length === dynamicsTable.rows[0].cells.length
+                && [...doctorReferralAverageDynamicsRow.cells].slice(2).some(cell => cell.textContent.includes('₽'));
+              const doctorSemanticSections = [...document.querySelectorAll('#doctorBody > .doctor-semantic-section')];
+              const doctorSemanticTitles = doctorSemanticSections.map(section => section.querySelector('.doctor-semantic-heading b')?.textContent.trim() || '');
+              const secondSemanticSection = doctorSemanticSections[1];
+              if (secondSemanticSection) secondSemanticSection.open = false;
+              await new Promise(resolve => setTimeout(resolve, 0));
+              const semanticCollapseRemembered = Boolean(secondSemanticSection)
+                && secondSemanticSection.open === false
+                && UI.openLists.doctorSemantic2 === false;
+              if (secondSemanticSection) secondSemanticSection.open = true;
+              await new Promise(resolve => setTimeout(resolve, 0));
+              const doctorSemanticSectionsValid = doctorSemanticSections.length === 4
+                && doctorSemanticTitles.join('|') === 'Итоговый рейтинговый балл|Расшифровка векторов|Годовая динамика показателей|Выводы и фокусы развития'
+                && Boolean(doctorSemanticSections[0]?.querySelector('#blkHead'))
+                && Boolean(doctorSemanticSections[1]?.querySelector('#doctorGoalsSummary'))
+                && Boolean(doctorSemanticSections[1]?.querySelector('#blkV1'))
+                && Boolean(doctorSemanticSections[1]?.querySelector('#blkV6'))
+                && Boolean(doctorSemanticSections[2]?.querySelector('#blkStack'))
+                && Boolean(doctorSemanticSections[2]?.querySelector('#blkDyn'))
+                && !doctorSemanticSections[2]?.querySelector('.dynamic-report-outcome')
+                && Boolean(doctorSemanticSections[3]?.querySelector('#blkDynOutcome .dynamic-report-outcome'))
+                && semanticCollapseRemembered;
+              if (dynamicsEditor) {
+                dynamicsEditor.innerHTML = '<strong>Ключевой вывод</strong><br><span style="color:#dc2626">Зона риска</span><br>' + Array.from({ length: 18 }, (_, index) => 'Строка подробного комментария ' + (index + 1)).join('<br>');
+                saveDynamicNarrative('blkDyn');
+              }
+              const savedNarrative = DB.dynamicNotes && DB.dynamicNotes['doctor|2026-02|d1'];
+              const reportWithNarrative = buildDoctorReport('d1', '2026-02');
+              const dynamicConclusionDetails = {
+                finalSection: doctorSemanticSections.at(-1)?.id === 'doctorSemanticSection4',
+                outcomeAfterDetails: Boolean(dynamicsTable && dynamicsOutcome
+                  && (dynamicsTable.compareDocumentPosition(dynamicsOutcome) & Node.DOCUMENT_POSITION_FOLLOWING)),
+                editorFullyVisible: Boolean(dynamicsEditor) && dynamicsEditor.scrollHeight <= dynamicsEditor.clientHeight + 2,
+                savedRich: Boolean(savedNarrative && savedNarrative.format === 'rich-v1'
+                  && savedNarrative.html.includes('<strong>Ключевой вывод</strong>')
+                  && savedNarrative.html.includes('color:#dc2626')),
+                reportIncludesSaved: reportWithNarrative.includes('<strong>Ключевой вывод</strong>')
+                  && reportWithNarrative.includes('Ключевой итог отчёта')
+              };
+              const dynamicConclusionValid = Object.values(dynamicConclusionDetails).every(Boolean);
               const mirrorChart = UI.charts.chStack;
               const mirrorGap = mirrorChart ? Number(mirrorChart.options.plugins.mirrorRevenue.gap) : 0;
               const mirrorOwnDatasets = mirrorChart ? mirrorChart.data.datasets.filter(dataset => dataset.mirrorSide === 'own') : [];
@@ -525,7 +656,15 @@ function createWindow() {
                 optionalLibrariesDeferred,
                 departmentPage,
                 departmentCharts,
+                departmentTotalValid,
                 reportLeaderboardsValid,
+                specializationSummaryValid,
+                specializationPrimaryReturnHeaderValid,
+                comparisonHeaders,
+                comparisonHeaderWidths,
+                heatmapLayoutValid,
+                heatmapFocusWidths,
+                heatmapCellWidths,
                 reportLeaderboardDetails: {
                   departmentAllLeaderboardCount,
                   departmentFilteredLeaderboardCount,
@@ -537,10 +676,17 @@ function createWindow() {
                 doctorHeaderMetricsValid,
                 doctorHeaderCardRects,
                 doctorHeaderLayoutValid,
+                clientBaseDynamicsValid,
                 clientBaseButtonsValid: Boolean(shortWindowButton && mediumWindowButton && fullWindowButton && riskActionButton)
                   && shortWindowSelected && mediumWindowSelected && fullWindowSelected && shortLostHidden && mediumLostVisible && clientActionOpened,
                 doctorGoalsSummaryValid,
                 doctorGoalCards,
+                doctorSemanticSectionsValid,
+                doctorSemanticTitles,
+                doctorReferralAverageDynamicsValid,
+                doctorReferralAverageDynamicsDetails,
+                dynamicConclusionValid,
+                dynamicConclusionDetails,
                 mirrorRevenueChartValid,
                 mirrorRevenueDetails,
                 interdisciplinaryFocus,
@@ -568,6 +714,16 @@ function createWindow() {
           if (!goalsScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок блока целей врача');
           fs.writeFileSync(goalsScreenshotPath, Buffer.from(goalsScreenshot.slice('data:image/png;base64,'.length), 'base64'));
           result.goalsScreenshot = goalsScreenshotPath;
+          const clientBaseScreenshotPath = path.join(artifactRoot, "client-base-vector-smoke.png");
+          const clientBaseScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            const element = document.getElementById('blkV4');
+            if (!element) return '';
+            const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.25, logging: false, windowWidth: 1400 });
+            return canvas.toDataURL('image/png');
+          })()`);
+          if (!clientBaseScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок Вектора 4');
+          fs.writeFileSync(clientBaseScreenshotPath, Buffer.from(clientBaseScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.clientBaseScreenshot = clientBaseScreenshotPath;
           const mirrorScreenshotPath = path.join(artifactRoot, "mirror-revenue-smoke.png");
           const mirrorScreenshot = await mainWindow.webContents.executeJavaScript(`document.getElementById('chStack')?.toDataURL('image/png') || ''`);
           if (!mirrorScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок зеркального графика');
@@ -585,6 +741,76 @@ function createWindow() {
           if (!leaderboardScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок лидерборда врачей');
           fs.writeFileSync(leaderboardScreenshotPath, Buffer.from(leaderboardScreenshot.slice('data:image/png;base64,'.length), 'base64'));
           result.leaderboardScreenshot = leaderboardScreenshotPath;
+          const specializationRatingScreenshotPath = path.join(artifactRoot, "specialization-rating-summary-smoke.png");
+          const specializationRatingScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            const table = document.getElementById('tblRating');
+            const element = table ? table.closest('.card') : null;
+            if (!element) return '';
+            const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.5, logging: false, windowWidth: 1400 });
+            return canvas.toDataURL('image/png');
+          })()`);
+          if (!specializationRatingScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок сводной таблицы специализации');
+          fs.writeFileSync(specializationRatingScreenshotPath, Buffer.from(specializationRatingScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.specializationRatingScreenshot = specializationRatingScreenshotPath;
+          const heatmapScreenshotPath = path.join(artifactRoot, "heatmap-focus-smoke.png");
+          const heatmapScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            const table = document.getElementById('tblHeat');
+            const element = table ? table.closest('.card') : null;
+            if (!element) return '';
+            const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.5, logging: false, windowWidth: 1400 });
+            return canvas.toDataURL('image/png');
+          })()`);
+          if (!heatmapScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок тепловой карты');
+          fs.writeFileSync(heatmapScreenshotPath, Buffer.from(heatmapScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.heatmapScreenshot = heatmapScreenshotPath;
+          const comparisonScreenshotPath = path.join(artifactRoot, "specialization-summary-smoke.png");
+          const comparisonScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            const element = document.getElementById('cmpTable');
+            if (!element) return '';
+            const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.5, logging: false, windowWidth: 1400 });
+            return canvas.toDataURL('image/png');
+          })()`);
+          if (!comparisonScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок итогов специализации');
+          fs.writeFileSync(comparisonScreenshotPath, Buffer.from(comparisonScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.comparisonScreenshot = comparisonScreenshotPath;
+          const semanticSectionsScreenshotPath = path.join(artifactRoot, "doctor-semantic-sections-smoke.png");
+          const semanticSectionsScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            UI.docId = 'd1'; UI.docMonth = '2026-02'; switchTab('doctor');
+            await new Promise(resolve => setTimeout(resolve, 150));
+            setDoctorSemanticSections(false);
+            await new Promise(resolve => setTimeout(resolve, 50));
+            const element = document.getElementById('doctorBody');
+            if (!element) return '';
+            const canvas = await html2canvas(element, { backgroundColor: '#f4f6fa', scale: 1.25, logging: false, windowWidth: 1400 });
+            return canvas.toDataURL('image/png');
+          })()`);
+          if (!semanticSectionsScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок четырёх разделов отчёта врача');
+          fs.writeFileSync(semanticSectionsScreenshotPath, Buffer.from(semanticSectionsScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.semanticSectionsScreenshot = semanticSectionsScreenshotPath;
+          const dynamicConclusionScreenshotPath = path.join(artifactRoot, "dynamic-conclusion-smoke.png");
+          const dynamicConclusionScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            UI.docId = 'd1'; UI.docMonth = '2026-02'; switchTab('doctor');
+            await new Promise(resolve => setTimeout(resolve, 150));
+            setDoctorSemanticSections(true);
+            await new Promise(resolve => setTimeout(resolve, 100));
+            const element = document.querySelector('#blkDynOutcome .dynamic-report-outcome');
+            if (!element) return '';
+            const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.25, logging: false, windowWidth: 1400 });
+            return canvas.toDataURL('image/png');
+          })()`);
+          if (!dynamicConclusionScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок ключевого итогового блока');
+          fs.writeFileSync(dynamicConclusionScreenshotPath, Buffer.from(dynamicConclusionScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.dynamicConclusionScreenshot = dynamicConclusionScreenshotPath;
+          const doctorDynamicsTableScreenshotPath = path.join(artifactRoot, "doctor-dynamics-table-smoke.png");
+          const doctorDynamicsTableScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            const element = document.getElementById('blkDyn_tbl');
+            if (!element) return '';
+            const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.25, logging: false, windowWidth: 1400 });
+            return canvas.toDataURL('image/png');
+          })()`);
+          if (!doctorDynamicsTableScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок таблицы динамики врача');
+          fs.writeFileSync(doctorDynamicsTableScreenshotPath, Buffer.from(doctorDynamicsTableScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.doctorDynamicsTableScreenshot = doctorDynamicsTableScreenshotPath;
           await mainWindow.webContents.executeJavaScript(`(() => {
             UI.docId = 'd1'; UI.docMonth = '2026-02'; switchTab('doctor');
             document.getElementById('blkHead')?.scrollIntoView({ block: 'start' });
@@ -619,9 +845,10 @@ function createWindow() {
           result.pdfFiles = pdfFiles;
           result.pdfDir = pdfDir;
         }
+        fs.writeFileSync(path.join(artifactRoot, "smoke-result.json"), JSON.stringify(result, null, 2), "utf8");
         process.stdout.write(`${JSON.stringify(result)}\n`);
         const passed = result.dataPage && result.optionalLibrariesDeferred && result.xlsx && result.chart && result.desktop
-          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.reportLeaderboardsValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.doctorMetricSettings))
+          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.doctorMetricSettings))
           && (!PDF_SMOKE_TEST || (result.saved && result.pdfSelectionDialogValid && result.pdfExport && result.pdfExport.saved === 3
             && result.pdfExport.chartImages >= 3 && result.pdfFiles.length === 3
             && result.sessionSaveStatus && result.sessionSaveStatus.includes('Сохранено в рабочую базу SQLite')

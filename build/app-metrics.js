@@ -820,6 +820,12 @@ function coreDoctorsInMonth(monthKey) {
   const set = new Set([...Object.keys(m.vyrabotka), ...Object.keys(m.kb), ...Object.keys(m.naznach || {})]);
   return [...set].sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru"));
 }
+function doctorsForScopeInMonth(monthKey, scoped = false) {
+  const all = doctorsInMonth(monthKey);
+  if (scoped) return all;
+  const core = coreDoctorsInMonth(monthKey);
+  return core.length ? core : all;
+}
 function monthKeysSorted() {
   return Object.keys(DB.months).sort();
 }
@@ -874,6 +880,7 @@ function dynMetricDefs(profile) {
     { key: "sales", name: "Выручка", fmt: fmtMoney, get: r => r.econ.sales, target: B.revenue },
     { key: "withRef", name: "Выручка с перенаправлениями", fmt: fmtMoney, get: r => r.econ.revenueWithRef },
     { key: "avgClient", name: "Средний чек на пациента", fmt: fmtMoney, get: r => r.econ.avgClient, target: B.avgCheck },
+    { key: "avgClientRef", name: "Средний чек пациента с перенаправлениями", fmt: fmtMoney, get: r => r.econ.avgClientRef },
     { key: "visits", name: "Визиты", fmt: v => fmtNum(v), get: r => r.traffic.visits },
     { key: "patients", name: "Пациенты", fmt: v => fmtNum(v), get: r => r.traffic.patients },
     { key: "freq", name: "Частота за месяц (виз./пациента)", fmt: v => fmtNum(v, 2), get: r => r.traffic.freq },
@@ -938,11 +945,10 @@ function computeDoctorDynamics(docId, endMk) {
 
 /* Агрегат отделения за месяц — «виртуальный r» с теми же полями, что читают dynMetricDefs */
 function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
-  const core = coreDoctorsInMonth(mk);
   const requestedSpecs = Array.isArray(deptFilter)
     ? new Set(deptFilter)
     : (deptFilter instanceof Set ? deptFilter : null);
-  const ids = (core.length ? core : doctorsInMonth(mk)).filter(id =>
+  const ids = doctorsForScopeInMonth(mk, deptFilter !== "all").filter(id =>
     (deptFilter === "all" || (requestedSpecs ? requestedSpecs.has(doctorDept(id)) : doctorDept(id) === deptFilter)) &&
     (subFilter === "all" || (DB.doctors[id] && DB.doctors[id].subdept) === subFilter)
   );
@@ -1007,6 +1013,8 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
   const uniqueWindow = win => uniqueClientBase(records.map(({ r }) => r.akb.wins[win]).filter(Boolean), records.length);
   const unique1 = uniqueWindow(1);
   const unique12 = uniqueWindow(12);
+  const unique24 = uniqueWindow(24);
+  const unique36 = uniqueWindow(36);
   const primaryBase = uniqueClientBase(records.map(({ r }) => r.akb.primary).filter(Boolean), records.length);
   const sales = sum(r => r.econ.sales);
   const withRef = sum(r => r.econ.revenueWithRef);
@@ -1028,14 +1036,59 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
   const schedBusy = sum(r => r.loyalty.sched ? r.loyalty.sched.busyMin : null);
   const schedFact = sum(r => r.loyalty.sched ? r.loyalty.sched.factMin : null);
   const schedAvg = avg(r => r.loyalty.sched ? r.loyalty.sched.pct : null);
-  const nazA = sum(r => r.cross.naz[1] && r.cross.naz[1].totals.valid !== false ? r.cross.naz[1].totals.assigned : null);
-  const nazD = sum(r => r.cross.naz[1] && r.cross.naz[1].totals.valid !== false ? r.cross.naz[1].totals.resultQ : null);
+  const aggregateNazSlice = slice => {
+    const values = rs.map(r => r.cross.naz[slice]).filter(nz => nz && nz.totals && nz.totals.valid !== false);
+    if (!values.length) return null;
+    const total = key => {
+      const known = values.map(nz => nz.totals[key]).filter(v => v != null && !isNaN(v));
+      return known.length ? known.reduce((a, b) => a + b, 0) : null;
+    };
+    const assigned = total("assigned");
+    const done = total("done");
+    const soldQ = total("soldQ");
+    const soldSum = total("soldSum");
+    const resultQ = total("resultQ");
+    const focusRows = values.map(nz => nz.focus).filter(Boolean);
+    const focusSum = key => {
+      const known = focusRows.map(focus => focus[key]).filter(v => v != null && !isNaN(v));
+      return known.length ? known.reduce((a, b) => a + b, 0) : null;
+    };
+    return {
+      slice,
+      totals: {
+        assigned, done, soldQ, soldSum, resultQ, valid: true,
+        conv: assigned != null && assigned > 0 && resultQ != null ? resultQ / assigned * 100 : null,
+      },
+      focus: focusRows.length ? {
+        title: focusRows[0].title,
+        assigned: focusSum("assigned"),
+        done: focusSum("done"),
+        soldQ: focusSum("soldQ"),
+        resultQ: focusSum("resultQ"),
+      } : null,
+    };
+  };
+  const naz1 = aggregateNazSlice(1);
+  const naz3 = aggregateNazSlice(3);
   const ownRecords = sum(r => r.loyalty.ownRec ? r.loyalty.ownRec.count : null);
   const courseCnt = sum(r => r.loyalty.courseCnt);
   const courseBase = sum(r => r.loyalty.courseBase);
+  const productRows = rs.map(r => r.product).filter(Boolean);
+  const usedExpertNames = new Set();
+  for (const product of productRows) {
+    for (const [name, item] of Object.entries(product.expert || {})) {
+      if (item && item.q > 0) usedExpertNames.add(name);
+    }
+  }
+  const scoreTotal = avg(r => r.scores && r.scores.rankEligible ? r.scores.total : null);
   // «виртуальный r» отделения
   return {
-    econ: { sales, refRevenue: refSum, revenueWithRef: withRef, avgClient: (sales != null && patients) ? sales / patients : null },
+    econ: {
+      sales, refRevenue: refSum, revenueWithRef: withRef,
+      avgClient: (sales != null && patients) ? sales / patients : null,
+      avgClientRef: (withRef != null && patients) ? withRef / patients : null,
+      avgVisit: (sales != null && visits) ? sales / visits : null,
+    },
     traffic: { visits, patients, freq: (visits != null && patients) ? visits / patients : null },
     loyalty: {
       sched: schedNorm && schedBusy != null
@@ -1053,17 +1106,27 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
     },
     cross: {
       crossShare: (withRef && refSum != null) ? refSum / withRef * 100 : null,
-      naz: { 1: (nazA != null && nazA > 0) ? { totals: { conv: nazD / nazA * 100 } } : null },
+      naz: { 1: naz1, 3: naz3 },
     },
     akb: {
       primary: primaryBase,
       primaryWin: primaryBase && primaryBase.windows.length === 1 ? primaryBase.windows[0] : null,
       availableWins: [...new Set(rs.flatMap(r => r.akb.availableWins || []))].sort((a, b) => a - b),
-      wins: { 12: unique12 },
+      wins: { 12: unique12, 24: unique24, 36: unique36 },
+      churn36: unique36 ? unique36.lostPct : null,
     },
-    product: (ownSum != null && ownSum > 0) ? { expertShare: (expSum || 0) / ownSum * 100 } : null,
+    product: (ownSum != null && ownSum > 0) ? {
+      expertShare: (expSum || 0) / ownSum * 100,
+      devicesUsed: usedExpertNames.size,
+      park: productRows.length ? Math.max(...productRows.map(product => Number(product.park) || 0)) : 0,
+    } : null,
+    rep: {
+      avgRating: avg(r => r.rep ? r.rep.avgRating : null),
+      nps: avg(r => r.rep ? r.rep.nps : null),
+      reviews: sum(r => r.rep ? r.rep.reviews : null),
+    },
     extras: { vy: (ownSum != null && ownSum > 0) ? { ownSum, expertShareSum: expSum || 0 } : null },
-    scores: { total: avg(r => r.scores && r.scores.rankEligible ? r.scores.total : null) },
+    scores: { total: scoreTotal, rankEligible: scoreTotal != null },
     vecAvg: (() => { const o = {}; for (const vk of ["v1","v2","v3","v4","v5","v6"]) o[vk] = avg(r => r.scores && r.scores.rankEligible ? r.scores.vec[vk] : null); return o; })(),
     doctors: rs.length,
   };

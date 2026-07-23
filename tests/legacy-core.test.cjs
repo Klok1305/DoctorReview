@@ -970,6 +970,39 @@ test("metric engine calculates a deterministic synthetic month", () => {
   assert.equal(result.visits, null);
 });
 
+test("doctor dynamics includes average patient check with referrals", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], dept: 'По умолчанию' } };
+    DB.months = { '2026-01': emptyMonth(), '2026-02': emptyMonth() };
+    DB.months['2026-01'].vyrabotka.d1 = { items: [
+      { form: '', cat: 'Прием', n: 'Прием врача', q: 2, sOwn: 1000, sRef: 200, goods: false }
+    ] };
+    DB.months['2026-02'].vyrabotka.d1 = { items: [
+      { form: '', cat: 'Прием', n: 'Прием врача', q: 3, sOwn: 2000, sRef: 1000, goods: false }
+    ] };
+    DB.months['2026-01'].kb.d1 = { '1': { clients: [
+      { name: 'Пациент 1', s: 600, v: 1, r: 10 },
+      { name: 'Пациент 2', s: 600, v: 1, r: 10 }
+    ] } };
+    DB.months['2026-02'].kb.d1 = { '1': { clients: [
+      { name: 'Пациент 1', s: 1000, v: 1, r: 10 },
+      { name: 'Пациент 2', s: 1000, v: 1, r: 10 },
+      { name: 'Пациент 3', s: 1000, v: 1, r: 10 }
+    ] } };
+    clearMetricsCache();
+    const dynamics = computeDoctorDynamics('d1', '2026-02');
+    const index = dynamics.rows.findIndex(item => item.key === 'avgClientRef');
+    const row = dynamics.rows[index];
+    return { name: row.name, values: row.values, delta: row.delta, previousKey: dynamics.rows[index - 1].key };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.equal(plain.name, "Средний чек пациента с перенаправлениями");
+  assert.equal(plain.previousKey, "avgClient");
+  assert.deepEqual(plain.values, [600, 1000]);
+  assert.ok(Math.abs(plain.delta - 66.66666666666666) < 1e-9);
+});
+
 test("completed-referral revenue uses only the doctor-work report", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
@@ -1041,6 +1074,47 @@ test("department aggregate combines only its selected specializations", () => {
   assert.equal(result.both.revenueWithRef, 450);
   assert.equal(result.both.refRevenue, 50);
   assert.equal(result.doctors, 2);
+});
+
+test("selected specialization includes doctors found only in the primary-return report", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    const therapy = '\\u0422\\u0435\\u0440\\u0430\\u043f\\u0438\\u044f';
+    const endocrine = '\\u042d\\u043d\\u0434\\u043e\\u043a\\u0440\\u0438\\u043d\\u043e\\u043b\\u043e\\u0433\\u0438\\u044f';
+    DB.doctors = {
+      d1: { name: 'Core Doctor', aliases: [], department: therapy, specialization: endocrine, structureManual: true },
+      d2: { name: 'Primary Return Only', aliases: [], department: therapy, specialization: endocrine, structureManual: true },
+    };
+    DB.months = { '2026-06': emptyMonth() };
+    DB.months['2026-06'].vyrabotka.d1 = {
+      items: [{ form: '', cat: 'Visit', n: 'Visit', q: 1, sOwn: 100, sRef: 0, goods: false }],
+    };
+    DB.months['2026-06'].pervichka['6'] = {
+      period: null,
+      perDoc: {
+        d1: { visits: 0, first: 100, ret: 40, notRet: 60 },
+        d2: { visits: 0, first: 50, ret: 10, notRet: 40 },
+      },
+    };
+    clearMetricsCache();
+    const selected = aggregateDeptMonth('2026-06', [endocrine]);
+    const all = aggregateDeptMonth('2026-06', 'all');
+    return {
+      scopedDoctors: doctorsForScopeInMonth('2026-06', true),
+      selectedDoctors: selected.doctors,
+      selectedPrimaryReturn: selected.loyalty.pvSlices[6],
+      allDoctors: all.doctors,
+      allPrimaryReturn: all.loyalty.pvSlices[6],
+    };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.deepEqual(plain.scopedDoctors, ["d1", "d2"]);
+  assert.equal(plain.selectedDoctors, 2);
+  assert.equal(plain.selectedPrimaryReturn.first, 150);
+  assert.equal(plain.selectedPrimaryReturn.ret, 50);
+  assert.equal(plain.selectedPrimaryReturn.pct, 50 / 150 * 100);
+  assert.equal(plain.allDoctors, 1);
+  assert.equal(plain.allPrimaryReturn.pct, 40);
 });
 
 test("desktop autosave serializes the current database before writing SQLite", async () => {
