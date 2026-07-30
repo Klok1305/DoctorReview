@@ -380,6 +380,31 @@ function isNaznachGoodsGroup(value) {
   return /^товары(?:\s|\(|$)/i.test(cellStr(value));
 }
 
+/* В плоской настройке отчёта 1С отдельной строки «Товары» нет.
+ * Товарную номенклатуру можно восстановить по её коду: актуальные карточки
+ * имеют префикс «СЛ», старые карточки — короткие серии «О»/«Ж».
+ * Часть услуг тоже заведена в серии «СЛ», поэтому сначала исключаем их
+ * по выполненному количеству и устойчивым названиям медицинских услуг. */
+function isNaznachServiceNomenclature(value, completed = 0) {
+  if ((Number(completed) || 0) > 0) return true;
+  const name = cellStr(value).toLowerCase().replace(/\s+/g, " ");
+  return /^(?:нг\d+\s+)?(?:онлайн\s+)?(?:прием(?:\s|\(|$)|консультац)/i.test(name)
+    || /(?:^|[\s.])(?:узи|уздг)(?:\s|$|[(/])/i.test(name)
+    || /(эхокардио|эхо-кг|холтер|велоэргометр)/i.test(name)
+    || /(пункционн[а-яё]*\s+биопс|под контролем узи)/i.test(name)
+    || /(введение препарата|инъекц|капельн|внутривенн|внутримышечн)/i.test(name)
+    || /(установка системы|мониторинг[а-яё]*\s+глюкоз)/i.test(name)
+    || /(?:^|\s)(?:массаж|осмотр)(?:\s|$|[(/])/i.test(name)
+    || /(ультразвуков[а-яё]*\s+исследован|ударно-волнов|электромагнитн[а-яё]*\s+стимуляц)/i.test(name);
+}
+
+function isNaznachGoodsNomenclature(value, completed = 0) {
+  if (isNaznachServiceNomenclature(value, completed)) return false;
+  const name = cellStr(value);
+  return /\((?:с[лl]|s[лl])\s*\d{4,}\)\s*$/i.test(name)
+    || /\([оoж]\s*\d{2,}\)\s*$/i.test(name);
+}
+
 function parseNaznacheniya(rows, info, ws) {
   const hIdx = findRowIdx(rows, r => rowText(r).includes("Количество назначено"));
   if (hIdx < 0) throw new Error("не найдена шапка «Количество назначено»");
@@ -461,6 +486,9 @@ function parseNaznacheniya(rows, info, ws) {
   }
   if (!doctorRaw) throw new Error("не удалось определить направившего врача");
   const items = selectNaznachItems(candidates, detailItems, ws, docTotals);
+  for (const item of items) {
+    item.goods = Boolean(item.goods || isNaznachGoodsNomenclature(item.n, item.d));
+  }
   if (!items.length) throw new Error("не найдено ни одной позиции назначений");
   const checked = naznachTotalsMatch(items, docTotals);
   return { doctorRaw, items, totals: docTotals, checked };

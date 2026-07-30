@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { backup, DatabaseSync } = require("node:sqlite");
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const SNAPSHOT_VERSION = 4;
 const MIN_SNAPSHOT_VERSION = 1;
 
@@ -158,6 +158,106 @@ class DatabaseService {
           .run(1, new Date().toISOString());
       });
     }
+    if (current < 2) {
+      this.#transaction(() => {
+        this.db.exec(`
+          CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            display_name TEXT NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('admin', 'doctor')),
+            doctor_id TEXT,
+            password_hash TEXT NOT NULL,
+            password_salt TEXT NOT NULL,
+            password_params TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1,
+            must_change_password INTEGER NOT NULL DEFAULT 0,
+            failed_attempts INTEGER NOT NULL DEFAULT 0,
+            locked_until TEXT,
+            last_login_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE UNIQUE INDEX idx_users_doctor
+            ON users(doctor_id) WHERE doctor_id IS NOT NULL;
+
+          CREATE TABLE comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope_type TEXT NOT NULL CHECK (scope_type IN ('department', 'specialization', 'doctor')),
+            scope_id TEXT NOT NULL,
+            period_key TEXT NOT NULL,
+            block_key TEXT NOT NULL,
+            body_html TEXT NOT NULL DEFAULT '',
+            body_text TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'archived')),
+            author_user_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            published_at TEXT,
+            archived_at TEXT,
+            UNIQUE(scope_type, scope_id, period_key, block_key),
+            FOREIGN KEY(author_user_id) REFERENCES users(id)
+          );
+          CREATE INDEX idx_comments_context
+            ON comments(period_key, scope_type, scope_id, block_key);
+
+          CREATE TABLE comment_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            comment_id INTEGER NOT NULL,
+            version INTEGER NOT NULL,
+            body_html TEXT NOT NULL,
+            body_text TEXT NOT NULL,
+            status TEXT NOT NULL,
+            changed_by INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(comment_id, version),
+            FOREIGN KEY(comment_id) REFERENCES comments(id),
+            FOREIGN KEY(changed_by) REFERENCES users(id)
+          );
+
+          CREATE TABLE publications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            period_key TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            created_by INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(period_key, version),
+            FOREIGN KEY(created_by) REFERENCES users(id)
+          );
+          CREATE INDEX idx_publications_period
+            ON publications(period_key, version DESC);
+
+          CREATE TABLE published_pages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            publication_id INTEGER NOT NULL,
+            doctor_id TEXT NOT NULL,
+            page_type TEXT NOT NULL CHECK (page_type IN ('department', 'specialization', 'doctor')),
+            scope_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            html TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(publication_id, doctor_id, page_type),
+            FOREIGN KEY(publication_id) REFERENCES publications(id) ON DELETE CASCADE
+          );
+          CREATE INDEX idx_published_pages_doctor
+            ON published_pages(doctor_id, page_type, publication_id);
+
+          CREATE TABLE audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor_user_id INTEGER,
+            action TEXT NOT NULL,
+            target_type TEXT,
+            target_id TEXT,
+            details_json TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(actor_user_id) REFERENCES users(id)
+          );
+          CREATE INDEX idx_audit_created ON audit_log(created_at DESC);
+        `);
+        this.db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)")
+          .run(2, new Date().toISOString());
+      });
+    }
     const finalVersion = this.db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get().version;
     if (finalVersion !== SCHEMA_VERSION) {
       throw new Error(`Неподдерживаемая версия базы: ${finalVersion}`);
@@ -287,9 +387,303 @@ class DatabaseService {
       months: this.db.prepare("SELECT COUNT(*) AS n FROM months").get().n,
       doctors: this.db.prepare("SELECT COUNT(*) AS n FROM doctors").get().n,
       imports: this.db.prepare("SELECT COUNT(*) AS n FROM import_events").get().n,
+      users: this.db.prepare("SELECT COUNT(*) AS n FROM users").get().n,
+      comments: this.db.prepare("SELECT COUNT(*) AS n FROM comments").get().n,
+      publications: this.db.prepare("SELECT COUNT(*) AS n FROM publications").get().n,
       databasePath: this.databasePath,
       schemaVersion: SCHEMA_VERSION,
     };
+  }
+
+  hasUsers() {
+    return this.db.prepare("SELECT 1 FROM users LIMIT 1").get() != null;
+  }
+
+  createUser({ username, displayName, role, doctorId = null, passwordHash, passwordSalt, passwordParams, mustChangePassword = false }) {
+    const now = new Date().toISOString();
+    const result = this.db.prepare(`
+      INSERT INTO users(username, display_name, role, doctor_id, password_hash, password_salt, password_params,
+        active, must_change_password, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+    `).run(
+      String(username).trim(),
+      String(displayName).trim(),
+      role,
+      doctorId || null,
+      passwordHash,
+      passwordSalt,
+      passwordParams,
+      mustChangePassword ? 1 : 0,
+      now,
+      now,
+    );
+    return this.getUserById(Number(result.lastInsertRowid));
+  }
+
+  getUserById(id) {
+    return this.db.prepare("SELECT * FROM users WHERE id = ?").get(Number(id)) || null;
+  }
+
+  getUserByUsername(username) {
+    return this.db.prepare("SELECT * FROM users WHERE username = ? COLLATE NOCASE").get(String(username || "").trim()) || null;
+  }
+
+  listUsers() {
+    return this.db.prepare(`
+      SELECT id, username, display_name, role, doctor_id, active, must_change_password,
+        failed_attempts, locked_until, last_login_at, created_at, updated_at
+      FROM users ORDER BY role, display_name COLLATE NOCASE
+    `).all().map(row => ({
+      id: Number(row.id),
+      username: row.username,
+      displayName: row.display_name,
+      role: row.role,
+      doctorId: row.doctor_id,
+      active: Boolean(row.active),
+      mustChangePassword: Boolean(row.must_change_password),
+      failedAttempts: Number(row.failed_attempts) || 0,
+      lockedUntil: row.locked_until,
+      lastLoginAt: row.last_login_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  updateUserPassword(id, { passwordHash, passwordSalt, passwordParams, mustChangePassword = false }) {
+    this.db.prepare(`
+      UPDATE users
+      SET password_hash = ?, password_salt = ?, password_params = ?, must_change_password = ?,
+        failed_attempts = 0, locked_until = NULL, updated_at = ?
+      WHERE id = ?
+    `).run(passwordHash, passwordSalt, passwordParams, mustChangePassword ? 1 : 0, new Date().toISOString(), Number(id));
+    return this.getUserById(id);
+  }
+
+  setUserActive(id, active) {
+    this.db.prepare("UPDATE users SET active = ?, updated_at = ? WHERE id = ?")
+      .run(active ? 1 : 0, new Date().toISOString(), Number(id));
+    return this.getUserById(id);
+  }
+
+  recordLoginFailure(id, { lock = false } = {}) {
+    const until = lock ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : null;
+    this.db.prepare(`
+      UPDATE users
+      SET failed_attempts = failed_attempts + 1,
+        locked_until = CASE WHEN ? IS NULL THEN locked_until ELSE ? END,
+        updated_at = ?
+      WHERE id = ?
+    `).run(until, until, new Date().toISOString(), Number(id));
+    return this.getUserById(id);
+  }
+
+  recordLoginSuccess(id) {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE users SET failed_attempts = 0, locked_until = NULL, last_login_at = ?, updated_at = ? WHERE id = ?
+    `).run(now, now, Number(id));
+    return this.getUserById(id);
+  }
+
+  listDoctorLoginCandidates(query = "") {
+    const needle = String(query || "").trim().toLocaleLowerCase("ru-RU");
+    const users = this.listUsers().filter(user => user.role === "doctor" && user.active);
+    const doctors = new Map(
+      this.db.prepare("SELECT id, data_json FROM doctors").all()
+        .map(row => [row.id, parseJson(row.data_json, {})]),
+    );
+    return users
+      .map(user => {
+        const doctor = doctors.get(user.doctorId) || {};
+        const haystack = `${user.displayName} ${doctor.department || ""} ${doctor.specialization || ""} ${doctor.spec || ""}`
+          .toLocaleLowerCase("ru-RU");
+        return {
+          userId: user.id,
+          displayName: user.displayName,
+          doctorId: user.doctorId,
+          department: doctor.department || "",
+          specialization: doctor.specialization || doctor.dept || "",
+          haystack,
+        };
+      })
+      .filter(item => !needle || needle.split(/\s+/).every(token => item.haystack.includes(token)))
+      .slice(0, 30)
+      .map(({ haystack, ...item }) => item);
+  }
+
+  saveCommentDraft({ scopeType, scopeId, periodKey, blockKey, bodyHtml, bodyText, authorUserId }) {
+    const now = new Date().toISOString();
+    return this.#transaction(() => {
+      this.db.prepare(`
+        INSERT INTO comments(scope_type, scope_id, period_key, block_key, body_html, body_text, status,
+          author_user_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
+        ON CONFLICT(scope_type, scope_id, period_key, block_key) DO UPDATE SET
+          body_html = excluded.body_html,
+          body_text = excluded.body_text,
+          status = 'draft',
+          author_user_id = excluded.author_user_id,
+          updated_at = excluded.updated_at,
+          archived_at = NULL
+      `).run(scopeType, scopeId, periodKey, blockKey, bodyHtml, bodyText, Number(authorUserId), now, now);
+      const comment = this.db.prepare(`
+        SELECT * FROM comments WHERE scope_type = ? AND scope_id = ? AND period_key = ? AND block_key = ?
+      `).get(scopeType, scopeId, periodKey, blockKey);
+      const version = this.db.prepare("SELECT COALESCE(MAX(version), 0) + 1 AS n FROM comment_versions WHERE comment_id = ?")
+        .get(comment.id).n;
+      this.db.prepare(`
+        INSERT INTO comment_versions(comment_id, version, body_html, body_text, status, changed_by, created_at)
+        VALUES (?, ?, ?, ?, 'draft', ?, ?)
+      `).run(comment.id, version, bodyHtml, bodyText, Number(authorUserId), now);
+      return this.#publicComment(comment);
+    });
+  }
+
+  listComments({ periodKey, scopeType = null, scopeId = null } = {}) {
+    const clauses = ["period_key = ?"];
+    const values = [periodKey];
+    if (scopeType) { clauses.push("scope_type = ?"); values.push(scopeType); }
+    if (scopeId) { clauses.push("scope_id = ?"); values.push(scopeId); }
+    return this.db.prepare(`
+      SELECT c.*, u.display_name AS author_name
+      FROM comments c JOIN users u ON u.id = c.author_user_id
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY c.scope_type, c.scope_id, c.block_key
+    `).all(...values).map(row => this.#publicComment(row));
+  }
+
+  listCommentVersions(commentId) {
+    return this.db.prepare(`
+      SELECT cv.version, cv.body_text, cv.status, cv.created_at, u.display_name AS author_name
+      FROM comment_versions cv
+      JOIN users u ON u.id = cv.changed_by
+      WHERE cv.comment_id = ?
+      ORDER BY cv.version DESC
+    `).all(Number(commentId)).map(row => ({
+      version: Number(row.version),
+      bodyText: row.body_text,
+      status: row.status,
+      createdAt: row.created_at,
+      authorName: row.author_name,
+    }));
+  }
+
+  #publicComment(row) {
+    if (!row) return null;
+    return {
+      id: Number(row.id),
+      scopeType: row.scope_type,
+      scopeId: row.scope_id,
+      periodKey: row.period_key,
+      blockKey: row.block_key,
+      bodyHtml: row.body_html,
+      bodyText: row.body_text,
+      status: row.status,
+      authorUserId: Number(row.author_user_id),
+      authorName: row.author_name || null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      publishedAt: row.published_at,
+      archivedAt: row.archived_at,
+    };
+  }
+
+  archiveComment(id, actorUserId) {
+    const now = new Date().toISOString();
+    this.db.prepare("UPDATE comments SET status = 'archived', archived_at = ?, updated_at = ? WHERE id = ?")
+      .run(now, now, Number(id));
+    const comment = this.db.prepare("SELECT * FROM comments WHERE id = ?").get(Number(id));
+    if (comment) {
+      const version = this.db.prepare("SELECT COALESCE(MAX(version), 0) + 1 AS n FROM comment_versions WHERE comment_id = ?")
+        .get(comment.id).n;
+      this.db.prepare(`
+        INSERT INTO comment_versions(comment_id, version, body_html, body_text, status, changed_by, created_at)
+        VALUES (?, ?, ?, ?, 'archived', ?, ?)
+      `).run(comment.id, version, comment.body_html, comment.body_text, Number(actorUserId), now);
+    }
+    return this.#publicComment(comment);
+  }
+
+  publish({ periodKey, createdBy, pages }) {
+    const now = new Date().toISOString();
+    return this.#transaction(() => {
+      const version = this.db.prepare("SELECT COALESCE(MAX(version), 0) + 1 AS n FROM publications WHERE period_key = ?")
+        .get(periodKey).n;
+      const publication = this.db.prepare(`
+        INSERT INTO publications(period_key, version, created_by, created_at) VALUES (?, ?, ?, ?)
+      `).run(periodKey, version, Number(createdBy), now);
+      const publicationId = Number(publication.lastInsertRowid);
+      const insertPage = this.db.prepare(`
+        INSERT INTO published_pages(publication_id, doctor_id, page_type, scope_id, title, html, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const page of pages) {
+        insertPage.run(publicationId, page.doctorId, page.pageType, page.scopeId, page.title, page.html, now);
+      }
+      const draftComments = this.db.prepare("SELECT * FROM comments WHERE period_key = ? AND status = 'draft'").all(periodKey);
+      this.db.prepare(`
+        UPDATE comments SET status = 'published', published_at = ?, updated_at = ?
+        WHERE period_key = ? AND status = 'draft'
+      `).run(now, now, periodKey);
+      const nextVersion = this.db.prepare("SELECT COALESCE(MAX(version), 0) + 1 AS n FROM comment_versions WHERE comment_id = ?");
+      const insertCommentVersion = this.db.prepare(`
+        INSERT INTO comment_versions(comment_id, version, body_html, body_text, status, changed_by, created_at)
+        VALUES (?, ?, ?, ?, 'published', ?, ?)
+      `);
+      for (const comment of draftComments) {
+        insertCommentVersion.run(
+          comment.id,
+          nextVersion.get(comment.id).n,
+          comment.body_html,
+          comment.body_text,
+          Number(createdBy),
+          now,
+        );
+      }
+      this.audit({ actorUserId: createdBy, action: "publication.created", targetType: "period", targetId: periodKey, details: { publicationId, version, pages: pages.length } });
+      return { publicationId, periodKey, version, pages: pages.length, createdAt: now };
+    });
+  }
+
+  listPublishedPeriods(doctorId) {
+    return this.db.prepare(`
+      SELECT p.period_key, MAX(p.version) AS version, MAX(p.created_at) AS created_at
+      FROM publications p
+      JOIN published_pages pp ON pp.publication_id = p.id
+      WHERE pp.doctor_id = ?
+      GROUP BY p.period_key
+      ORDER BY p.period_key DESC
+    `).all(String(doctorId)).map(row => ({
+      periodKey: row.period_key,
+      version: Number(row.version),
+      createdAt: row.created_at,
+    }));
+  }
+
+  getPublishedPage({ doctorId, periodKey, pageType }) {
+    const row = this.db.prepare(`
+      SELECT pp.page_type, pp.scope_id, pp.title, pp.html, p.period_key, p.version, p.created_at
+      FROM published_pages pp
+      JOIN publications p ON p.id = pp.publication_id
+      WHERE pp.doctor_id = ? AND p.period_key = ? AND pp.page_type = ?
+      ORDER BY p.version DESC LIMIT 1
+    `).get(String(doctorId), String(periodKey), String(pageType));
+    return row ? {
+      pageType: row.page_type,
+      scopeId: row.scope_id,
+      title: row.title,
+      html: row.html,
+      periodKey: row.period_key,
+      version: Number(row.version),
+      createdAt: row.created_at,
+    } : null;
+  }
+
+  audit({ actorUserId = null, action, targetType = null, targetId = null, details = null }) {
+    this.db.prepare(`
+      INSERT INTO audit_log(actor_user_id, action, target_type, target_id, details_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(actorUserId == null ? null : Number(actorUserId), action, targetType, targetId, stableJson(details), new Date().toISOString());
   }
 
   hasSuccessfulSource(sha256) {
@@ -439,6 +833,9 @@ class DatabaseService {
         months: tableExists("months") ? db.prepare("SELECT COUNT(*) AS n FROM months").get().n : 0,
         doctors: tableExists("doctors") ? db.prepare("SELECT COUNT(*) AS n FROM doctors").get().n : 0,
         imports: tableExists("import_events") ? db.prepare("SELECT COUNT(*) AS n FROM import_events").get().n : 0,
+        users: tableExists("users") ? db.prepare("SELECT COUNT(*) AS n FROM users").get().n : 0,
+        comments: tableExists("comments") ? db.prepare("SELECT COUNT(*) AS n FROM comments").get().n : 0,
+        publications: tableExists("publications") ? db.prepare("SELECT COUNT(*) AS n FROM publications").get().n : 0,
         hasSnapshot: tableExists("app_settings") ? Boolean(db.prepare("SELECT 1 FROM app_settings WHERE id = 1").get()) : false,
       };
     } catch (error) {

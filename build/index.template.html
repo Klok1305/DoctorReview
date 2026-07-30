@@ -10,6 +10,40 @@
 </style>
 </head>
 <body>
+<section class="auth-screen hidden" id="authScreen" aria-live="polite">
+  <div class="auth-card">
+    <div class="auth-brand">💓 <b>Пульс клиники</b></div>
+    <div id="authSetup" class="hidden">
+      <h1>Создание администратора</h1>
+      <p class="muted">Первый запуск. Создайте учётную запись руководителя.</p>
+      <label class="fld"><span>Логин</span><input id="setupUsername" autocomplete="username"></label>
+      <label class="fld"><span>Имя</span><input id="setupDisplayName" value="Администратор"></label>
+      <label class="fld"><span>Пароль</span><input id="setupPassword" type="password" autocomplete="new-password"></label>
+      <label class="fld"><span>Повторите пароль</span><input id="setupPasswordRepeat" type="password" autocomplete="new-password"></label>
+      <button class="btn primary auth-submit" id="btnSetupAdmin">Создать администратора</button>
+    </div>
+    <div id="authLogin" class="hidden">
+      <h1>Вход</h1>
+      <div class="auth-columns">
+        <form class="auth-pane" id="adminLoginForm">
+          <h2>Администратор</h2>
+          <label class="fld"><span>Логин</span><input id="adminLoginUsername" autocomplete="username"></label>
+          <label class="fld"><span>Пароль</span><input id="adminLoginPassword" type="password" autocomplete="current-password"></label>
+          <button class="btn primary auth-submit" type="submit">Войти</button>
+        </form>
+        <form class="auth-pane" id="doctorLoginForm">
+          <h2>Врач</h2>
+          <label class="fld"><span>Начните вводить имя или фамилию</span><input id="doctorLoginSearch" autocomplete="off" placeholder="не менее 2 символов"></label>
+          <div class="doctor-login-results" id="doctorLoginResults"><p class="small muted">Введите часть имени или фамилии.</p></div>
+          <label class="fld"><span>Пароль</span><input id="doctorLoginPassword" type="password" autocomplete="current-password"></label>
+          <button class="btn primary auth-submit" type="submit">Открыть мои отчёты</button>
+        </form>
+      </div>
+    </div>
+    <div class="notice bad hidden" id="authError"></div>
+  </div>
+</section>
+
 <header class="app-header no-print">
   <div class="logo">💓 <span class="logo-work">Пульс</span> <span class="logo-doctors">клиники</span></div>
   <nav class="tabs">
@@ -21,6 +55,7 @@
     <button data-tab="settings">⚙️ Настройки</button>
   </nav>
   <div class="header-status" id="headerStatus"></div>
+  <div class="header-user hidden" id="headerUser"><span id="headerUserName"></span><button class="btn mini" id="btnAdminChangePassword">Сменить пароль</button><button class="btn mini" id="btnLogout">Сменить пользователя</button></div>
 </header>
 <main>
 
@@ -125,6 +160,7 @@
     <label>Кому: <select id="repScope" style="min-width:220px"></select></label>
     <label>Месяц: <select id="repMonth"></select></label>
     <button class="btn primary" id="btnExportAllPdf" title="Выбрать отделения, специализации и врачей для PDF-выгрузки">📁 Выгрузить PDF</button>
+    <button class="btn primary" id="btnPublishReports" title="Зафиксировать отчёты и комментарии для врачей">✓ Сохранить и опубликовать</button>
     <button class="btn" id="btnPrint">🖨 Печать</button>
   </div>
   <div class="notice blue no-print">Нажмите «Выгрузить PDF», затем в открывшемся окне отметьте конкретные отделения, специализации и врачей. Экспорт начнётся только после подтверждения выбора. Предпросмотр «Кому» и кнопка «Печать» работают для одного выбранного краткого отчёта.</div>
@@ -152,10 +188,35 @@
 
 <section id="page-settings" class="page">
   <h2>Настройки расчёта</h2>
+  <div id="userManagement"></div>
   <div id="settingsBody"></div>
 </section>
 
 </main>
+<section class="doctor-viewer hidden" id="doctorViewer">
+  <header class="doctor-viewer-head no-print">
+    <div><b>💓 Пульс клиники</b><span id="doctorViewerIdentity"></span></div>
+    <div class="flex">
+      <label>Период: <select id="doctorViewerPeriod"></select></label>
+      <button class="btn" id="btnDoctorChangePassword">Сменить пароль</button>
+      <button class="btn" id="btnDoctorLogout">Сменить пользователя</button>
+    </div>
+  </header>
+  <nav class="doctor-viewer-tabs no-print" id="doctorViewerTabs"></nav>
+  <div class="doctor-viewer-body" id="doctorViewerBody"></div>
+</section>
+
+<dialog id="changePasswordDialog" class="password-dialog">
+  <form method="dialog">
+    <h2>Смена пароля</h2>
+    <p class="small muted" id="changePasswordHint"></p>
+    <label class="fld"><span>Текущий пароль</span><input id="currentPassword" type="password" autocomplete="current-password"></label>
+    <label class="fld"><span>Новый пароль</span><input id="newPassword" type="password" autocomplete="new-password"></label>
+    <label class="fld"><span>Повторите новый пароль</span><input id="newPasswordRepeat" type="password" autocomplete="new-password"></label>
+    <div class="notice bad hidden" id="changePasswordError"></div>
+    <div class="toolbar"><button class="btn" value="cancel">Отмена</button><button class="btn primary" value="default" id="btnConfirmPasswordChange">Сохранить пароль</button></div>
+  </form>
+</dialog>
 <footer class="app-footer no-print" id="footerText">Приложение работает полностью локально: данные не покидают этот компьютер. Сохраняйте базу в файл после каждой загрузки данных.</footer>
 <script type="text/plain" id="lib-xlsx">
 /*__XLSX__*/

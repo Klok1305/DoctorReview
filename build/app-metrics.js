@@ -89,6 +89,9 @@ function classifyItem(profile, cat, n, goods) {
         const [substr, g, sg, kind] = rule;
         if (kind === "товар" && !goods) continue;
         if (kind === "услуга" && goods) continue;
+        // Общие правила вроде «прием»/«узи» не должны перехватывать товар:
+        // «раствор для приема внутрь» и «смузи» — реальные примеры из 1С.
+        if (goods && kind !== "товар" && g !== "Товары") continue;
         if (txt.includes(substr.toLowerCase())) return { g, sg: sg || "", substr: substr.toLowerCase() };
       }
       return null;
@@ -123,7 +126,7 @@ function classifyItem(profile, cat, n, goods) {
   }
   group = canonGroup(group);
   sub = canonSub(group, sub);
-  return { group, sub: sub || "", expertItem, devCandidate, unmapped };
+  return { group, sub: sub || "", expertItem, devCandidate, unmapped, goods: Boolean(goods) };
 }
 
 /* Тип направления/назначения (Вектор 3 — междисциплинарный) */
@@ -286,11 +289,14 @@ function naznachSummary(docId, monthKey, slice) {
   let hasExplicitSourceGroups = false;
   for (const t of REF_TYPES) out.byType[t] = { assigned: 0, done: 0, soldQ: 0, soldSum: 0, resultQ: 0, items: {} };
   for (const it of nz.items) {
-    const goods = Boolean(it.goods);
+    // Код номенклатуры восстанавливает тип и для уже сохранённых импортов,
+    // созданных до появления товарной классификации плоского отчёта 1С.
+    const sourceGoods = Boolean(it.goods) || isNaznachGoodsNomenclature(it.n, it.d);
+    const cls = classifyItem(profile, "", it.n, sourceGoods);
+    const goods = Boolean(cls.goods);
     const done = goods ? 0 : (it.d || 0);
     const soldQ = it.sq || 0;
     const resultQ = done + soldQ;
-    const cls = classifyItem(profile, "", it.n, goods);
     const t = refTypeOf(cls);
     const b = out.byType[t];
     b.assigned += it.a; b.done += done; b.soldQ += soldQ; b.soldSum += it.ss; b.resultQ += resultQ;

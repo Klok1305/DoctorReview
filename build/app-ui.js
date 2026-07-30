@@ -34,6 +34,207 @@ const UI = {
   setSpecialization: "",
 };
 
+let APP_AUTH = null;
+let APP_USERS = [];
+let selectedDoctorLoginUserId = null;
+let doctorViewerState = { periods: [], pages: {}, periodKey: null, pageType: "department" };
+
+function showAuthError(message) {
+  const box = document.getElementById("authError");
+  if (!box) return;
+  box.textContent = String(message || "");
+  box.classList.toggle("hidden", !message);
+}
+
+function showAuthScreen(auth) {
+  APP_AUTH = auth;
+  document.getElementById("authScreen").classList.remove("hidden");
+  document.getElementById("authSetup").classList.toggle("hidden", !auth.needsSetup);
+  document.getElementById("authLogin").classList.toggle("hidden", auth.needsSetup);
+  document.querySelector(".app-header").classList.add("hidden");
+  document.querySelector("main").classList.add("hidden");
+  document.getElementById("doctorViewer").classList.add("hidden");
+  showAuthError("");
+  setTimeout(() => {
+    const target = document.getElementById(auth.needsSetup ? "setupUsername" : "adminLoginUsername");
+    if (target) target.focus();
+  }, 0);
+}
+
+function showAdminApplication(auth) {
+  APP_AUTH = auth;
+  document.getElementById("authScreen").classList.add("hidden");
+  document.querySelector(".app-header").classList.remove("hidden");
+  document.querySelector("main").classList.remove("hidden");
+  document.getElementById("doctorViewer").classList.add("hidden");
+  const headerUser = document.getElementById("headerUser");
+  headerUser.classList.remove("hidden");
+  document.getElementById("headerUserName").textContent = auth.user.displayName;
+}
+
+async function loadAdminApplication(auth) {
+  const state = await DESKTOP_API.getAdminState();
+  DESKTOP_STATE = Object.assign({}, DESKTOP_STATE || {}, state, { auth });
+  APP_USERS = state.users || [];
+  if (state.snapshot && !applyLoadedDatabase(state.snapshot)) {
+    throw new Error("Рабочая база создана несовместимой версией приложения");
+  }
+  setAutosaveStatus(`SQLite · ${state.config.databasePath}`);
+  showAdminApplication(auth);
+  renderDesktopWorkspace();
+  switchTab("data");
+}
+
+async function setupAdministrator() {
+  const username = document.getElementById("setupUsername").value;
+  const displayName = document.getElementById("setupDisplayName").value;
+  const password = document.getElementById("setupPassword").value;
+  const repeat = document.getElementById("setupPasswordRepeat").value;
+  if (password !== repeat) { showAuthError("Пароли не совпадают"); return; }
+  try {
+    const auth = await DESKTOP_API.setupAdmin({ username, displayName, password });
+    await loadAdminApplication(auth);
+  } catch (error) {
+    showAuthError(error.message);
+  }
+}
+
+async function loginAdministrator(event) {
+  event.preventDefault();
+  try {
+    const auth = await DESKTOP_API.login({
+      username: document.getElementById("adminLoginUsername").value,
+      password: document.getElementById("adminLoginPassword").value,
+    });
+    await loadAdminApplication(auth);
+  } catch (error) {
+    showAuthError(error.message);
+  }
+}
+
+async function searchDoctorLoginCandidates() {
+  const query = document.getElementById("doctorLoginSearch").value.trim();
+  const box = document.getElementById("doctorLoginResults");
+  selectedDoctorLoginUserId = null;
+  if (query.length < 2) {
+    box.innerHTML = '<p class="small muted">Введите не менее двух символов.</p>';
+    return;
+  }
+  try {
+    const rows = await DESKTOP_API.findDoctorCandidates(query);
+    box.innerHTML = rows.length ? rows.map(row => `<label class="doctor-login-choice">
+      <input type="radio" name="doctorLoginUser" value="${row.userId}">
+      <span><b>${esc(row.displayName)}</b><small>${esc([row.department, row.specialization].filter(Boolean).join(" · ") || "структура не назначена")}</small></span>
+    </label>`).join("") : '<p class="small muted">Активные учётные записи не найдены. Обратитесь к администратору.</p>';
+    box.querySelectorAll('input[name="doctorLoginUser"]').forEach(input => input.addEventListener("change", () => {
+      selectedDoctorLoginUserId = Number(input.value);
+    }));
+  } catch (error) {
+    box.innerHTML = `<p class="small bad-text">${esc(error.message)}</p>`;
+  }
+}
+
+async function loginDoctor(event) {
+  event.preventDefault();
+  if (!selectedDoctorLoginUserId) { showAuthError("Сначала выберите себя в списке"); return; }
+  try {
+    const auth = await DESKTOP_API.login({
+      userId: selectedDoctorLoginUserId,
+      password: document.getElementById("doctorLoginPassword").value,
+    });
+    APP_AUTH = auth;
+    showAuthError("");
+    await showDoctorViewer(auth);
+    if (auth.user.mustChangePassword) openPasswordDialog(true);
+  } catch (error) {
+    showAuthError(error.message);
+  }
+}
+
+async function logoutApplication() {
+  try { await DESKTOP_API.logout(); } catch (_) { /* reload still clears renderer memory */ }
+  window.location.reload();
+}
+
+function openPasswordDialog(force = false) {
+  const dialog = document.getElementById("changePasswordDialog");
+  dialog.dataset.force = force ? "1" : "0";
+  document.getElementById("changePasswordHint").textContent = force
+    ? "Временный пароль необходимо заменить перед дальнейшей работой."
+    : "Новый пароль должен содержать не менее 10 символов, буквы и цифры.";
+  dialog.querySelector('button[value="cancel"]').classList.toggle("hidden", force);
+  for (const id of ["currentPassword", "newPassword", "newPasswordRepeat"]) document.getElementById(id).value = "";
+  document.getElementById("changePasswordError").classList.add("hidden");
+  dialog.showModal();
+}
+
+async function confirmPasswordChange(event) {
+  event.preventDefault();
+  const currentPassword = document.getElementById("currentPassword").value;
+  const newPassword = document.getElementById("newPassword").value;
+  const repeat = document.getElementById("newPasswordRepeat").value;
+  const errorBox = document.getElementById("changePasswordError");
+  if (newPassword !== repeat) {
+    errorBox.textContent = "Новые пароли не совпадают";
+    errorBox.classList.remove("hidden");
+    return;
+  }
+  try {
+    const user = await DESKTOP_API.changePassword({ currentPassword, newPassword });
+    APP_AUTH.user = user;
+    document.getElementById("changePasswordDialog").close();
+    toast("Пароль изменён");
+  } catch (error) {
+    errorBox.textContent = error.message;
+    errorBox.classList.remove("hidden");
+  }
+}
+
+async function showDoctorViewer(auth) {
+  APP_AUTH = auth;
+  document.getElementById("authScreen").classList.add("hidden");
+  document.querySelector(".app-header").classList.add("hidden");
+  document.querySelector("main").classList.add("hidden");
+  document.getElementById("doctorViewer").classList.remove("hidden");
+  document.getElementById("doctorViewerIdentity").textContent = auth.user.displayName;
+  doctorViewerState.periods = await DESKTOP_API.listPublishedPeriods();
+  const select = document.getElementById("doctorViewerPeriod");
+  select.innerHTML = doctorViewerState.periods.map(item => `<option value="${item.periodKey}">${monthLabel(item.periodKey)} · версия ${item.version}</option>`).join("");
+  doctorViewerState.periodKey = doctorViewerState.periods[0] ? doctorViewerState.periods[0].periodKey : null;
+  if (!doctorViewerState.periodKey) {
+    document.getElementById("doctorViewerTabs").innerHTML = "";
+    document.getElementById("doctorViewerBody").innerHTML = '<div class="card doctor-viewer-empty"><h2>Опубликованных отчётов пока нет</h2><p class="muted">Обратитесь к администратору.</p></div>';
+    return;
+  }
+  select.value = doctorViewerState.periodKey;
+  await loadDoctorViewerPeriod();
+}
+
+async function loadDoctorViewerPeriod() {
+  const periodKey = document.getElementById("doctorViewerPeriod").value || doctorViewerState.periodKey;
+  doctorViewerState.periodKey = periodKey;
+  const pageTypes = ["department", "specialization", "doctor"];
+  const pages = await Promise.all(pageTypes.map(pageType => DESKTOP_API.getPublishedPage({ periodKey, pageType })));
+  doctorViewerState.pages = Object.fromEntries(pageTypes.map((type, index) => [type, pages[index]]).filter(([, page]) => page));
+  if (!doctorViewerState.pages[doctorViewerState.pageType]) doctorViewerState.pageType = Object.keys(doctorViewerState.pages)[0] || "doctor";
+  const labels = { department: "Отчёт отделения", specialization: "Отчёт специализации", doctor: "Мой отчёт" };
+  document.getElementById("doctorViewerTabs").innerHTML = Object.keys(doctorViewerState.pages)
+    .map(type => `<button class="btn ${type === doctorViewerState.pageType ? "active" : ""}" data-viewer-page="${type}">${labels[type]}</button>`).join("");
+  document.querySelectorAll("[data-viewer-page]").forEach(button => button.addEventListener("click", () => {
+    doctorViewerState.pageType = button.dataset.viewerPage;
+    renderDoctorViewerPage();
+  }));
+  renderDoctorViewerPage();
+}
+
+function renderDoctorViewerPage() {
+  const page = doctorViewerState.pages[doctorViewerState.pageType];
+  document.querySelectorAll("[data-viewer-page]").forEach(button => button.classList.toggle("active", button.dataset.viewerPage === doctorViewerState.pageType));
+  document.getElementById("doctorViewerBody").innerHTML = page
+    ? `<div class="small muted" style="margin-bottom:8px">Опубликовано ${new Date(page.createdAt).toLocaleString("ru-RU")} · версия ${page.version}</div>${page.html}`
+    : '<div class="card"><p class="muted">Страница недоступна.</p></div>';
+}
+
 function setControlsDisabled(ids, disabled) {
   for (const id of ids) {
     const control = document.getElementById(id);
@@ -179,10 +380,10 @@ async function desktopRestoreBackup() {
   try {
     const result = await DESKTOP_API.restoreBackup();
     if (result.canceled) return;
-    if (!applyLoadedDatabase(result.snapshot)) throw new Error("Восстановленная база имеет неподдерживаемый формат");
-    DESKTOP_STATE.summary = result.summary;
-    renderAll();
-    toast("База восстановлена. Перед восстановлением автоматически сохранена текущая версия.");
+    if (result.requiresLogin) {
+      window.location.reload();
+      return;
+    }
   } catch (error) {
     toast("Не удалось восстановить базу: " + error.message, true);
   }
@@ -2325,7 +2526,15 @@ function renderScoresChart(canvasId, months, vecGetter, totalGetter) {
 /* сворачивание подкатегорий в расшифровке В2 */
 function toggleGroup(g) {
   UI.openGroups[g] = !UI.openGroups[g];
-  document.querySelectorAll(".grp-sub." + g).forEach(tr => { tr.style.display = UI.openGroups[g] ? "" : "none"; });
+  const nestedRows = document.querySelectorAll(`[data-group-ancestors~="${g}"]`);
+  if (nestedRows.length) {
+    nestedRows.forEach(tr => {
+      const ancestors = String(tr.dataset.groupAncestors || "").split(/\s+/).filter(Boolean);
+      tr.style.display = ancestors.every(key => Boolean(UI.openGroups[key])) ? "" : "none";
+    });
+  } else {
+    document.querySelectorAll(".grp-sub." + g).forEach(tr => { tr.style.display = UI.openGroups[g] ? "" : "none"; });
+  }
   const tri = document.getElementById("tri_" + g);
   if (tri) tri.textContent = UI.openGroups[g] ? "▾" : "▸";
 }
@@ -2836,13 +3045,18 @@ function renderDoctor() {
     const convTarget = docProfile.scoring && docProfile.scoring.benchmarks ? docProfile.scoring.benchmarks.nazConv : null;
     const convState = trackedMetricState(nz.totals.conv, convTarget);
     const hasConvTarget = convTarget != null && convTarget !== "" && !isNaN(convTarget) && Number(convTarget) > 0;
-    html += `<h3 class="section-title" style="margin:12px 0 6px">КОНВЕРСИЯ НАЗНАЧЕНИЙ <span class="section-detail">· окно ${nazCur} мес. · источник: отчёт «Назначения» · группы сохраняются из структуры 1С</span> ${copyBtn("copyTable", "tblNaz")}</h3>
+    html += `<details ${collapsibleListAttrs("appointmentConversionBlock", false)}><summary class="collapsible-list-summary appointment-conversion-summary">
+      <span>КОНВЕРСИЯ НАЗНАЧЕНИЙ <span class="section-detail">· окно ${nazCur} мес. · назначено ${fmtNum(nz.totals.assigned)} · результат ${fmtNum(nz.totals.resultQ)}</span></span>
+      <strong class="appointment-conversion-summary-value ${convState}">${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</strong>
+      <span class="collapse-hint"></span>
+      </summary><div class="collapsible-list-body appointment-conversion-body">
+      <div class="toolbar no-print appointment-conversion-actions">${copyBtn("copyTable", "tblNaz")}</div>
       ${nz.totals.valid === false ? `<div class="notice bad"><b>Конверсия не рассчитана:</b> ${esc(nz.totals.issue)}. Проверьте состав исходной выгрузки.</div>` : ""}
       <div class="tracked-metric ${convState}">
         <div><div class="tracked-title">Конверсия за ${nazCur} мес.</div><div class="tracked-note">Услуги: выполнено + продано; товары: продано · ${fmtNum(nz.totals.resultQ)} из ${fmtNum(nz.totals.assigned)}</div></div>
         <div class="tracked-side"><div class="tracked-value">${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</div><div class="tracked-goal">${hasConvTarget ? `цель ≥ ${fmtPct(Number(convTarget))}` : "цель не установлена"}</div></div>
       </div>
-      <details ${collapsibleListAttrs("appointmentDetails")}><summary class="collapsible-list-summary"><span>ДЕТАЛИ НАЗНАЧЕНИЙ</span><span class="collapse-hint"></span></summary>
+      <details ${collapsibleListAttrs("appointmentDetails", false)}><summary class="collapsible-list-summary"><span>ДЕТАЛИ НАЗНАЧЕНИЙ <span class="section-detail">· назначено ${fmtNum(nz.totals.assigned)} · результат ${fmtNum(nz.totals.resultQ)} · конверсия ${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</span></span><span class="collapse-hint"></span></summary>
       <div class="collapsible-list-body"><table class="data" id="tblNaz"><tr><th>${nz.sourceGroups && nz.sourceGroups.length ? "Вид услуги / специализация / номенклатура" : "Тип направления"}</th><th class="num">Назначено, шт</th><th class="num">Выполнено, шт</th><th class="num">Продано, шт</th><th class="num">Конверсия</th></tr>`;
     let ntIdx = 0;
     if (nz.sourceGroups && nz.sourceGroups.length) {
@@ -2873,21 +3087,27 @@ function renderDoctor() {
           for (const [name, values] of Object.entries(group.items || {})) target.items[name] = values;
         }
       }
-      const renderSourceNodes = (nodes, depth = 0) => {
+      const renderSourceNodes = (nodes, depth = 0, ancestorKeys = []) => {
         for (const node of nodes.values()) {
           const itEntries = Object.entries(node.items || {}).filter(([n, v]) => v.assigned || v.done || v.soldQ);
           const gKey = "nsg" + ntIdx++;
           const open = !!UI.openGroups[gKey];
           const hasChildren = node.children.size > 0;
+          const expandable = itEntries.length > 0 || hasChildren;
           const valid = node.assigned >= 0 && node.done >= 0 && node.soldQ >= 0 && node.resultQ <= node.assigned;
           const conv = valid && node.assigned > 0 ? node.resultQ / node.assigned * 100 : null;
-          const marker = itEntries.length ? (open ? "▾" : "▸") : (hasChildren ? "▾" : "·");
-          html += `<tr class="grp-head source-group-head source-group-depth-${Math.min(depth, 3)}" data-g="${gKey}" ${itEntries.length ? `onclick="toggleGroup('${gKey}')" style="cursor:pointer"` : ""}>
+          const marker = expandable ? (open ? "▾" : "▸") : "·";
+          const ancestorAttr = ancestorKeys.length ? ` data-group-ancestors="${ancestorKeys.join(" ")}"` : "";
+          const initiallyVisible = ancestorKeys.every(key => Boolean(UI.openGroups[key]));
+          const rowStyle = [initiallyVisible ? "" : "display:none", expandable ? "cursor:pointer" : ""].filter(Boolean).join(";");
+          html += `<tr class="grp-head source-group-head source-group-depth-${Math.min(depth, 3)}" data-g="${gKey}"${ancestorAttr}${expandable ? ` onclick="toggleGroup('${gKey}')"` : ""}${rowStyle ? ` style="${rowStyle}"` : ""}>
             <td style="padding-left:${10 + depth * 22}px"><span id="tri_${gKey}" class="muted">${marker}</span> <span class="source-group-path"><span class="source-group-level">${esc(node.name)}</span></span></td>
             <td class="num"><b>${fmtNum(node.assigned)}</b></td><td class="num"><b>${fmtNum(node.done)}</b></td><td class="num"><b>${fmtNum(node.soldQ)}</b></td><td class="num"><b>${conv != null ? fmtPct(conv) : "—"}</b></td></tr>`;
-          if (hasChildren) renderSourceNodes(node.children, depth + 1);
+          if (hasChildren) renderSourceNodes(node.children, depth + 1, [...ancestorKeys, gKey]);
           for (const [n, v] of itEntries) {
-            html += `<tr class="grp-sub ${gKey}" ${open ? "" : 'style="display:none"'}><td class="small muted source-nomenclature" style="padding-left:${10 + (depth + 1) * 22}px">${esc(n)}</td>
+            const itemAncestors = [...ancestorKeys, gKey];
+            const itemVisible = itemAncestors.every(key => Boolean(UI.openGroups[key]));
+            html += `<tr class="grp-sub ${gKey}" data-group-ancestors="${itemAncestors.join(" ")}" ${itemVisible ? "" : 'style="display:none"'}><td class="small muted source-nomenclature" style="padding-left:${10 + (depth + 1) * 22}px">${esc(n)}</td>
               <td class="num small muted">${fmtNum(v.assigned)}</td><td class="num small muted">${fmtNum(v.done)}</td><td class="num small muted">${fmtNum(v.soldQ)}</td><td class="num small muted"></td></tr>`;
           }
         }
@@ -2922,12 +3142,13 @@ function renderDoctor() {
         <div class="grid cols-3" style="margin-top:12px">
           <div>${focusAssignedEntries.length ? `<h3 class="small muted" style="margin-bottom:6px">НАЗНАЧЕНО ПО ФОКУСАМ, ШТ. ${copyBtn("copyChart", "chNazFocusAssigned", "PNG")}</h3><div class="chart-box"><canvas id="chNazFocusAssigned"></canvas></div>` : '<p class="muted small">По фокусам пока нет назначений.</p>'}</div>
           <div>${focusResultEntries.length ? `<h3 class="small muted" style="margin-bottom:6px">ВЫПОЛНЕНО + ПРОДАНО ПО ФОКУСАМ, ШТ. ${copyBtn("copyChart", "chNazFocusResult", "PNG")}</h3><div class="chart-box"><canvas id="chNazFocusResult"></canvas></div>` : '<p class="muted small">По фокусам пока нет выполненных или проданных услуг.</p>'}</div>
-          <div><details ${collapsibleListAttrs("interdisciplinaryFocusPositions")}><summary class="collapsible-list-summary"><span>${focusTitle}: СПИСОК</span><span class="collapse-hint"></span></summary>
+          <div><details ${collapsibleListAttrs("interdisciplinaryFocusPositions", false)}><summary class="collapsible-list-summary"><span>${focusTitle}: СПИСОК</span><span class="collapse-hint"></span></summary>
             <div class="collapsible-list-body"><div class="toolbar no-print">${copyBtn("copyTable", "tblNazFocus")}</div><table class="data" id="tblNazFocus"><tr><th>Наименование услуги</th><th class="num">Назначено, шт</th><th class="num">Выполнено + продано, шт</th></tr>
             ${focusEntries.map(name => { const item = nz.focus.items[name] || { assigned: 0, resultQ: 0 }; return `<tr><td>${esc(name)}</td><td class="num">${fmtNum(item.assigned)}</td><td class="num">${fmtNum(item.resultQ)}</td></tr>`; }).join("")}
             </table></div></details></div>
         </div>`;
     }
+    html += `</div></details>`;
   } else {
     html += '<p class="muted small" style="margin-top:8px">Нет выгрузки «Назначения» за этот месяц — конверсии недоступны.</p>';
   }
@@ -2943,7 +3164,7 @@ function renderDoctor() {
       <div class="tracked-side"><div class="tracked-value">${fmtPct(r.cross.crossShare)}</div><div class="tracked-goal">${hasCompletedReferralTarget ? `цель ≥ ${fmtPct(Number(completedReferralTarget))}` : "цель не установлена"}</div></div>
     </div>
     <div class="grid cols-2" style="margin-top:12px"><div>
-      <details ${collapsibleListAttrs("completedReferralDetails")}><summary class="collapsible-list-summary"><span>ВЫПОЛНЕНИЕ НАПРАВЛЕНИЙ <span class="section-detail">· источник: «Выработка»</span></span><span class="collapse-hint"></span></summary>
+      <details ${collapsibleListAttrs("completedReferralDetails", false)}><summary class="collapsible-list-summary"><span>ВЫПОЛНЕНИЕ НАПРАВЛЕНИЙ <span class="section-detail">· источник: «Выработка» · итог ${fmtMoney(refWorkTotal)}</span></span><span class="collapse-hint"></span></summary>
       <div class="collapsible-list-body"><div class="toolbar no-print">${copyBtn("copyTable", "tblRef")}</div>
       <table class="data" id="tblRef"><tr><th>Тип</th><th class="num">Штук</th><th class="num">Сумма по отчёту «Выработка»</th></tr>`;
     let rtIdx = 0;
@@ -3519,7 +3740,7 @@ function renderReport() {
   if (kbControl) kbControl.innerHTML = `<span class="small muted">База:</span> ${segToggle("repKbWinSeg", [
     { v: 12, label: "1 год" }, { v: 24, label: "2 года" }, { v: 36, label: "3 года" },
   ], UI.repKbWin, "setReportKbWin")}`;
-  setControlsDisabled(["repMonth", "repScope", "btnExportAllPdf", "btnPrint"], !months.length);
+  setControlsDisabled(["repMonth", "repScope", "btnExportAllPdf", "btnPublishReports", "btnPrint"], !months.length);
   if (!months.length) {
     body.innerHTML = '<div class="card"><p class="muted">Загрузите данные на вкладке «Данные».</p></div>';
     mSel.innerHTML = ""; sSel.innerHTML = "";
@@ -3529,10 +3750,263 @@ function renderReport() {
   const mk = UI.repMonth;
   mSel.innerHTML = months.map(k => `<option value="${k}" ${k === mk ? "selected" : ""}>${monthLabel(k)}</option>`).join("");
   const core = coreDoctorsInMonth(mk).length ? coreDoctorsInMonth(mk) : doctorsInMonth(mk);
-  sSel.innerHTML = `<option value="dept" ${UI.repScope === "dept" ? "selected" : ""}>Специализация целиком</option>` +
-    core.map(id => `<option value="doc:${id}" ${UI.repScope === "doc:" + id ? "selected" : ""}>${esc(doctorName(id))}</option>`).join("");
-  if (UI.repScope.startsWith("doc:") && !core.includes(UI.repScope.slice(4))) UI.repScope = "dept";
-  body.innerHTML = UI.repScope === "dept" ? buildDeptReport(mk) : buildDoctorReport(UI.repScope.slice(4), mk);
+  const departments = [...new Set(core.map(resolvedDepartmentName).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ru"));
+  const specializations = [...new Set(core.map(resolvedSpecializationName).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ru"));
+  const validScopes = new Set([
+    ...departments.map(name => `department:${name}`),
+    ...specializations.map(name => `specialization:${name}`),
+    ...core.map(id => `doc:${id}`),
+  ]);
+  if (!validScopes.has(UI.repScope)) UI.repScope = departments.length ? `department:${departments[0]}` : (specializations.length ? `specialization:${specializations[0]}` : `doc:${core[0]}`);
+  sSel.innerHTML = [
+    ...departments.map(name => `<option value="department:${esc(name)}" ${UI.repScope === "department:" + name ? "selected" : ""}>Отделение · ${esc(name)}</option>`),
+    ...specializations.map(name => `<option value="specialization:${esc(name)}" ${UI.repScope === "specialization:" + name ? "selected" : ""}>Специализация · ${esc(name)}</option>`),
+    ...core.map(id => `<option value="doc:${id}" ${UI.repScope === "doc:" + id ? "selected" : ""}>Врач · ${esc(doctorName(id))}</option>`),
+  ].join("");
+  const context = reportContextFromScope(UI.repScope, mk);
+  if (context.scopeType === "department") body.innerHTML = buildDepartmentReport(mk, context.scopeId);
+  else if (context.scopeType === "specialization") body.innerHTML = buildDeptReport(mk, context.scopeId, "all");
+  else body.innerHTML = buildDoctorReport(context.scopeId, mk);
+  decorateAdminReportComments(context).catch(error => toast("Не удалось загрузить комментарии: " + error.message, true));
+}
+
+function reportContextFromScope(scope, periodKey) {
+  if (String(scope).startsWith("department:")) {
+    return { scopeType: "department", scopeId: String(scope).slice("department:".length), periodKey, pageType: "department" };
+  }
+  if (String(scope).startsWith("specialization:")) {
+    return { scopeType: "specialization", scopeId: String(scope).slice("specialization:".length), periodKey, pageType: "specialization" };
+  }
+  return { scopeType: "doctor", scopeId: String(scope).replace(/^doc:/, ""), periodKey, pageType: "doctor" };
+}
+
+function buildDepartmentReport(mk, departmentName) {
+  const rows = departmentDoctorRows(mk, departmentName);
+  if (!rows.length) return '<div class="card"><p class="muted">Нет данных отделения за выбранный месяц.</p></div>';
+  const sales = rows.reduce((sum, item) => sum + (item.r.econ.sales || 0), 0);
+  const revenueWithRef = rows.reduce((sum, item) => sum + (item.r.econ.revenueWithRef || 0), 0);
+  const patients = rows.reduce((sum, item) => sum + (item.r.traffic.patients || 0), 0);
+  const scored = rows.map(item => item.r.scores && item.r.scores.total).filter(value => value != null);
+  const specializations = [...new Set(rows.map(item => resolvedSpecializationName(item.id)).filter(Boolean))];
+  let html = `<div class="card slide"><h2>${esc(departmentName)} <span class="muted small">· ${monthLabel(mk)}</span></h2>
+    <div class="grid cols-4">
+      <div class="kpi"><div class="lbl">Врачей с данными</div><div class="val">${fmtNum(rows.length)}</div></div>
+      <div class="kpi"><div class="lbl">Собственная выручка</div><div class="val">${fmtMoney(sales)}</div></div>
+      <div class="kpi"><div class="lbl">Выручка с перенаправлениями</div><div class="val">${fmtMoney(revenueWithRef)}</div></div>
+      <div class="kpi"><div class="lbl">Пациентов</div><div class="val">${fmtNum(patients)}</div></div>
+    </div>
+    ${scored.length ? `<p class="small muted">Средний балл врачей: <b>${fmtNum(scored.reduce((a, b) => a + b, 0) / scored.length, 1)}</b></p>` : ""}
+  </div>`;
+  html += `<div class="card slide"><h2>Специализации отделения</h2><table class="data"><tr><th>Специализация</th><th class="num">Врачей</th><th class="num">Выручка</th><th class="num">Пациентов</th></tr>
+    ${specializations.map(name => {
+      const group = rows.filter(item => resolvedSpecializationName(item.id) === name);
+      return `<tr><td><b>${esc(name)}</b></td><td class="num">${fmtNum(group.length)}</td><td class="num">${fmtMoney(group.reduce((sum, item) => sum + (item.r.econ.sales || 0), 0))}</td><td class="num">${fmtNum(group.reduce((sum, item) => sum + (item.r.traffic.patients || 0), 0))}</td></tr>`;
+    }).join("")}
+  </table></div>`;
+  html += `<div class="card slide"><h2>Результативность врачей отделения</h2>${doctorScoreLeaderboardHtml(rows, mk, departmentName) || '<p class="muted">Баллы недоступны.</p>'}</div>`;
+  return html;
+}
+
+function reportBlockKey(card, pageType, index) {
+  if (card.id === "reportDoctorMetrics") return `${pageType}.overview`;
+  const heading = String(card.querySelector("h1,h2,h3")?.textContent || "").toLocaleLowerCase("ru-RU");
+  const rules = [
+    [/баллы по векторам/, "vector-scores"],
+    [/экономика и трафик/, "economy-traffic"],
+    [/экспертность|за месяц, шт/, "expertise"],
+    [/междисциплинарный подход/, "interdisciplinary"],
+    [/цели врача/, "goals"],
+    [/клиентская база/, "client-base"],
+    [/лояльность и удержание/, "loyalty"],
+    [/структура выручки|выручка/, "revenue"],
+    [/назначения|направления/, "appointments"],
+    [/динамика|точки роста|точки риска/, "dynamics"],
+    [/специализации отделения/, "specializations"],
+    [/результативность врачей|рейтинг/, "performance"],
+  ];
+  const matched = rules.find(([pattern]) => pattern.test(heading));
+  const structuralFallbacks = {
+    department: ["overview", "specializations", "performance"],
+    specialization: ["overview"],
+    doctor: ["overview"],
+  };
+  return `${pageType}.${matched ? matched[1] : (structuralFallbacks[pageType]?.[index] || "block-" + (index + 1))}`;
+}
+
+function commentForBlock(comments, context, blockKey) {
+  return comments.find(comment => comment.scopeType === context.scopeType
+    && comment.scopeId === context.scopeId
+    && comment.periodKey === context.periodKey
+    && comment.blockKey === blockKey
+    && comment.status !== "archived") || null;
+}
+
+function makeCommentRail(context, blockKey, comment, editable) {
+  const rail = document.createElement("aside");
+  rail.className = `analytic-comment-rail${comment ? "" : " analytic-comment-empty"}`;
+  rail.dataset.blockKey = blockKey;
+  const scopeLabels = { department: "Для отделения", specialization: "Для специализации", doctor: "Для врача" };
+  if (editable) {
+    rail.innerHTML = `<span class="badge info comment-scope-label">${scopeLabels[context.scopeType]} · ${esc(context.scopeId)}</span>
+      <h3>Комментарий к блоку</h3>
+      <textarea class="analytic-comment-input" placeholder="Введите комментарий руководителя…">${esc(comment ? comment.bodyText : "")}</textarea>
+      <div class="toolbar"><button class="btn primary mini" data-save-comment>Сохранить черновик</button>
+        ${comment ? '<button class="btn mini" data-comment-history>История</button><button class="btn mini" data-archive-comment>Архивировать</button>' : ""}
+      </div>
+      <div class="comment-history hidden"></div>
+      <div class="analytic-comment-meta">${comment ? `${comment.status === "published" ? "опубликован" : "черновик"} · ${new Date(comment.updatedAt).toLocaleString("ru-RU")}` : "Комментарий ещё не создан"}</div>`;
+    rail.querySelector("[data-save-comment]").addEventListener("click", () => saveAnalyticComment(rail, context));
+    const archive = rail.querySelector("[data-archive-comment]");
+    if (archive) archive.addEventListener("click", () => archiveAnalyticComment(comment.id));
+    const history = rail.querySelector("[data-comment-history]");
+    if (history) history.addEventListener("click", () => showAnalyticCommentHistory(rail, comment.id));
+  } else if (comment && comment.bodyHtml) {
+    rail.innerHTML = `<span class="badge info comment-scope-label">${scopeLabels[context.scopeType]}</span>
+      <h3>Комментарий руководителя</h3><div class="analytic-comment-body">${comment.bodyHtml}</div>
+      <div class="analytic-comment-meta">${esc(comment.authorName || "Администратор")}</div>`;
+  }
+  return rail;
+}
+
+async function showAnalyticCommentHistory(rail, commentId) {
+  const box = rail.querySelector(".comment-history");
+  if (!box) return;
+  if (!box.classList.contains("hidden")) {
+    box.classList.add("hidden");
+    return;
+  }
+  try {
+    const versions = await DESKTOP_API.getCommentHistory(commentId);
+    box.innerHTML = versions.length ? versions.map(item => `<div class="small" style="margin-top:8px"><b>Версия ${item.version} · ${esc(item.status)}</b><br>
+      ${esc(item.bodyText || "пустой комментарий")}<br><span class="muted">${esc(item.authorName)} · ${new Date(item.createdAt).toLocaleString("ru-RU")}</span></div>`).join("")
+      : '<p class="small muted">История пуста.</p>';
+    box.classList.remove("hidden");
+  } catch (error) {
+    toast("Не удалось загрузить историю: " + error.message, true);
+  }
+}
+
+function wrapAnalyticCards(container, context, comments, editable) {
+  const cards = [...container.children].filter(element => element.classList && element.classList.contains("card"));
+  cards.forEach((card, index) => {
+    const blockKey = reportBlockKey(card, context.pageType, index);
+    card.dataset.analyticsBlockKey = blockKey;
+    const comment = commentForBlock(comments, context, blockKey);
+    if (!editable && !comment) return;
+    const row = document.createElement("div");
+    row.className = "commented-analytic-row";
+    container.insertBefore(row, card);
+    row.appendChild(card);
+    row.appendChild(makeCommentRail(context, blockKey, comment, editable));
+  });
+}
+
+async function decorateAdminReportComments(context) {
+  if (!DESKTOP_API || !APP_AUTH || APP_AUTH.user.role !== "admin") return;
+  const comments = await DESKTOP_API.listComments({ periodKey: context.periodKey, scopeType: context.scopeType, scopeId: context.scopeId });
+  const body = document.getElementById("reportBody");
+  if (body && reportContextFromScope(UI.repScope, UI.repMonth).scopeId === context.scopeId) {
+    wrapAnalyticCards(body, context, comments, true);
+  }
+}
+
+async function saveAnalyticComment(rail, context) {
+  const text = rail.querySelector(".analytic-comment-input").value.trim();
+  const blockKey = rail.dataset.blockKey;
+  try {
+    await DESKTOP_API.saveComment({
+      scopeType: context.scopeType,
+      scopeId: context.scopeId,
+      periodKey: context.periodKey,
+      blockKey,
+      bodyText: text,
+      bodyHtml: esc(text).replace(/\r?\n/g, "<br>"),
+    });
+    toast("Черновик комментария сохранён");
+    renderReport();
+  } catch (error) {
+    toast("Не удалось сохранить комментарий: " + error.message, true);
+  }
+}
+
+async function archiveAnalyticComment(id) {
+  if (!confirm("Архивировать этот комментарий? В опубликованных ранее отчётах он сохранится.")) return;
+  try {
+    await DESKTOP_API.archiveComment(id);
+    toast("Комментарий архивирован");
+    renderReport();
+  } catch (error) {
+    toast("Не удалось архивировать комментарий: " + error.message, true);
+  }
+}
+
+function composePublishedHtml(rawHtml, context, comments) {
+  const root = document.createElement("div");
+  root.innerHTML = rawHtml;
+  root.querySelectorAll(".no-print,button,input,textarea,dialog").forEach(element => element.remove());
+  root.querySelectorAll("[contenteditable]").forEach(element => element.removeAttribute("contenteditable"));
+  wrapAnalyticCards(root, context, comments, false);
+  return root.innerHTML;
+}
+
+async function publishReportsAndComments() {
+  const mk = UI.repMonth;
+  if (!mk || !DB.months[mk]) { toast("Выберите период публикации", true); return; }
+  const button = document.getElementById("btnPublishReports");
+  button.disabled = true;
+  button.textContent = "Публикация…";
+  try {
+    if (!await saveLocal()) throw new Error("Не удалось сохранить текущую рабочую базу");
+    const comments = await DESKTOP_API.listComments({ periodKey: mk });
+    const doctorIds = coreDoctorsInMonth(mk).length ? coreDoctorsInMonth(mk) : doctorsInMonth(mk);
+    const departmentCache = new Map();
+    const specializationCache = new Map();
+    const pages = [];
+    for (const doctorId of doctorIds) {
+      const department = resolvedDepartmentName(doctorId);
+      const specialization = resolvedSpecializationName(doctorId);
+      if (!departmentCache.has(department)) {
+        const context = { scopeType: "department", scopeId: department, periodKey: mk, pageType: "department" };
+        departmentCache.set(department, composePublishedHtml(buildDepartmentReport(mk, department), context, comments));
+      }
+      pages.push({
+        doctorId,
+        pageType: "department",
+        scopeId: department,
+        title: `Отделение ${department} · ${monthLabel(mk)}`,
+        html: departmentCache.get(department),
+      });
+      if (specialization) {
+        if (!specializationCache.has(specialization)) {
+          const context = { scopeType: "specialization", scopeId: specialization, periodKey: mk, pageType: "specialization" };
+          specializationCache.set(specialization, composePublishedHtml(buildDeptReport(mk, specialization, "all"), context, comments));
+        }
+        pages.push({
+          doctorId,
+          pageType: "specialization",
+          scopeId: specialization,
+          title: `Специализация ${specialization} · ${monthLabel(mk)}`,
+          html: specializationCache.get(specialization),
+        });
+      }
+      const doctorContext = { scopeType: "doctor", scopeId: doctorId, periodKey: mk, pageType: "doctor" };
+      pages.push({
+        doctorId,
+        pageType: "doctor",
+        scopeId: doctorId,
+        title: `${doctorName(doctorId)} · ${monthLabel(mk)}`,
+        html: composePublishedHtml(buildDoctorReport(doctorId, mk), doctorContext, comments),
+      });
+    }
+    const result = await DESKTOP_API.publishReports({ periodKey: mk, pages });
+    toast(`Опубликована версия ${result.version}: страниц — ${result.pages}`);
+    renderReport();
+  } catch (error) {
+    toast("Публикация не выполнена: " + error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = "✓ Сохранить и опубликовать";
+  }
 }
 
 function reportHeader(title, subtitle) {
@@ -3961,6 +4435,7 @@ function scoringBenchmarkDefs(profile) {
 }
 
 function renderSettings() {
+  renderUserManagement();
   const s = DB.settings;
   const departmentName = curSetDepartment();
   const specializationNames = departmentGroups()[departmentName] || [];
@@ -4308,6 +4783,72 @@ function renderSettings() {
     el.focus();
     el.setSelectionRange(el.value.length, el.value.length);
   });
+}
+
+function defaultDoctorUsername(doctorId) {
+  return `doctor_${String(doctorId).toLocaleLowerCase("ru-RU").replace(/[^a-zа-яё0-9._-]+/gi, "_")}`.slice(0, 40);
+}
+
+function renderUserManagement() {
+  const host = document.getElementById("userManagement");
+  if (!host || !APP_AUTH || APP_AUTH.user.role !== "admin") return;
+  const doctorUsers = new Map(APP_USERS.filter(user => user.role === "doctor").map(user => [user.doctorId, user]));
+  const rows = Object.keys(DB.doctors).sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru")).map(doctorId => {
+    const user = doctorUsers.get(doctorId);
+    if (!user) {
+      return `<tr data-account-doctor="${esc(doctorId)}"><td><b>${esc(doctorName(doctorId))}</b><br><span class="small muted">${esc(doctorStructureLabel(doctorId))}</span></td>
+        <td><input class="account-username" type="text" value="${esc(defaultDoctorUsername(doctorId))}"></td>
+        <td><input class="account-password" type="password" placeholder="временный пароль"></td>
+        <td><span class="badge mut">не активирован</span></td>
+        <td><button class="btn primary mini" data-create-doctor-account>Создать</button></td></tr>`;
+    }
+    return `<tr data-account-user="${user.id}"><td><b>${esc(user.displayName)}</b><br><span class="small muted">${esc(doctorStructureLabel(doctorId))}</span></td>
+      <td>${esc(user.username)}</td>
+      <td><input class="account-password" type="password" placeholder="новый временный пароль"></td>
+      <td><span class="badge ${user.active ? "good" : "bad"}">${user.active ? "активен" : "отключён"}</span>${user.mustChangePassword ? ' <span class="badge warn">сменит пароль</span>' : ""}</td>
+      <td><div class="user-account-actions"><button class="btn mini" data-reset-doctor-password>Сбросить пароль</button>
+        <button class="btn mini ${user.active ? "danger" : "primary"}" data-toggle-doctor-account data-active="${user.active ? "0" : "1"}>${user.active ? "Отключить" : "Включить"}</button></div></td></tr>`;
+  }).join("");
+  host.innerHTML = `<div class="card"><h2>🔐 Учётные записи врачей</h2>
+    <p class="small muted">Врач появляется здесь после импорта или добавления в справочник. Создание учётной записи всегда подтверждает администратор. Временный пароль врач заменит при первом входе.</p>
+    <div style="overflow-x:auto"><table class="data user-management-table"><tr><th>Врач</th><th>Логин</th><th>Временный пароль</th><th>Состояние</th><th></th></tr>${rows}</table></div>
+  </div>`;
+  host.querySelectorAll("[data-create-doctor-account]").forEach(button => button.addEventListener("click", async () => {
+    const row = button.closest("[data-account-doctor]");
+    const doctorId = row.dataset.accountDoctor;
+    const username = row.querySelector(".account-username").value;
+    const password = row.querySelector(".account-password").value;
+    try {
+      await DESKTOP_API.createDoctorUser({ doctorId, username, displayName: doctorName(doctorId), password });
+      APP_USERS = await DESKTOP_API.listUsers();
+      toast(`Учётная запись врача «${doctorName(doctorId)}» создана`);
+      renderUserManagement();
+    } catch (error) {
+      toast("Не удалось создать учётную запись: " + error.message, true);
+    }
+  }));
+  host.querySelectorAll("[data-reset-doctor-password]").forEach(button => button.addEventListener("click", async () => {
+    const row = button.closest("[data-account-user]");
+    const password = row.querySelector(".account-password").value;
+    try {
+      await DESKTOP_API.resetDoctorPassword({ userId: Number(row.dataset.accountUser), password });
+      APP_USERS = await DESKTOP_API.listUsers();
+      toast("Временный пароль установлен");
+      renderUserManagement();
+    } catch (error) {
+      toast("Не удалось сбросить пароль: " + error.message, true);
+    }
+  }));
+  host.querySelectorAll("[data-toggle-doctor-account]").forEach(button => button.addEventListener("click", async () => {
+    const row = button.closest("[data-account-user]");
+    try {
+      await DESKTOP_API.setUserActive({ userId: Number(row.dataset.accountUser), active: button.dataset.active === "1" });
+      APP_USERS = await DESKTOP_API.listUsers();
+      renderUserManagement();
+    } catch (error) {
+      toast("Не удалось изменить состояние: " + error.message, true);
+    }
+  }));
 }
 
 /* --- отделения и специализации --- */
@@ -4762,7 +5303,12 @@ async function initApp() {
   Chart.defaults.set("plugins.datalabels", { display: false });
   if (DESKTOP_API) {
     await loadDesktopDatabase();
-    renderDesktopWorkspace();
+    APP_AUTH = DESKTOP_STATE.auth;
+    if (APP_AUTH.authenticated && APP_AUTH.user.role === "admin") {
+      APP_USERS = (await DESKTOP_API.getAdminState()).users || [];
+      showAdminApplication(APP_AUTH);
+      renderDesktopWorkspace();
+    }
   } else {
     loadLocal();
     restoreAutosave().then(() => { if (UI.tab === "data") renderData(); });
@@ -4802,6 +5348,7 @@ async function initApp() {
   document.getElementById("repScope").addEventListener("change", e => { UI.repScope = e.target.value; renderReport(); });
   document.getElementById("btnPrint").addEventListener("click", () => window.print());
   document.getElementById("btnExportAllPdf").addEventListener("click", openPdfExportDialog);
+  document.getElementById("btnPublishReports").addEventListener("click", publishReportsAndComments);
   document.getElementById("pdfExportDialogList").addEventListener("change", updatePdfExportDialogState);
   document.getElementById("pdfExportSelectAll").addEventListener("click", () => setAllPdfExportDialogChoices(true));
   document.getElementById("pdfExportClearAll").addEventListener("click", () => setAllPdfExportDialogChoices(false));
@@ -4816,9 +5363,28 @@ async function initApp() {
   document.getElementById("btnAutosave").addEventListener("click", connectAutosave);
   if (DESKTOP_API) {
     DESKTOP_API.onPrepareClose(async () => {
-      let saved = false;
-      try { saved = await saveLocal(); } catch (_) { saved = false; }
+      let saved = true;
+      if (APP_AUTH && APP_AUTH.authenticated && APP_AUTH.user.role === "admin") {
+        try { saved = await saveLocal(); } catch (_) { saved = false; }
+      }
       DESKTOP_API.confirmCloseSaved(saved);
+    });
+    document.getElementById("btnSetupAdmin").addEventListener("click", setupAdministrator);
+    document.getElementById("adminLoginForm").addEventListener("submit", loginAdministrator);
+    document.getElementById("doctorLoginForm").addEventListener("submit", loginDoctor);
+    let doctorSearchTimer = null;
+    document.getElementById("doctorLoginSearch").addEventListener("input", () => {
+      clearTimeout(doctorSearchTimer);
+      doctorSearchTimer = setTimeout(searchDoctorLoginCandidates, 180);
+    });
+    document.getElementById("btnLogout").addEventListener("click", logoutApplication);
+    document.getElementById("btnAdminChangePassword").addEventListener("click", () => openPasswordDialog(false));
+    document.getElementById("btnDoctorLogout").addEventListener("click", logoutApplication);
+    document.getElementById("btnDoctorChangePassword").addEventListener("click", () => openPasswordDialog(false));
+    document.getElementById("doctorViewerPeriod").addEventListener("change", loadDoctorViewerPeriod);
+    document.getElementById("btnConfirmPasswordChange").addEventListener("click", confirmPasswordChange);
+    document.getElementById("changePasswordDialog").addEventListener("cancel", event => {
+      if (event.currentTarget.dataset.force === "1") event.preventDefault();
     });
     document.getElementById("btnScanInput").addEventListener("click", desktopScanInput);
     document.getElementById("btnOpenOutput").addEventListener("click", () => DESKTOP_API.openPath("output").catch(error => toast(error.message, true)));
@@ -4831,9 +5397,26 @@ async function initApp() {
     document.getElementById("btnCheckUpdates").addEventListener("click", desktopCheckUpdates);
     document.getElementById("btnInstallUpdate").addEventListener("click", desktopInstallUpdateFile);
     DESKTOP_API.onUpdateStatus(status => {
+      if (!DESKTOP_STATE) return;
       DESKTOP_STATE.update = status;
       renderUpdateStatus(status);
     });
+    setInterval(async () => {
+      if (!APP_AUTH || !APP_AUTH.authenticated) return;
+      try {
+        const status = await DESKTOP_API.authStatus();
+        if (!status.authenticated) window.location.reload();
+      } catch (_) { /* a later protected action will surface the error */ }
+    }, 30000);
+  }
+  if (DESKTOP_API && (!APP_AUTH || !APP_AUTH.authenticated)) {
+    showAuthScreen(APP_AUTH || { needsSetup: false, authenticated: false });
+    return;
+  }
+  if (DESKTOP_API && APP_AUTH.user.role === "doctor") {
+    await showDoctorViewer(APP_AUTH);
+    if (APP_AUTH.user.mustChangePassword) openPasswordDialog(true);
+    return;
   }
   switchTab("data");
 }

@@ -14,6 +14,7 @@ const { DatabaseService } = require("./services/database.cjs");
 const { BackupService } = require("./services/backup-service.cjs");
 const { FileService } = require("./services/file-service.cjs");
 const { UpdateService } = require("./services/update-service.cjs");
+const { AuthService } = require("./services/auth-service.cjs");
 
 const PDF_SMOKE_TEST = process.argv.includes("--pdf-smoke");
 const SMOKE_TEST = PDF_SMOKE_TEST || process.argv.includes("--smoke-test");
@@ -50,6 +51,7 @@ let database = null;
 let backupService = null;
 let fileService = null;
 let updateService = null;
+let authService = null;
 let closeSaveRequested = false;
 let closeAllowed = false;
 let closeSaveTimer = null;
@@ -66,6 +68,23 @@ function logEvent(event, details = {}) {
 function ensureObject(value, label = "данные") {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Некорректные ${label}`);
   return value;
+}
+
+function sanitizeRichTextHtml(value) {
+  let html = String(value || "").slice(0, 20000);
+  html = html.replace(/<\s*(script|style|iframe|object|embed|form)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, "");
+  html = html.replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+  html = html.replace(/\s(?:href|src)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+  return html.replace(/<(?!\/?(?:strong|b|br|span)(?:\s|>|\/))[^>]+>/gi, "");
+}
+
+function sanitizePublishedHtml(value) {
+  let html = String(value || "");
+  if (html.length > 8 * 1024 * 1024) throw new Error("Страница публикации превышает 8 МБ");
+  html = html.replace(/<\s*(script|iframe|object|embed|form)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, "");
+  html = html.replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+  html = html.replace(/javascript\s*:/gi, "");
+  return html;
 }
 
 async function copyDatabaseToWorkspace(rootPath) {
@@ -128,12 +147,20 @@ async function copyDatabaseToWorkspace(rootPath) {
 async function initializeServices() {
   app.setName(APP_NAME);
   const userDataDir = app.getPath("userData");
-  const documentsDir = app.getPath("home");
+  const documentsDir = app.getPath("documents");
   configStore = new ConfigStore({
     userDataDir,
     documentsDir,
   });
   database = new DatabaseService(configStore.databasePath());
+  authService = new AuthService({ database, logger: logEvent });
+  if (SMOKE_TEST && !database.hasUsers()) {
+    authService.setupAdmin({
+      username: "smoke-admin",
+      displayName: "Администратор smoke-теста",
+      password: "SmokeTest2026",
+    });
+  }
   backupService = new BackupService({ database, configStore, logger: logEvent });
   fileService = new FileService({ configStore, database, logger: logEvent });
   updateService = new UpdateService({
@@ -198,6 +225,14 @@ function createWindow() {
   });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   mainWindow.webContents.on("will-navigate", event => event.preventDefault());
+  if (SMOKE_TEST) {
+    mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+      process.stderr.write(`[renderer:${level}] ${message} (${sourceId}:${line})\n`);
+    });
+    mainWindow.webContents.on("render-process-gone", (_event, details) => {
+      process.stderr.write(`[renderer-gone] ${JSON.stringify(details)}\n`);
+    });
+  }
   mainWindow.once("ready-to-show", () => {
     if (SMOKE_TEST) return;
     mainWindow.show();
@@ -243,6 +278,7 @@ function createWindow() {
   if (SMOKE_TEST) {
     mainWindow.webContents.once("did-finish-load", async () => {
       try {
+        process.stdout.write("[smoke] renderer loaded\n");
         const smokeAction = PDF_SMOKE_TEST
           ? `(async () => {
               await new Promise(resolve => setTimeout(resolve, 1200));
@@ -406,8 +442,8 @@ function createWindow() {
                   ] }
                 };
                 DB.months[mk].naznach.d1 = { '1': { items: [
-                  { n: 'Фокус А услуга', a: 2, d: 1, sq: 1, ss: 10000 },
-                  { n: 'Прочая услуга', a: 2, d: 0, sq: 1, ss: 10000 }
+                  { n: 'Фокус А услуга', a: 2, d: 1, sq: 1, ss: 10000, groupPath: ['Клиника', 'Диагностика', 'Фокусные услуги'] },
+                  { n: 'Прочая услуга', a: 2, d: 0, sq: 1, ss: 10000, groupPath: ['Клиника', 'Диагностика', 'Прочие услуги'] }
                 ] } };
               }
               clearMetricsCache();
@@ -480,6 +516,10 @@ function createWindow() {
                 && specializationLeaderboardCount === 2
                 && reportLeaderboardCount === 2
                 && leaderboardColorStates.join(',') === 'bad,good,warn';
+              DB.months['2026-02'].naznach.d3 = { '1': { items: [
+                { n: 'Смежная услуга', a: 5, d: 2, sq: 0, ss: 5000 }
+              ] } };
+              clearMetricsCache();
               UI.docId = 'd1';
               UI.docMonth = '2026-02';
               switchTab('doctor');
@@ -548,6 +588,58 @@ function createWindow() {
                 && doctorGoalCards.some(goal => goal.fact !== 'Факт: нет данных')
                 && doctorGoalCards.some(goal => goal.state === 'goal-good')
                 && doctorGoalCards.some(goal => goal.state === 'goal-bad');
+              const appointmentConversionBlock = document.querySelector('#blkV3 [data-list-key="appointmentConversionBlock"]');
+              const appointmentConversionInitiallyCollapsed = Boolean(appointmentConversionBlock) && !appointmentConversionBlock.open;
+              if (appointmentConversionBlock) appointmentConversionBlock.open = true;
+              await new Promise(resolve => setTimeout(resolve, 0));
+              const appointmentDetails = document.querySelector('#blkV3 [data-list-key="appointmentDetails"]');
+              const appointmentDetailsInitiallyCollapsed = Boolean(appointmentDetails) && !appointmentDetails.open;
+              if (appointmentDetails) appointmentDetails.open = true;
+              await new Promise(resolve => setTimeout(resolve, 0));
+              const appointmentRootGroup = document.querySelector('#tblNaz .source-group-depth-0[data-g]');
+              const appointmentDescendants = appointmentRootGroup
+                ? [...document.querySelectorAll('#tblNaz [data-group-ancestors~="' + appointmentRootGroup.dataset.g + '"]')]
+                : [];
+              if (appointmentRootGroup) appointmentRootGroup.click();
+              await new Promise(resolve => setTimeout(resolve, 0));
+              const appointmentExpandedShowsChild = appointmentDescendants.some(row => row.style.display !== 'none');
+              if (appointmentRootGroup) appointmentRootGroup.click();
+              await new Promise(resolve => setTimeout(resolve, 0));
+              if (appointmentDetails) appointmentDetails.open = false;
+              if (appointmentConversionBlock) appointmentConversionBlock.open = false;
+              await new Promise(resolve => setTimeout(resolve, 0));
+              const appointmentConversionCollapsed = Boolean(appointmentConversionBlock)
+                && !appointmentConversionBlock.open;
+              const primaryAppointmentCollapseChecks = {
+                initiallyCollapsed: appointmentConversionInitiallyCollapsed,
+                compactSummary: Boolean(appointmentConversionBlock?.querySelector('summary')?.textContent.includes('назначено 4')),
+                compactValue: Boolean(appointmentConversionBlock?.querySelector('.appointment-conversion-summary-value')?.textContent.includes('75%')),
+                bodyHidden: appointmentConversionCollapsed,
+                detailsInitiallyCollapsed: appointmentDetailsInitiallyCollapsed,
+                detailsSummary: Boolean(appointmentDetails?.querySelector('summary')?.textContent.includes('назначено 4')),
+                hasDescendants: appointmentDescendants.length > 0,
+                expandedShowsChild: appointmentExpandedShowsChild,
+                collapsedHidesDescendants: appointmentDescendants.every(row => row.style.display === 'none')
+              };
+              const primaryAppointmentCollapseValid = Object.values(primaryAppointmentCollapseChecks).every(Boolean);
+              UI.docId = 'd3';
+              renderDoctor();
+              await new Promise(resolve => setTimeout(resolve, 0));
+              const anotherDoctorAppointmentBlock = document.querySelector('#blkV3 [data-list-key="appointmentConversionBlock"]');
+              const anotherDoctorAppointmentCollapseValid = Boolean(anotherDoctorAppointmentBlock)
+                && !anotherDoctorAppointmentBlock.open
+                && anotherDoctorAppointmentBlock.querySelector('summary')?.textContent.includes('назначено 5')
+                && anotherDoctorAppointmentBlock.querySelector('.appointment-conversion-summary-value')?.textContent.includes('40%');
+              UI.docId = 'd1';
+              renderDoctor();
+              await new Promise(resolve => setTimeout(resolve, 0));
+              const appointmentTablesCollapseValid = primaryAppointmentCollapseValid && anotherDoctorAppointmentCollapseValid;
+              const appointmentCollapseDetails = {
+                primaryAppointmentCollapseValid,
+                primaryAppointmentCollapseChecks,
+                anotherDoctorAppointmentCollapseValid,
+                anotherDoctorSummary: anotherDoctorAppointmentBlock?.querySelector('summary')?.textContent.trim() || ''
+              };
               const dynamicsCard = document.getElementById('blkDyn');
               const dynamicsTable = document.getElementById('blkDyn_tbl');
               const dynamicsOutcome = document.querySelector('#blkDynOutcome .dynamic-report-outcome');
@@ -681,6 +773,8 @@ function createWindow() {
                   && shortWindowSelected && mediumWindowSelected && fullWindowSelected && shortLostHidden && mediumLostVisible && clientActionOpened,
                 doctorGoalsSummaryValid,
                 doctorGoalCards,
+                appointmentTablesCollapseValid,
+                appointmentCollapseDetails,
                 doctorSemanticSectionsValid,
                 doctorSemanticTitles,
                 doctorReferralAverageDynamicsValid,
@@ -698,6 +792,7 @@ function createWindow() {
               };
             })()`;
         const result = await mainWindow.webContents.executeJavaScript(smokeAction);
+        process.stdout.write("[smoke] renderer assertions completed\n");
         const artifactRoot = SMOKE_ARTIFACT_ROOT;
         fs.mkdirSync(artifactRoot, { recursive: true });
         if (!PDF_SMOKE_TEST) {
@@ -724,6 +819,16 @@ function createWindow() {
           if (!clientBaseScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок Вектора 4');
           fs.writeFileSync(clientBaseScreenshotPath, Buffer.from(clientBaseScreenshot.slice('data:image/png;base64,'.length), 'base64'));
           result.clientBaseScreenshot = clientBaseScreenshotPath;
+          const appointmentCollapseScreenshotPath = path.join(artifactRoot, "appointment-conversion-collapsed-smoke.png");
+          const appointmentCollapseScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            const element = document.getElementById('blkV3');
+            if (!element) return '';
+            const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.25, logging: false, windowWidth: 1400 });
+            return canvas.toDataURL('image/png');
+          })()`);
+          if (!appointmentCollapseScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок свёрнутых таблиц назначений');
+          fs.writeFileSync(appointmentCollapseScreenshotPath, Buffer.from(appointmentCollapseScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.appointmentCollapseScreenshot = appointmentCollapseScreenshotPath;
           const mirrorScreenshotPath = path.join(artifactRoot, "mirror-revenue-smoke.png");
           const mirrorScreenshot = await mainWindow.webContents.executeJavaScript(`document.getElementById('chStack')?.toDataURL('image/png') || ''`);
           if (!mirrorScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок зеркального графика');
@@ -848,7 +953,7 @@ function createWindow() {
         fs.writeFileSync(path.join(artifactRoot, "smoke-result.json"), JSON.stringify(result, null, 2), "utf8");
         process.stdout.write(`${JSON.stringify(result)}\n`);
         const passed = result.dataPage && result.optionalLibrariesDeferred && result.xlsx && result.chart && result.desktop
-          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.doctorMetricSettings))
+          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.doctorMetricSettings))
           && (!PDF_SMOKE_TEST || (result.saved && result.pdfSelectionDialogValid && result.pdfExport && result.pdfExport.saved === 3
             && result.pdfExport.chartImages >= 3 && result.pdfFiles.length === 3
             && result.sessionSaveStatus && result.sessionSaveStatus.includes('Сохранено в рабочую базу SQLite')
@@ -885,21 +990,134 @@ function registerIpc() {
     mainWindow.close();
   });
 
-  ipcMain.handle("app:initialize", () => ({
-    app: { name: APP_NAME, version: app.getVersion(), packaged: app.isPackaged, smokeTest: SMOKE_TEST },
-    config: configStore.publicConfig(),
-    snapshot: database.loadSnapshot(),
-    summary: database.summary(),
-    update: updateService.getStatus(),
-  }));
+  ipcMain.handle("app:initialize", () => {
+    const auth = authService.status();
+    return {
+      app: { name: APP_NAME, version: app.getVersion(), packaged: app.isPackaged, smokeTest: SMOKE_TEST },
+      auth,
+      config: auth.authenticated && auth.user.role === "admin" ? configStore.publicConfig() : null,
+      snapshot: auth.authenticated && auth.user.role === "admin" ? database.loadSnapshot() : null,
+      summary: auth.authenticated && auth.user.role === "admin" ? database.summary() : null,
+      update: auth.authenticated && auth.user.role === "admin" ? updateService.getStatus() : null,
+    };
+  });
+
+  ipcMain.handle("auth:status", () => authService.status());
+  ipcMain.handle("auth:setup-admin", (_event, payload) => authService.setupAdmin(ensureObject(payload, "параметры администратора")));
+  ipcMain.handle("auth:login", (_event, payload) => authService.login(ensureObject(payload, "параметры входа")));
+  ipcMain.handle("auth:logout", () => authService.logout());
+  ipcMain.handle("auth:change-password", (_event, payload) => authService.changePassword(ensureObject(payload, "смена пароля")));
+  ipcMain.handle("auth:doctor-candidates", (_event, query) => {
+    const value = String(query || "").trim();
+    if (value.length < 2) return [];
+    return database.listDoctorLoginCandidates(value);
+  });
+
+  ipcMain.handle("admin:state", () => {
+    authService.require("admin");
+    return {
+      config: configStore.publicConfig(),
+      snapshot: database.loadSnapshot(),
+      summary: database.summary(),
+      update: updateService.getStatus(),
+      users: database.listUsers(),
+    };
+  });
+  ipcMain.handle("admin:users", () => {
+    authService.require("admin");
+    return database.listUsers();
+  });
+  ipcMain.handle("admin:create-doctor-user", (_event, payload) => {
+    const input = ensureObject(payload, "учётная запись врача");
+    const doctor = (database.loadSnapshot() || {}).doctors?.[String(input.doctorId)];
+    if (!doctor) throw new Error("Врач не найден в рабочей базе");
+    return authService.createDoctorUser({
+      doctorId: String(input.doctorId),
+      username: input.username,
+      displayName: String(doctor.name || input.displayName || "Врач"),
+      password: input.password,
+    });
+  });
+  ipcMain.handle("admin:reset-password", (_event, payload) => authService.resetPassword(ensureObject(payload, "сброс пароля")));
+  ipcMain.handle("admin:set-user-active", (_event, payload) => authService.setActive(ensureObject(payload, "состояние пользователя")));
+  ipcMain.handle("comments:list", (_event, payload) => {
+    authService.require("admin");
+    return database.listComments(ensureObject(payload, "контекст комментариев"));
+  });
+  ipcMain.handle("comments:save", (_event, payload) => {
+    const session = authService.require("admin");
+    const input = ensureObject(payload, "комментарий");
+    const bodyHtml = sanitizeRichTextHtml(input.bodyHtml);
+    const bodyText = String(input.bodyText || "").slice(0, 10000);
+    if (!/^(department|specialization|doctor)$/.test(String(input.scopeType))) throw new Error("Некорректная область комментария");
+    if (!/^\d{4}-\d{2}$/.test(String(input.periodKey))) throw new Error("Некорректный период комментария");
+    if (!/^[a-z0-9._:-]{2,120}$/i.test(String(input.blockKey))) throw new Error("Некорректный ключ аналитического блока");
+    const saved = database.saveCommentDraft({
+      scopeType: input.scopeType,
+      scopeId: String(input.scopeId || "").slice(0, 200),
+      periodKey: input.periodKey,
+      blockKey: input.blockKey,
+      bodyHtml,
+      bodyText,
+      authorUserId: session.userId,
+    });
+    database.audit({ actorUserId: session.userId, action: "comment.saved", targetType: "comment", targetId: String(saved.id), details: { periodKey: input.periodKey, blockKey: input.blockKey } });
+    return saved;
+  });
+  ipcMain.handle("comments:history", (_event, id) => {
+    authService.require("admin");
+    return database.listCommentVersions(id);
+  });
+  ipcMain.handle("comments:archive", (_event, id) => {
+    const session = authService.require("admin");
+    const archived = database.archiveComment(id, session.userId);
+    database.audit({ actorUserId: session.userId, action: "comment.archived", targetType: "comment", targetId: String(id) });
+    return archived;
+  });
+  ipcMain.handle("publication:create", (_event, payload) => {
+    const session = authService.require("admin");
+    const input = ensureObject(payload, "публикация");
+    if (!/^\d{4}-\d{2}$/.test(String(input.periodKey))) throw new Error("Некорректный период публикации");
+    if (!Array.isArray(input.pages) || !input.pages.length || input.pages.length > 2000) throw new Error("Некорректный набор страниц");
+    const doctors = new Set(Object.keys((database.loadSnapshot() || {}).doctors || {}));
+    const pages = input.pages.map(page => {
+      ensureObject(page, "страница публикации");
+      if (!doctors.has(String(page.doctorId))) throw new Error("В публикации указан неизвестный врач");
+      if (!/^(department|specialization|doctor)$/.test(String(page.pageType))) throw new Error("Некорректный тип страницы");
+      return {
+        doctorId: String(page.doctorId),
+        pageType: String(page.pageType),
+        scopeId: String(page.scopeId || "").slice(0, 200),
+        title: String(page.title || "").slice(0, 300),
+        html: sanitizePublishedHtml(page.html),
+      };
+    });
+    return database.publish({ periodKey: input.periodKey, createdBy: session.userId, pages });
+  });
+  ipcMain.handle("viewer:periods", () => {
+    const session = authService.require("doctor");
+    return database.listPublishedPeriods(session.doctorId);
+  });
+  ipcMain.handle("viewer:page", (_event, payload) => {
+    const session = authService.require("doctor");
+    const input = ensureObject(payload, "страница врача");
+    if (!/^(department|specialization|doctor)$/.test(String(input.pageType))) throw new Error("Некорректный тип страницы");
+    return database.getPublishedPage({
+      doctorId: session.doctorId,
+      periodKey: String(input.periodKey),
+      pageType: String(input.pageType),
+    });
+  });
 
   ipcMain.handle("database:save", (_event, json) => {
+    authService.require("admin");
     if (typeof json !== "string" || json.length > 200 * 1024 * 1024) throw new Error("Некорректный размер снимка базы");
     const snapshot = JSON.parse(json);
     return database.saveSnapshot(snapshot);
   });
 
   ipcMain.handle("database:export-json", async (_event, json) => {
+    authService.require("admin");
     if (typeof json !== "string") throw new Error("Некорректный JSON");
     const date = new Date().toISOString().slice(0, 10);
     const result = await dialog.showSaveDialog(mainWindow, {
@@ -912,6 +1130,7 @@ function registerIpc() {
   });
 
   ipcMain.handle("config:choose-workspace", async () => {
+    authService.require("admin");
     const result = await dialog.showOpenDialog(mainWindow, {
       title: "Выберите рабочую папку",
       defaultPath: configStore.publicConfig().workspaceRoot,
@@ -927,6 +1146,7 @@ function registerIpc() {
   });
 
   ipcMain.handle("config:choose-folder", async (_event, kind) => {
+    authService.require("admin");
     const config = configStore.publicConfig();
     const keyMap = { input: "inputDir", output: "outputDir", backup: "backupDir" };
     if (!keyMap[kind]) throw new Error("Неизвестный тип папки");
@@ -942,6 +1162,7 @@ function registerIpc() {
   });
 
   ipcMain.handle("path:open", async (_event, kind) => {
+    authService.require("admin");
     const config = configStore.publicConfig();
     const paths = {
       workspace: config.workspaceRoot,
@@ -958,6 +1179,7 @@ function registerIpc() {
   });
 
   ipcMain.handle("files:pick-input", async () => {
+    authService.require("admin");
     const result = await dialog.showOpenDialog(mainWindow, {
       title: "Выберите выгрузки 1С",
       defaultPath: configStore.publicConfig().inputDir,
@@ -967,33 +1189,37 @@ function registerIpc() {
     if (result.canceled) return [];
     return fileService.describeSelected(result.filePaths);
   });
-  ipcMain.handle("files:scan-input", () => fileService.scanInputFolder());
-  ipcMain.handle("files:read-input", (_event, filePath) => fileService.readInputFile(String(filePath)));
-  ipcMain.handle("import:has-source", (_event, sha256) => database.hasSuccessfulSource(String(sha256)));
+  ipcMain.handle("files:scan-input", () => { authService.require("admin"); return fileService.scanInputFolder(); });
+  ipcMain.handle("files:read-input", (_event, filePath) => { authService.require("admin"); return fileService.readInputFile(String(filePath)); });
+  ipcMain.handle("import:has-source", (_event, sha256) => { authService.require("admin"); return database.hasSuccessfulSource(String(sha256)); });
 
   ipcMain.handle("import:begin", async (_event, payload) => {
+    authService.require("admin");
     const input = ensureObject(payload || {}, "параметры импорта");
     const backup = await backupService.createAutomatic("перед-импортом");
     return { batchId: database.beginImportBatch({ totalFiles: input.totalFiles, backupPath: backup.path }), backupPath: backup.path };
   });
   ipcMain.handle("import:record", (_event, payload) => {
+    authService.require("admin");
     const input = ensureObject(payload, "сведения об импорте");
     database.recordImport(input);
     return true;
   });
   ipcMain.handle("import:finish", (_event, payload) => {
+    authService.require("admin");
     const input = ensureObject(payload, "итоги импорта");
     database.finishImportBatch(input.batchId, input.counts || {});
     return database.summary();
   });
 
-  ipcMain.handle("export:begin", (_event, payload) => fileService.beginExportBatch(ensureObject(payload, "параметры выгрузки")));
-  ipcMain.handle("export:write", (_event, payload) => fileService.writeExportFile(ensureObject(payload, "файл выгрузки")));
-  ipcMain.handle("export:finish", (_event, payload) => fileService.finishExportBatch(ensureObject(payload, "итоги выгрузки")));
-  ipcMain.handle("export:abort", (_event, token) => fileService.abortExportBatch(token));
+  ipcMain.handle("export:begin", (_event, payload) => { authService.require("admin"); return fileService.beginExportBatch(ensureObject(payload, "параметры выгрузки")); });
+  ipcMain.handle("export:write", (_event, payload) => { authService.require("admin"); return fileService.writeExportFile(ensureObject(payload, "файл выгрузки")); });
+  ipcMain.handle("export:finish", (_event, payload) => { authService.require("admin"); return fileService.finishExportBatch(ensureObject(payload, "итоги выгрузки")); });
+  ipcMain.handle("export:abort", (_event, token) => { authService.require("admin"); return fileService.abortExportBatch(token); });
 
-  ipcMain.handle("backup:create", async () => backupService.createAutomatic("ручная"));
+  ipcMain.handle("backup:create", async () => { authService.require("admin"); return backupService.createAutomatic("ручная"); });
   ipcMain.handle("backup:export", async () => {
+    authService.require("admin");
     const date = new Date().toISOString().slice(0, 10);
     const result = await dialog.showSaveDialog(mainWindow, {
       title: "Сохранить переносимую резервную копию",
@@ -1005,6 +1231,7 @@ function registerIpc() {
     return Object.assign({ canceled: false }, saved);
   });
   ipcMain.handle("backup:restore", async () => {
+    authService.require("admin");
     const selected = await dialog.showOpenDialog(mainWindow, {
       title: "Выберите резервную копию",
       defaultPath: configStore.publicConfig().backupDir,
@@ -1023,19 +1250,21 @@ function registerIpc() {
       type: "warning",
       title: "Восстановление базы",
       message: "Заменить текущую базу выбранной резервной копией?",
-      detail: `В копии: месяцев — ${preview.months}, врачей — ${preview.doctors}, импортов — ${preview.imports}, версия данных — ${preview.snapshotVersion || "без версии"}. Текущая база будет предварительно сохранена.`,
+      detail: `В копии: месяцев — ${preview.months}, врачей — ${preview.doctors}, пользователей — ${preview.users || 0}, комментариев — ${preview.comments || 0}, публикаций — ${preview.publications || 0}, импортов — ${preview.imports}, версия данных — ${preview.snapshotVersion || "без версии"}. Текущая база будет предварительно сохранена.`,
       buttons: ["Восстановить", "Отмена"],
       defaultId: 1,
       cancelId: 1,
     });
     if (confirmation.response !== 0) return { canceled: true };
     const restored = await backupService.restore(source);
-    return { canceled: false, restored, snapshot: database.loadSnapshot(), summary: database.summary() };
+    authService.logout();
+    return { canceled: false, restored, requiresLogin: true };
   });
 
-  ipcMain.handle("update:check", () => updateService.check());
-  ipcMain.handle("update:install-downloaded", () => updateService.installDownloaded());
+  ipcMain.handle("update:check", () => { authService.require("admin"); return updateService.check(); });
+  ipcMain.handle("update:install-downloaded", () => { authService.require("admin"); return updateService.installDownloaded(); });
   ipcMain.handle("update:install-file", async () => {
+    authService.require("admin");
     const selected = await dialog.showOpenDialog(mainWindow, {
       title: "Выберите установщик новой версии",
       properties: ["openFile"],

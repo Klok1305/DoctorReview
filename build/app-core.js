@@ -7,6 +7,7 @@ const APP_VERSION = 4;
 const LS_KEY = "dpi_app_db_v1"; // ключ не меняем — миграция по полю version
 const DESKTOP_API = window.desktopAPI || null;
 let DESKTOP_STATE = null;
+let DESKTOP_DATABASE_LOADED = false;
 let desktopPendingSnapshot = null;
 let desktopPendingRevision = 0;
 let desktopWrittenRevision = 0;
@@ -1239,6 +1240,9 @@ function queueDesktopSnapshot(snapshot) {
 }
 
 function saveLocal() {
+  if (DESKTOP_API && (typeof APP_AUTH === "undefined" || !APP_AUTH || !APP_AUTH.authenticated || APP_AUTH.user.role !== "admin")) {
+    return Promise.resolve(false);
+  }
   if (typeof clearMetricsCache === "function") clearMetricsCache(); // данные/настройки изменились
   let snapshot;
   try {
@@ -1280,10 +1284,12 @@ function loadLocal() {
 async function loadDesktopDatabase() {
   if (!DESKTOP_API) return null;
   DESKTOP_STATE = await DESKTOP_API.initialize();
-  if (DESKTOP_STATE.snapshot && !applyLoadedDatabase(DESKTOP_STATE.snapshot)) {
+  if (DESKTOP_STATE.auth && DESKTOP_STATE.auth.authenticated && DESKTOP_STATE.auth.user.role === "admin"
+      && DESKTOP_STATE.snapshot && !applyLoadedDatabase(DESKTOP_STATE.snapshot)) {
     throw new Error("Рабочая база создана несовместимой версией приложения");
   }
-  setAutosaveStatus(`SQLite · ${DESKTOP_STATE.config.databasePath}`);
+  DESKTOP_DATABASE_LOADED = Boolean(DESKTOP_STATE.snapshot);
+  if (DESKTOP_STATE.config) setAutosaveStatus(`SQLite · ${DESKTOP_STATE.config.databasePath}`);
   return DESKTOP_STATE;
 }
 

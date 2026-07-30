@@ -461,6 +461,58 @@ test("appointments parser marks nomenclature inside the 1C goods group", () => {
   assert.equal(plain.items[0].d, 2);
 });
 
+test("flat 1C appointments group product nomenclature by code and keep completed services", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    const rows = [
+      ['Направивший врач', null, null, null, null, null, null, null, 'Количество назначено', 'Количество выполнено', 'Продажи', null],
+      ['Номенклатура/Специализация', null, null, null, null, null, null, null, null, null, 'Количество', 'Сумма'],
+      ['Документ', null, null, 'Клиент', null, 'Направивший врач', 'Врач - исполнитель', 'Номенклатура'],
+      ['Бузина Екатерина Олеговна', null, null, null, null, null, null, null, 12, 1, 4, 400],
+      ['Омега БАД (СЛ000000001)', null, null, null, null, null, null, null, 3, 0, 2, 200],
+      ['Оказание услуг 1', null, null, 'Пациент 1', null, 'Бузина Екатерина Олеговна', null, 'Омега БАД (СЛ000000001)', 3, 0, 2, 200],
+      ['УЗИ услуга (СЛ000000002)', null, null, null, null, null, null, null, 2, 1, 1, 100],
+      ['Оказание услуг 2', null, null, 'Пациент 2', null, 'Бузина Екатерина Олеговна', null, 'УЗИ услуга (СЛ000000002)', 2, 1, 1, 100],
+      ['Препарат старой серии (О04)', null, null, null, null, null, null, null, 3, 0, 1, 100],
+      ['Оказание услуг 3', null, null, 'Пациент 3', null, 'Бузина Екатерина Олеговна', null, 'Препарат старой серии (О04)', 3, 0, 1, 100],
+      ['Онлайн консультация врача (СЛ000000003)', null, null, null, null, null, null, null, 2, 0, 0, 0],
+      ['Оказание услуг 4', null, null, 'Пациент 4', null, 'Бузина Екатерина Олеговна', null, 'Онлайн консультация врача (СЛ000000003)', 2, 0, 0, 0],
+      ['Раствор для приема внутрь (СЛ000000004)', null, null, null, null, null, null, null, 1, 0, 0, 0],
+      ['Оказание услуг 5', null, null, 'Пациент 5', null, 'Бузина Екатерина Олеговна', null, 'Раствор для приема внутрь (СЛ000000004)', 1, 0, 0, 0],
+      ['Смузи Teo Green (СЛ000000005)', null, null, null, null, null, null, null, 1, 0, 0, 0],
+      ['Оказание услуг 6', null, null, 'Пациент 6', null, 'Бузина Екатерина Олеговна', null, 'Смузи Teo Green (СЛ000000005)', 1, 0, 0, 0],
+      ['Итого', null, null, null, null, null, null, null, 12, 1, 4, 400]
+    ];
+    const ws = { '!rows': [null, null, null, {}, { level: 1 }, { level: 2 }, { level: 1 }, { level: 2 }, { level: 1 }, { level: 2 }, { level: 1 }, { level: 2 }, { level: 1 }, { level: 2 }, { level: 1 }, { level: 2 }] };
+    const parsed = parseNaznacheniya(rows, { otborName: 'Бузина Екатерина Олеговна' }, ws);
+    DB.doctors = { d1: { name: 'Бузина Екатерина Олеговна', aliases: [], dept: 'По умолчанию' } };
+    DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].naznach.d1 = { '1': { items: parsed.items.map(item => ({ ...item, goods: false })) } };
+    const summary = naznachSummary('d1', '2026-01', 1);
+    return {
+      parsed,
+      summary,
+      directChecks: {
+        massageService: isNaznachGoodsNomenclature('Массаж антицеллюлитный 60 минут (СЛ000005234)', 0),
+        ultrasoundService: isNaznachGoodsNomenclature('Ультразвуковое исследование органов малого таза (СЛ000010614)', 0),
+        smoothieProduct: isNaznachGoodsNomenclature('Смузи Teo Green (СЛ000000005)', 0)
+      }
+    };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.equal(plain.parsed.checked, true);
+  assert.deepEqual(plain.parsed.items.map(item => item.goods), [true, false, true, false, true, true]);
+  assert.deepEqual(plain.directChecks, { massageService: false, ultrasoundService: false, smoothieProduct: true });
+  assert.deepEqual(
+    { assigned: plain.summary.totals.assigned, done: plain.summary.totals.done, soldQ: plain.summary.totals.soldQ, resultQ: plain.summary.totals.resultQ },
+    { assigned: 12, done: 1, soldQ: 4, resultQ: 5 },
+  );
+  assert.deepEqual(
+    { assigned: plain.summary.byType["Товары"].assigned, done: plain.summary.byType["Товары"].done, soldQ: plain.summary.byType["Товары"].soldQ, resultQ: plain.summary.byType["Товары"].resultQ },
+    { assigned: 8, done: 0, soldQ: 3, resultQ: 3 },
+  );
+});
+
 test("score coverage requires exact windows and blocks incomplete ranking", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
@@ -1120,6 +1172,7 @@ test("selected specialization includes doctors found only in the primary-return 
 test("desktop autosave serializes the current database before writing SQLite", async () => {
   const context = createContext({ desktop: true });
   const saved = await vm.runInContext(`(async () => {
+    APP_AUTH = { authenticated: true, user: { role: 'admin' } };
     DB.doctors = { d1: { name: 'Тестов Врач', aliases: [] } };
     DB.months = { '2026-01': emptyMonth() };
     return saveLocal();

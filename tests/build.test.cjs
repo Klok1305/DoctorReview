@@ -476,7 +476,7 @@ test("appointment details preserve grouped 1C service hierarchy with a flat-repo
   assert.match(ui, /Вид услуги \/ специализация \/ номенклатура/);
   assert.match(ui, /: "Тип направления"/);
   assert.match(ui, /const sourceTree = new Map\(\)/);
-  assert.match(ui, /renderSourceNodes\(node\.children, depth \+ 1\)/);
+  assert.match(ui, /renderSourceNodes\(node\.children, depth \+ 1, \[\.\.\.ancestorKeys, gKey\]\)/);
   assert.match(ui, /class="source-group-path"/);
   assert.match(ui, /class="small muted source-nomenclature"/);
   assert.match(css, /\.source-group-path\s*\{/);
@@ -484,6 +484,30 @@ test("appointment details preserve grouped 1C service hierarchy with a flat-repo
   assert.match(css, /table\.data td\.source-nomenclature\s*\{/);
   assert.match(ui, /desktopDescriptorsToFiles\(descriptors, true\)/);
   assert.match(parsers, /!file\.__forceReimport/);
+});
+
+test("appointment conversion block starts compact and parent groups hide their whole subtree", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
+  const vector = ui.match(/\/\* ---- В3 Междисциплинарный ---- \*\/[\s\S]*?\/\* ---- В4 Клиентская база ---- \*\//);
+  const toggle = ui.match(/function toggleGroup\(g\) \{[\s\S]*?\n\}/);
+
+  assert.ok(vector);
+  assert.ok(toggle);
+  assert.match(vector[0], /collapsibleListAttrs\("appointmentConversionBlock", false\)/);
+  assert.match(vector[0], /appointment-conversion-summary/);
+  assert.match(vector[0], /appointment-conversion-summary-value/);
+  assert.match(vector[0], /КОНВЕРСИЯ НАЗНАЧЕНИЙ[\s\S]*назначено \$\{fmtNum\(nz\.totals\.assigned\)\}[\s\S]*результат \$\{fmtNum\(nz\.totals\.resultQ\)\}/);
+  assert.match(vector[0], /collapsibleListAttrs\("appointmentDetails", false\)/);
+  assert.match(vector[0], /collapsibleListAttrs\("interdisciplinaryFocusPositions", false\)/);
+  assert.match(vector[0], /collapsibleListAttrs\("completedReferralDetails", false\)/);
+  assert.match(vector[0], /ДЕТАЛИ НАЗНАЧЕНИЙ[\s\S]*назначено \$\{fmtNum\(nz\.totals\.assigned\)\}[\s\S]*конверсия/);
+  assert.match(vector[0], /const renderSourceNodes = \(nodes, depth = 0, ancestorKeys = \[\]\)/);
+  assert.match(vector[0], /data-group-ancestors="\$\{ancestorKeys\.join\(" "\)\}"/);
+  assert.match(vector[0], /renderSourceNodes\(node\.children, depth \+ 1, \[\.\.\.ancestorKeys, gKey\]\)/);
+  assert.match(toggle[0], /querySelectorAll\(`\[data-group-ancestors~="\$\{g\}"\]`\)/);
+  assert.match(toggle[0], /ancestors\.every\(key => Boolean\(UI\.openGroups\[key\]\)\)/);
+  assert.match(css, /\.appointment-conversion-body\s*\{/);
 });
 
 test("client-base vector keeps 12/24/36 manual and hides unavailable overlapping groups", () => {
@@ -688,4 +712,32 @@ test("client-base table shows overlapping groups and omits unavailable values", 
   assert.match(css, /\.table-kpi-trend/);
   assert.match(css, /\.client-base-description-list li \+ li/);
   assert.doesNotMatch(ui, /Клиентская база по настройкам специализаций|Порог \/ окно/);
+});
+
+test("local authentication, protected publications and right-side comments are wired end to end", () => {
+  const template = fs.readFileSync(path.join(build, "index.template.html"), "utf8");
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
+  const preload = fs.readFileSync(path.join(root, "desktop", "preload.cjs"), "utf8");
+  const main = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
+  const database = fs.readFileSync(path.join(root, "desktop", "services", "database.cjs"), "utf8");
+
+  for (const id of ["authScreen", "doctorLoginSearch", "doctorViewer", "btnPublishReports", "userManagement", "changePasswordDialog"]) {
+    assert.match(template, new RegExp(`id="${id}"`));
+  }
+  assert.match(ui, /function searchDoctorLoginCandidates/);
+  assert.match(ui, /function publishReportsAndComments/);
+  assert.match(ui, /function composePublishedHtml/);
+  assert.match(ui, /function wrapAnalyticCards/);
+  assert.match(css, /\.commented-analytic-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+340px/);
+  assert.match(css, /@media \(max-width:\s*1100px\)[\s\S]*?\.commented-analytic-row\s*\{\s*grid-template-columns:\s*1fr/);
+  assert.match(preload, /login:\s*payload\s*=>\s*invoke\("auth:login"/);
+  assert.match(preload, /getPublishedPage:\s*payload\s*=>\s*invoke\("viewer:page"/);
+  assert.match(main, /ipcMain\.handle\("viewer:page"[\s\S]*?authService\.require\("doctor"\)/);
+  assert.match(main, /ipcMain\.handle\("database:save"[\s\S]*?authService\.require\("admin"\)/);
+  assert.match(database, /CREATE TABLE users/);
+  assert.match(database, /CREATE TABLE comments/);
+  assert.match(database, /CREATE TABLE publications/);
+  assert.match(database, /CREATE TABLE published_pages/);
+  assert.match(database, /CREATE TABLE audit_log/);
 });
