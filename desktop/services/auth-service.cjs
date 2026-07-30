@@ -11,11 +11,29 @@ function normalizeUsername(value) {
 
 function validatePassword(password) {
   const value = String(password || "");
-  if (value.length < 10) throw new Error("Пароль должен содержать не менее 10 символов");
-  if (!/[а-яёa-z]/i.test(value) || !/\d/.test(value)) {
-    throw new Error("Пароль должен содержать буквы и цифры");
-  }
+  if (!value.length) throw new Error("Пароль не может быть пустым");
   return value;
+}
+
+function doctorUsername(displayName, database) {
+  const surname = String(displayName || "")
+    .trim()
+    .split(/\s+/)[0]
+    .toLocaleLowerCase("ru-RU")
+    .replace(/[^a-zа-яё0-9_-]+/gi, "")
+    .slice(0, 40);
+  if (!surname) throw new Error("Не удалось сформировать логин из фамилии врача");
+  let username = surname;
+  let suffix = 2;
+  while (database.getUserByUsername(username)) {
+    const number = String(suffix++);
+    username = `${surname.slice(0, Math.max(1, 40 - number.length))}${number}`;
+  }
+  return username;
+}
+
+function temporaryPassword() {
+  return String(crypto.randomInt(0, 1000000)).padStart(6, "0");
 }
 
 function passwordRecord(password) {
@@ -119,29 +137,30 @@ class AuthService {
     return this.#publicUser(this.database.getUserById(user.id));
   }
 
-  createDoctorUser({ doctorId, username, displayName, password }) {
+  createDoctorUser({ doctorId, displayName, password = null }) {
     const admin = this.require("admin");
-    const normalized = normalizeUsername(username);
-    if (!/^[a-zа-яё0-9._-]{3,40}$/i.test(normalized)) throw new Error("Некорректный логин врача");
+    const normalized = doctorUsername(displayName, this.database);
+    const issuedPassword = password == null ? temporaryPassword() : validatePassword(password);
     const user = this.database.createUser({
       username: normalized,
       displayName,
       role: "doctor",
       doctorId,
-      ...passwordRecord(password),
+      ...passwordRecord(issuedPassword),
       mustChangePassword: true,
     });
     this.database.audit({ actorUserId: admin.userId, action: "user.doctor-created", targetType: "doctor", targetId: doctorId, details: { userId: user.id } });
-    return this.#publicUser(user);
+    return Object.assign(this.#publicUser(user), { temporaryPassword: issuedPassword });
   }
 
-  resetPassword({ userId, password }) {
+  resetPassword({ userId, password = null }) {
     const admin = this.require("admin");
     const user = this.database.getUserById(userId);
     if (!user || user.role !== "doctor") throw new Error("Учётная запись врача не найдена");
-    const updated = this.database.updateUserPassword(user.id, { ...passwordRecord(password), mustChangePassword: true });
+    const issuedPassword = password == null ? temporaryPassword() : validatePassword(password);
+    const updated = this.database.updateUserPassword(user.id, { ...passwordRecord(issuedPassword), mustChangePassword: true });
     this.database.audit({ actorUserId: admin.userId, action: "user.password-reset", targetType: "user", targetId: String(user.id) });
-    return this.#publicUser(updated);
+    return Object.assign(this.#publicUser(updated), { temporaryPassword: issuedPassword });
   }
 
   setActive({ userId, active }) {
@@ -202,6 +221,8 @@ module.exports = {
   SESSION_IDLE_MS,
   PASSWORD_PARAMS,
   normalizeUsername,
+  doctorUsername,
+  temporaryPassword,
   validatePassword,
   passwordRecord,
   verifyPassword,

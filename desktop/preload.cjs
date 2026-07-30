@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   listUsers: () => invoke("admin:users"),
   createDoctorUser: payload => invoke("admin:create-doctor-user", payload),
   resetDoctorPassword: payload => invoke("admin:reset-password", payload),
+  issueDoctorCredentials: payload => invoke("admin:issue-credentials", payload),
+  exportDoctorCredentialsXlsx: payload => invoke("admin:export-credentials-xlsx", payload),
   setUserActive: payload => invoke("admin:set-user-active", payload),
   listComments: payload => invoke("comments:list", payload),
   saveComment: payload => invoke("comments:save", payload),
@@ -47,13 +49,7 @@ contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   createBackup: () => invoke("backup:create"),
   exportBackup: () => invoke("backup:export"),
   restoreBackup: () => invoke("backup:restore"),
-  confirmCloseSaved: saved => ipcRenderer.send("app:close-ready", saved === true),
-  onPrepareClose: callback => {
-    if (typeof callback !== "function") return () => {};
-    const listener = () => callback();
-    ipcRenderer.on("app:prepare-close", listener);
-    return () => ipcRenderer.removeListener("app:prepare-close", listener);
-  },
+  reportRendererError: payload => ipcRenderer.send("app:renderer-error", payload),
 
   checkUpdates: () => invoke("update:check"),
   installDownloadedUpdate: () => invoke("update:install-downloaded"),

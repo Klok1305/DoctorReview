@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { AuthService, verifyPassword } = require("../desktop/services/auth-service.cjs");
+const { AuthService, validatePassword, verifyPassword } = require("../desktop/services/auth-service.cjs");
 const { BackupService } = require("../desktop/services/backup-service.cjs");
 const { ConfigStore } = require("../desktop/services/config-store.cjs");
 const { DatabaseService } = require("../desktop/services/database.cjs");
@@ -37,47 +37,60 @@ function fixture(t) {
   return { root, config, database, auth: new AuthService({ database }) };
 }
 
-test("administrator setup and doctor password flow keep hashes out of public records", t => {
+test("password may contain any single character but cannot be empty", () => {
+  assert.equal(validatePassword("я"), "я");
+  assert.equal(validatePassword(" "), " ");
+  assert.throws(() => validatePassword(""), /не может быть пустым/);
+});
+
+test("administrator setup accepts a short password and doctor credentials are generated from the surname", t => {
   const { database, auth } = fixture(t);
-  const setup = auth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "SecureAdmin2026" });
+  const setup = auth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "1" });
   assert.equal(setup.user.role, "admin");
   const doctor = auth.createDoctorUser({
     doctorId: "d1",
-    username: "doctor_d1",
     displayName: "Тестов Врач",
-    password: "Temporary2026",
   });
   assert.equal(doctor.mustChangePassword, true);
+  assert.equal(doctor.username, "тестов");
+  assert.match(doctor.temporaryPassword, /^\d{6}$/);
   const raw = database.getUserById(doctor.id);
-  assert.notEqual(raw.password_hash, "Temporary2026");
-  assert.equal(verifyPassword("Temporary2026", raw), true);
+  assert.notEqual(raw.password_hash, doctor.temporaryPassword);
+  assert.equal(verifyPassword(doctor.temporaryPassword, raw), true);
   assert.equal(Object.hasOwn(doctor, "passwordHash"), false);
 
   auth.logout();
   const candidates = database.listDoctorLoginCandidates("тест");
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0].department, "Терапия");
-  const loggedIn = auth.login({ userId: doctor.id, password: "Temporary2026" });
+  const loggedIn = auth.login({ userId: doctor.id, password: doctor.temporaryPassword });
   assert.equal(loggedIn.user.doctorId, "d1");
-  auth.changePassword({ currentPassword: "Temporary2026", newPassword: "Personal2026" });
+  auth.changePassword({ currentPassword: doctor.temporaryPassword, newPassword: "я" });
   assert.equal(database.getUserById(doctor.id).must_change_password, 0);
+});
+
+test("identical doctor surnames get a numeric login suffix", t => {
+  const { auth } = fixture(t);
+  auth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "1" });
+  const first = auth.createDoctorUser({ doctorId: "d1", displayName: "Иванов Первый" });
+  const second = auth.createDoctorUser({ doctorId: "d2", displayName: "Иванов Второй" });
+  assert.equal(first.username, "иванов");
+  assert.equal(second.username, "иванов2");
 });
 
 test("five failed password attempts lock the doctor account", t => {
   const { auth } = fixture(t);
-  auth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "SecureAdmin2026" });
+  auth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "1" });
   const doctor = auth.createDoctorUser({
     doctorId: "d1",
-    username: "doctor_d1",
     displayName: "Тестов Врач",
-    password: "Temporary2026",
   });
   auth.logout();
   for (let attempt = 1; attempt <= 4; attempt++) {
     assert.throws(() => auth.login({ userId: doctor.id, password: "WrongPassword1" }), /Неверный/);
   }
   assert.throws(() => auth.login({ userId: doctor.id, password: "WrongPassword1" }), /заблокирован/);
-  assert.throws(() => auth.login({ userId: doctor.id, password: "Temporary2026" }), /временно заблокирован/);
+  assert.throws(() => auth.login({ userId: doctor.id, password: doctor.temporaryPassword }), /временно заблокирован/);
 });
 
 test("comments and immutable published pages survive a portable backup", async t => {
@@ -86,9 +99,7 @@ test("comments and immutable published pages survive a portable backup", async t
   const adminId = setup.user.id;
   auth.createDoctorUser({
     doctorId: "d1",
-    username: "doctor_d1",
     displayName: "Тестов Врач",
-    password: "Temporary2026",
   });
   database.saveCommentDraft({
     scopeType: "doctor",

@@ -52,9 +52,6 @@ let backupService = null;
 let fileService = null;
 let updateService = null;
 let authService = null;
-let closeSaveRequested = false;
-let closeAllowed = false;
-let closeSaveTimer = null;
 
 function logEvent(event, details = {}) {
   const record = JSON.stringify({ time: new Date().toISOString(), event, details });
@@ -251,27 +248,8 @@ function createWindow() {
       });
     });
   });
-  mainWindow.on("close", event => {
-    if (SMOKE_TEST || closeAllowed) return;
-    event.preventDefault();
-    if (closeSaveRequested) return;
-    closeSaveRequested = true;
-    mainWindow.webContents.send("app:prepare-close");
-    closeSaveTimer = setTimeout(() => {
-      closeSaveRequested = false;
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        dialog.showMessageBox(mainWindow, {
-          type: "warning",
-          title: APP_NAME,
-          message: "Закрытие отменено: приложение не подтвердило сохранение данных",
-          detail: "Повторите закрытие. Если ошибка повторится, создайте переносимую копию базы и только затем завершите приложение.",
-          buttons: ["Понятно"],
-        }).catch(() => {});
-      }
-    }, 15000);
-  });
   mainWindow.on("closed", () => {
-    if (closeSaveTimer) clearTimeout(closeSaveTimer);
+    logEvent("window-closed");
     mainWindow = null;
   });
 
@@ -971,25 +949,15 @@ function createWindow() {
 }
 
 function registerIpc() {
-  ipcMain.on("app:close-ready", (event, saved) => {
-    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents || !closeSaveRequested) return;
-    if (closeSaveTimer) clearTimeout(closeSaveTimer);
-    closeSaveTimer = null;
-    closeSaveRequested = false;
-    if (!saved) {
-      dialog.showMessageBox(mainWindow, {
-        type: "error",
-        title: APP_NAME,
-        message: "Закрытие отменено: последние изменения не сохранены",
-        detail: "Исправьте ошибку сохранения или создайте переносимую копию базы перед закрытием.",
-        buttons: ["Понятно"],
-      }).catch(() => {});
-      return;
-    }
-    closeAllowed = true;
-    mainWindow.close();
+  ipcMain.on("app:renderer-error", (event, payload) => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return;
+    const input = payload && typeof payload === "object" ? payload : {};
+    logEvent("renderer-error", {
+      message: String(input.message || "Неизвестная ошибка renderer").slice(0, 2000),
+      stack: String(input.stack || "").slice(0, 8000),
+      source: String(input.source || "").slice(0, 500),
+    });
   });
-
   ipcMain.handle("app:initialize", () => {
     const auth = authService.status();
     return {
@@ -1033,12 +1001,34 @@ function registerIpc() {
     if (!doctor) throw new Error("Врач не найден в рабочей базе");
     return authService.createDoctorUser({
       doctorId: String(input.doctorId),
-      username: input.username,
       displayName: String(doctor.name || input.displayName || "Врач"),
-      password: input.password,
     });
   });
   ipcMain.handle("admin:reset-password", (_event, payload) => authService.resetPassword(ensureObject(payload, "сброс пароля")));
+  ipcMain.handle("admin:issue-credentials", (_event, payload) => {
+    authService.require("admin");
+    const input = ensureObject(payload, "выдача временных паролей");
+    if (!Array.isArray(input.userIds) || input.userIds.length > 500) throw new Error("Некорректный список пользователей");
+    return [...new Set(input.userIds.map(Number))].map(userId => authService.resetPassword({ userId }));
+  });
+  ipcMain.handle("admin:export-credentials-xlsx", (_event, payload) => {
+    const session = authService.require("admin");
+    const input = ensureObject(payload, "Excel-файл доступов");
+    const bytes = Buffer.from(input.bytes || []);
+    if (!bytes.length || bytes.length > 20 * 1024 * 1024 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
+      throw new Error("Некорректный Excel-файл");
+    }
+    const stamp = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+    const filePath = path.join(configStore.publicConfig().outputDir, `Доступы-врачей-${stamp}.xlsx`);
+    fs.writeFileSync(filePath, bytes);
+    database.audit({
+      actorUserId: session.userId,
+      action: "credentials.exported",
+      targetType: "users",
+      details: { count: Number(input.count) || 0, fileName: path.basename(filePath) },
+    });
+    return { canceled: false, path: filePath };
+  });
   ipcMain.handle("admin:set-user-active", (_event, payload) => authService.setActive(ensureObject(payload, "состояние пользователя")));
   ipcMain.handle("comments:list", (_event, payload) => {
     authService.require("admin");

@@ -36,6 +36,7 @@ const UI = {
 
 let APP_AUTH = null;
 let APP_USERS = [];
+const ISSUED_DOCTOR_CREDENTIALS = new Map();
 let selectedDoctorLoginUserId = null;
 let doctorViewerState = { periods: [], pages: {}, periodKey: null, pageType: "department" };
 
@@ -161,7 +162,7 @@ function openPasswordDialog(force = false) {
   dialog.dataset.force = force ? "1" : "0";
   document.getElementById("changePasswordHint").textContent = force
     ? "Временный пароль необходимо заменить перед дальнейшей работой."
-    : "Новый пароль должен содержать не менее 10 символов, буквы и цифры.";
+    : "Можно использовать пароль любой длины и состава. Пустой пароль недопустим.";
   dialog.querySelector('button[value="cancel"]').classList.toggle("hidden", force);
   for (const id of ["currentPassword", "newPassword", "newPasswordRepeat"]) document.getElementById(id).value = "";
   document.getElementById("changePasswordError").classList.add("hidden");
@@ -4785,8 +4786,71 @@ function renderSettings() {
   });
 }
 
-function defaultDoctorUsername(doctorId) {
-  return `doctor_${String(doctorId).toLocaleLowerCase("ru-RU").replace(/[^a-zа-яё0-9._-]+/gi, "_")}`.slice(0, 40);
+function rememberIssuedDoctorCredential(user) {
+  if (!user || !user.id || !user.temporaryPassword) return;
+  ISSUED_DOCTOR_CREDENTIALS.set(Number(user.id), {
+    userId: Number(user.id),
+    doctorId: user.doctorId,
+    displayName: user.displayName,
+    username: user.username,
+    password: user.temporaryPassword,
+  });
+}
+
+async function exportDoctorCredentials() {
+  let doctorUsers = APP_USERS.filter(user => user.role === "doctor" && user.active);
+  if (!doctorUsers.length) {
+    toast("Сначала создайте хотя бы одну активную учётную запись врача", true);
+    return;
+  }
+  const missing = doctorUsers.filter(user => !ISSUED_DOCTOR_CREDENTIALS.has(Number(user.id)));
+  if (missing.length) {
+    const accepted = confirm(
+      `Открытые пароли не хранятся в базе и недоступны для повторного просмотра.\n\n` +
+      `Для ${missing.length} учётных записей будут созданы новые временные пароли. Продолжить?`
+    );
+    if (!accepted) return;
+    try {
+      const issued = await DESKTOP_API.issueDoctorCredentials({ userIds: missing.map(user => user.id) });
+      issued.forEach(rememberIssuedDoctorCredential);
+      APP_USERS = await DESKTOP_API.listUsers();
+      doctorUsers = APP_USERS.filter(user => user.role === "doctor" && user.active);
+    } catch (error) {
+      toast("Не удалось сформировать временные пароли: " + error.message, true);
+      return;
+    }
+  }
+  const rows = doctorUsers.map(user => {
+    const credential = ISSUED_DOCTOR_CREDENTIALS.get(Number(user.id));
+    const doctorId = user.doctorId;
+    return [
+      user.displayName,
+      user.username,
+      credential ? credential.password : "",
+      doctorId ? resolvedDepartmentName(doctorId) : "",
+      doctorId ? resolvedSpecializationName(doctorId) || "" : "",
+      "Сменить при первом входе",
+    ];
+  });
+  loadBundledLibrary("lib-xlsx", "XLSX");
+  const aoa = [
+    ["Доступы врачей · создано " + new Date().toLocaleString("ru-RU")],
+    [],
+    ["ФИО", "Логин", "Временный пароль", "Отделение", "Специализация", "Примечание"],
+    ...rows,
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 34 }, { wch: 20 }, { wch: 20 }, { wch: 28 }, { wch: 28 }, { wch: 28 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Доступы");
+  try {
+    const bytes = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    const result = await DESKTOP_API.exportDoctorCredentialsXlsx({ bytes: new Uint8Array(bytes), count: rows.length });
+    toast("Excel с доступами сохранён: " + result.path);
+    renderUserManagement();
+  } catch (error) {
+    toast("Не удалось сохранить Excel: " + error.message, true);
+  }
 }
 
 function renderUserManagement() {
@@ -4797,31 +4861,30 @@ function renderUserManagement() {
     const user = doctorUsers.get(doctorId);
     if (!user) {
       return `<tr data-account-doctor="${esc(doctorId)}"><td><b>${esc(doctorName(doctorId))}</b><br><span class="small muted">${esc(doctorStructureLabel(doctorId))}</span></td>
-        <td><input class="account-username" type="text" value="${esc(defaultDoctorUsername(doctorId))}"></td>
-        <td><input class="account-password" type="password" placeholder="временный пароль"></td>
+        <td><span class="small muted">автоматически по фамилии</span></td>
         <td><span class="badge mut">не активирован</span></td>
-        <td><button class="btn primary mini" data-create-doctor-account>Создать</button></td></tr>`;
+        <td><button class="btn primary mini" data-create-doctor-account>Создать доступ</button></td></tr>`;
     }
+    const credential = ISSUED_DOCTOR_CREDENTIALS.get(Number(user.id));
     return `<tr data-account-user="${user.id}"><td><b>${esc(user.displayName)}</b><br><span class="small muted">${esc(doctorStructureLabel(doctorId))}</span></td>
       <td>${esc(user.username)}</td>
-      <td><input class="account-password" type="password" placeholder="новый временный пароль"></td>
-      <td><span class="badge ${user.active ? "good" : "bad"}">${user.active ? "активен" : "отключён"}</span>${user.mustChangePassword ? ' <span class="badge warn">сменит пароль</span>' : ""}</td>
-      <td><div class="user-account-actions"><button class="btn mini" data-reset-doctor-password>Сбросить пароль</button>
+      <td><span class="badge ${user.active ? "good" : "bad"}">${user.active ? "активен" : "отключён"}</span>${user.mustChangePassword ? ' <span class="badge warn">сменит пароль</span>' : ""}${credential ? `<br><code class="issued-password">${esc(credential.password)}</code>` : ""}</td>
+      <td><div class="user-account-actions"><button class="btn mini" data-reset-doctor-password>Новый пароль</button>
         <button class="btn mini ${user.active ? "danger" : "primary"}" data-toggle-doctor-account data-active="${user.active ? "0" : "1"}>${user.active ? "Отключить" : "Включить"}</button></div></td></tr>`;
   }).join("");
   host.innerHTML = `<div class="card"><h2>🔐 Учётные записи врачей</h2>
-    <p class="small muted">Врач появляется здесь после импорта или добавления в справочник. Создание учётной записи всегда подтверждает администратор. Временный пароль врач заменит при первом входе.</p>
-    <div style="overflow-x:auto"><table class="data user-management-table"><tr><th>Врач</th><th>Логин</th><th>Временный пароль</th><th>Состояние</th><th></th></tr>${rows}</table></div>
+    <p class="small muted">Нажмите «Создать доступ»: логином станет фамилия, а временный пароль приложение создаст само. При одинаковых фамилиях к логину добавится номер.</p>
+    <div class="user-management-toolbar"><button class="btn primary" data-export-doctor-credentials>Выгрузить логины и пароли в Excel</button><span class="small muted">Файл сохраняется в папку «Результаты».</span></div>
+    <div style="overflow-x:auto"><table class="data user-management-table"><tr><th>Врач</th><th>Логин</th><th>Состояние и новый пароль</th><th></th></tr>${rows}</table></div>
   </div>`;
   host.querySelectorAll("[data-create-doctor-account]").forEach(button => button.addEventListener("click", async () => {
     const row = button.closest("[data-account-doctor]");
     const doctorId = row.dataset.accountDoctor;
-    const username = row.querySelector(".account-username").value;
-    const password = row.querySelector(".account-password").value;
     try {
-      await DESKTOP_API.createDoctorUser({ doctorId, username, displayName: doctorName(doctorId), password });
+      const issued = await DESKTOP_API.createDoctorUser({ doctorId });
+      rememberIssuedDoctorCredential(issued);
       APP_USERS = await DESKTOP_API.listUsers();
-      toast(`Учётная запись врача «${doctorName(doctorId)}» создана`);
+      toast(`Доступ создан: ${issued.username} · пароль ${issued.temporaryPassword}`);
       renderUserManagement();
     } catch (error) {
       toast("Не удалось создать учётную запись: " + error.message, true);
@@ -4829,11 +4892,11 @@ function renderUserManagement() {
   }));
   host.querySelectorAll("[data-reset-doctor-password]").forEach(button => button.addEventListener("click", async () => {
     const row = button.closest("[data-account-user]");
-    const password = row.querySelector(".account-password").value;
     try {
-      await DESKTOP_API.resetDoctorPassword({ userId: Number(row.dataset.accountUser), password });
+      const issued = await DESKTOP_API.resetDoctorPassword({ userId: Number(row.dataset.accountUser) });
+      rememberIssuedDoctorCredential(issued);
       APP_USERS = await DESKTOP_API.listUsers();
-      toast("Временный пароль установлен");
+      toast(`Новый временный пароль: ${issued.temporaryPassword}`);
       renderUserManagement();
     } catch (error) {
       toast("Не удалось сбросить пароль: " + error.message, true);
@@ -4849,6 +4912,8 @@ function renderUserManagement() {
       toast("Не удалось изменить состояние: " + error.message, true);
     }
   }));
+  const exportButton = host.querySelector("[data-export-doctor-credentials]");
+  if (exportButton) exportButton.addEventListener("click", exportDoctorCredentials);
 }
 
 /* --- отделения и специализации --- */
@@ -5362,13 +5427,6 @@ async function initApp() {
   document.getElementById("btnClear").addEventListener("click", clearDB);
   document.getElementById("btnAutosave").addEventListener("click", connectAutosave);
   if (DESKTOP_API) {
-    DESKTOP_API.onPrepareClose(async () => {
-      let saved = true;
-      if (APP_AUTH && APP_AUTH.authenticated && APP_AUTH.user.role === "admin") {
-        try { saved = await saveLocal(); } catch (_) { saved = false; }
-      }
-      DESKTOP_API.confirmCloseSaved(saved);
-    });
     document.getElementById("btnSetupAdmin").addEventListener("click", setupAdministrator);
     document.getElementById("adminLoginForm").addEventListener("submit", loginAdministrator);
     document.getElementById("doctorLoginForm").addEventListener("submit", loginDoctor);
@@ -5424,6 +5482,28 @@ async function initApp() {
 document.addEventListener("DOMContentLoaded", () => {
   initApp().catch(error => {
     console.error("application init failed", error);
+    if (DESKTOP_API && DESKTOP_API.reportRendererError) {
+      DESKTOP_API.reportRendererError({ message: error.message, stack: error.stack, source: "initApp" });
+    }
     toast("Не удалось запустить приложение: " + error.message, true);
+  });
+});
+
+window.addEventListener("error", event => {
+  if (!DESKTOP_API || !DESKTOP_API.reportRendererError) return;
+  DESKTOP_API.reportRendererError({
+    message: event.message,
+    stack: event.error && event.error.stack,
+    source: `${event.filename || "renderer"}:${event.lineno || 0}`,
+  });
+});
+
+window.addEventListener("unhandledrejection", event => {
+  if (!DESKTOP_API || !DESKTOP_API.reportRendererError) return;
+  const reason = event.reason;
+  DESKTOP_API.reportRendererError({
+    message: reason && reason.message ? reason.message : String(reason || "Необработанная ошибка Promise"),
+    stack: reason && reason.stack,
+    source: "unhandledrejection",
   });
 });
