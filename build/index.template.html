@@ -163,7 +163,7 @@
     <button class="btn primary" id="btnPublishReports" title="Зафиксировать отчёты и комментарии для врачей">✓ Сохранить и опубликовать</button>
     <button class="btn" id="btnPrint">🖨 Печать</button>
   </div>
-  <div class="notice blue no-print">Нажмите «Выгрузить PDF», затем в открывшемся окне отметьте конкретные отделения, специализации и врачей. Экспорт начнётся только после подтверждения выбора. Предпросмотр «Кому» и кнопка «Печать» работают для одного выбранного краткого отчёта.</div>
+  <div class="notice blue no-print"><b>Как работать:</b> выберите период и адресата, напишите комментарии справа от нужных блоков и нажмите «Сохранить и опубликовать». Черновик комментария сохраняется при выходе из поля. «Выгрузить PDF» отдельно предложит выбрать нужные отчёты.</div>
   <div id="reportBody"></div>
 </section>
 
@@ -187,7 +187,8 @@
 </dialog>
 
 <section id="page-settings" class="page">
-  <h2>Настройки расчёта</h2>
+  <h2>Настройки</h2>
+  <div class="settings-navigation no-print" id="settingsNavigation"></div>
   <div id="userManagement"></div>
   <div id="settingsBody"></div>
 </section>
@@ -197,7 +198,11 @@
   <header class="doctor-viewer-head no-print">
     <div><b>💓 Пульс клиники</b><span id="doctorViewerIdentity"></span></div>
     <div class="flex">
-      <label>Период: <select id="doctorViewerPeriod"></select></label>
+      <div class="doctor-period-picker">
+        <button class="btn mini" id="btnDoctorPreviousPeriod" type="button" title="Более ранний период">←</button>
+        <label>Период: <select id="doctorViewerPeriod"></select></label>
+        <button class="btn mini" id="btnDoctorNextPeriod" type="button" title="Более новый период">→</button>
+      </div>
       <button class="btn" id="btnDoctorChangePassword">Сменить пароль</button>
       <button class="btn" id="btnDoctorLogout">Сменить пользователя</button>
     </div>

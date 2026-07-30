@@ -77,10 +77,12 @@ class AuthService {
   status() {
     const needsSetup = !this.database.hasUsers();
     const session = this.#activeSession();
+    const user = session ? this.database.getUserById(session.userId) : null;
+    if (session && (!user || !user.active)) this.session = null;
     return {
       needsSetup,
-      authenticated: Boolean(session),
-      user: session ? this.#publicUser(this.database.getUserById(session.userId)) : null,
+      authenticated: Boolean(session && user && user.active),
+      user: session && user && user.active ? this.#publicUser(user) : null,
       idleTimeoutMs: SESSION_IDLE_MS,
     };
   }
@@ -124,6 +126,11 @@ class AuthService {
         this.database.audit({ actorUserId: this.session.userId, action: "auth.logout", targetType: "user", targetId: String(this.session.userId) });
       } catch (_) { /* restored databases may not contain the previous user */ }
     }
+    this.session = null;
+    return this.status();
+  }
+
+  invalidateSession() {
     this.session = null;
     return this.status();
   }
@@ -179,6 +186,14 @@ class AuthService {
     if (!user || !user.active || (role && user.role !== role)) throw new Error("Недостаточно прав");
     session.lastActivityAt = Date.now();
     return Object.assign({}, session, { user: this.#publicUser(user) });
+  }
+
+  requireDoctorReady() {
+    const session = this.require("doctor");
+    if (session.user.mustChangePassword) {
+      throw new Error("Перед просмотром отчётов необходимо заменить временный пароль");
+    }
+    return session;
   }
 
   #activeSession() {

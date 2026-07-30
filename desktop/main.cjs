@@ -62,6 +62,16 @@ function logEvent(event, details = {}) {
   } catch (_) { /* logs must never stop the app */ }
 }
 
+app.on("child-process-gone", (_event, details) => {
+  logEvent("child-process-gone", {
+    type: details.type,
+    reason: details.reason,
+    exitCode: details.exitCode,
+    serviceName: details.serviceName || null,
+    name: details.name || null,
+  });
+});
+
 function ensureObject(value, label = "данные") {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Некорректные ${label}`);
   return value;
@@ -151,6 +161,7 @@ async function initializeServices() {
   });
   database = new DatabaseService(configStore.databasePath());
   authService = new AuthService({ database, logger: logEvent });
+  database.syncDoctorUserIdentities();
   if (SMOKE_TEST && !database.hasUsers()) {
     authService.setupAdmin({
       username: "smoke-admin",
@@ -202,6 +213,7 @@ async function promptForWorkspaceOnFirstRun() {
 }
 
 function createWindow() {
+  const smokeRendererErrors = [];
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 940,
@@ -222,12 +234,23 @@ function createWindow() {
   });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   mainWindow.webContents.on("will-navigate", event => event.preventDefault());
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    logEvent("render-process-gone", details);
+    if (SMOKE_TEST) process.stderr.write(`[renderer-gone] ${JSON.stringify(details)}\n`);
+  });
+  mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (isMainFrame) logEvent("renderer-load-failed", { errorCode, errorDescription, validatedURL });
+  });
+  mainWindow.on("unresponsive", () => logEvent("window-unresponsive"));
+  mainWindow.on("responsive", () => logEvent("window-responsive"));
   if (SMOKE_TEST) {
-    mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+    mainWindow.webContents.on("console-message", details => {
+      const level = details && details.level ? details.level : "unknown";
+      const message = details && details.message ? details.message : "";
+      const sourceId = details && details.sourceId ? details.sourceId : "renderer";
+      const line = details && details.lineNumber ? details.lineNumber : 0;
       process.stderr.write(`[renderer:${level}] ${message} (${sourceId}:${line})\n`);
-    });
-    mainWindow.webContents.on("render-process-gone", (_event, details) => {
-      process.stderr.write(`[renderer-gone] ${JSON.stringify(details)}\n`);
+      if (level === "error") smokeRendererErrors.push({ message, sourceId, line });
     });
   }
   mainWindow.once("ready-to-show", () => {
@@ -481,6 +504,25 @@ function createWindow() {
               switchTab('report');
               await new Promise(resolve => setTimeout(resolve, 150));
               const reportLeaderboardCount = document.querySelectorAll('#reportBody .doctor-score-leader').length;
+              const smokeCommentContext = reportContextFromScope(UI.repScope, UI.repMonth);
+              const smokeCommentRail = document.querySelector('#reportBody .analytic-comment-rail');
+              const smokeCommentInput = smokeCommentRail?.querySelector('.analytic-comment-input');
+              if (smokeCommentInput) {
+                smokeCommentInput.focus();
+                smokeCommentInput.value = 'Комментарий smoke-теста';
+                smokeCommentInput.dispatchEvent(new Event('input', { bubbles: true }));
+                smokeCommentInput.blur();
+              }
+              await new Promise(resolve => setTimeout(resolve, 250));
+              const smokeDrafts = await DESKTOP_API.listComments({
+                periodKey: smokeCommentContext.periodKey,
+                scopeType: smokeCommentContext.scopeType,
+                scopeId: smokeCommentContext.scopeId
+              });
+              const commentWorkflowDraftSaved = smokeDrafts.some(comment => comment.bodyText === 'Комментарий smoke-теста');
+              await publishReportsAndComments();
+              await new Promise(resolve => setTimeout(resolve, 100));
+              const smokeCommentBlockKey = smokeCommentRail?.dataset.blockKey || '';
               const leaderboardFixture = document.createElement('div');
               leaderboardFixture.innerHTML = doctorScoreLeaderboardHtml([
                 { id: 'd1', r: { scores: { total: 82, rankEligible: true } } },
@@ -742,6 +784,9 @@ function createWindow() {
                   reportLeaderboardCount,
                   leaderboardColorStates
                 },
+                commentWorkflowDraftSaved,
+                smokeCommentContext,
+                smokeCommentBlockKey,
                 doctorHeaderMetrics,
                 doctorHeaderMetricsValid,
                 doctorHeaderCardRects,
@@ -771,6 +816,25 @@ function createWindow() {
             })()`;
         const result = await mainWindow.webContents.executeJavaScript(smokeAction);
         process.stdout.write("[smoke] renderer assertions completed\n");
+        if (!PDF_SMOKE_TEST) {
+          const publishedComment = database.listComments({
+            periodKey: result.smokeCommentContext.periodKey,
+            scopeType: result.smokeCommentContext.scopeType,
+            scopeId: result.smokeCommentContext.scopeId,
+          }).find(comment => comment.blockKey === result.smokeCommentBlockKey);
+          const publishedPage = database.getPublishedPage({
+            doctorId: "d1",
+            periodKey: result.smokeCommentContext.periodKey,
+            pageType: result.smokeCommentContext.pageType,
+          });
+          result.commentWorkflowDraftSaved = Boolean(publishedComment);
+          result.commentWorkflowValid = Boolean(
+            publishedComment
+            && publishedComment.status === "published"
+            && publishedPage
+            && publishedPage.html.includes("Комментарий smoke-теста"),
+          );
+        }
         const artifactRoot = SMOKE_ARTIFACT_ROOT;
         fs.mkdirSync(artifactRoot, { recursive: true });
         if (!PDF_SMOKE_TEST) {
@@ -928,10 +992,12 @@ function createWindow() {
           result.pdfFiles = pdfFiles;
           result.pdfDir = pdfDir;
         }
+        result.rendererErrors = smokeRendererErrors.slice();
         fs.writeFileSync(path.join(artifactRoot, "smoke-result.json"), JSON.stringify(result, null, 2), "utf8");
         process.stdout.write(`${JSON.stringify(result)}\n`);
         const passed = result.dataPage && result.optionalLibrariesDeferred && result.xlsx && result.chart && result.desktop
-          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.doctorMetricSettings))
+          && result.rendererErrors.length === 0
+          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.doctorMetricSettings && result.commentWorkflowValid))
           && (!PDF_SMOKE_TEST || (result.saved && result.pdfSelectionDialogValid && result.pdfExport && result.pdfExport.saved === 3
             && result.pdfExport.chartImages >= 3 && result.pdfFiles.length === 3
             && result.sessionSaveStatus && result.sessionSaveStatus.includes('Сохранено в рабочую базу SQLite')
@@ -1030,6 +1096,25 @@ function registerIpc() {
     return { canceled: false, path: filePath };
   });
   ipcMain.handle("admin:set-user-active", (_event, payload) => authService.setActive(ensureObject(payload, "состояние пользователя")));
+  ipcMain.handle("admin:rebind-doctor-users", (_event, payload) => {
+    const session = authService.require("admin");
+    const input = ensureObject(payload, "объединение учётных записей врачей");
+    if (!Array.isArray(input.sourceDoctorIds) || input.sourceDoctorIds.length > 50) {
+      throw new Error("Некорректный список объединяемых врачей");
+    }
+    const result = database.rebindDoctorUsers({
+      sourceDoctorIds: input.sourceDoctorIds,
+      targetDoctorId: String(input.targetDoctorId || ""),
+    });
+    database.audit({
+      actorUserId: session.userId,
+      action: "user.doctor-rebound",
+      targetType: "doctor",
+      targetId: String(input.targetDoctorId || ""),
+      details: { sourceDoctorIds: input.sourceDoctorIds, moved: result.moved },
+    });
+    return result;
+  });
   ipcMain.handle("comments:list", (_event, payload) => {
     authService.require("admin");
     return database.listComments(ensureObject(payload, "контекст комментариев"));
@@ -1070,26 +1155,30 @@ function registerIpc() {
     if (!/^\d{4}-\d{2}$/.test(String(input.periodKey))) throw new Error("Некорректный период публикации");
     if (!Array.isArray(input.pages) || !input.pages.length || input.pages.length > 2000) throw new Error("Некорректный набор страниц");
     const doctors = new Set(Object.keys((database.loadSnapshot() || {}).doctors || {}));
+    let totalHtmlBytes = 0;
     const pages = input.pages.map(page => {
       ensureObject(page, "страница публикации");
       if (!doctors.has(String(page.doctorId))) throw new Error("В публикации указан неизвестный врач");
       if (!/^(department|specialization|doctor)$/.test(String(page.pageType))) throw new Error("Некорректный тип страницы");
+      const html = sanitizePublishedHtml(page.html);
+      totalHtmlBytes += Buffer.byteLength(html, "utf8");
+      if (totalHtmlBytes > 250 * 1024 * 1024) throw new Error("Общий размер публикации превышает 250 МБ");
       return {
         doctorId: String(page.doctorId),
         pageType: String(page.pageType),
         scopeId: String(page.scopeId || "").slice(0, 200),
         title: String(page.title || "").slice(0, 300),
-        html: sanitizePublishedHtml(page.html),
+        html,
       };
     });
     return database.publish({ periodKey: input.periodKey, createdBy: session.userId, pages });
   });
   ipcMain.handle("viewer:periods", () => {
-    const session = authService.require("doctor");
+    const session = authService.requireDoctorReady();
     return database.listPublishedPeriods(session.doctorId);
   });
   ipcMain.handle("viewer:page", (_event, payload) => {
-    const session = authService.require("doctor");
+    const session = authService.requireDoctorReady();
     const input = ensureObject(payload, "страница врача");
     if (!/^(department|specialization|doctor)$/.test(String(input.pageType))) throw new Error("Некорректный тип страницы");
     return database.getPublishedPage({
@@ -1132,7 +1221,8 @@ function registerIpc() {
     const config = await copyDatabaseToWorkspace(result.filePaths[0]);
     if (!config) return { canceled: true, config: configStore.publicConfig() };
     fileService = new FileService({ configStore, database, logger: logEvent });
-    return { canceled: false, config, snapshot: database.loadSnapshot(), summary: database.summary() };
+    authService.invalidateSession();
+    return { canceled: false, config, requiresLogin: true };
   });
 
   ipcMain.handle("config:choose-folder", async (_event, kind) => {
@@ -1247,7 +1337,7 @@ function registerIpc() {
     });
     if (confirmation.response !== 0) return { canceled: true };
     const restored = await backupService.restore(source);
-    authService.logout();
+    authService.invalidateSession();
     return { canceled: false, restored, requiresLogin: true };
   });
 

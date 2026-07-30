@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   issueDoctorCredentials: payload => invoke("admin:issue-credentials", payload),
   exportDoctorCredentialsXlsx: payload => invoke("admin:export-credentials-xlsx", payload),
   setUserActive: payload => invoke("admin:set-user-active", payload),
+  rebindDoctorUsers: payload => invoke("admin:rebind-doctor-users", payload),
   listComments: payload => invoke("comments:list", payload),
   saveComment: payload => invoke("comments:save", payload),
   getCommentHistory: id => invoke("comments:history", id),

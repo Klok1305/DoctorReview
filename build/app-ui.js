@@ -18,6 +18,8 @@ const UI = {
   repKbWin: 12,
   cmp: [null, null, null],
   staffFilter: "",
+  userFilter: "",
+  settingsSection: "calculation",
   openGroups: {},
   openLists: {},
   setDoctor: null,
@@ -39,6 +41,8 @@ let APP_USERS = [];
 const ISSUED_DOCTOR_CREDENTIALS = new Map();
 let selectedDoctorLoginUserId = null;
 let doctorViewerState = { periods: [], pages: {}, periodKey: null, pageType: "department" };
+let reportRenderRevision = 0;
+let settingsFilterTimer = null;
 
 function showAuthError(message) {
   const box = document.getElementById("authError");
@@ -130,6 +134,12 @@ async function searchDoctorLoginCandidates() {
     box.querySelectorAll('input[name="doctorLoginUser"]').forEach(input => input.addEventListener("change", () => {
       selectedDoctorLoginUserId = Number(input.value);
     }));
+    if (rows.length === 1) {
+      const only = box.querySelector('input[name="doctorLoginUser"]');
+      only.checked = true;
+      selectedDoctorLoginUserId = Number(only.value);
+      document.getElementById("doctorLoginPassword").focus();
+    }
   } catch (error) {
     box.innerHTML = `<p class="small bad-text">${esc(error.message)}</p>`;
   }
@@ -145,8 +155,12 @@ async function loginDoctor(event) {
     });
     APP_AUTH = auth;
     showAuthError("");
-    await showDoctorViewer(auth);
-    if (auth.user.mustChangePassword) openPasswordDialog(true);
+    if (auth.user.mustChangePassword) {
+      showDoctorPasswordGate(auth);
+      openPasswordDialog(true);
+    } else {
+      await showDoctorViewer(auth);
+    }
   } catch (error) {
     showAuthError(error.message);
   }
@@ -169,6 +183,17 @@ function openPasswordDialog(force = false) {
   dialog.showModal();
 }
 
+function showDoctorPasswordGate(auth) {
+  APP_AUTH = auth;
+  document.getElementById("authScreen").classList.add("hidden");
+  document.querySelector(".app-header").classList.add("hidden");
+  document.querySelector("main").classList.add("hidden");
+  document.getElementById("doctorViewer").classList.remove("hidden");
+  document.getElementById("doctorViewerIdentity").textContent = auth.user.displayName;
+  document.getElementById("doctorViewerTabs").innerHTML = "";
+  document.getElementById("doctorViewerBody").innerHTML = '<div class="card doctor-viewer-empty"><h2>Сначала замените временный пароль</h2><p class="muted">После сохранения нового пароля откроется последний опубликованный отчёт.</p></div>';
+}
+
 async function confirmPasswordChange(event) {
   event.preventDefault();
   const currentPassword = document.getElementById("currentPassword").value;
@@ -181,10 +206,12 @@ async function confirmPasswordChange(event) {
     return;
   }
   try {
+    const forced = document.getElementById("changePasswordDialog").dataset.force === "1";
     const user = await DESKTOP_API.changePassword({ currentPassword, newPassword });
     APP_AUTH.user = user;
     document.getElementById("changePasswordDialog").close();
     toast("Пароль изменён");
+    if (forced && user.role === "doctor") await showDoctorViewer(APP_AUTH);
   } catch (error) {
     errorBox.textContent = error.message;
     errorBox.classList.remove("hidden");
@@ -200,8 +227,9 @@ async function showDoctorViewer(auth) {
   document.getElementById("doctorViewerIdentity").textContent = auth.user.displayName;
   doctorViewerState.periods = await DESKTOP_API.listPublishedPeriods();
   const select = document.getElementById("doctorViewerPeriod");
-  select.innerHTML = doctorViewerState.periods.map(item => `<option value="${item.periodKey}">${monthLabel(item.periodKey)} · версия ${item.version}</option>`).join("");
+  select.innerHTML = doctorViewerState.periods.map(item => `<option value="${item.periodKey}">${monthLabel(item.periodKey)}</option>`).join("");
   doctorViewerState.periodKey = doctorViewerState.periods[0] ? doctorViewerState.periods[0].periodKey : null;
+  updateDoctorViewerPeriodButtons();
   if (!doctorViewerState.periodKey) {
     document.getElementById("doctorViewerTabs").innerHTML = "";
     document.getElementById("doctorViewerBody").innerHTML = '<div class="card doctor-viewer-empty"><h2>Опубликованных отчётов пока нет</h2><p class="muted">Обратитесь к администратору.</p></div>';
@@ -214,6 +242,7 @@ async function showDoctorViewer(auth) {
 async function loadDoctorViewerPeriod() {
   const periodKey = document.getElementById("doctorViewerPeriod").value || doctorViewerState.periodKey;
   doctorViewerState.periodKey = periodKey;
+  updateDoctorViewerPeriodButtons();
   const pageTypes = ["department", "specialization", "doctor"];
   const pages = await Promise.all(pageTypes.map(pageType => DESKTOP_API.getPublishedPage({ periodKey, pageType })));
   doctorViewerState.pages = Object.fromEntries(pageTypes.map((type, index) => [type, pages[index]]).filter(([, page]) => page));
@@ -228,11 +257,29 @@ async function loadDoctorViewerPeriod() {
   renderDoctorViewerPage();
 }
 
+function updateDoctorViewerPeriodButtons() {
+  const select = document.getElementById("doctorViewerPeriod");
+  const previous = document.getElementById("btnDoctorPreviousPeriod");
+  const next = document.getElementById("btnDoctorNextPeriod");
+  if (!select || !previous || !next) return;
+  previous.disabled = select.selectedIndex < 0 || select.selectedIndex >= select.options.length - 1;
+  next.disabled = select.selectedIndex <= 0;
+}
+
+async function navigateDoctorViewerPeriod(direction) {
+  const select = document.getElementById("doctorViewerPeriod");
+  if (!select || !select.options.length) return;
+  const nextIndex = Math.max(0, Math.min(select.options.length - 1, select.selectedIndex + Number(direction || 0)));
+  if (nextIndex === select.selectedIndex) return;
+  select.selectedIndex = nextIndex;
+  await loadDoctorViewerPeriod();
+}
+
 function renderDoctorViewerPage() {
   const page = doctorViewerState.pages[doctorViewerState.pageType];
   document.querySelectorAll("[data-viewer-page]").forEach(button => button.classList.toggle("active", button.dataset.viewerPage === doctorViewerState.pageType));
   document.getElementById("doctorViewerBody").innerHTML = page
-    ? `<div class="small muted" style="margin-bottom:8px">Опубликовано ${new Date(page.createdAt).toLocaleString("ru-RU")} · версия ${page.version}</div>${page.html}`
+    ? `<div class="small muted doctor-publication-date" style="margin-bottom:8px">Опубликовано ${new Date(page.createdAt).toLocaleString("ru-RU")}</div>${page.html}`
     : '<div class="card"><p class="muted">Страница недоступна.</p></div>';
 }
 
@@ -245,7 +292,7 @@ function setControlsDisabled(ids, disabled) {
 
 function collapsibleListAttrs(key, defaultOpen = true) {
   const isOpen = Object.prototype.hasOwnProperty.call(UI.openLists, key) ? UI.openLists[key] : defaultOpen;
-  return `class="collapsible-list" data-list-key="${esc(key)}" ${isOpen ? "open" : ""} ontoggle="rememberListToggle(${esc(JSON.stringify(key))}, this.open)"`;
+  return `class="collapsible-list" data-list-key="${esc(key)}" ${isOpen ? "open" : ""}`;
 }
 
 function rememberListToggle(key, isOpen) {
@@ -339,6 +386,10 @@ async function desktopChooseWorkspace() {
     if (!await saveLocal()) throw new Error("Текущие изменения не записаны; смена рабочей папки отменена");
     const result = await DESKTOP_API.chooseWorkspace();
     if (result.canceled) return;
+    if (result.requiresLogin) {
+      window.location.reload();
+      return;
+    }
     DESKTOP_STATE.config = result.config;
     DESKTOP_STATE.summary = result.summary;
     if (result.snapshot && !applyLoadedDatabase(result.snapshot)) throw new Error("Рабочая база имеет неподдерживаемый формат");
@@ -2846,8 +2897,7 @@ function doctorMetricsHeaderHtml(docId, mk, r, { blockId = "blkHead", slide = fa
 function doctorSemanticSectionOpen(number, title, subtitle, defaultOpen = true) {
   const key = `doctorSemantic${number}`;
   const isOpen = Object.prototype.hasOwnProperty.call(UI.openLists, key) ? UI.openLists[key] : defaultOpen;
-  return `<details id="doctorSemanticSection${number}" class="doctor-semantic-section" data-list-key="${key}" ${isOpen ? "open" : ""}
-    ontoggle="rememberDoctorSectionToggle('${key}', this.open)">
+  return `<details id="doctorSemanticSection${number}" class="doctor-semantic-section" data-list-key="${key}" ${isOpen ? "open" : ""}>
     <summary class="doctor-semantic-summary">
       <span class="doctor-semantic-number">${number}</span>
       <span class="doctor-semantic-heading"><b>${esc(title)}</b><small>${esc(subtitle)}</small></span>
@@ -3733,6 +3783,7 @@ async function startPdfExportFromDialog() {
 }
 
 function renderReport() {
+  const revision = ++reportRenderRevision;
   const months = monthKeysSorted();
   const mSel = document.getElementById("repMonth");
   const sSel = document.getElementById("repScope");
@@ -3765,10 +3816,11 @@ function renderReport() {
     ...core.map(id => `<option value="doc:${id}" ${UI.repScope === "doc:" + id ? "selected" : ""}>Врач · ${esc(doctorName(id))}</option>`),
   ].join("");
   const context = reportContextFromScope(UI.repScope, mk);
+  body.dataset.reportRevision = String(revision);
   if (context.scopeType === "department") body.innerHTML = buildDepartmentReport(mk, context.scopeId);
   else if (context.scopeType === "specialization") body.innerHTML = buildDeptReport(mk, context.scopeId, "all");
   else body.innerHTML = buildDoctorReport(context.scopeId, mk);
-  decorateAdminReportComments(context).catch(error => toast("Не удалось загрузить комментарии: " + error.message, true));
+  decorateAdminReportComments(context, revision).catch(error => toast("Не удалось загрузить комментарии: " + error.message, true));
 }
 
 function reportContextFromScope(scope, periodKey) {
@@ -3789,7 +3841,7 @@ function buildDepartmentReport(mk, departmentName) {
   const patients = rows.reduce((sum, item) => sum + (item.r.traffic.patients || 0), 0);
   const scored = rows.map(item => item.r.scores && item.r.scores.total).filter(value => value != null);
   const specializations = [...new Set(rows.map(item => resolvedSpecializationName(item.id)).filter(Boolean))];
-  let html = `<div class="card slide"><h2>${esc(departmentName)} <span class="muted small">· ${monthLabel(mk)}</span></h2>
+  let html = `<div class="card slide" data-analytics-block-key="overview"><h2>${esc(departmentName)} <span class="muted small">· ${monthLabel(mk)}</span></h2>
     <div class="grid cols-4">
       <div class="kpi"><div class="lbl">Врачей с данными</div><div class="val">${fmtNum(rows.length)}</div></div>
       <div class="kpi"><div class="lbl">Собственная выручка</div><div class="val">${fmtMoney(sales)}</div></div>
@@ -3798,17 +3850,19 @@ function buildDepartmentReport(mk, departmentName) {
     </div>
     ${scored.length ? `<p class="small muted">Средний балл врачей: <b>${fmtNum(scored.reduce((a, b) => a + b, 0) / scored.length, 1)}</b></p>` : ""}
   </div>`;
-  html += `<div class="card slide"><h2>Специализации отделения</h2><table class="data"><tr><th>Специализация</th><th class="num">Врачей</th><th class="num">Выручка</th><th class="num">Пациентов</th></tr>
+  html += `<div class="card slide" data-analytics-block-key="specializations"><h2>Специализации отделения</h2><table class="data"><tr><th>Специализация</th><th class="num">Врачей</th><th class="num">Выручка</th><th class="num">Пациентов</th></tr>
     ${specializations.map(name => {
       const group = rows.filter(item => resolvedSpecializationName(item.id) === name);
       return `<tr><td><b>${esc(name)}</b></td><td class="num">${fmtNum(group.length)}</td><td class="num">${fmtMoney(group.reduce((sum, item) => sum + (item.r.econ.sales || 0), 0))}</td><td class="num">${fmtNum(group.reduce((sum, item) => sum + (item.r.traffic.patients || 0), 0))}</td></tr>`;
     }).join("")}
   </table></div>`;
-  html += `<div class="card slide"><h2>Результативность врачей отделения</h2>${doctorScoreLeaderboardHtml(rows, mk, departmentName) || '<p class="muted">Баллы недоступны.</p>'}</div>`;
+  html += `<div class="card slide" data-analytics-block-key="performance"><h2>Результативность врачей отделения</h2>${doctorScoreLeaderboardHtml(rows, mk, departmentName) || '<p class="muted">Баллы недоступны.</p>'}</div>`;
   return html;
 }
 
 function reportBlockKey(card, pageType, index) {
+  const explicit = String(card.dataset.analyticsBlockKey || "").trim();
+  if (explicit) return explicit.includes(".") ? explicit : `${pageType}.${explicit}`;
   if (card.id === "reportDoctorMetrics") return `${pageType}.overview`;
   const heading = String(card.querySelector("h1,h2,h3")?.textContent || "").toLocaleLowerCase("ru-RU");
   const rules = [
@@ -3856,7 +3910,21 @@ function makeCommentRail(context, blockKey, comment, editable) {
       </div>
       <div class="comment-history hidden"></div>
       <div class="analytic-comment-meta">${comment ? `${comment.status === "published" ? "опубликован" : "черновик"} · ${new Date(comment.updatedAt).toLocaleString("ru-RU")}` : "Комментарий ещё не создан"}</div>`;
-    rail.querySelector("[data-save-comment]").addEventListener("click", () => saveAnalyticComment(rail, context));
+    const input = rail.querySelector(".analytic-comment-input");
+    input.dataset.savedText = comment ? comment.bodyText : "";
+    input.addEventListener("input", () => {
+      const changed = input.value.trim() !== input.dataset.savedText;
+      const meta = rail.querySelector(".analytic-comment-meta");
+      if (changed && meta) meta.textContent = "Есть несохранённые изменения";
+    });
+    input.addEventListener("blur", () => {
+      if (input.value.trim() !== input.dataset.savedText) {
+        saveAnalyticComment(rail, context, { silent: true, rerender: false }).catch(() => {});
+      }
+    });
+    rail.querySelector("[data-save-comment]").addEventListener("click", () => {
+      saveAnalyticComment(rail, context, { rerender: false }).catch(() => {});
+    });
     const archive = rail.querySelector("[data-archive-comment]");
     if (archive) archive.addEventListener("click", () => archiveAnalyticComment(comment.id));
     const history = rail.querySelector("[data-comment-history]");
@@ -3902,20 +3970,36 @@ function wrapAnalyticCards(container, context, comments, editable) {
   });
 }
 
-async function decorateAdminReportComments(context) {
+async function decorateAdminReportComments(context, revision) {
   if (!DESKTOP_API || !APP_AUTH || APP_AUTH.user.role !== "admin") return;
   const comments = await DESKTOP_API.listComments({ periodKey: context.periodKey, scopeType: context.scopeType, scopeId: context.scopeId });
   const body = document.getElementById("reportBody");
-  if (body && reportContextFromScope(UI.repScope, UI.repMonth).scopeId === context.scopeId) {
+  const current = reportContextFromScope(UI.repScope, UI.repMonth);
+  if (body
+      && revision === reportRenderRevision
+      && body.dataset.reportRevision === String(revision)
+      && current.scopeType === context.scopeType
+      && current.scopeId === context.scopeId
+      && current.periodKey === context.periodKey) {
     wrapAnalyticCards(body, context, comments, true);
   }
 }
 
-async function saveAnalyticComment(rail, context) {
-  const text = rail.querySelector(".analytic-comment-input").value.trim();
+async function saveAnalyticComment(rail, context, { silent = false, rerender = true } = {}) {
+  const input = rail.querySelector(".analytic-comment-input");
+  if (rail._commentSavePromise) {
+    await rail._commentSavePromise;
+    if (input.value.trim() !== input.dataset.savedText) {
+      return saveAnalyticComment(rail, context, { silent, rerender });
+    }
+    return null;
+  }
+  const text = input.value.trim();
   const blockKey = rail.dataset.blockKey;
-  try {
-    await DESKTOP_API.saveComment({
+  const saveButton = rail.querySelector("[data-save-comment]");
+  if (saveButton) saveButton.disabled = true;
+  const operation = (async () => {
+    const saved = await DESKTOP_API.saveComment({
       scopeType: context.scopeType,
       scopeId: context.scopeId,
       periodKey: context.periodKey,
@@ -3923,10 +4007,36 @@ async function saveAnalyticComment(rail, context) {
       bodyText: text,
       bodyHtml: esc(text).replace(/\r?\n/g, "<br>"),
     });
-    toast("Черновик комментария сохранён");
-    renderReport();
+    input.dataset.savedText = text;
+    const meta = rail.querySelector(".analytic-comment-meta");
+    if (meta) meta.textContent = input.value.trim() === text
+      ? `черновик · ${new Date(saved.updatedAt).toLocaleString("ru-RU")}`
+      : "Есть несохранённые изменения";
+    if (!silent) toast("Черновик комментария сохранён");
+    if (rerender) renderReport();
+    return saved;
+  })();
+  rail._commentSavePromise = operation;
+  try {
+    return await operation;
   } catch (error) {
     toast("Не удалось сохранить комментарий: " + error.message, true);
+    throw error;
+  } finally {
+    if (rail._commentSavePromise === operation) rail._commentSavePromise = null;
+    if (saveButton && saveButton.isConnected) saveButton.disabled = false;
+  }
+}
+
+async function saveVisibleCommentDrafts() {
+  const rails = [...document.querySelectorAll("#reportBody .analytic-comment-rail")];
+  for (const rail of rails) {
+    const input = rail.querySelector(".analytic-comment-input");
+    if (!input || input.value.trim() === input.dataset.savedText) continue;
+    const blockKey = rail.dataset.blockKey;
+    const context = reportContextFromScope(UI.repScope, UI.repMonth);
+    rail.dataset.blockKey = blockKey;
+    await saveAnalyticComment(rail, context, { silent: true, rerender: false });
   }
 }
 
@@ -3957,13 +4067,15 @@ async function publishReportsAndComments() {
   button.disabled = true;
   button.textContent = "Публикация…";
   try {
+    await saveVisibleCommentDrafts();
     if (!await saveLocal()) throw new Error("Не удалось сохранить текущую рабочую базу");
     const comments = await DESKTOP_API.listComments({ periodKey: mk });
     const doctorIds = coreDoctorsInMonth(mk).length ? coreDoctorsInMonth(mk) : doctorsInMonth(mk);
     const departmentCache = new Map();
     const specializationCache = new Map();
     const pages = [];
-    for (const doctorId of doctorIds) {
+    for (let doctorIndex = 0; doctorIndex < doctorIds.length; doctorIndex++) {
+      const doctorId = doctorIds[doctorIndex];
       const department = resolvedDepartmentName(doctorId);
       const specialization = resolvedSpecializationName(doctorId);
       if (!departmentCache.has(department)) {
@@ -3998,7 +4110,12 @@ async function publishReportsAndComments() {
         title: `${doctorName(doctorId)} · ${monthLabel(mk)}`,
         html: composePublishedHtml(buildDoctorReport(doctorId, mk), doctorContext, comments),
       });
+      if ((doctorIndex + 1) % 5 === 0 || doctorIndex === doctorIds.length - 1) {
+        button.textContent = `Формирую ${doctorIndex + 1} из ${doctorIds.length}…`;
+        await new Promise(resolve => requestAnimationFrame(resolve));
+      }
     }
+    button.textContent = "Сохраняю публикацию…";
     const result = await DESKTOP_API.publishReports({ periodKey: mk, pages });
     toast(`Опубликована версия ${result.version}: страниц — ${result.pages}`);
     renderReport();
@@ -4045,7 +4162,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
   const sub = monthLabel(mk) + (deptFilter !== "all" ? " · " + esc(deptFilter) : "");
 
   /* Слайд 1: итоги + сводная */
-  let html = `<div class="card slide">${reportHeader("Отчёт по специализации", sub)}
+  let html = `<div class="card slide" data-analytics-block-key="overview">${reportHeader("Отчёт по специализации", sub)}
     ${doctorScoreLeaderboardHtml(rows, mk, deptFilter !== "all" ? deptFilter : "Все специализации")}
     ${reportOverallIndex(scAvg, "Общий индекс", scAvgPreliminary ? "предварительный: полнота данных ниже 80%" : `среднее по ${eligibleScores.length || allScores.length} специалистам`)}
     <div class="grid cols-4">
@@ -4067,7 +4184,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
 
   /* Слайд 2: баллы по векторам */
   if (showSc) {
-    html += `<div class="card slide"><h2>Баллы по векторам · ${sub}</h2>
+    html += `<div class="card slide" data-analytics-block-key="vector-scores"><h2>Баллы по векторам · ${sub}</h2>
       <table class="data"><tr><th>Специалист</th>${["v1", "v2", "v3", "v4", "v5", "v6"].map(vk => `<th class="num" title="${VECTOR_META[vk].name}">В${vk[1]}</th>`).join("")}<th class="num">Общий</th></tr>`;
     for (const x of rows) {
       html += `<tr><td>${esc(doctorName(x.id))}</td>${["v1", "v2", "v3", "v4", "v5", "v6"].map(vk => `<td class="num">${x.r.scores && x.r.scores.vec[vk] != null ? fmtNum(x.r.scores.vec[vk], 0) : '<span class="muted">·</span>'}</td>`).join("")}<td class="num"><b>${x.r.scores && x.r.scores.total != null ? (x.r.scores.rankEligible ? fmtNum(x.r.scores.total, 0) : `${fmtNum(x.r.scores.total, 0)} · предв. (${fmtPct(x.r.scores.coveragePct)})`) : "—"}</b></td></tr>`;
@@ -4076,7 +4193,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
   }
 
   /* Слайд 3: экономика и трафик */
-  html += `<div class="card slide"><h2>Экономика и трафик · ${sub}</h2>
+  html += `<div class="card slide" data-analytics-block-key="economy-traffic"><h2>Экономика и трафик · ${sub}</h2>
     <table class="data"><tr><th>Специалист</th><th class="num">Выручка</th><th class="num">От перенаправлений</th><th class="num">Чек пациента</th><th class="num">Чек посещения</th><th class="num">Визиты</th><th class="num">Пациенты</th><th class="num">Частота</th></tr>`;
   for (const x of rows) {
     html += `<tr><td>${esc(doctorName(x.id))}</td><td class="num">${fmtMoney(x.r.econ.sales)}</td><td class="num">${fmtMoney(x.r.econ.refRevenue)}</td>
@@ -4091,7 +4208,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
     const fProfile = deptProfile(deptFilter);
     const devs = (fProfile.expertise.items || []).map(d => d.name);
     if (devs.length && fProfile.expertise.mode !== "none") {
-      html += `<div class="card slide"><h2>${esc(fProfile.expertise.title)} (за месяц, шт) · ${sub}</h2>
+      html += `<div class="card slide" data-analytics-block-key="expertise"><h2>${esc(fProfile.expertise.title)} (за месяц, шт) · ${sub}</h2>
         <table class="data"><tr><th>Специалист</th>${devs.map(d => `<th class="num">${esc(d)}</th>`).join("")}<th class="num">Широта</th><th class="num">Доля эксп. услуг</th></tr>`;
       for (const x of withVy) {
         html += `<tr><td>${esc(doctorName(x.id))}</td>${devs.map(dv => `<td class="num">${x.r.product.expert[dv] ? fmtNum(x.r.product.expert[dv].q) : "·"}</td>`).join("")}
@@ -4100,7 +4217,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
       html += "</table></div>";
     }
   } else if (withVy.length) {
-    html += `<div class="card slide"><h2>Экспертность · ${sub}</h2>
+    html += `<div class="card slide" data-analytics-block-key="expertise"><h2>Экспертность · ${sub}</h2>
       <table class="data"><tr><th>Специалист</th><th>Специализация</th><th class="num">Задействовано позиций</th><th class="num">Доля экспертных услуг</th></tr>`;
     for (const x of withVy) {
       html += `<tr><td>${esc(doctorName(x.id))}</td><td>${esc(doctorDept(x.id))}</td><td class="num">${x.r.product.park ? x.r.product.devicesUsed + " из " + x.r.product.park : "—"}</td><td class="num">${fmtPct(x.r.product.expertShare)}</td></tr>`;
@@ -4111,7 +4228,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
   /* Слайд 5: междисциплинарный */
   const withNaz = rows.filter(x => x.r.cross.naz[1] || x.r.cross.naz[3]);
   if (withNaz.length) {
-    html += `<div class="card slide"><h2>Междисциплинарный подход · ${sub}</h2>
+    html += `<div class="card slide" data-analytics-block-key="interdisciplinary"><h2>Междисциплинарный подход · ${sub}</h2>
       <table class="data"><tr><th>Специалист</th><th class="num">Назначено</th><th class="num">Выполнено</th><th class="num">Продано</th><th class="num">Конверсия</th><th class="num">Назначено по фокусам</th><th class="num">Выполнено + продано по фокусам</th><th class="num">Выручка от перенаправлений</th><th class="num">Доля выручки от перенаправлений</th></tr>`;
     for (const x of withNaz) {
       const nz = x.r.cross.naz[1] || x.r.cross.naz[3];
@@ -4139,7 +4256,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
         reportBaseProfiles.push({ scope, profile: p });
       }
     }
-    html += `<div class="card slide"><h2>Клиентская база · ${sub}</h2><table class="data"><tr><th>Специалист</th><th class="num">Период</th><th class="num">Общая база</th>${visibleGroups.map(group => `<th class="num">${esc(clientBaseGroupLabel(group))}<br><span class="small muted">чел. · %</span></th>`).join("")}</tr>`;
+    html += `<div class="card slide" data-analytics-block-key="client-base"><h2>Клиентская база · ${sub}</h2><table class="data"><tr><th>Специалист</th><th class="num">Период</th><th class="num">Общая база</th>${visibleGroups.map(group => `<th class="num">${esc(clientBaseGroupLabel(group))}<br><span class="small muted">чел. · %</span></th>`).join("")}</tr>`;
     for (const x of withKb) {
       const kb = x.kb;
       html += `<tr><td>${esc(doctorName(x.id))}</td><td class="num">${fmtNum(kb.window)} мес.</td><td class="num"><b>${fmtNum(kb.total)}</b></td>
@@ -4153,7 +4270,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
   }
 
   /* Слайд 7: лояльность */
-  html += `<div class="card slide"><h2>Лояльность и удержание · ${sub}</h2>
+  html += `<div class="card slide" data-analytics-block-key="loyalty"><h2>Лояльность и удержание · ${sub}</h2>
     <table class="data"><tr><th>Специалист</th><th class="num">Загрузка расписания</th><th class="num">Часы (записано / график)</th><th class="num">Возвращаемость первички (${UI.pvSlice} мес.)</th><th class="num">Собственная запись в 1С</th><th class="num">Курсовое</th></tr>`;
   for (const x of rows) {
     const s = x.r.loyalty.sched, pv = x.r.loyalty.pvSlices[UI.pvSlice], or = x.r.loyalty.ownRec;
@@ -4168,7 +4285,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
   /* Слайд 8: динамика отделения */
   const dyn = computeDeptDynamics(mk, deptFilter, subFilter);
   if (dyn && dyn.months.length >= 2) {
-    html += `<div class="card slide"><h2>Динамика: точки роста и риска · ${sub}</h2>
+    html += `<div class="card slide" data-analytics-block-key="dynamics"><h2>Динамика: точки роста и риска · ${sub}</h2>
       <div class="grid cols-2" style="margin-bottom:12px">
         <div style="border-left:3px solid var(--good);padding-left:12px"><h3 style="color:var(--good)">Точки роста</h3>
           ${dyn.growth.length ? dyn.growth.slice(0, 8).map(x => `<div class="metric-row"><span class="mname">${esc(x.name)}</span><span class="mval">${x.fmt(x.cur)} ${deltaCell(x)}</span></div>`).join("") : '<p class="muted small">нет улучшений ≥ 5%</p>'}
@@ -4193,7 +4310,7 @@ function buildDoctorReport(docId, mk) {
   const reportProfile = profileForDoctor(docId);
   const reportNaz = r.cross.naz[UI.nazSlice] || r.cross.naz[1] || r.cross.naz[3];
   let html = doctorMetricsHeaderHtml(docId, mk, r, { blockId: "reportDoctorMetrics", slide: true, nazSlice: UI.nazSlice });
-  html += `<div class="card slide">
+  html += `<div class="card slide" data-analytics-block-key="block-2">
     ${doctorGoalsSummaryHtml(docId, reportProfile, false, r)}
     <div class="grid cols-2" style="margin-top:12px"><div>
       ${metricRow("Выручка", fmtMoney(e.sales))}
@@ -4219,7 +4336,7 @@ function buildDoctorReport(docId, mk) {
   if (reportKb) {
     const groupOrder = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
     const visibleGroups = groupOrder.filter(group => reportKb.groupAvailable[group]);
-    html += `<div class="card slide"><h2>Клиентская база · ${esc(doctorName(docId))} · ${fmtNum(reportKb.window)} мес.</h2>
+    html += `<div class="card slide" data-analytics-block-key="client-base"><h2>Клиентская база · ${esc(doctorName(docId))} · ${fmtNum(reportKb.window)} мес.</h2>
       <table class="data"><tr><th>Группа</th><th class="num">Пациентов</th><th class="num">% от общей базы</th><th>Что означает группа</th></tr>
       <tr><td><b>Общая база</b></td><td class="num"><b>${fmtNum(reportKb.total)}</b></td><td class="num"></td><td>Фактическое количество уникальных пациентов в выгрузке за ${fmtNum(reportKb.window)} месяцев.</td></tr>
       ${visibleGroups.map(group => `<tr><td><b>${esc(clientBaseGroupLabel(group))}</b></td><td class="num">${fmtNum(reportKb.seg[group])}</td><td class="num">${fmtPct(clientBaseGroupPct(reportKb, group))}</td><td>${esc(clientBaseGroupDescription(reportKb, group))}.</td></tr>`).join("")}
@@ -4227,14 +4344,14 @@ function buildDoctorReport(docId, mk) {
   }
 
   if (!reportKb) {
-    html += `<div class="card slide"><h2>Клиентская база · ${fmtNum(UI.repKbWin)} мес.</h2><p class="muted">Нет выгрузки ровно за выбранный период. Другой период автоматически не подставляется.</p></div>`;
+    html += `<div class="card slide" data-analytics-block-key="client-base"><h2>Клиентская база · ${fmtNum(UI.repKbWin)} мес.</h2><p class="muted">Нет выгрузки ровно за выбранный период. Другой период автоматически не подставляется.</p></div>`;
   }
 
   // категории выручки
   if (r.product) {
     const totalOwn = r.extras.vy.ownSum || 1;
     const repProfile = reportProfile;
-    html += `<div class="card slide"><h2>Структура выручки · ${esc(doctorName(docId))} · ${monthLabel(mk)}</h2>
+    html += `<div class="card slide" data-analytics-block-key="revenue"><h2>Структура выручки · ${esc(doctorName(docId))} · ${monthLabel(mk)}</h2>
       <table class="data"><tr><th>Категория</th><th class="num">Кол-во</th><th class="num">Сумма</th><th class="num">Доля</th></tr>`;
     for (const g of Object.keys(repProfile.groups)) {
       const gd = r.product.byGroup[g];
@@ -4250,7 +4367,7 @@ function buildDoctorReport(docId, mk) {
   // назначения
   const nz = r.cross.naz[UI.nazSlice] || r.cross.naz[1] || r.cross.naz[3];
   if (nz) {
-    html += `<div class="card slide"><h2>Назначения и направления (${nz.slice} мес) · ${monthLabel(mk)}</h2>
+    html += `<div class="card slide" data-analytics-block-key="appointments"><h2>Назначения и направления (${nz.slice} мес) · ${monthLabel(mk)}</h2>
       <table class="data"><tr><th>Тип</th><th class="num">Назначено</th><th class="num">Выполнено</th><th class="num">Продано</th><th class="num">Конверсия</th></tr>`;
     for (const t of REF_TYPES) {
       const b = nz.byType[t];
@@ -4271,7 +4388,7 @@ function buildDoctorReport(docId, mk) {
   const repDyn = computeDoctorDynamics(docId, mk);
   if (repDyn && repDyn.months.length >= 2) {
     const repNarrative = dynamicNarrativeValue(`doctor|${mk}|${docId}`, repDyn);
-    html += `<div class="card slide dynamics-final-card"><h2>Динамика текущего месяца: точки роста и риска · ${esc(doctorName(docId))}</h2>
+    html += `<div class="card slide dynamics-final-card" data-analytics-block-key="dynamics"><h2>Динамика текущего месяца: точки роста и риска · ${esc(doctorName(docId))}</h2>
       <p class="small muted">Сначала — детализация по месяцам, ниже — ключевой итог отчёта.</p>
       <table class="data"><tr><th>Метрика</th>${repDyn.months.map(k => `<th class="num">${monthLabel(k)}</th>`).join("")}<th class="num">Δ</th></tr>`;
     for (const row of repDyn.rows) {
@@ -4435,8 +4552,30 @@ function scoringBenchmarkDefs(profile) {
   ];
 }
 
+function setSettingsSection(section) {
+  UI.settingsSection = section === "access" ? "access" : "calculation";
+  renderSettings();
+}
+
+function renderSettingsNavigation() {
+  const host = document.getElementById("settingsNavigation");
+  if (!host) return;
+  const activeDoctors = APP_USERS.filter(user => user.role === "doctor" && user.active).length;
+  host.innerHTML = `
+    <button class="btn ${UI.settingsSection === "calculation" ? "active" : ""}" type="button" onclick="setSettingsSection('calculation')">Расчёты и структура</button>
+    <button class="btn ${UI.settingsSection === "access" ? "active" : ""}" type="button" onclick="setSettingsSection('access')">Доступы врачей · ${activeDoctors}</button>`;
+}
+
 function renderSettings() {
-  renderUserManagement();
+  renderSettingsNavigation();
+  const settingsBody = document.getElementById("settingsBody");
+  const userManagement = document.getElementById("userManagement");
+  if (UI.settingsSection === "access") {
+    settingsBody.innerHTML = "";
+    renderUserManagement();
+    return;
+  }
+  userManagement.innerHTML = "";
   const s = DB.settings;
   const departmentName = curSetDepartment();
   const specializationNames = departmentGroups()[departmentName] || [];
@@ -4483,7 +4622,7 @@ function renderSettings() {
   // состояние «свёрнуто/развёрнуто» секций настроек — переживает перерисовку
   if (!UI.setOpen) UI.setOpen = { norm: false, expert: false, nom: false, score: false, doctor: true, rules: false };
   // атрибуты для схлопывающейся секции: data-ключ + запоминание при переключении
-  const det = key => `data-sk="${key}" ${UI.setOpen[key] ? "open" : ""} ontoggle="UI.setOpen['${key}']=this.open"`;
+  const det = key => `data-sk="${key}" ${UI.setOpen[key] ? "open" : ""}`;
 
   /* --- иерархия отделение -> опциональные специализации --- */
   html += `<div class="card"><div class="vhead"><h2 class="mt0">🏥 Структура клиники</h2>
@@ -4765,24 +4904,36 @@ function renderSettings() {
   html += `</table></div></div>`;
 
   const nomScrollTop = document.getElementById("nomScroll") ? document.getElementById("nomScroll").scrollTop : 0;
-  document.getElementById("settingsBody").innerHTML = html;
+  settingsBody.innerHTML = html;
   const nomScrollEl = document.getElementById("nomScroll");
   if (nomScrollEl && nomScrollTop) nomScrollEl.scrollTop = nomScrollTop; // не прыгать вверх при правках
   const sf = document.getElementById("staffFilter");
   sf.addEventListener("input", () => {
     UI.staffFilter = sf.value;
-    renderSettings();
-    const el = document.getElementById("staffFilter");
-    el.focus();
-    el.setSelectionRange(el.value.length, el.value.length);
+    clearTimeout(settingsFilterTimer);
+    settingsFilterTimer = setTimeout(() => {
+      if (UI.settingsSection !== "calculation") return;
+      renderSettings();
+      const el = document.getElementById("staffFilter");
+      if (el) {
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      }
+    }, 180);
   });
   const nfEl = document.getElementById("nomFilter");
   nfEl.addEventListener("input", () => {
     UI.nomFilter = nfEl.value;
-    renderSettings();
-    const el = document.getElementById("nomFilter");
-    el.focus();
-    el.setSelectionRange(el.value.length, el.value.length);
+    clearTimeout(settingsFilterTimer);
+    settingsFilterTimer = setTimeout(() => {
+      if (UI.settingsSection !== "calculation") return;
+      renderSettings();
+      const el = document.getElementById("nomFilter");
+      if (el) {
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      }
+    }, 180);
   });
 }
 
@@ -4853,11 +5004,48 @@ async function exportDoctorCredentials() {
   }
 }
 
+async function createAllDoctorAccounts(button) {
+  const existing = new Set(APP_USERS.filter(user => user.role === "doctor" && user.doctorId).map(user => user.doctorId));
+  const missingDoctorIds = Object.keys(DB.doctors).filter(doctorId => !existing.has(doctorId));
+  if (!missingDoctorIds.length) {
+    toast("Доступы уже созданы для всех врачей");
+    return;
+  }
+  if (!confirm(`Создать доступы для ${missingDoctorIds.length} врачей? Логином будет фамилия, временные пароли попадут в Excel.`)) return;
+  const failures = [];
+  let created = 0;
+  button.disabled = true;
+  for (let index = 0; index < missingDoctorIds.length; index++) {
+    const doctorId = missingDoctorIds[index];
+    button.textContent = `Создаю ${index + 1} из ${missingDoctorIds.length}…`;
+    try {
+      const issued = await DESKTOP_API.createDoctorUser({ doctorId });
+      rememberIssuedDoctorCredential(issued);
+      created++;
+    } catch (error) {
+      failures.push(`${doctorName(doctorId)}: ${error.message}`);
+    }
+    await new Promise(resolve => requestAnimationFrame(resolve));
+  }
+  APP_USERS = await DESKTOP_API.listUsers();
+  if (failures.length) {
+    toast(`Создано доступов: ${created}. Ошибок: ${failures.length}. Первая: ${failures[0]}`, true);
+  } else {
+    toast(`Доступы созданы для ${created} врачей. Теперь выгрузите Excel.`);
+  }
+  renderUserManagement();
+}
+
 function renderUserManagement() {
   const host = document.getElementById("userManagement");
   if (!host || !APP_AUTH || APP_AUTH.user.role !== "admin") return;
   const doctorUsers = new Map(APP_USERS.filter(user => user.role === "doctor").map(user => [user.doctorId, user]));
-  const rows = Object.keys(DB.doctors).sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru")).map(doctorId => {
+  const allDoctorIds = Object.keys(DB.doctors).sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru"));
+  const filter = UI.userFilter.trim().toLocaleLowerCase("ru-RU");
+  const visibleDoctorIds = allDoctorIds.filter(doctorId => !filter
+    || doctorName(doctorId).toLocaleLowerCase("ru-RU").includes(filter)
+    || doctorStructureLabel(doctorId).toLocaleLowerCase("ru-RU").includes(filter));
+  const rows = visibleDoctorIds.map(doctorId => {
     const user = doctorUsers.get(doctorId);
     if (!user) {
       return `<tr data-account-doctor="${esc(doctorId)}"><td><b>${esc(doctorName(doctorId))}</b><br><span class="small muted">${esc(doctorStructureLabel(doctorId))}</span></td>
@@ -4872,9 +5060,14 @@ function renderUserManagement() {
       <td><div class="user-account-actions"><button class="btn mini" data-reset-doctor-password>Новый пароль</button>
         <button class="btn mini ${user.active ? "danger" : "primary"}" data-toggle-doctor-account data-active="${user.active ? "0" : "1"}>${user.active ? "Отключить" : "Включить"}</button></div></td></tr>`;
   }).join("");
-  host.innerHTML = `<div class="card"><h2>🔐 Учётные записи врачей</h2>
-    <p class="small muted">Нажмите «Создать доступ»: логином станет фамилия, а временный пароль приложение создаст само. При одинаковых фамилиях к логину добавится номер.</p>
-    <div class="user-management-toolbar"><button class="btn primary" data-export-doctor-credentials>Выгрузить логины и пароли в Excel</button><span class="small muted">Файл сохраняется в папку «Результаты».</span></div>
+  host.innerHTML = `<div class="card"><h2>🔐 Доступы врачей</h2>
+    <p class="settings-section-intro small muted">Быстрый порядок работы: создайте недостающие доступы, затем выгрузите один Excel. Логин — фамилия; при совпадении добавляется номер.</p>
+    <div class="user-management-toolbar">
+      <button class="btn" data-create-all-doctor-accounts>Создать недостающие доступы</button>
+      <button class="btn primary" data-export-doctor-credentials>Выгрузить логины и пароли в Excel</button>
+      <input type="search" data-user-filter placeholder="Найти врача…" value="${esc(UI.userFilter)}">
+      <span class="small muted">Показано ${visibleDoctorIds.length} из ${allDoctorIds.length}</span>
+    </div>
     <div style="overflow-x:auto"><table class="data user-management-table"><tr><th>Врач</th><th>Логин</th><th>Состояние и новый пароль</th><th></th></tr>${rows}</table></div>
   </div>`;
   host.querySelectorAll("[data-create-doctor-account]").forEach(button => button.addEventListener("click", async () => {
@@ -4914,6 +5107,22 @@ function renderUserManagement() {
   }));
   const exportButton = host.querySelector("[data-export-doctor-credentials]");
   if (exportButton) exportButton.addEventListener("click", exportDoctorCredentials);
+  const createAllButton = host.querySelector("[data-create-all-doctor-accounts]");
+  if (createAllButton) createAllButton.addEventListener("click", () => createAllDoctorAccounts(createAllButton));
+  const filterInput = host.querySelector("[data-user-filter]");
+  if (filterInput) filterInput.addEventListener("input", () => {
+    UI.userFilter = filterInput.value;
+    clearTimeout(settingsFilterTimer);
+    settingsFilterTimer = setTimeout(() => {
+      if (UI.settingsSection !== "access") return;
+      renderUserManagement();
+      const nextInput = document.querySelector("[data-user-filter]");
+      if (nextInput) {
+        nextInput.focus();
+        nextInput.setSelectionRange(nextInput.value.length, nextInput.value.length);
+      }
+    }, 140);
+  });
 }
 
 /* --- отделения и специализации --- */
@@ -5345,6 +5554,18 @@ async function mergeSelected() {
       return;
     }
   }
+  const intendedTarget = ids.reduce((a, b) => (DB.doctors[b].name.length > DB.doctors[a].name.length ? b : a));
+  if (DESKTOP_API) {
+    try {
+      await DESKTOP_API.rebindDoctorUsers({
+        sourceDoctorIds: ids.filter(id => id !== intendedTarget),
+        targetDoctorId: intendedTarget,
+      });
+    } catch (error) {
+      toast("Объединение отменено: не удалось безопасно перенести доступ врача — " + error.message, true);
+      return;
+    }
+  }
   const target = mergeDoctors(ids);
   await saveLocal();
   toast("Склеено: " + doctorName(target));
@@ -5440,6 +5661,8 @@ async function initApp() {
     document.getElementById("btnDoctorLogout").addEventListener("click", logoutApplication);
     document.getElementById("btnDoctorChangePassword").addEventListener("click", () => openPasswordDialog(false));
     document.getElementById("doctorViewerPeriod").addEventListener("change", loadDoctorViewerPeriod);
+    document.getElementById("btnDoctorPreviousPeriod").addEventListener("click", () => navigateDoctorViewerPeriod(1));
+    document.getElementById("btnDoctorNextPeriod").addEventListener("click", () => navigateDoctorViewerPeriod(-1));
     document.getElementById("btnConfirmPasswordChange").addEventListener("click", confirmPasswordChange);
     document.getElementById("changePasswordDialog").addEventListener("cancel", event => {
       if (event.currentTarget.dataset.force === "1") event.preventDefault();
@@ -5472,12 +5695,32 @@ async function initApp() {
     return;
   }
   if (DESKTOP_API && APP_AUTH.user.role === "doctor") {
-    await showDoctorViewer(APP_AUTH);
-    if (APP_AUTH.user.mustChangePassword) openPasswordDialog(true);
+    if (APP_AUTH.user.mustChangePassword) {
+      showDoctorPasswordGate(APP_AUTH);
+      openPasswordDialog(true);
+    } else {
+      await showDoctorViewer(APP_AUTH);
+    }
     return;
   }
   switchTab("data");
 }
+
+document.addEventListener("toggle", event => {
+  const details = event.target;
+  if (!(details instanceof HTMLDetailsElement)) return;
+  if (details.dataset.listKey) {
+    if (details.classList.contains("doctor-semantic-section")) {
+      rememberDoctorSectionToggle(details.dataset.listKey, details.open);
+    } else {
+      rememberListToggle(details.dataset.listKey, details.open);
+    }
+  }
+  if (details.dataset.sk) {
+    if (!UI.setOpen) UI.setOpen = {};
+    UI.setOpen[details.dataset.sk] = details.open;
+  }
+}, true);
 
 document.addEventListener("DOMContentLoaded", () => {
   initApp().catch(error => {

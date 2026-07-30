@@ -239,7 +239,7 @@ test("PDF export waits for a modal selection of exact reports", () => {
   assert.match(template, /id="pdfExportClearAll"/);
   assert.match(template, /id="pdfExportDialogCancel"/);
   assert.match(template, /id="pdfExportDialogStart"/);
-  assert.match(template, /Экспорт начнётся только после подтверждения выбора/);
+  assert.match(template, /«Выгрузить PDF» отдельно предложит выбрать нужные отчёты/);
   assert.match(ui, /btnExportAllPdf"\)\.addEventListener\("click", openPdfExportDialog\)/);
   assert.doesNotMatch(ui, /btnExportAllPdf"\)\.addEventListener\("click", exportAllReportsToFolder\)/);
   assert.match(ui, /data-pdf-target-index/);
@@ -721,7 +721,7 @@ test("local authentication, protected publications and right-side comments are w
   const main = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const database = fs.readFileSync(path.join(root, "desktop", "services", "database.cjs"), "utf8");
 
-  for (const id of ["authScreen", "doctorLoginSearch", "doctorViewer", "btnPublishReports", "userManagement", "changePasswordDialog"]) {
+  for (const id of ["authScreen", "doctorLoginSearch", "doctorViewer", "btnDoctorPreviousPeriod", "btnDoctorNextPeriod", "btnPublishReports", "settingsNavigation", "userManagement", "changePasswordDialog"]) {
     assert.match(template, new RegExp(`id="${id}"`));
   }
   assert.match(ui, /function searchDoctorLoginCandidates/);
@@ -729,6 +729,9 @@ test("local authentication, protected publications and right-side comments are w
   assert.match(ui, /function composePublishedHtml/);
   assert.match(ui, /function wrapAnalyticCards/);
   assert.match(ui, /function exportDoctorCredentials/);
+  assert.match(ui, /function createAllDoctorAccounts/);
+  assert.match(ui, /function saveVisibleCommentDrafts/);
+  assert.match(ui, /data-analytics-block-key="overview"/);
   assert.match(ui, /Выгрузить логины и пароли в Excel/);
   assert.doesNotMatch(ui, /class="account-password"/);
   assert.match(css, /\.commented-analytic-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+340px/);
@@ -737,7 +740,7 @@ test("local authentication, protected publications and right-side comments are w
   assert.match(preload, /getPublishedPage:\s*payload\s*=>\s*invoke\("viewer:page"/);
   assert.match(preload, /issueDoctorCredentials:\s*payload\s*=>\s*invoke\("admin:issue-credentials"/);
   assert.match(preload, /exportDoctorCredentialsXlsx:\s*payload\s*=>\s*invoke\("admin:export-credentials-xlsx"/);
-  assert.match(main, /ipcMain\.handle\("viewer:page"[\s\S]*?authService\.require\("doctor"\)/);
+  assert.match(main, /ipcMain\.handle\("viewer:page"[\s\S]*?authService\.requireDoctorReady\(\)/);
   assert.match(main, /ipcMain\.handle\("database:save"[\s\S]*?authService\.require\("admin"\)/);
   assert.doesNotMatch(main, /mainWindow\.on\("close"|event\.preventDefault\(\)[\s\S]*?app:prepare-close/);
   assert.doesNotMatch(preload, /app:prepare-close|app:close-ready/);

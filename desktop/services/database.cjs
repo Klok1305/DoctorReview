@@ -21,6 +21,15 @@ function parseJson(json, fallback) {
   try { return JSON.parse(json); } catch (_) { return fallback; }
 }
 
+function doctorLoginBase(displayName) {
+  return String(displayName || "")
+    .trim()
+    .split(/\s+/)[0]
+    .toLocaleLowerCase("ru-RU")
+    .replace(/[^a-zа-яё0-9_-]+/gi, "")
+    .slice(0, 40);
+}
+
 class DatabaseService {
   constructor(databasePath) {
     this.databasePath = null;
@@ -449,6 +458,80 @@ class DatabaseService {
     }));
   }
 
+  syncDoctorUserIdentities() {
+    const doctors = new Map(
+      this.db.prepare("SELECT id, data_json FROM doctors").all()
+        .map(row => [row.id, parseJson(row.data_json, {})]),
+    );
+    const users = this.db.prepare("SELECT id, username, display_name, doctor_id FROM users WHERE role = 'doctor'").all();
+    const occupied = new Set(
+      this.db.prepare("SELECT username FROM users").all()
+        .map(row => String(row.username).toLocaleLowerCase("ru-RU")),
+    );
+    const update = this.db.prepare("UPDATE users SET username = ?, display_name = ?, updated_at = ? WHERE id = ?");
+    let changed = 0;
+    this.#transaction(() => {
+      for (const user of users) {
+        const doctor = doctors.get(user.doctor_id);
+        if (!doctor) continue;
+        const displayName = String(doctor.name || user.display_name || "Врач").trim();
+        let username = String(user.username || "").trim();
+        if (/^doctor_/i.test(username)) {
+          occupied.delete(username.toLocaleLowerCase("ru-RU"));
+          const base = doctorLoginBase(displayName);
+          if (base) {
+            username = base;
+            let suffix = 2;
+            while (occupied.has(username.toLocaleLowerCase("ru-RU"))) {
+              const number = String(suffix++);
+              username = `${base.slice(0, Math.max(1, 40 - number.length))}${number}`;
+            }
+            occupied.add(username.toLocaleLowerCase("ru-RU"));
+          }
+        }
+        if (username !== user.username || displayName !== user.display_name) {
+          update.run(username, displayName, new Date().toISOString(), Number(user.id));
+          changed++;
+        }
+      }
+    });
+    return changed;
+  }
+
+  rebindDoctorUsers({ sourceDoctorIds, targetDoctorId }) {
+    const sources = [...new Set((sourceDoctorIds || []).map(String))]
+      .filter(id => id && id !== String(targetDoctorId));
+    const target = String(targetDoctorId || "");
+    if (!target || !sources.length) return { moved: 0 };
+    const targetDoctor = this.db.prepare("SELECT data_json FROM doctors WHERE id = ?").get(target);
+    if (!targetDoctor) throw new Error("Итоговая карточка врача не найдена");
+    const sourceUsers = this.db.prepare(`
+      SELECT * FROM users WHERE role = 'doctor' AND doctor_id IN (${sources.map(() => "?").join(",")})
+    `).all(...sources);
+    const targetUser = this.db.prepare("SELECT * FROM users WHERE role = 'doctor' AND doctor_id = ?").get(target);
+    if (sourceUsers.length > 1 || (sourceUsers.length && targetUser)) {
+      throw new Error("У объединяемых карточек несколько учётных записей. Сначала оставьте одну активную запись врача.");
+    }
+    if (!sourceUsers.length) return { moved: 0 };
+    const doctor = parseJson(targetDoctor.data_json, {});
+    const userId = Number(sourceUsers[0].id);
+    const displayName = String(doctor.name || sourceUsers[0].display_name || "Врач").trim();
+    const base = doctorLoginBase(displayName);
+    if (!base) throw new Error("Не удалось сформировать логин из фамилии итогового врача");
+    let username = base;
+    let suffix = 2;
+    const occupied = this.db.prepare("SELECT 1 FROM users WHERE username = ? COLLATE NOCASE AND id <> ?");
+    while (occupied.get(username, userId)) {
+      const number = String(suffix++);
+      username = `${base.slice(0, Math.max(1, 40 - number.length))}${number}`;
+    }
+    this.#transaction(() => {
+      this.db.prepare("UPDATE users SET doctor_id = ?, username = ?, display_name = ?, updated_at = ? WHERE id = ?")
+        .run(target, username, displayName, new Date().toISOString(), userId);
+    });
+    return { moved: 1, userId, doctorId: target, username };
+  }
+
   updateUserPassword(id, { passwordHash, passwordSalt, passwordParams, mustChangePassword = false }) {
     this.db.prepare(`
       UPDATE users
@@ -665,9 +748,16 @@ class DatabaseService {
       SELECT pp.page_type, pp.scope_id, pp.title, pp.html, p.period_key, p.version, p.created_at
       FROM published_pages pp
       JOIN publications p ON p.id = pp.publication_id
-      WHERE pp.doctor_id = ? AND p.period_key = ? AND pp.page_type = ?
-      ORDER BY p.version DESC LIMIT 1
-    `).get(String(doctorId), String(periodKey), String(pageType));
+      WHERE pp.doctor_id = ? AND pp.page_type = ? AND pp.publication_id = (
+        SELECT p2.id
+        FROM publications p2
+        JOIN published_pages pp2 ON pp2.publication_id = p2.id
+        WHERE p2.period_key = ? AND pp2.doctor_id = ?
+        ORDER BY p2.version DESC
+        LIMIT 1
+      )
+      LIMIT 1
+    `).get(String(doctorId), String(pageType), String(periodKey), String(doctorId));
     return row ? {
       pageType: row.page_type,
       scopeId: row.scope_id,
@@ -799,11 +889,25 @@ class DatabaseService {
   async backupTo(destination) {
     const target = path.resolve(destination);
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    if (fs.existsSync(target)) fs.rmSync(target, { force: true });
-    await backup(this.db, target);
-    const preview = DatabaseService.inspect(target);
-    if (!preview.ok) throw new Error("Проверка резервной копии не пройдена");
-    return preview;
+    const staged = `${target}.part-${process.pid}-${Date.now()}`;
+    const previous = `${target}.previous-${process.pid}-${Date.now()}`;
+    try {
+      await backup(this.db, staged);
+      const preview = DatabaseService.inspect(staged);
+      if (!preview.ok) throw new Error("Проверка резервной копии не пройдена");
+      if (fs.existsSync(target)) fs.renameSync(target, previous);
+      try {
+        fs.renameSync(staged, target);
+      } catch (error) {
+        if (fs.existsSync(previous)) fs.renameSync(previous, target);
+        throw error;
+      }
+      if (fs.existsSync(previous)) fs.rmSync(previous, { force: true });
+      return preview;
+    } finally {
+      if (fs.existsSync(staged)) fs.rmSync(staged, { force: true });
+      if (fs.existsSync(previous) && !fs.existsSync(target)) fs.renameSync(previous, target);
+    }
   }
 
   static inspect(databasePath) {
