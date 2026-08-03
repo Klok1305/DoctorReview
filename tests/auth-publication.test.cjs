@@ -16,7 +16,6 @@ function snapshot() {
     settings: { showScores: true, depts: {} },
     doctors: {
       d1: { name: "Тестов Врач", aliases: [], department: "Терапия", specialization: "Кардиология" },
-      d2: { name: "Другая Врач", aliases: [], department: "Терапия", specialization: "Неврология" },
     },
     months: { "2026-01": { vyrabotka: {}, kb: {}, naznach: {}, pervichka: {}, prostoy: {}, zapis: {}, manual6: {} } },
     dynamicNotes: {},
@@ -25,7 +24,7 @@ function snapshot() {
 }
 
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-auth-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-admin-auth-"));
   const config = new ConfigStore({ userDataDir: path.join(root, "config"), documentsDir: path.join(root, "documents") });
   config.setWorkspaceRoot(path.join(root, "workspace"));
   const database = new DatabaseService(config.databasePath());
@@ -43,112 +42,56 @@ test("password may contain any single character but cannot be empty", () => {
   assert.throws(() => validatePassword(""), /не может быть пустым/);
 });
 
-test("administrator setup accepts a short password and doctor credentials are generated from the surname", t => {
+test("administrator can be created, authenticated and change the password", t => {
   const { database, auth } = fixture(t);
   const setup = auth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "1" });
   assert.equal(setup.user.role, "admin");
-  const doctor = auth.createDoctorUser({
-    doctorId: "d1",
-    displayName: "Тестов Врач",
-  });
-  assert.equal(doctor.mustChangePassword, true);
-  assert.equal(doctor.username, "тестов");
-  assert.match(doctor.temporaryPassword, /^\d{6}$/);
-  const raw = database.getUserById(doctor.id);
-  assert.notEqual(raw.password_hash, doctor.temporaryPassword);
-  assert.equal(verifyPassword(doctor.temporaryPassword, raw), true);
-  assert.equal(Object.hasOwn(doctor, "passwordHash"), false);
+  assert.equal(database.hasAdminUser(), true);
+  assert.equal(verifyPassword("1", database.getUserById(setup.user.id)), true);
 
   auth.logout();
-  const candidates = database.listDoctorLoginCandidates("тест");
-  assert.equal(candidates.length, 1);
-  assert.equal(candidates[0].department, "Терапия");
-  const loggedIn = auth.login({ userId: doctor.id, password: doctor.temporaryPassword });
-  assert.equal(loggedIn.user.doctorId, "d1");
-  auth.changePassword({ currentPassword: doctor.temporaryPassword, newPassword: "я" });
-  assert.equal(database.getUserById(doctor.id).must_change_password, 0);
-});
-
-test("identical doctor surnames get a numeric login suffix", t => {
-  const { auth } = fixture(t);
-  auth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "1" });
-  const first = auth.createDoctorUser({ doctorId: "d1", displayName: "Иванов Первый" });
-  const second = auth.createDoctorUser({ doctorId: "d2", displayName: "Иванов Второй" });
-  assert.equal(first.username, "иванов");
-  assert.equal(second.username, "иванов2");
-});
-
-test("doctor cannot read publications until the temporary password is changed", t => {
-  const { auth } = fixture(t);
-  auth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "1" });
-  const doctor = auth.createDoctorUser({ doctorId: "d1", displayName: "Тестов Врач" });
+  const loggedIn = auth.login({ username: "boss", password: "1" });
+  assert.equal(loggedIn.user.displayName, "Руководитель");
+  auth.changePassword({ currentPassword: "1", newPassword: "новый" });
   auth.logout();
-  auth.login({ userId: doctor.id, password: doctor.temporaryPassword });
-  assert.throws(() => auth.requireDoctorReady(), /заменить временный пароль/);
-  auth.changePassword({ currentPassword: doctor.temporaryPassword, newPassword: "я" });
-  assert.equal(auth.requireDoctorReady().doctorId, "d1");
+  assert.equal(auth.login({ username: "boss", password: "новый" }).user.role, "admin");
 });
 
-test("legacy doctor logins and merged doctor bindings stay aligned with the final surname", t => {
+test("legacy doctor accounts remain stored but cannot authenticate in the admin build", t => {
   const { database, auth } = fixture(t);
-  auth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "1" });
-  const doctor = auth.createDoctorUser({ doctorId: "d1", displayName: "Тестов Врач" });
-  database.db.prepare("UPDATE users SET username = 'doctor_d1' WHERE id = ?").run(doctor.id);
-  assert.equal(database.syncDoctorUserIdentities(), 1);
-  assert.equal(database.getUserById(doctor.id).username, "тестов");
+  database.createUser({
+    username: "legacy-doctor",
+    displayName: "Старый врач",
+    role: "doctor",
+    doctorId: "d1",
+    passwordHash: "legacy",
+    passwordSalt: "legacy",
+    passwordParams: "{}",
+  });
 
-  const moved = database.rebindDoctorUsers({ sourceDoctorIds: ["d1"], targetDoctorId: "d2" });
-  assert.equal(moved.moved, 1);
-  assert.equal(moved.username, "другая");
-  assert.equal(database.getUserById(doctor.id).doctor_id, "d2");
-  assert.equal(database.getUserById(doctor.id).display_name, "Другая Врач");
+  assert.equal(auth.status().needsSetup, true, "a doctor-only legacy database still needs an administrator");
+  assert.throws(() => auth.login({ username: "legacy-doctor", password: "anything" }), /только администратору/);
+  assert.equal(typeof auth.createDoctorUser, "undefined");
+  assert.equal(typeof auth.requireDoctorReady, "undefined");
+
+  auth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "admin" });
+  assert.equal(database.listUsers().length, 2, "legacy rows are preserved for backup compatibility");
 });
 
-test("five failed password attempts lock the doctor account", t => {
+test("five failed administrator password attempts lock the account", t => {
   const { auth } = fixture(t);
-  auth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "1" });
-  const doctor = auth.createDoctorUser({
-    doctorId: "d1",
-    displayName: "Тестов Врач",
-  });
+  auth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "correct" });
   auth.logout();
   for (let attempt = 1; attempt <= 4; attempt++) {
-    assert.throws(() => auth.login({ userId: doctor.id, password: "WrongPassword1" }), /Неверный/);
+    assert.throws(() => auth.login({ username: "boss", password: "wrong" }), /Неверный/);
   }
-  assert.throws(() => auth.login({ userId: doctor.id, password: "WrongPassword1" }), /заблокирован/);
-  assert.throws(() => auth.login({ userId: doctor.id, password: doctor.temporaryPassword }), /временно заблокирован/);
+  assert.throws(() => auth.login({ username: "boss", password: "wrong" }), /заблокирован/);
+  assert.throws(() => auth.login({ username: "boss", password: "correct" }), /временно заблокирован/);
 });
 
-test("a newer publication never leaks a page left over from an older publication bundle", t => {
-  const { database, auth } = fixture(t);
-  const admin = auth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "1" }).user;
-  database.publish({
-    periodKey: "2026-01",
-    createdBy: admin.id,
-    pages: [
-      { doctorId: "d1", pageType: "doctor", scopeId: "d1", title: "Врач", html: "<div>Врач v1</div>" },
-      { doctorId: "d1", pageType: "specialization", scopeId: "Кардиология", title: "Специализация", html: "<div>Специализация v1</div>" },
-    ],
-  });
-  database.publish({
-    periodKey: "2026-01",
-    createdBy: admin.id,
-    pages: [
-      { doctorId: "d1", pageType: "doctor", scopeId: "d1", title: "Врач", html: "<div>Врач v2</div>" },
-    ],
-  });
-  assert.match(database.getPublishedPage({ doctorId: "d1", periodKey: "2026-01", pageType: "doctor" }).html, /v2/);
-  assert.equal(database.getPublishedPage({ doctorId: "d1", periodKey: "2026-01", pageType: "specialization" }), null);
-});
-
-test("comments and immutable published pages survive a portable backup", async t => {
+test("administrative comments and legacy publications survive a portable backup", async t => {
   const { root, config, database, auth } = fixture(t);
-  const setup = auth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "SecureAdmin2026" });
-  const adminId = setup.user.id;
-  auth.createDoctorUser({
-    doctorId: "d1",
-    displayName: "Тестов Врач",
-  });
+  const adminId = auth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "SecureAdmin2026" }).user.id;
   database.saveCommentDraft({
     scopeType: "doctor",
     scopeId: "d1",
@@ -161,45 +104,25 @@ test("comments and immutable published pages survive a portable backup", async t
   database.publish({
     periodKey: "2026-01",
     createdBy: adminId,
-    pages: [{
-      doctorId: "d1",
-      pageType: "doctor",
-      scopeId: "d1",
-      title: "Личный отчёт",
-      html: '<div class="card">Опубликованная версия 1</div>',
-    }],
+    pages: [{ doctorId: "d1", pageType: "doctor", scopeId: "d1", title: "Архивный отчёт", html: "<div>Версия 1</div>" }],
   });
-  const firstPage = database.getPublishedPage({ doctorId: "d1", periodKey: "2026-01", pageType: "doctor" });
-  database.publish({
-    periodKey: "2026-01",
-    createdBy: adminId,
-    pages: [{
-      doctorId: "d1",
-      pageType: "doctor",
-      scopeId: "d1",
-      title: "Личный отчёт",
-      html: '<div class="card">Опубликованная версия 2</div>',
-    }],
-  });
-  assert.match(firstPage.html, /версия 1/);
-  assert.match(database.getPublishedPage({ doctorId: "d1", periodKey: "2026-01", pageType: "doctor" }).html, /версия 2/);
 
   const backups = new BackupService({ database, configStore: config });
   const portable = path.join(root, "complete.ovbackup");
   await backups.createPortable(portable);
   const preview = DatabaseService.inspect(portable);
-  assert.equal(preview.users, 2);
+  assert.equal(preview.users, 1);
   assert.equal(preview.comments, 1);
-  assert.equal(preview.publications, 2);
+  assert.equal(preview.publications, 1);
 
   database.archiveComment(1, adminId);
   await backups.restore(portable);
   assert.equal(database.listComments({ periodKey: "2026-01" })[0].status, "published");
-  assert.match(database.getPublishedPage({ doctorId: "d1", periodKey: "2026-01", pageType: "doctor" }).html, /версия 2/);
+  assert.match(database.getPublishedPage({ doctorId: "d1", periodKey: "2026-01", pageType: "doctor" }).html, /Версия 1/);
 });
 
-test("a full backup from one installation restores users, comments and publications into a clean installation", async t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-transfer-"));
+test("a full backup restores data but keeps the target installation paths", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-admin-transfer-"));
   const sourceConfig = new ConfigStore({
     userDataDir: path.join(root, "source-config"),
     documentsDir: path.join(root, "source-documents"),
@@ -221,63 +144,28 @@ test("a full backup from one installation restores users, comments and publicati
   sourceDatabase.saveSnapshot(snapshot());
   const sourceAuth = new AuthService({ database: sourceDatabase });
   const admin = sourceAuth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "admin" }).user;
-  const doctor = sourceAuth.createDoctorUser({ doctorId: "d1", displayName: "Тестов Врач" });
-  const commentFixtures = [
-    { scopeType: "department", scopeId: "Терапия", blockKey: "department.overview", text: "Комментарий отделения" },
-    { scopeType: "specialization", scopeId: "Кардиология", blockKey: "specialization.overview", text: "Комментарий специализации" },
-    { scopeType: "doctor", scopeId: "d1", blockKey: "doctor.overview", text: "Личный комментарий" },
-  ];
-  for (const item of commentFixtures) {
-    sourceDatabase.saveCommentDraft({
-      scopeType: item.scopeType,
-      scopeId: item.scopeId,
-      periodKey: "2026-01",
-      blockKey: item.blockKey,
-      bodyHtml: `<p>${item.text}</p>`,
-      bodyText: item.text,
-      authorUserId: admin.id,
-    });
-  }
-  sourceDatabase.publish({
+  sourceDatabase.saveCommentDraft({
+    scopeType: "department",
+    scopeId: "Терапия",
     periodKey: "2026-01",
-    createdBy: admin.id,
-    pages: [
-      { doctorId: "d1", pageType: "department", scopeId: "Терапия", title: "Отделение", html: "<div>Комментарий отделения</div>" },
-      { doctorId: "d1", pageType: "specialization", scopeId: "Кардиология", title: "Специализация", html: "<div>Комментарий специализации</div>" },
-      { doctorId: "d1", pageType: "doctor", scopeId: "d1", title: "Врач", html: "<div>Личный комментарий</div>" },
-    ],
+    blockKey: "department.overview",
+    bodyHtml: "<p>Комментарий отделения</p>",
+    bodyText: "Комментарий отделения",
+    authorUserId: admin.id,
   });
   sourceDatabase.recordImport({
     source: { sha256: "b".repeat(64), path: "C:\\1C\\report.xlsx", name: "report.xlsx", size: 100 },
     log: { status: "загружено", type: "vyrabotka", month: "2026-01", doctor: "Тестов Врач" },
   });
 
-  assert.equal(targetDatabase.hasUsers(), false);
-  assert.equal(targetDatabase.listComments({ periodKey: "2026-01" }).length, 0);
   const portable = path.join(root, "transfer.ovbackup");
   await new BackupService({ database: sourceDatabase, configStore: sourceConfig }).createPortable(portable);
   const targetWorkspace = targetConfig.publicConfig().workspaceRoot;
   const restored = await new BackupService({ database: targetDatabase, configStore: targetConfig }).restore(portable);
 
-  assert.equal(restored.preview.users, 2);
-  assert.equal(restored.preview.comments, 3);
-  assert.equal(restored.preview.publications, 1);
+  assert.equal(restored.preview.users, 1);
+  assert.equal(restored.preview.comments, 1);
   assert.equal(targetConfig.publicConfig().workspaceRoot, targetWorkspace);
-  assert.deepEqual(
-    targetDatabase.listComments({ periodKey: "2026-01" }).map(item => item.bodyText).sort(),
-    commentFixtures.map(item => item.text).sort(),
-  );
-  assert.equal(targetDatabase.db.prepare("SELECT COUNT(*) AS n FROM comment_versions").get().n, 6);
   assert.equal(targetDatabase.db.prepare("SELECT COUNT(*) AS n FROM import_events").get().n, 1);
-
-  const targetAuth = new AuthService({ database: targetDatabase });
-  const loggedIn = targetAuth.login({ userId: doctor.id, password: doctor.temporaryPassword });
-  assert.equal(loggedIn.user.doctorId, "d1");
-  assert.throws(() => targetAuth.requireDoctorReady(), /заменить временный пароль/);
-  targetAuth.changePassword({ currentPassword: doctor.temporaryPassword, newPassword: "1" });
-  assert.match(targetDatabase.getPublishedPage({
-    doctorId: targetAuth.requireDoctorReady().doctorId,
-    periodKey: "2026-01",
-    pageType: "doctor",
-  }).html, /Личный комментарий/);
+  assert.equal(new AuthService({ database: targetDatabase }).login({ username: "boss", password: "admin" }).user.role, "admin");
 });

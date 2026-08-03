@@ -31,6 +31,6 @@ if ($SmokeTest) {
   Invoke-Pnpm @("run", "test:smoke")
   Invoke-Pnpm @("run", "test:pdf")
 }
-Invoke-Pnpm @("run", "dist:all")
+Invoke-Pnpm @("run", "dist")
 
-Write-Host "Done. Installer and portable packages are in $root\dist"
+Write-Host "Done. The administrator installer is in $root\dist"

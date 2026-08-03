@@ -55,8 +55,8 @@ jobs:
       - name: Запустить тесты
         run: pnpm test
 
-      - name: Собрать установщики
-        run: pnpm run dist:all
+      - name: Собрать администраторский установщик
+        run: pnpm run dist
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
@@ -71,9 +71,8 @@ jobs:
           $version = (Get-Content -Raw package.json | ConvertFrom-Json).version
           $displayVersion = $version -replace '\.0$', ''
           $assets = @(
-            "dist/DoctorReview-Setup-$version-x64.exe",
-            "dist/DoctorReview-Setup-$version-x64.exe.blockmap",
-            "dist/DoctorReview-Portable-$version-x64.exe",
+            "dist/DoctorReview-Admin-Setup-$version-x64.exe",
+            "dist/DoctorReview-Admin-Setup-$version-x64.exe.blockmap",
             "dist/latest.yml"
           )
           foreach ($asset in $assets) {

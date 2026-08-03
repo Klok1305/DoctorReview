@@ -1,5 +1,6 @@
 "use strict";
 
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { DatabaseService } = require("./database.cjs");
@@ -27,6 +28,10 @@ function assertRestorableDatabase(filePath) {
   }
 }
 
+function fileSha256(filePath) {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
 class BackupService {
   constructor({ database, configStore, logger = () => {} }) {
     this.database = database;
@@ -47,8 +52,9 @@ class BackupService {
   async createPortable(destination) {
     const target = path.resolve(destination);
     const preview = await this.database.backupTo(target);
-    this.logger("portable-backup-created", { target, preview });
-    return { path: target, preview };
+    const sha256 = fileSha256(target);
+    this.logger("portable-backup-created", { target, sha256, preview });
+    return { path: target, sha256, preview };
   }
 
   preview(sourcePath) {
@@ -131,4 +137,4 @@ class BackupService {
   }
 }
 
-module.exports = { BackupService, timestamp, isSqliteSidecar };
+module.exports = { BackupService, timestamp, isSqliteSidecar, fileSha256 };

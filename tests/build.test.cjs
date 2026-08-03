@@ -90,7 +90,7 @@ test("assembled HTML is reproducible and complete", () => {
     assert.match(actual, new RegExp(profileMetric));
   }
   assert.doesNotMatch(actual, /📅 Количество визитов за месяц/);
-  assert.match(actual, /<title>Пульс клиники<\/title>/);
+  assert.match(actual, /<title>Пульс клиники — Администратор<\/title>/);
   assert.match(actual, /class="logo-work">Пульс<\/span>/);
   assert.match(actual, /class="logo-doctors">клиники<\/span>/);
   assert.match(actual, /Загрузка расписания/);
@@ -239,7 +239,7 @@ test("PDF export waits for a modal selection of exact reports", () => {
   assert.match(template, /id="pdfExportClearAll"/);
   assert.match(template, /id="pdfExportDialogCancel"/);
   assert.match(template, /id="pdfExportDialogStart"/);
-  assert.match(template, /«Выгрузить PDF» отдельно предложит выбрать нужные отчёты/);
+  assert.match(template, /«Выгрузить PDF» предложит выбрать нужные отчёты/);
   assert.match(ui, /btnExportAllPdf"\)\.addEventListener\("click", openPdfExportDialog\)/);
   assert.doesNotMatch(ui, /btnExportAllPdf"\)\.addEventListener\("click", exportAllReportsToFolder\)/);
   assert.match(ui, /data-pdf-target-index/);
@@ -415,9 +415,13 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.build.productName, "Пульс клиники");
-  assert.match(source, /const APP_NAME = "Пульс клиники"/);
-  assert.match(source, /legacyUserData[\s\S]*Оценка врачей/);
+  assert.equal(packageJson.version, "2.1.0");
+  assert.equal(packageJson.build.productName, "Пульс клиники — Администратор");
+  assert.equal(packageJson.build.artifactName, "DoctorReview-Admin-Setup-${version}-${arch}.${ext}");
+  assert.equal(packageJson.scripts["dist:portable"], undefined);
+  assert.equal(packageJson.scripts["dist:all"], undefined);
+  assert.match(source, /const APP_NAME = "Пульс клиники — Администратор"/);
+  assert.match(source, /previousUserData[\s\S]*Пульс клиники[\s\S]*Оценка врачей/);
   const visibleWindow = source.indexOf("mainWindow.show();");
   const firstRunPrompt = source.indexOf("promptForWorkspaceOnFirstRun().catch");
   assert.ok(visibleWindow >= 0, "the main window must be shown during startup");
@@ -732,7 +736,7 @@ test("client-base table shows overlapping groups and omits unavailable values", 
   assert.doesNotMatch(ui, /Клиентская база по настройкам специализаций|Порог \/ окно/);
 });
 
-test("local authentication, protected publications and right-side comments are wired end to end", () => {
+test("administrator-only authentication and right-side comments are wired without doctor sharing", () => {
   const template = fs.readFileSync(path.join(build, "index.template.html"), "utf8");
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
@@ -740,31 +744,26 @@ test("local authentication, protected publications and right-side comments are w
   const main = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const database = fs.readFileSync(path.join(root, "desktop", "services", "database.cjs"), "utf8");
 
-  for (const id of ["authScreen", "doctorLoginSearch", "doctorViewer", "btnDoctorPreviousPeriod", "btnDoctorNextPeriod", "btnPublishReports", "settingsNavigation", "userManagement", "changePasswordDialog"]) {
+  for (const id of ["authScreen", "adminLoginForm", "changePasswordDialog"]) {
     assert.match(template, new RegExp(`id="${id}"`));
   }
-  assert.match(ui, /function searchDoctorLoginCandidates/);
-  assert.match(ui, /function publishReportsAndComments/);
-  assert.match(ui, /function composePublishedHtml/);
+  for (const id of ["doctorLoginSearch", "doctorViewer", "btnDoctorPreviousPeriod", "btnDoctorNextPeriod", "btnPublishReports", "settingsNavigation", "userManagement"]) {
+    assert.doesNotMatch(template, new RegExp(`id="${id}"`));
+  }
+  assert.doesNotMatch(ui, /function searchDoctorLoginCandidates/);
+  assert.doesNotMatch(ui, /function publishReportsAndComments/);
+  assert.doesNotMatch(ui, /function composePublishedHtml/);
   assert.match(ui, /function wrapAnalyticCards/);
-  assert.match(ui, /function exportDoctorCredentials/);
-  assert.match(ui, /function createAllDoctorAccounts/);
-  assert.match(ui, /function saveVisibleCommentDrafts/);
+  assert.doesNotMatch(ui, /function exportDoctorCredentials/);
+  assert.doesNotMatch(ui, /function createAllDoctorAccounts/);
+  assert.doesNotMatch(ui, /function saveVisibleCommentDrafts/);
   assert.match(ui, /data-analytics-block-key="overview"/);
-  assert.match(ui, /Выгрузить логины и пароли в Excel/);
-  assert.match(ui, /Доступы врачей · \$\{activeDoctors\}\/\$\{totalDoctors\}/);
-  assert.match(ui, /class="user-access-readiness \$\{accessReady \? "ready" : "pending"\}"/);
-  assert.match(ui, /Готово \$\{activeDoctorCount\} из \$\{allDoctorIds\.length\}/);
-  assert.match(css, /\.user-access-readiness\.ready/);
-  assert.match(css, /\.user-access-readiness\.pending/);
-  assert.doesNotMatch(ui, /class="account-password"/);
+  assert.doesNotMatch(css, /\.doctor-viewer|\.doctor-login|\.user-access-readiness/);
   assert.match(css, /\.commented-analytic-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+340px/);
   assert.match(css, /@media \(max-width:\s*1100px\)[\s\S]*?\.commented-analytic-row\s*\{\s*grid-template-columns:\s*1fr/);
   assert.match(preload, /login:\s*payload\s*=>\s*invoke\("auth:login"/);
-  assert.match(preload, /getPublishedPage:\s*payload\s*=>\s*invoke\("viewer:page"/);
-  assert.match(preload, /issueDoctorCredentials:\s*payload\s*=>\s*invoke\("admin:issue-credentials"/);
-  assert.match(preload, /exportDoctorCredentialsXlsx:\s*payload\s*=>\s*invoke\("admin:export-credentials-xlsx"/);
-  assert.match(main, /ipcMain\.handle\("viewer:page"[\s\S]*?authService\.requireDoctorReady\(\)/);
+  assert.doesNotMatch(preload, /viewer:|doctor-candidates|doctor-user|issue-credentials|export-credentials|set-user-active|rebind-doctor/);
+  assert.doesNotMatch(main, /ipcMain\.handle\("(?:viewer:|publication:|auth:doctor|admin:(?:users|create-doctor|reset-password|issue-credentials|export-credentials|set-user-active|rebind-doctor))/);
   assert.match(main, /ipcMain\.handle\("database:save"[\s\S]*?authService\.require\("admin"\)/);
   assert.doesNotMatch(main, /mainWindow\.on\("close"|event\.preventDefault\(\)[\s\S]*?app:prepare-close/);
   assert.doesNotMatch(preload, /app:prepare-close|app:close-ready/);

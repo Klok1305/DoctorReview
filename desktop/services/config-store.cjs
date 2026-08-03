@@ -19,12 +19,17 @@ function ensureDirectory(directory) {
 
 function isUnsupportedStoragePath(targetPath) {
   if (typeof targetPath !== "string" || !targetPath.trim()) return false;
-  return path.resolve(targetPath).split(/[\\/]+/).some(part => /^onedrive(?:\s|\s*-|$)/i.test(part));
+  const value = targetPath.trim();
+  const isNetworkPath = /^(?:\\\\|\/\/|smb:\/\/)/i.test(value)
+    || /^\\\\\?\\UNC\\/i.test(value);
+  const isOneDrivePath = path.resolve(value).split(/[\\/]+/)
+    .some(part => /^onedrive(?:\s|\s*-|$)/i.test(part));
+  return isNetworkPath || isOneDrivePath;
 }
 
 function assertSupportedStoragePath(targetPath) {
   if (isUnsupportedStoragePath(targetPath)) {
-    throw new Error("Папки OneDrive нельзя использовать для рабочих данных: файловая система блокирует приложение. Выберите локальную папку вне OneDrive.");
+    throw new Error("Для рабочих данных разрешены только локальные папки вне OneDrive. Сетевые пути SMB/UNC не поддерживаются.");
   }
 }
 
@@ -41,16 +46,19 @@ function readJson(filePath) {
 }
 
 class ConfigStore {
-  constructor({ userDataDir, documentsDir }) {
+  constructor({ userDataDir, documentsDir, defaultWorkspaceRoot = null }) {
     this.userDataDir = ensureDirectory(userDataDir);
     this.documentsDir = documentsDir;
+    this.defaultWorkspaceRoot = defaultWorkspaceRoot ? path.resolve(defaultWorkspaceRoot) : null;
     this.configPath = path.join(this.userDataDir, "config.json");
     this.config = this.#load();
     this.ensureFolders();
   }
 
   #defaultRoot() {
-    return path.join(this.documentsDir, "Пульс клиники");
+    const root = this.defaultWorkspaceRoot || path.join(this.documentsDir, "Пульс клиники");
+    assertSupportedStoragePath(root);
+    return root;
   }
 
   #defaults(root = this.#defaultRoot()) {

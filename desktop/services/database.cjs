@@ -408,6 +408,10 @@ class DatabaseService {
     return this.db.prepare("SELECT 1 FROM users LIMIT 1").get() != null;
   }
 
+  hasAdminUser() {
+    return this.db.prepare("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1").get() != null;
+  }
+
   createUser({ username, displayName, role, doctorId = null, passwordHash, passwordSalt, passwordParams, mustChangePassword = false }) {
     const now = new Date().toISOString();
     const result = this.db.prepare(`

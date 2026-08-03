@@ -18,8 +18,6 @@ const UI = {
   repKbWin: 12,
   cmp: [null, null, null],
   staffFilter: "",
-  userFilter: "",
-  settingsSection: "calculation",
   openGroups: {},
   openLists: {},
   setDoctor: null,
@@ -37,10 +35,6 @@ const UI = {
 };
 
 let APP_AUTH = null;
-let APP_USERS = [];
-const ISSUED_DOCTOR_CREDENTIALS = new Map();
-let selectedDoctorLoginUserId = null;
-let doctorViewerState = { periods: [], pages: {}, periodKey: null, pageType: "department" };
 let reportRenderRevision = 0;
 let settingsFilterTimer = null;
 
@@ -58,7 +52,6 @@ function showAuthScreen(auth) {
   document.getElementById("authLogin").classList.toggle("hidden", auth.needsSetup);
   document.querySelector(".app-header").classList.add("hidden");
   document.querySelector("main").classList.add("hidden");
-  document.getElementById("doctorViewer").classList.add("hidden");
   showAuthError("");
   setTimeout(() => {
     const target = document.getElementById(auth.needsSetup ? "setupUsername" : "adminLoginUsername");
@@ -71,7 +64,6 @@ function showAdminApplication(auth) {
   document.getElementById("authScreen").classList.add("hidden");
   document.querySelector(".app-header").classList.remove("hidden");
   document.querySelector("main").classList.remove("hidden");
-  document.getElementById("doctorViewer").classList.add("hidden");
   const headerUser = document.getElementById("headerUser");
   headerUser.classList.remove("hidden");
   document.getElementById("headerUserName").textContent = auth.user.displayName;
@@ -80,7 +72,6 @@ function showAdminApplication(auth) {
 async function loadAdminApplication(auth) {
   const state = await DESKTOP_API.getAdminState();
   DESKTOP_STATE = Object.assign({}, DESKTOP_STATE || {}, state, { auth });
-  APP_USERS = state.users || [];
   if (state.snapshot && !applyLoadedDatabase(state.snapshot)) {
     throw new Error("Рабочая база создана несовместимой версией приложения");
   }
@@ -117,81 +108,18 @@ async function loginAdministrator(event) {
   }
 }
 
-async function searchDoctorLoginCandidates() {
-  const query = document.getElementById("doctorLoginSearch").value.trim();
-  const box = document.getElementById("doctorLoginResults");
-  selectedDoctorLoginUserId = null;
-  if (query.length < 2) {
-    box.innerHTML = '<p class="small muted">Введите не менее двух символов.</p>';
-    return;
-  }
-  try {
-    const rows = await DESKTOP_API.findDoctorCandidates(query);
-    box.innerHTML = rows.length ? rows.map(row => `<label class="doctor-login-choice">
-      <input type="radio" name="doctorLoginUser" value="${row.userId}">
-      <span><b>${esc(row.displayName)}</b><small>${esc([row.department, row.specialization].filter(Boolean).join(" · ") || "структура не назначена")}</small></span>
-    </label>`).join("") : '<p class="small muted">Активные учётные записи не найдены. Обратитесь к администратору.</p>';
-    box.querySelectorAll('input[name="doctorLoginUser"]').forEach(input => input.addEventListener("change", () => {
-      selectedDoctorLoginUserId = Number(input.value);
-    }));
-    if (rows.length === 1) {
-      const only = box.querySelector('input[name="doctorLoginUser"]');
-      only.checked = true;
-      selectedDoctorLoginUserId = Number(only.value);
-      document.getElementById("doctorLoginPassword").focus();
-    }
-  } catch (error) {
-    box.innerHTML = `<p class="small bad-text">${esc(error.message)}</p>`;
-  }
-}
-
-async function loginDoctor(event) {
-  event.preventDefault();
-  if (!selectedDoctorLoginUserId) { showAuthError("Сначала выберите себя в списке"); return; }
-  try {
-    const auth = await DESKTOP_API.login({
-      userId: selectedDoctorLoginUserId,
-      password: document.getElementById("doctorLoginPassword").value,
-    });
-    APP_AUTH = auth;
-    showAuthError("");
-    if (auth.user.mustChangePassword) {
-      showDoctorPasswordGate(auth);
-      openPasswordDialog(true);
-    } else {
-      await showDoctorViewer(auth);
-    }
-  } catch (error) {
-    showAuthError(error.message);
-  }
-}
-
 async function logoutApplication() {
   try { await DESKTOP_API.logout(); } catch (_) { /* reload still clears renderer memory */ }
   window.location.reload();
 }
 
-function openPasswordDialog(force = false) {
+function openPasswordDialog() {
   const dialog = document.getElementById("changePasswordDialog");
-  dialog.dataset.force = force ? "1" : "0";
-  document.getElementById("changePasswordHint").textContent = force
-    ? "Временный пароль необходимо заменить перед дальнейшей работой."
-    : "Можно использовать пароль любой длины и состава. Пустой пароль недопустим.";
-  dialog.querySelector('button[value="cancel"]').classList.toggle("hidden", force);
+  document.getElementById("changePasswordHint").textContent = "Можно использовать пароль любой длины и состава. Пустой пароль недопустим.";
+  dialog.querySelector('button[value="cancel"]').classList.remove("hidden");
   for (const id of ["currentPassword", "newPassword", "newPasswordRepeat"]) document.getElementById(id).value = "";
   document.getElementById("changePasswordError").classList.add("hidden");
   dialog.showModal();
-}
-
-function showDoctorPasswordGate(auth) {
-  APP_AUTH = auth;
-  document.getElementById("authScreen").classList.add("hidden");
-  document.querySelector(".app-header").classList.add("hidden");
-  document.querySelector("main").classList.add("hidden");
-  document.getElementById("doctorViewer").classList.remove("hidden");
-  document.getElementById("doctorViewerIdentity").textContent = auth.user.displayName;
-  document.getElementById("doctorViewerTabs").innerHTML = "";
-  document.getElementById("doctorViewerBody").innerHTML = '<div class="card doctor-viewer-empty"><h2>Сначала замените временный пароль</h2><p class="muted">После сохранения нового пароля откроется последний опубликованный отчёт.</p></div>';
 }
 
 async function confirmPasswordChange(event) {
@@ -206,81 +134,14 @@ async function confirmPasswordChange(event) {
     return;
   }
   try {
-    const forced = document.getElementById("changePasswordDialog").dataset.force === "1";
     const user = await DESKTOP_API.changePassword({ currentPassword, newPassword });
     APP_AUTH.user = user;
     document.getElementById("changePasswordDialog").close();
     toast("Пароль изменён");
-    if (forced && user.role === "doctor") await showDoctorViewer(APP_AUTH);
   } catch (error) {
     errorBox.textContent = error.message;
     errorBox.classList.remove("hidden");
   }
-}
-
-async function showDoctorViewer(auth) {
-  APP_AUTH = auth;
-  document.getElementById("authScreen").classList.add("hidden");
-  document.querySelector(".app-header").classList.add("hidden");
-  document.querySelector("main").classList.add("hidden");
-  document.getElementById("doctorViewer").classList.remove("hidden");
-  document.getElementById("doctorViewerIdentity").textContent = auth.user.displayName;
-  doctorViewerState.periods = await DESKTOP_API.listPublishedPeriods();
-  const select = document.getElementById("doctorViewerPeriod");
-  select.innerHTML = doctorViewerState.periods.map(item => `<option value="${item.periodKey}">${monthLabel(item.periodKey)}</option>`).join("");
-  doctorViewerState.periodKey = doctorViewerState.periods[0] ? doctorViewerState.periods[0].periodKey : null;
-  updateDoctorViewerPeriodButtons();
-  if (!doctorViewerState.periodKey) {
-    document.getElementById("doctorViewerTabs").innerHTML = "";
-    document.getElementById("doctorViewerBody").innerHTML = '<div class="card doctor-viewer-empty"><h2>Опубликованных отчётов пока нет</h2><p class="muted">Обратитесь к администратору.</p></div>';
-    return;
-  }
-  select.value = doctorViewerState.periodKey;
-  await loadDoctorViewerPeriod();
-}
-
-async function loadDoctorViewerPeriod() {
-  const periodKey = document.getElementById("doctorViewerPeriod").value || doctorViewerState.periodKey;
-  doctorViewerState.periodKey = periodKey;
-  updateDoctorViewerPeriodButtons();
-  const pageTypes = ["department", "specialization", "doctor"];
-  const pages = await Promise.all(pageTypes.map(pageType => DESKTOP_API.getPublishedPage({ periodKey, pageType })));
-  doctorViewerState.pages = Object.fromEntries(pageTypes.map((type, index) => [type, pages[index]]).filter(([, page]) => page));
-  if (!doctorViewerState.pages[doctorViewerState.pageType]) doctorViewerState.pageType = Object.keys(doctorViewerState.pages)[0] || "doctor";
-  const labels = { department: "Отчёт отделения", specialization: "Отчёт специализации", doctor: "Мой отчёт" };
-  document.getElementById("doctorViewerTabs").innerHTML = Object.keys(doctorViewerState.pages)
-    .map(type => `<button class="btn ${type === doctorViewerState.pageType ? "active" : ""}" data-viewer-page="${type}">${labels[type]}</button>`).join("");
-  document.querySelectorAll("[data-viewer-page]").forEach(button => button.addEventListener("click", () => {
-    doctorViewerState.pageType = button.dataset.viewerPage;
-    renderDoctorViewerPage();
-  }));
-  renderDoctorViewerPage();
-}
-
-function updateDoctorViewerPeriodButtons() {
-  const select = document.getElementById("doctorViewerPeriod");
-  const previous = document.getElementById("btnDoctorPreviousPeriod");
-  const next = document.getElementById("btnDoctorNextPeriod");
-  if (!select || !previous || !next) return;
-  previous.disabled = select.selectedIndex < 0 || select.selectedIndex >= select.options.length - 1;
-  next.disabled = select.selectedIndex <= 0;
-}
-
-async function navigateDoctorViewerPeriod(direction) {
-  const select = document.getElementById("doctorViewerPeriod");
-  if (!select || !select.options.length) return;
-  const nextIndex = Math.max(0, Math.min(select.options.length - 1, select.selectedIndex + Number(direction || 0)));
-  if (nextIndex === select.selectedIndex) return;
-  select.selectedIndex = nextIndex;
-  await loadDoctorViewerPeriod();
-}
-
-function renderDoctorViewerPage() {
-  const page = doctorViewerState.pages[doctorViewerState.pageType];
-  document.querySelectorAll("[data-viewer-page]").forEach(button => button.classList.toggle("active", button.dataset.viewerPage === doctorViewerState.pageType));
-  document.getElementById("doctorViewerBody").innerHTML = page
-    ? `<div class="small muted doctor-publication-date" style="margin-bottom:8px">Опубликовано ${new Date(page.createdAt).toLocaleString("ru-RU")}</div>${page.html}`
-    : '<div class="card"><p class="muted">Страница недоступна.</p></div>';
 }
 
 function setControlsDisabled(ids, disabled) {
@@ -422,7 +283,10 @@ async function desktopBackupNow(portable = false) {
     const saved = await saveLocal();
     if (!saved) throw new Error("Текущие изменения не записаны в SQLite");
     const result = portable ? await DESKTOP_API.exportBackup() : await DESKTOP_API.createBackup();
-    if (!result.canceled) toast("Резервная копия создана: " + result.path);
+    if (!result.canceled) {
+      const checksum = result.sha256 ? ` · SHA-256: ${result.sha256}` : "";
+      toast("Резервная копия создана: " + result.path + checksum);
+    }
   } catch (error) {
     toast("Не удалось создать резервную копию: " + error.message, true);
   }
@@ -3930,7 +3794,7 @@ function renderReport() {
   if (kbControl) kbControl.innerHTML = `<span class="small muted">База:</span> ${segToggle("repKbWinSeg", [
     { v: 12, label: "1 год" }, { v: 24, label: "2 года" }, { v: 36, label: "3 года" },
   ], UI.repKbWin, "setReportKbWin")}`;
-  setControlsDisabled(["repMonth", "repScope", "btnExportAllPdf", "btnPublishReports", "btnPrint"], !months.length);
+  setControlsDisabled(["repMonth", "repScope", "btnExportAllPdf", "btnPrint"], !months.length);
   if (!months.length) {
     body.innerHTML = '<div class="card"><p class="muted">Загрузите данные на вкладке «Данные».</p></div>';
     mSel.innerHTML = ""; sSel.innerHTML = "";
@@ -4166,102 +4030,14 @@ async function saveAnalyticComment(rail, context, { silent = false, rerender = t
   }
 }
 
-async function saveVisibleCommentDrafts() {
-  const rails = [...document.querySelectorAll("#reportBody .analytic-comment-rail")];
-  for (const rail of rails) {
-    const input = rail.querySelector(".analytic-comment-input");
-    if (!input || input.value.trim() === input.dataset.savedText) continue;
-    const blockKey = rail.dataset.blockKey;
-    const context = reportContextFromScope(UI.repScope, UI.repMonth);
-    rail.dataset.blockKey = blockKey;
-    await saveAnalyticComment(rail, context, { silent: true, rerender: false });
-  }
-}
-
 async function archiveAnalyticComment(id) {
-  if (!confirm("Архивировать этот комментарий? В опубликованных ранее отчётах он сохранится.")) return;
+  if (!confirm("Архивировать этот административный комментарий?")) return;
   try {
     await DESKTOP_API.archiveComment(id);
     toast("Комментарий архивирован");
     renderReport();
   } catch (error) {
     toast("Не удалось архивировать комментарий: " + error.message, true);
-  }
-}
-
-function composePublishedHtml(rawHtml, context, comments) {
-  const root = document.createElement("div");
-  root.innerHTML = rawHtml;
-  root.querySelectorAll(".no-print,button,input,textarea,dialog").forEach(element => element.remove());
-  root.querySelectorAll("[contenteditable]").forEach(element => element.removeAttribute("contenteditable"));
-  wrapAnalyticCards(root, context, comments, false);
-  return root.innerHTML;
-}
-
-async function publishReportsAndComments() {
-  const mk = UI.repMonth;
-  if (!mk || !DB.months[mk]) { toast("Выберите период публикации", true); return; }
-  const button = document.getElementById("btnPublishReports");
-  button.disabled = true;
-  button.textContent = "Публикация…";
-  try {
-    await saveVisibleCommentDrafts();
-    if (!await saveLocal()) throw new Error("Не удалось сохранить текущую рабочую базу");
-    const comments = await DESKTOP_API.listComments({ periodKey: mk });
-    const doctorIds = coreDoctorsInMonth(mk).length ? coreDoctorsInMonth(mk) : doctorsInMonth(mk);
-    const departmentCache = new Map();
-    const specializationCache = new Map();
-    const pages = [];
-    for (let doctorIndex = 0; doctorIndex < doctorIds.length; doctorIndex++) {
-      const doctorId = doctorIds[doctorIndex];
-      const department = resolvedDepartmentName(doctorId);
-      const specialization = resolvedSpecializationName(doctorId);
-      if (!departmentCache.has(department)) {
-        const context = { scopeType: "department", scopeId: department, periodKey: mk, pageType: "department" };
-        departmentCache.set(department, composePublishedHtml(buildDepartmentReport(mk, department), context, comments));
-      }
-      pages.push({
-        doctorId,
-        pageType: "department",
-        scopeId: department,
-        title: `Отделение ${department} · ${monthLabel(mk)}`,
-        html: departmentCache.get(department),
-      });
-      if (specialization) {
-        if (!specializationCache.has(specialization)) {
-          const context = { scopeType: "specialization", scopeId: specialization, periodKey: mk, pageType: "specialization" };
-          specializationCache.set(specialization, composePublishedHtml(buildDeptReport(mk, specialization, "all"), context, comments));
-        }
-        pages.push({
-          doctorId,
-          pageType: "specialization",
-          scopeId: specialization,
-          title: `Специализация ${specialization} · ${monthLabel(mk)}`,
-          html: specializationCache.get(specialization),
-        });
-      }
-      const doctorContext = { scopeType: "doctor", scopeId: doctorId, periodKey: mk, pageType: "doctor" };
-      pages.push({
-        doctorId,
-        pageType: "doctor",
-        scopeId: doctorId,
-        title: `${doctorName(doctorId)} · ${monthLabel(mk)}`,
-        html: composePublishedHtml(buildDoctorReport(doctorId, mk), doctorContext, comments),
-      });
-      if ((doctorIndex + 1) % 5 === 0 || doctorIndex === doctorIds.length - 1) {
-        button.textContent = `Формирую ${doctorIndex + 1} из ${doctorIds.length}…`;
-        await new Promise(resolve => requestAnimationFrame(resolve));
-      }
-    }
-    button.textContent = "Сохраняю публикацию…";
-    const result = await DESKTOP_API.publishReports({ periodKey: mk, pages });
-    toast(`Опубликована версия ${result.version}: страниц — ${result.pages}`);
-    renderReport();
-  } catch (error) {
-    toast("Публикация не выполнена: " + error.message, true);
-  } finally {
-    button.disabled = false;
-    button.textContent = "✓ Сохранить и опубликовать";
   }
 }
 
@@ -4686,32 +4462,8 @@ function scoringBenchmarkDefs(profile) {
   ];
 }
 
-function setSettingsSection(section) {
-  UI.settingsSection = section === "access" ? "access" : "calculation";
-  renderSettings();
-}
-
-function renderSettingsNavigation() {
-  const host = document.getElementById("settingsNavigation");
-  if (!host) return;
-  const totalDoctors = Object.keys(DB.doctors).length;
-  const activeDoctorIds = new Set(APP_USERS.filter(user => user.role === "doctor" && user.active && user.doctorId).map(user => user.doctorId));
-  const activeDoctors = [...activeDoctorIds].filter(doctorId => DB.doctors[doctorId]).length;
-  host.innerHTML = `
-    <button class="btn ${UI.settingsSection === "calculation" ? "active" : ""}" type="button" onclick="setSettingsSection('calculation')">Расчёты и структура</button>
-    <button class="btn ${UI.settingsSection === "access" ? "active" : ""}" type="button" onclick="setSettingsSection('access')">Доступы врачей · ${activeDoctors}/${totalDoctors}</button>`;
-}
-
 function renderSettings() {
-  renderSettingsNavigation();
   const settingsBody = document.getElementById("settingsBody");
-  const userManagement = document.getElementById("userManagement");
-  if (UI.settingsSection === "access") {
-    settingsBody.innerHTML = "";
-    renderUserManagement();
-    return;
-  }
-  userManagement.innerHTML = "";
   const s = DB.settings;
   const departmentName = curSetDepartment();
   const specializationNames = departmentGroups()[departmentName] || [];
@@ -5048,7 +4800,6 @@ function renderSettings() {
     UI.staffFilter = sf.value;
     clearTimeout(settingsFilterTimer);
     settingsFilterTimer = setTimeout(() => {
-      if (UI.settingsSection !== "calculation") return;
       renderSettings();
       const el = document.getElementById("staffFilter");
       if (el) {
@@ -5062,7 +4813,6 @@ function renderSettings() {
     UI.nomFilter = nfEl.value;
     clearTimeout(settingsFilterTimer);
     settingsFilterTimer = setTimeout(() => {
-      if (UI.settingsSection !== "calculation") return;
       renderSettings();
       const el = document.getElementById("nomFilter");
       if (el) {
@@ -5073,202 +4823,6 @@ function renderSettings() {
   });
 }
 
-function rememberIssuedDoctorCredential(user) {
-  if (!user || !user.id || !user.temporaryPassword) return;
-  ISSUED_DOCTOR_CREDENTIALS.set(Number(user.id), {
-    userId: Number(user.id),
-    doctorId: user.doctorId,
-    displayName: user.displayName,
-    username: user.username,
-    password: user.temporaryPassword,
-  });
-}
-
-async function exportDoctorCredentials() {
-  let doctorUsers = APP_USERS.filter(user => user.role === "doctor" && user.active);
-  if (!doctorUsers.length) {
-    toast("Сначала создайте хотя бы одну активную учётную запись врача", true);
-    return;
-  }
-  const missing = doctorUsers.filter(user => !ISSUED_DOCTOR_CREDENTIALS.has(Number(user.id)));
-  if (missing.length) {
-    const accepted = confirm(
-      `Открытые пароли не хранятся в базе и недоступны для повторного просмотра.\n\n` +
-      `Для ${missing.length} учётных записей будут созданы новые временные пароли. Продолжить?`
-    );
-    if (!accepted) return;
-    try {
-      const issued = await DESKTOP_API.issueDoctorCredentials({ userIds: missing.map(user => user.id) });
-      issued.forEach(rememberIssuedDoctorCredential);
-      APP_USERS = await DESKTOP_API.listUsers();
-      doctorUsers = APP_USERS.filter(user => user.role === "doctor" && user.active);
-    } catch (error) {
-      toast("Не удалось сформировать временные пароли: " + error.message, true);
-      return;
-    }
-  }
-  const rows = doctorUsers.map(user => {
-    const credential = ISSUED_DOCTOR_CREDENTIALS.get(Number(user.id));
-    const doctorId = user.doctorId;
-    return [
-      user.displayName,
-      user.username,
-      credential ? credential.password : "",
-      doctorId ? resolvedDepartmentName(doctorId) : "",
-      doctorId ? resolvedSpecializationName(doctorId) || "" : "",
-      "Сменить при первом входе",
-    ];
-  });
-  loadBundledLibrary("lib-xlsx", "XLSX");
-  const aoa = [
-    ["Доступы врачей · создано " + new Date().toLocaleString("ru-RU")],
-    [],
-    ["ФИО", "Логин", "Временный пароль", "Отделение", "Специализация", "Примечание"],
-    ...rows,
-  ];
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws["!cols"] = [{ wch: 34 }, { wch: 20 }, { wch: 20 }, { wch: 28 }, { wch: 28 }, { wch: 28 }];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Доступы");
-  try {
-    const bytes = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-    const result = await DESKTOP_API.exportDoctorCredentialsXlsx({ bytes: new Uint8Array(bytes), count: rows.length });
-    toast("Excel с доступами сохранён: " + result.path);
-    renderUserManagement();
-  } catch (error) {
-    toast("Не удалось сохранить Excel: " + error.message, true);
-  }
-}
-
-async function createAllDoctorAccounts(button) {
-  const existing = new Set(APP_USERS.filter(user => user.role === "doctor" && user.doctorId).map(user => user.doctorId));
-  const missingDoctorIds = Object.keys(DB.doctors).filter(doctorId => !existing.has(doctorId));
-  if (!missingDoctorIds.length) {
-    toast("Доступы уже созданы для всех врачей");
-    return;
-  }
-  if (!confirm(`Создать доступы для ${missingDoctorIds.length} врачей? Логином будет фамилия, временные пароли попадут в Excel.`)) return;
-  const failures = [];
-  let created = 0;
-  button.disabled = true;
-  for (let index = 0; index < missingDoctorIds.length; index++) {
-    const doctorId = missingDoctorIds[index];
-    button.textContent = `Создаю ${index + 1} из ${missingDoctorIds.length}…`;
-    try {
-      const issued = await DESKTOP_API.createDoctorUser({ doctorId });
-      rememberIssuedDoctorCredential(issued);
-      created++;
-    } catch (error) {
-      failures.push(`${doctorName(doctorId)}: ${error.message}`);
-    }
-    await new Promise(resolve => requestAnimationFrame(resolve));
-  }
-  APP_USERS = await DESKTOP_API.listUsers();
-  if (failures.length) {
-    toast(`Создано доступов: ${created}. Ошибок: ${failures.length}. Первая: ${failures[0]}`, true);
-  } else {
-    toast(`Доступы созданы для ${created} врачей. Теперь выгрузите Excel.`);
-  }
-  renderUserManagement();
-}
-
-function renderUserManagement() {
-  const host = document.getElementById("userManagement");
-  if (!host || !APP_AUTH || APP_AUTH.user.role !== "admin") return;
-  const doctorUsers = new Map(APP_USERS.filter(user => user.role === "doctor").map(user => [user.doctorId, user]));
-  const allDoctorIds = Object.keys(DB.doctors).sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru"));
-  const activeDoctorCount = allDoctorIds.filter(doctorId => doctorUsers.get(doctorId) && doctorUsers.get(doctorId).active).length;
-  const missingDoctorCount = allDoctorIds.filter(doctorId => !doctorUsers.has(doctorId)).length;
-  const disabledDoctorCount = allDoctorIds.filter(doctorId => doctorUsers.has(doctorId) && !doctorUsers.get(doctorId).active).length;
-  const accessReady = allDoctorIds.length > 0 && activeDoctorCount === allDoctorIds.length;
-  const filter = UI.userFilter.trim().toLocaleLowerCase("ru-RU");
-  const visibleDoctorIds = allDoctorIds.filter(doctorId => !filter
-    || doctorName(doctorId).toLocaleLowerCase("ru-RU").includes(filter)
-    || doctorStructureLabel(doctorId).toLocaleLowerCase("ru-RU").includes(filter));
-  const rows = visibleDoctorIds.map(doctorId => {
-    const user = doctorUsers.get(doctorId);
-    if (!user) {
-      return `<tr data-account-doctor="${esc(doctorId)}"><td><b>${esc(doctorName(doctorId))}</b><br><span class="small muted">${esc(doctorStructureLabel(doctorId))}</span></td>
-        <td><span class="small muted">автоматически по фамилии</span></td>
-        <td><span class="badge mut">не активирован</span></td>
-        <td><button class="btn primary mini" data-create-doctor-account>Создать доступ</button></td></tr>`;
-    }
-    const credential = ISSUED_DOCTOR_CREDENTIALS.get(Number(user.id));
-    return `<tr data-account-user="${user.id}"><td><b>${esc(user.displayName)}</b><br><span class="small muted">${esc(doctorStructureLabel(doctorId))}</span></td>
-      <td>${esc(user.username)}</td>
-      <td><span class="badge ${user.active ? "good" : "bad"}">${user.active ? "активен" : "отключён"}</span>${user.mustChangePassword ? ' <span class="badge warn">сменит пароль</span>' : ""}${credential ? `<br><code class="issued-password">${esc(credential.password)}</code>` : ""}</td>
-      <td><div class="user-account-actions"><button class="btn mini" data-reset-doctor-password>Новый пароль</button>
-        <button class="btn mini ${user.active ? "danger" : "primary"}" data-toggle-doctor-account data-active="${user.active ? "0" : "1"}>${user.active ? "Отключить" : "Включить"}</button></div></td></tr>`;
-  }).join("");
-  host.innerHTML = `<div class="card"><h2>🔐 Доступы врачей</h2>
-    <p class="settings-section-intro small muted">Быстрый порядок работы: создайте недостающие доступы, затем выгрузите один Excel. Логин — фамилия; при совпадении добавляется номер.</p>
-    <div class="user-access-readiness ${accessReady ? "ready" : "pending"}" role="status">
-      <div><strong>${accessReady ? "Доступы готовы для всех врачей" : `Готово ${activeDoctorCount} из ${allDoctorIds.length}`}</strong>
-      <span>${missingDoctorCount ? `Без учётной записи: ${missingDoctorCount}. ` : ""}${disabledDoctorCount ? `Отключено: ${disabledDoctorCount}.` : ""}</span></div>
-      <div class="user-access-readiness-value">${activeDoctorCount}/${allDoctorIds.length}</div>
-    </div>
-    <div class="user-management-toolbar">
-      <button class="btn" data-create-all-doctor-accounts ${missingDoctorCount ? "" : "disabled"}>Создать недостающие доступы</button>
-      <button class="btn primary" data-export-doctor-credentials>Выгрузить логины и пароли в Excel</button>
-      <input type="search" data-user-filter placeholder="Найти врача…" value="${esc(UI.userFilter)}">
-      <span class="small muted">Показано ${visibleDoctorIds.length} из ${allDoctorIds.length}</span>
-    </div>
-    <div style="overflow-x:auto"><table class="data user-management-table"><tr><th>Врач</th><th>Логин</th><th>Состояние и новый пароль</th><th></th></tr>${rows}</table></div>
-  </div>`;
-  host.querySelectorAll("[data-create-doctor-account]").forEach(button => button.addEventListener("click", async () => {
-    const row = button.closest("[data-account-doctor]");
-    const doctorId = row.dataset.accountDoctor;
-    try {
-      const issued = await DESKTOP_API.createDoctorUser({ doctorId });
-      rememberIssuedDoctorCredential(issued);
-      APP_USERS = await DESKTOP_API.listUsers();
-      toast(`Доступ создан: ${issued.username} · пароль ${issued.temporaryPassword}`);
-      renderUserManagement();
-    } catch (error) {
-      toast("Не удалось создать учётную запись: " + error.message, true);
-    }
-  }));
-  host.querySelectorAll("[data-reset-doctor-password]").forEach(button => button.addEventListener("click", async () => {
-    const row = button.closest("[data-account-user]");
-    try {
-      const issued = await DESKTOP_API.resetDoctorPassword({ userId: Number(row.dataset.accountUser) });
-      rememberIssuedDoctorCredential(issued);
-      APP_USERS = await DESKTOP_API.listUsers();
-      toast(`Новый временный пароль: ${issued.temporaryPassword}`);
-      renderUserManagement();
-    } catch (error) {
-      toast("Не удалось сбросить пароль: " + error.message, true);
-    }
-  }));
-  host.querySelectorAll("[data-toggle-doctor-account]").forEach(button => button.addEventListener("click", async () => {
-    const row = button.closest("[data-account-user]");
-    try {
-      await DESKTOP_API.setUserActive({ userId: Number(row.dataset.accountUser), active: button.dataset.active === "1" });
-      APP_USERS = await DESKTOP_API.listUsers();
-      renderUserManagement();
-    } catch (error) {
-      toast("Не удалось изменить состояние: " + error.message, true);
-    }
-  }));
-  const exportButton = host.querySelector("[data-export-doctor-credentials]");
-  if (exportButton) exportButton.addEventListener("click", exportDoctorCredentials);
-  const createAllButton = host.querySelector("[data-create-all-doctor-accounts]");
-  if (createAllButton) createAllButton.addEventListener("click", () => createAllDoctorAccounts(createAllButton));
-  const filterInput = host.querySelector("[data-user-filter]");
-  if (filterInput) filterInput.addEventListener("input", () => {
-    UI.userFilter = filterInput.value;
-    clearTimeout(settingsFilterTimer);
-    settingsFilterTimer = setTimeout(() => {
-      if (UI.settingsSection !== "access") return;
-      renderUserManagement();
-      const nextInput = document.querySelector("[data-user-filter]");
-      if (nextInput) {
-        nextInput.focus();
-        nextInput.setSelectionRange(nextInput.value.length, nextInput.value.length);
-      }
-    }, 140);
-  });
-}
 
 /* --- отделения и специализации --- */
 function addDepartmentV4() {
@@ -5699,18 +5253,6 @@ async function mergeSelected() {
       return;
     }
   }
-  const intendedTarget = ids.reduce((a, b) => (DB.doctors[b].name.length > DB.doctors[a].name.length ? b : a));
-  if (DESKTOP_API) {
-    try {
-      await DESKTOP_API.rebindDoctorUsers({
-        sourceDoctorIds: ids.filter(id => id !== intendedTarget),
-        targetDoctorId: intendedTarget,
-      });
-    } catch (error) {
-      toast("Объединение отменено: не удалось безопасно перенести доступ врача — " + error.message, true);
-      return;
-    }
-  }
   const target = mergeDoctors(ids);
   await saveLocal();
   toast("Склеено: " + doctorName(target));
@@ -5736,7 +5278,6 @@ async function initApp() {
     await loadDesktopDatabase();
     APP_AUTH = DESKTOP_STATE.auth;
     if (APP_AUTH.authenticated && APP_AUTH.user.role === "admin") {
-      APP_USERS = (await DESKTOP_API.getAdminState()).users || [];
       showAdminApplication(APP_AUTH);
       renderDesktopWorkspace();
     }
@@ -5779,7 +5320,6 @@ async function initApp() {
   document.getElementById("repScope").addEventListener("change", e => { UI.repScope = e.target.value; renderReport(); });
   document.getElementById("btnPrint").addEventListener("click", () => window.print());
   document.getElementById("btnExportAllPdf").addEventListener("click", openPdfExportDialog);
-  document.getElementById("btnPublishReports").addEventListener("click", publishReportsAndComments);
   document.getElementById("pdfExportDialogList").addEventListener("change", updatePdfExportDialogState);
   document.getElementById("pdfExportSelectAll").addEventListener("click", () => setAllPdfExportDialogChoices(true));
   document.getElementById("pdfExportClearAll").addEventListener("click", () => setAllPdfExportDialogChoices(false));
@@ -5795,23 +5335,9 @@ async function initApp() {
   if (DESKTOP_API) {
     document.getElementById("btnSetupAdmin").addEventListener("click", setupAdministrator);
     document.getElementById("adminLoginForm").addEventListener("submit", loginAdministrator);
-    document.getElementById("doctorLoginForm").addEventListener("submit", loginDoctor);
-    let doctorSearchTimer = null;
-    document.getElementById("doctorLoginSearch").addEventListener("input", () => {
-      clearTimeout(doctorSearchTimer);
-      doctorSearchTimer = setTimeout(searchDoctorLoginCandidates, 180);
-    });
     document.getElementById("btnLogout").addEventListener("click", logoutApplication);
-    document.getElementById("btnAdminChangePassword").addEventListener("click", () => openPasswordDialog(false));
-    document.getElementById("btnDoctorLogout").addEventListener("click", logoutApplication);
-    document.getElementById("btnDoctorChangePassword").addEventListener("click", () => openPasswordDialog(false));
-    document.getElementById("doctorViewerPeriod").addEventListener("change", loadDoctorViewerPeriod);
-    document.getElementById("btnDoctorPreviousPeriod").addEventListener("click", () => navigateDoctorViewerPeriod(1));
-    document.getElementById("btnDoctorNextPeriod").addEventListener("click", () => navigateDoctorViewerPeriod(-1));
+    document.getElementById("btnAdminChangePassword").addEventListener("click", openPasswordDialog);
     document.getElementById("btnConfirmPasswordChange").addEventListener("click", confirmPasswordChange);
-    document.getElementById("changePasswordDialog").addEventListener("cancel", event => {
-      if (event.currentTarget.dataset.force === "1") event.preventDefault();
-    });
     document.getElementById("btnScanInput").addEventListener("click", desktopScanInput);
     document.getElementById("btnOpenOutput").addEventListener("click", () => DESKTOP_API.openPath("output").catch(error => toast(error.message, true)));
     document.getElementById("btnChooseWorkspace").addEventListener("click", desktopChooseWorkspace);
@@ -5837,15 +5363,6 @@ async function initApp() {
   }
   if (DESKTOP_API && (!APP_AUTH || !APP_AUTH.authenticated)) {
     showAuthScreen(APP_AUTH || { needsSetup: false, authenticated: false });
-    return;
-  }
-  if (DESKTOP_API && APP_AUTH.user.role === "doctor") {
-    if (APP_AUTH.user.mustChangePassword) {
-      showDoctorPasswordGate(APP_AUTH);
-      openPasswordDialog(true);
-    } else {
-      await showDoctorViewer(APP_AUTH);
-    }
     return;
   }
   switchTab("data");

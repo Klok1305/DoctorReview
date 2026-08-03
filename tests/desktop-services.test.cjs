@@ -75,6 +75,35 @@ test("OneDrive paths are rejected before filesystem access can block startup", t
   assert.equal(fs.existsSync(blocked), false);
 });
 
+test("the first-run database uses an explicit local default when Documents is redirected to OneDrive", t => {
+  const root = makeTemp("doctor-app-local-default-");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const redirectedDocuments = path.join(root, "OneDrive - Clinic", "Documents");
+  const localWorkspace = path.join(root, "LocalAppData", "PulseClinic", "Рабочие данные");
+  const store = new ConfigStore({
+    userDataDir: path.join(root, "config"),
+    documentsDir: redirectedDocuments,
+    defaultWorkspaceRoot: localWorkspace,
+  });
+
+  assert.equal(store.publicConfig().workspaceRoot, path.resolve(localWorkspace));
+  assert.equal(store.publicConfig().databasePath.startsWith(path.resolve(localWorkspace)), true);
+  assert.equal(fs.existsSync(redirectedDocuments), false);
+});
+
+test("SMB and UNC paths are rejected for every configured working folder", t => {
+  const root = makeTemp("doctor-app-network-guard-");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new ConfigStore({ userDataDir: path.join(root, "config"), documentsDir: path.join(root, "documents") });
+  for (const blocked of ["\\\\clinic-server\\pulse", "//clinic-server/pulse", "smb://clinic-server/pulse", "\\\\?\\UNC\\clinic-server\\pulse"]) {
+    assert.equal(isUnsupportedStoragePath(blocked), true, blocked);
+    assert.throws(() => store.setWorkspaceRoot(blocked), /SMB\/UNC/);
+  }
+  assert.throws(() => store.setFolder("input", "\\\\clinic-server\\incoming"), /SMB\/UNC/);
+  assert.throws(() => store.setFolder("output", "\\\\clinic-server\\results"), /SMB\/UNC/);
+  assert.throws(() => store.setFolder("backup", "\\\\clinic-server\\backups"), /SMB\/UNC/);
+});
+
 test("PDF publishing replaces the current set and archives stale files", t => {
   const root = makeTemp("doctor-app-export-");
   const store = new ConfigStore({ userDataDir: path.join(root, "config"), documentsDir: path.join(root, "documents") });
@@ -127,7 +156,8 @@ test("portable SQLite backup restores data after later changes", async t => {
   const backups = new BackupService({ database, configStore: store });
   database.saveSnapshot(makeSnapshot("Первая версия"));
   const portable = path.join(root, "portable.ovbackup");
-  await backups.createPortable(portable);
+  const created = await backups.createPortable(portable);
+  assert.match(created.sha256, /^[a-f0-9]{64}$/);
   database.saveSnapshot(makeSnapshot("Вторая версия"));
 
   const restored = await backups.restore(portable);

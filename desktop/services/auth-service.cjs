@@ -15,27 +15,6 @@ function validatePassword(password) {
   return value;
 }
 
-function doctorUsername(displayName, database) {
-  const surname = String(displayName || "")
-    .trim()
-    .split(/\s+/)[0]
-    .toLocaleLowerCase("ru-RU")
-    .replace(/[^a-zа-яё0-9_-]+/gi, "")
-    .slice(0, 40);
-  if (!surname) throw new Error("Не удалось сформировать логин из фамилии врача");
-  let username = surname;
-  let suffix = 2;
-  while (database.getUserByUsername(username)) {
-    const number = String(suffix++);
-    username = `${surname.slice(0, Math.max(1, 40 - number.length))}${number}`;
-  }
-  return username;
-}
-
-function temporaryPassword() {
-  return String(crypto.randomInt(0, 1000000)).padStart(6, "0");
-}
-
 function passwordRecord(password) {
   const value = validatePassword(password);
   const salt = crypto.randomBytes(24);
@@ -75,7 +54,7 @@ class AuthService {
   }
 
   status() {
-    const needsSetup = !this.database.hasUsers();
+    const needsSetup = !this.database.hasAdminUser();
     const session = this.#activeSession();
     const user = session ? this.database.getUserById(session.userId) : null;
     if (session && (!user || !user.active)) this.session = null;
@@ -88,7 +67,7 @@ class AuthService {
   }
 
   setupAdmin({ username, displayName, password }) {
-    if (this.database.hasUsers()) throw new Error("Администратор уже создан");
+    if (this.database.hasAdminUser()) throw new Error("Администратор уже создан");
     const normalized = normalizeUsername(username);
     if (!/^[a-zа-яё0-9._-]{3,40}$/i.test(normalized)) throw new Error("Некорректный логин администратора");
     const user = this.database.createUser({
@@ -103,7 +82,7 @@ class AuthService {
 
   login({ username = null, userId = null, password }) {
     const user = userId != null ? this.database.getUserById(userId) : this.database.getUserByUsername(normalizeUsername(username));
-    if (!user || !user.active) throw new Error("Неверный пользователь или пароль");
+    if (!user || !user.active || user.role !== "admin") throw new Error("Вход разрешён только администратору");
     if (user.locked_until && Date.parse(user.locked_until) > Date.now()) {
       throw new Error("Вход временно заблокирован после нескольких ошибок");
     }
@@ -144,41 +123,6 @@ class AuthService {
     return this.#publicUser(this.database.getUserById(user.id));
   }
 
-  createDoctorUser({ doctorId, displayName, password = null }) {
-    const admin = this.require("admin");
-    const normalized = doctorUsername(displayName, this.database);
-    const issuedPassword = password == null ? temporaryPassword() : validatePassword(password);
-    const user = this.database.createUser({
-      username: normalized,
-      displayName,
-      role: "doctor",
-      doctorId,
-      ...passwordRecord(issuedPassword),
-      mustChangePassword: true,
-    });
-    this.database.audit({ actorUserId: admin.userId, action: "user.doctor-created", targetType: "doctor", targetId: doctorId, details: { userId: user.id } });
-    return Object.assign(this.#publicUser(user), { temporaryPassword: issuedPassword });
-  }
-
-  resetPassword({ userId, password = null }) {
-    const admin = this.require("admin");
-    const user = this.database.getUserById(userId);
-    if (!user || user.role !== "doctor") throw new Error("Учётная запись врача не найдена");
-    const issuedPassword = password == null ? temporaryPassword() : validatePassword(password);
-    const updated = this.database.updateUserPassword(user.id, { ...passwordRecord(issuedPassword), mustChangePassword: true });
-    this.database.audit({ actorUserId: admin.userId, action: "user.password-reset", targetType: "user", targetId: String(user.id) });
-    return Object.assign(this.#publicUser(updated), { temporaryPassword: issuedPassword });
-  }
-
-  setActive({ userId, active }) {
-    const admin = this.require("admin");
-    const user = this.database.getUserById(userId);
-    if (!user || user.role !== "doctor") throw new Error("Учётная запись врача не найдена");
-    const updated = this.database.setUserActive(user.id, active);
-    this.database.audit({ actorUserId: admin.userId, action: active ? "user.activated" : "user.deactivated", targetType: "user", targetId: String(user.id) });
-    return this.#publicUser(updated);
-  }
-
   require(role = null) {
     const session = this.#activeSession();
     if (!session) throw new Error("Сессия истекла. Войдите снова.");
@@ -186,14 +130,6 @@ class AuthService {
     if (!user || !user.active || (role && user.role !== role)) throw new Error("Недостаточно прав");
     session.lastActivityAt = Date.now();
     return Object.assign({}, session, { user: this.#publicUser(user) });
-  }
-
-  requireDoctorReady() {
-    const session = this.require("doctor");
-    if (session.user.mustChangePassword) {
-      throw new Error("Перед просмотром отчётов необходимо заменить временный пароль");
-    }
-    return session;
   }
 
   #activeSession() {
@@ -236,8 +172,6 @@ module.exports = {
   SESSION_IDLE_MS,
   PASSWORD_PARAMS,
   normalizeUsername,
-  doctorUsername,
-  temporaryPassword,
   validatePassword,
   passwordRecord,
   verifyPassword,

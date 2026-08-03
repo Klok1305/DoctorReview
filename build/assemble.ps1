@@ -14,7 +14,13 @@ $html = $html.Replace("/*__JSPDF__*/",   (& $read "jspdf.umd.min.js"))
 $html = $html.Replace("/*__CORE__*/",    (& $read "app-core.js"))
 $html = $html.Replace("/*__PARSERS__*/", (& $read "app-parsers.js"))
 $html = $html.Replace("/*__METRICS__*/", (& $read "app-metrics.js"))
-$html = $html.Replace("/*__UI__*/",      (& $read "app-ui.js"))
+$ui = & $read "app-ui.js"
+$ui = [System.Text.RegularExpressions.Regex]::Replace(
+  $ui,
+  "(?s)/\*__REMOVED_DOCTOR_ACCESS_START__\*/.*?/\*__REMOVED_DOCTOR_ACCESS_END__\*/",
+  ""
+)
+$html = $html.Replace("/*__UI__*/",      $ui)
 
 if ($html -match "/\*__[A-Z0-9_]+__\*/") {
   throw "The assembled HTML still contains unresolved placeholders."
