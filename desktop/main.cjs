@@ -499,6 +499,21 @@ function createWindow() {
                 && heatmapCellWidths.length === 2
                 && Math.max(...heatmapFocusWidths) - Math.min(...heatmapFocusWidths) <= 2
                 && Math.max(...heatmapCellWidths) - Math.min(...heatmapCellWidths) <= 2;
+              const specializationFocusTable = document.getElementById('tblSpecializationFocus');
+              const specializationFocusNames = specializationFocusTable
+                ? [...specializationFocusTable.querySelectorAll('tr')].slice(1, -1).map(row => row.cells[0]?.textContent.trim())
+                : [];
+              const specializationFocusTotal = specializationFocusTable?.querySelector('.specialization-focus-total');
+              const specializationGrouping = document.querySelector('#deptBody .specialization-1c-grouping');
+              const specializationFirstDoctorGroup = specializationGrouping?.querySelector('.specialization-1c-doctor');
+              const specializationFocusBlockValid = Boolean(specializationFocusTable && specializationFocusTotal && specializationGrouping && specializationFirstDoctorGroup)
+                && specializationFocusNames.some(name => name.includes('Фокус А'))
+                && specializationFocusNames.some(name => name.includes('Фокус Б'))
+                && specializationFocusTotal.textContent.includes('Итого по фокусам')
+                && specializationFocusTotal.textContent.includes('2')
+                && specializationFirstDoctorGroup.open
+                && specializationGrouping.textContent.includes('Клиника')
+                && specializationGrouping.textContent.includes('Фокусные услуги');
               UI.repMonth = '2026-02';
               UI.repScope = 'dept';
               switchTab('report');
@@ -772,6 +787,7 @@ function createWindow() {
                 reportLeaderboardsValid,
                 specializationSummaryValid,
                 specializationPrimaryReturnHeaderValid,
+                specializationFocusBlockValid,
                 comparisonHeaders,
                 comparisonHeaderWidths,
                 heatmapLayoutValid,
@@ -833,6 +849,17 @@ function createWindow() {
             && publishedComment.status === "published"
             && publishedPage
             && publishedPage.html.includes("Комментарий smoke-теста"),
+          );
+          const publishedSpecializationPage = database.getPublishedPage({
+            doctorId: "d1",
+            periodKey: result.smokeCommentContext.periodKey,
+            pageType: "specialization",
+          });
+          result.specializationPublishedFocusValid = Boolean(
+            publishedSpecializationPage
+            && publishedSpecializationPage.html.includes("Фокусы специализации")
+            && publishedSpecializationPage.html.includes("Группировка из файла 1С")
+            && publishedSpecializationPage.html.includes("Фокус А"),
           );
         }
         const artifactRoot = SMOKE_ARTIFACT_ROOT;
@@ -899,6 +926,16 @@ function createWindow() {
           if (!specializationRatingScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок сводной таблицы специализации');
           fs.writeFileSync(specializationRatingScreenshotPath, Buffer.from(specializationRatingScreenshot.slice('data:image/png;base64,'.length), 'base64'));
           result.specializationRatingScreenshot = specializationRatingScreenshotPath;
+          const specializationFocusScreenshotPath = path.join(artifactRoot, "specialization-focuses-smoke.png");
+          const specializationFocusScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            const element = document.querySelector('#deptBody .specialization-interdisciplinary');
+            if (!element) return '';
+            const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.25, logging: false, windowWidth: 1400 });
+            return canvas.toDataURL('image/png');
+          })()`);
+          if (!specializationFocusScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок фокусов специализации');
+          fs.writeFileSync(specializationFocusScreenshotPath, Buffer.from(specializationFocusScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.specializationFocusScreenshot = specializationFocusScreenshotPath;
           const heatmapScreenshotPath = path.join(artifactRoot, "heatmap-focus-smoke.png");
           const heatmapScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
             const table = document.getElementById('tblHeat');
@@ -997,7 +1034,7 @@ function createWindow() {
         process.stdout.write(`${JSON.stringify(result)}\n`);
         const passed = result.dataPage && result.optionalLibrariesDeferred && result.xlsx && result.chart && result.desktop
           && result.rendererErrors.length === 0
-          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.doctorMetricSettings && result.commentWorkflowValid))
+          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.specializationFocusBlockValid && result.specializationPublishedFocusValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.doctorMetricSettings && result.commentWorkflowValid))
           && (!PDF_SMOKE_TEST || (result.saved && result.pdfSelectionDialogValid && result.pdfExport && result.pdfExport.saved === 3
             && result.pdfExport.chartImages >= 3 && result.pdfFiles.length === 3
             && result.sessionSaveStatus && result.sessionSaveStatus.includes('Сохранено в рабочую базу SQLite')

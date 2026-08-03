@@ -485,6 +485,25 @@ test("appointment details preserve grouped 1C service hierarchy with a flat-repo
   assert.match(parsers, /!file\.__forceReimport/);
 });
 
+test("specialization page highlights its focuses and exposes the original 1C grouping", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
+
+  assert.match(ui, /function specializationInterdisciplinaryHtml/);
+  assert.match(ui, /Фокусы специализации/);
+  assert.match(ui, /id="tblSpecializationFocus"/);
+  assert.match(ui, /Итого по фокусам/);
+  assert.match(ui, /Группировка из файла 1С/);
+  assert.match(ui, /врач → вид услуги \/ специализация → номенклатура/);
+  assert.match(ui, /class="specialization-1c-doctor"/);
+  assert.match(ui, /specializationNazGroups\(row\.nz\)/);
+  assert.match(ui, /nz\.sourceGroups && nz\.sourceGroups\.length/);
+  assert.match(ui, /specializationInterdisciplinaryHtml\(rows, mk, deptFilter, \{ slide: true/);
+  assert.match(css, /\.specialization-focuses\s*\{/);
+  assert.match(css, /\.specialization-1c-doctor\s*\{/);
+  assert.match(css, /@media print[\s\S]*?\.specialization-1c-doctor > \.specialization-table-scroll\s*\{\s*display:\s*block !important/);
+});
+
 test("appointment conversion block starts compact and parent groups hide their whole subtree", () => {
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
@@ -733,6 +752,11 @@ test("local authentication, protected publications and right-side comments are w
   assert.match(ui, /function saveVisibleCommentDrafts/);
   assert.match(ui, /data-analytics-block-key="overview"/);
   assert.match(ui, /Выгрузить логины и пароли в Excel/);
+  assert.match(ui, /Доступы врачей · \$\{activeDoctors\}\/\$\{totalDoctors\}/);
+  assert.match(ui, /class="user-access-readiness \$\{accessReady \? "ready" : "pending"\}"/);
+  assert.match(ui, /Готово \$\{activeDoctorCount\} из \$\{allDoctorIds\.length\}/);
+  assert.match(css, /\.user-access-readiness\.ready/);
+  assert.match(css, /\.user-access-readiness\.pending/);
   assert.doesNotMatch(ui, /class="account-password"/);
   assert.match(css, /\.commented-analytic-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+340px/);
   assert.match(css, /@media \(max-width:\s*1100px\)[\s\S]*?\.commented-analytic-row\s*\{\s*grid-template-columns:\s*1fr/);

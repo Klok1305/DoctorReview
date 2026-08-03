@@ -984,6 +984,140 @@ function compactBaseTrend(current, previous, lowerBetter = false) {
   return `<div class="table-kpi-trend" title="К прошлому месяцу">${kbTrendMarkup(current, previous, lowerBetter, "relative")}</div>`;
 }
 
+function specializationNazSummary(result) {
+  if (!result || !result.cross || !result.cross.naz) return null;
+  const bySlice = result.cross.naz;
+  if (bySlice[UI.nazSlice]) return bySlice[UI.nazSlice];
+  if (bySlice[1]) return bySlice[1];
+  if (bySlice[3]) return bySlice[3];
+  return Object.values(bySlice).filter(Boolean).sort((a, b) => Number(a.slice || 0) - Number(b.slice || 0))[0] || null;
+}
+
+function specializationNazGroups(nz) {
+  if (nz && nz.sourceGroups && nz.sourceGroups.length) return nz.sourceGroups;
+  if (!nz || !nz.byType) return [];
+  return Object.entries(nz.byType)
+    .filter(([, values]) => values && (values.assigned || values.done || values.soldQ))
+    .map(([name, values]) => ({
+      path: [name],
+      assigned: values.assigned || 0,
+      done: values.done || 0,
+      soldQ: values.soldQ || 0,
+      resultQ: values.resultQ || 0,
+      items: values.items || {},
+    }));
+}
+
+function specializationInterdisciplinaryHtml(rows, mk, specializationName, options = {}) {
+  if (!specializationName || specializationName === "all") return "";
+  const profile = deptProfile(specializationName);
+  const configuredFocuses = profile && profile.crossFocus && Array.isArray(profile.crossFocus.items)
+    ? profile.crossFocus.items
+    : [];
+  const doctorRows = rows.map(row => ({ ...row, nz: specializationNazSummary(row.r) })).filter(row => row.nz);
+  const focusOrder = configuredFocuses.map(item => item.name);
+  for (const row of doctorRows) {
+    for (const name of Object.keys(row.nz.focus && row.nz.focus.items || {})) {
+      if (!focusOrder.includes(name)) focusOrder.push(name);
+    }
+  }
+  if (!focusOrder.length && !doctorRows.length) return "";
+
+  const focusMeta = new Map(configuredFocuses.map(item => [item.name, item]));
+  const focusTotals = new Map(focusOrder.map(name => [name, { assigned: 0, done: 0, soldQ: 0, resultQ: 0 }]));
+  for (const row of doctorRows) {
+    for (const [name, values] of Object.entries(row.nz.focus && row.nz.focus.items || {})) {
+      if (!focusTotals.has(name)) focusTotals.set(name, { assigned: 0, done: 0, soldQ: 0, resultQ: 0 });
+      const total = focusTotals.get(name);
+      total.assigned += Number(values.assigned) || 0;
+      total.done += Number(values.done) || 0;
+      total.soldQ += Number(values.soldQ) || 0;
+      total.resultQ += Number(values.resultQ) || 0;
+    }
+  }
+  const overallFocus = [...focusTotals.values()].reduce((total, values) => {
+    total.assigned += values.assigned;
+    total.done += values.done;
+    total.soldQ += values.soldQ;
+    total.resultQ += values.resultQ;
+    return total;
+  }, { assigned: 0, done: 0, soldQ: 0, resultQ: 0 });
+  const overallFocusConv = overallFocus.assigned > 0 && overallFocus.resultQ <= overallFocus.assigned
+    ? overallFocus.resultQ / overallFocus.assigned * 100
+    : null;
+  const title = profile && profile.crossFocus && profile.crossFocus.title
+    ? profile.crossFocus.title
+    : "Фокусы междисциплинарного подхода";
+  const cardClass = options.slide ? "card slide" : "card";
+  const subtitle = options.subtitle || `${specializationName} · ${monthLabel(mk)}`;
+  let html = `<div class="${cardClass} specialization-interdisciplinary" data-analytics-block-key="interdisciplinary">
+    <h2>🤝 Междисциплинарный подход · ${esc(subtitle)}</h2>
+    <p class="small muted">Фокусы заданы для специализации «${esc(specializationName)}». Ниже — их общий результат и исходная группировка назначений из файла 1С по каждому врачу.</p>`;
+
+  if (focusOrder.length) {
+    html += `<section class="specialization-focuses" aria-label="Фокусы специализации">
+      <div class="vhead"><h3>Фокусы специализации <span class="small muted">· ${esc(title)}</span></h3><span class="badge ${overallFocus.resultQ ? "ok" : "mut"}">Результат: ${fmtNum(overallFocus.resultQ)}</span></div>
+      <div class="specialization-table-scroll"><table class="data" id="tblSpecializationFocus"><tr><th>Фокус</th><th class="num">Назначено</th><th class="num">Выполнено</th><th class="num">Продано</th><th class="num">Результат</th><th class="num">Конверсия</th></tr>`;
+    for (const name of focusOrder) {
+      const values = focusTotals.get(name) || { assigned: 0, done: 0, soldQ: 0, resultQ: 0 };
+      const valid = values.assigned >= 0 && values.resultQ <= values.assigned;
+      const conv = valid && values.assigned > 0 ? values.resultQ / values.assigned * 100 : null;
+      const meta = focusMeta.get(name);
+      html += `<tr><td><b>${esc(name)}</b>${meta && meta.core === false ? ' <span class="badge mut">наблюдение</span>' : ""}</td>
+        <td class="num">${fmtNum(values.assigned)}</td><td class="num">${fmtNum(values.done)}</td><td class="num">${fmtNum(values.soldQ)}</td>
+        <td class="num"><b>${fmtNum(values.resultQ)}</b></td><td class="num">${conv != null ? fmtPct(conv) : "—"}</td></tr>`;
+    }
+    html += `<tr class="specialization-focus-total"><td><b>Итого по фокусам</b></td><td class="num"><b>${fmtNum(overallFocus.assigned)}</b></td>
+      <td class="num"><b>${fmtNum(overallFocus.done)}</b></td><td class="num"><b>${fmtNum(overallFocus.soldQ)}</b></td>
+      <td class="num"><b>${fmtNum(overallFocus.resultQ)}</b></td><td class="num"><b>${overallFocusConv != null ? fmtPct(overallFocusConv) : "—"}</b></td></tr></table></div>
+      ${doctorRows.length ? "" : '<p class="small muted">Фокусы настроены, но выгрузка «Назначения» за выбранный период ещё не загружена.</p>'}
+    </section>`;
+  } else {
+    html += '<div class="notice blue"><b>Фокусы специализации ещё не настроены.</b> Их можно добавить в настройках структуры клиники.</div>';
+  }
+
+  if (doctorRows.length) {
+    html += `<section class="specialization-doctor-results"><h3>Итоги по врачам</h3><div class="specialization-table-scroll"><table class="data" id="tblSpecializationInterdisciplinary"><tr><th>Врач</th><th class="num">Период</th><th class="num">Назначено</th><th class="num">Выполнено</th><th class="num">Продано</th><th class="num">Конверсия</th><th class="num">По фокусам</th><th class="num">Выручка от перенаправлений</th></tr>`;
+    for (const row of doctorRows) {
+      html += `<tr><td><b>${esc(doctorName(row.id))}</b></td><td class="num">${fmtNum(row.nz.slice)} мес.</td>
+        <td class="num">${fmtNum(row.nz.totals.assigned)}</td><td class="num">${fmtNum(row.nz.totals.done)}</td><td class="num">${fmtNum(row.nz.totals.soldQ)}</td>
+        <td class="num"><b>${row.nz.totals.conv != null ? fmtPct(row.nz.totals.conv) : "—"}</b></td>
+        <td class="num">${row.nz.focus ? `${fmtNum(row.nz.focus.assigned)} / ${fmtNum(row.nz.focus.resultQ)}` : "—"}</td>
+        <td class="num">${fmtMoney(row.r.econ.refRevenue)}</td></tr>`;
+    }
+    html += `</table></div></section>
+      <section class="specialization-1c-grouping"><h3>Группировка из файла 1С</h3>
+      <p class="small muted">Структура сохраняется в том же порядке, что в исходном отчёте: врач → вид услуги / специализация → номенклатура. Нажмите на врача, чтобы раскрыть строки.</p>`;
+    doctorRows.forEach((row, doctorIndex) => {
+      const groups = specializationNazGroups(row.nz);
+      const maxItems = 120;
+      let renderedItems = 0;
+      const totalItems = groups.reduce((sum, group) => sum + Object.keys(group.items || {}).length, 0);
+      html += `<details class="specialization-1c-doctor" ${doctorIndex === 0 ? "open" : ""}><summary>
+        <span><b>${esc(doctorName(row.id))}</b><small>${fmtNum(groups.length)} групп · ${fmtNum(totalItems)} позиций</small></span>
+        <span class="specialization-1c-doctor-totals"><b>${fmtNum(row.nz.totals.assigned)}</b> назначено · <b>${fmtNum(row.nz.totals.resultQ)}</b> результат</span>
+      </summary><div class="specialization-table-scroll"><table class="data"><tr><th>Группа / номенклатура</th><th class="num">Назначено</th><th class="num">Выполнено</th><th class="num">Продано</th><th class="num">Конверсия</th></tr>`;
+      for (const group of groups) {
+        const valid = group.assigned >= 0 && group.resultQ <= group.assigned;
+        const conv = valid && group.assigned > 0 ? group.resultQ / group.assigned * 100 : null;
+        html += `<tr class="source-group-head source-group-depth-0"><td><span class="source-group-path">${(group.path || []).map(part => `<span class="source-group-level">${esc(part)}</span>`).join('<span class="source-group-separator">›</span>')}</span></td>
+          <td class="num"><b>${fmtNum(group.assigned)}</b></td><td class="num"><b>${fmtNum(group.done)}</b></td><td class="num"><b>${fmtNum(group.soldQ)}</b></td><td class="num"><b>${conv != null ? fmtPct(conv) : "—"}</b></td></tr>`;
+        const itemEntries = Object.entries(group.items || {}).sort((a, b) => ((b[1].assigned || 0) + (b[1].resultQ || 0)) - ((a[1].assigned || 0) + (a[1].resultQ || 0)));
+        for (const [name, values] of itemEntries) {
+          if (renderedItems >= maxItems) break;
+          renderedItems++;
+          html += `<tr><td class="small muted source-nomenclature">${esc(name)}</td><td class="num small muted">${fmtNum(values.assigned)}</td>
+            <td class="num small muted">${fmtNum(values.done)}</td><td class="num small muted">${fmtNum(values.soldQ)}</td><td class="num small muted"></td></tr>`;
+        }
+        if (renderedItems >= maxItems) break;
+      }
+      html += `</table>${totalItems > renderedItems ? `<p class="small muted">Показаны первые ${fmtNum(renderedItems)} из ${fmtNum(totalItems)} позиций. Полная детализация доступна на странице врача.</p>` : ""}</div></details>`;
+    });
+    html += "</section>";
+  }
+  return html + "</div>";
+}
+
 function renderDept() {
   const months = monthKeysSorted();
   const sel = document.getElementById("deptMonth");
@@ -1118,6 +1252,10 @@ function renderDept() {
     }
   } else if (rows.some(x => x.r.product)) {
     html += `<div class="card"><p class="small muted" style="margin:0">🔥 Тепловая карта аппаратов/услуг доступна при выборе конкретной специализации в фильтре сверху — у каждой специализации свой набор отслеживаемых позиций.</p></div>`;
+  }
+
+  if (UI.deptFilter !== "all") {
+    html += specializationInterdisciplinaryHtml(rows, mk, UI.deptFilter);
   }
 
   // Клиентская база: период выбирается вручную, группы с недоступным временным порогом скрываются.
@@ -4225,19 +4363,15 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
     html += "</table></div>";
   }
 
-  /* Слайд 5: междисциплинарный */
-  const withNaz = rows.filter(x => x.r.cross.naz[1] || x.r.cross.naz[3]);
-  if (withNaz.length) {
-    html += `<div class="card slide" data-analytics-block-key="interdisciplinary"><h2>Междисциплинарный подход · ${sub}</h2>
-      <table class="data"><tr><th>Специалист</th><th class="num">Назначено</th><th class="num">Выполнено</th><th class="num">Продано</th><th class="num">Конверсия</th><th class="num">Назначено по фокусам</th><th class="num">Выполнено + продано по фокусам</th><th class="num">Выручка от перенаправлений</th><th class="num">Доля выручки от перенаправлений</th></tr>`;
-    for (const x of withNaz) {
-      const nz = x.r.cross.naz[1] || x.r.cross.naz[3];
-      html += `<tr><td>${esc(doctorName(x.id))} <span class="small muted">(${nz.slice} мес)</span></td>
-        <td class="num">${fmtNum(nz.totals.assigned)}</td><td class="num">${fmtNum(nz.totals.done)}</td><td class="num">${fmtNum(nz.totals.soldQ)}</td>
-        <td class="num"><b>${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</b></td><td class="num">${nz.focus ? fmtNum(nz.focus.assigned) : "—"}</td><td class="num">${nz.focus ? fmtNum(nz.focus.resultQ) : "—"}</td>
-        <td class="num">${fmtMoney(x.r.econ.refRevenue)}</td><td class="num">${fmtPct(x.r.cross.crossShare)}</td></tr>`;
+  /* Слайд 5: междисциплинарный — фокусы специализации + исходная группировка 1С */
+  if (deptFilter !== "all") {
+    html += specializationInterdisciplinaryHtml(rows, mk, deptFilter, { slide: true, subtitle: sub });
+  } else {
+    const withNaz = rows.filter(x => specializationNazSummary(x.r));
+    if (withNaz.length) {
+      html += `<div class="card slide" data-analytics-block-key="interdisciplinary"><h2>Междисциплинарный подход · ${sub}</h2>
+        <p class="small muted">Выберите конкретную специализацию, чтобы увидеть её фокусы и группировку из файла 1С.</p></div>`;
     }
-    html += "</table></div>";
   }
 
   /* Слайд 6: клиентская база */
@@ -4560,10 +4694,12 @@ function setSettingsSection(section) {
 function renderSettingsNavigation() {
   const host = document.getElementById("settingsNavigation");
   if (!host) return;
-  const activeDoctors = APP_USERS.filter(user => user.role === "doctor" && user.active).length;
+  const totalDoctors = Object.keys(DB.doctors).length;
+  const activeDoctorIds = new Set(APP_USERS.filter(user => user.role === "doctor" && user.active && user.doctorId).map(user => user.doctorId));
+  const activeDoctors = [...activeDoctorIds].filter(doctorId => DB.doctors[doctorId]).length;
   host.innerHTML = `
     <button class="btn ${UI.settingsSection === "calculation" ? "active" : ""}" type="button" onclick="setSettingsSection('calculation')">Расчёты и структура</button>
-    <button class="btn ${UI.settingsSection === "access" ? "active" : ""}" type="button" onclick="setSettingsSection('access')">Доступы врачей · ${activeDoctors}</button>`;
+    <button class="btn ${UI.settingsSection === "access" ? "active" : ""}" type="button" onclick="setSettingsSection('access')">Доступы врачей · ${activeDoctors}/${totalDoctors}</button>`;
 }
 
 function renderSettings() {
@@ -5041,6 +5177,10 @@ function renderUserManagement() {
   if (!host || !APP_AUTH || APP_AUTH.user.role !== "admin") return;
   const doctorUsers = new Map(APP_USERS.filter(user => user.role === "doctor").map(user => [user.doctorId, user]));
   const allDoctorIds = Object.keys(DB.doctors).sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru"));
+  const activeDoctorCount = allDoctorIds.filter(doctorId => doctorUsers.get(doctorId) && doctorUsers.get(doctorId).active).length;
+  const missingDoctorCount = allDoctorIds.filter(doctorId => !doctorUsers.has(doctorId)).length;
+  const disabledDoctorCount = allDoctorIds.filter(doctorId => doctorUsers.has(doctorId) && !doctorUsers.get(doctorId).active).length;
+  const accessReady = allDoctorIds.length > 0 && activeDoctorCount === allDoctorIds.length;
   const filter = UI.userFilter.trim().toLocaleLowerCase("ru-RU");
   const visibleDoctorIds = allDoctorIds.filter(doctorId => !filter
     || doctorName(doctorId).toLocaleLowerCase("ru-RU").includes(filter)
@@ -5062,8 +5202,13 @@ function renderUserManagement() {
   }).join("");
   host.innerHTML = `<div class="card"><h2>🔐 Доступы врачей</h2>
     <p class="settings-section-intro small muted">Быстрый порядок работы: создайте недостающие доступы, затем выгрузите один Excel. Логин — фамилия; при совпадении добавляется номер.</p>
+    <div class="user-access-readiness ${accessReady ? "ready" : "pending"}" role="status">
+      <div><strong>${accessReady ? "Доступы готовы для всех врачей" : `Готово ${activeDoctorCount} из ${allDoctorIds.length}`}</strong>
+      <span>${missingDoctorCount ? `Без учётной записи: ${missingDoctorCount}. ` : ""}${disabledDoctorCount ? `Отключено: ${disabledDoctorCount}.` : ""}</span></div>
+      <div class="user-access-readiness-value">${activeDoctorCount}/${allDoctorIds.length}</div>
+    </div>
     <div class="user-management-toolbar">
-      <button class="btn" data-create-all-doctor-accounts>Создать недостающие доступы</button>
+      <button class="btn" data-create-all-doctor-accounts ${missingDoctorCount ? "" : "disabled"}>Создать недостающие доступы</button>
       <button class="btn primary" data-export-doctor-credentials>Выгрузить логины и пароли в Excel</button>
       <input type="search" data-user-filter placeholder="Найти врача…" value="${esc(UI.userFilter)}">
       <span class="small muted">Показано ${visibleDoctorIds.length} из ${allDoctorIds.length}</span>
