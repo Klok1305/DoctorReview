@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { backup, DatabaseSync } = require("node:sqlite");
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const SNAPSHOT_VERSION = 4;
 const MIN_SNAPSHOT_VERSION = 1;
 
@@ -312,7 +312,6 @@ class DatabaseService {
             pin_salt TEXT NOT NULL,
             pin_params TEXT NOT NULL,
             pin_version INTEGER NOT NULL DEFAULT 1,
-            windows_account TEXT NOT NULL DEFAULT '',
             updated_at TEXT NOT NULL
           );
 
@@ -330,6 +329,31 @@ class DatabaseService {
         `);
         this.db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)")
           .run(3, new Date().toISOString());
+      });
+    }
+    if (current < 4) {
+      this.#transaction(() => {
+        this.db.exec(`
+          CREATE TABLE viewer_doctor_access_v4 (
+            doctor_id TEXT PRIMARY KEY,
+            active INTEGER NOT NULL DEFAULT 0,
+            pin_code TEXT NOT NULL,
+            pin_hash TEXT NOT NULL,
+            pin_salt TEXT NOT NULL,
+            pin_params TEXT NOT NULL,
+            pin_version INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL
+          );
+          INSERT INTO viewer_doctor_access_v4(
+            doctor_id, active, pin_code, pin_hash, pin_salt, pin_params, pin_version, updated_at
+          )
+          SELECT doctor_id, active, pin_code, pin_hash, pin_salt, pin_params, pin_version, updated_at
+          FROM viewer_doctor_access;
+          DROP TABLE viewer_doctor_access;
+          ALTER TABLE viewer_doctor_access_v4 RENAME TO viewer_doctor_access;
+        `);
+        this.db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)")
+          .run(4, new Date().toISOString());
       });
     }
     const finalVersion = this.db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get().version;
@@ -475,6 +499,30 @@ class DatabaseService {
 
   hasAdminUser() {
     return this.db.prepare("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1").get() != null;
+  }
+
+  ensureLocalAdministrator() {
+    const existing = this.db.prepare("SELECT * FROM users WHERE role = 'admin' ORDER BY id LIMIT 1").get();
+    if (existing) {
+      this.db.prepare(`
+        UPDATE users
+        SET active = 1, must_change_password = 0, failed_attempts = 0, locked_until = NULL, updated_at = ?
+        WHERE id = ?
+      `).run(new Date().toISOString(), Number(existing.id));
+      return this.getUserById(existing.id);
+    }
+
+    let username = "local-admin";
+    let suffix = 2;
+    while (this.getUserByUsername(username)) username = `local-admin-${suffix++}`;
+    return this.createUser({
+      username,
+      displayName: "Администратор",
+      role: "admin",
+      passwordHash: "",
+      passwordSalt: "",
+      passwordParams: "{}",
+    });
   }
 
   createUser({ username, displayName, role, doctorId = null, passwordHash, passwordSalt, passwordParams, mustChangePassword = false }) {
@@ -762,8 +810,8 @@ class DatabaseService {
     const doctors = this.db.prepare("SELECT id, data_json FROM doctors ORDER BY id").all();
     const insert = this.db.prepare(`
       INSERT OR IGNORE INTO viewer_doctor_access(
-        doctor_id, active, pin_code, pin_hash, pin_salt, pin_params, pin_version, windows_account, updated_at
-      ) VALUES (?, 0, ?, ?, ?, ?, 1, '', ?)
+        doctor_id, active, pin_code, pin_hash, pin_salt, pin_params, pin_version, updated_at
+      ) VALUES (?, 0, ?, ?, ?, ?, 1, ?)
     `);
     this.#transaction(() => {
       for (const doctor of doctors) {
@@ -791,7 +839,6 @@ class DatabaseService {
           active: Boolean(item.active),
           pin: item.pin_code,
           pinVersion: Number(item.pin_version),
-          windowsAccount: item.windows_account || "",
           updatedAt: item.updated_at,
         };
       }),
@@ -815,7 +862,7 @@ class DatabaseService {
     return { configured: true, version };
   }
 
-  updateViewerDoctorAccess({ doctorId, active, pin, windowsAccount }) {
+  updateViewerDoctorAccess({ doctorId, active, pin }) {
     const id = String(doctorId || "");
     if (!this.db.prepare("SELECT 1 FROM doctors WHERE id = ?").get(id)) throw new Error("Врач не найден в рабочей базе");
     this.viewerAccessSnapshot();
@@ -824,19 +871,15 @@ class DatabaseService {
     if (!/^\d{4}$/.test(nextPin)) throw new Error("PIN врача должен состоять ровно из четырёх цифр");
     const duplicate = this.db.prepare("SELECT doctor_id FROM viewer_doctor_access WHERE pin_code = ? AND doctor_id <> ?").get(nextPin, id);
     if (duplicate) throw new Error("Такой PIN уже назначен другому врачу");
-    const account = String(windowsAccount == null ? current.windows_account : windowsAccount).trim().slice(0, 160);
-    if (account && !/^[^\\/:*?\"<>|\r\n]{1,80}(?:\\[^\\/:*?\"<>|\r\n]{1,80})?$/.test(account)) {
-      throw new Error("Укажите Windows-учётку в формате DOMAIN\\username или username");
-    }
     const changedPin = nextPin !== current.pin_code;
     const record = changedPin ? viewerPinRecord(nextPin) : {
       hash: current.pin_hash, salt: current.pin_salt, params: current.pin_params,
     };
     this.db.prepare(`
       UPDATE viewer_doctor_access SET active = ?, pin_code = ?, pin_hash = ?, pin_salt = ?, pin_params = ?,
-        pin_version = ?, windows_account = ?, updated_at = ? WHERE doctor_id = ?
+        pin_version = ?, updated_at = ? WHERE doctor_id = ?
     `).run(active == null ? current.active : (active ? 1 : 0), nextPin, record.hash, record.salt, record.params,
-      Number(current.pin_version) + (changedPin ? 1 : 0), account, new Date().toISOString(), id);
+      Number(current.pin_version) + (changedPin ? 1 : 0), new Date().toISOString(), id);
     return this.viewerAccessSnapshot().doctors.find(item => item.doctorId === id);
   }
 
@@ -849,11 +892,11 @@ class DatabaseService {
       if (!row || !row.active) throw new Error(`Доступ врача ${id} не включён`);
       return {
         doctorId: id,
+        pinCode: row.pin_code,
         pinHash: row.pin_hash,
         pinSalt: row.pin_salt,
         pinParams: row.pin_params,
         pinVersion: Number(row.pin_version),
-        windowsAccount: row.windows_account || "",
       };
     });
     return {

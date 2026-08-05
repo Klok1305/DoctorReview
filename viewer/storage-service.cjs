@@ -2,9 +2,9 @@
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
-const { inspectViewerPackage } = require("../desktop/services/viewer-package-service.cjs");
+const { decryptViewerPage, inspectViewerPackage } = require("../desktop/services/viewer-package-service.cjs");
+const DOCTOR_LOCK_MS = 15 * 60 * 1000;
 
 function readJson(filePath, fallback = null) {
   try { return JSON.parse(fs.readFileSync(filePath, "utf8")); } catch (_) { return fallback; }
@@ -48,36 +48,12 @@ function atomicWriteJson(filePath, value) {
   }
 }
 
-function normalizeWindowsAccount(value) {
-  return String(value || "").trim().replace(/\//g, "\\").toLocaleLowerCase("ru-RU");
-}
-
-function windowsIdentity() {
-  const username = os.userInfo().username;
-  const domain = String(process.env.USERDOMAIN || "").trim();
-  return {
-    username,
-    domain,
-    qualified: domain ? `${domain}\\${username}` : username,
-  };
-}
-
-function accountMatches(expected) {
-  const wanted = normalizeWindowsAccount(expected);
-  if (!wanted) return true;
-  const identity = windowsIdentity();
-  const candidates = new Set([
-    normalizeWindowsAccount(identity.username),
-    normalizeWindowsAccount(identity.qualified),
-    normalizeWindowsAccount(process.env.USERNAME || ""),
-  ]);
-  return candidates.has(wanted);
-}
-
 class ViewerStorageService {
   constructor({ configPath }) {
     this.configPath = configPath;
     this.root = null;
+    this.doctorFailures = new Map();
+    this.doctorLockedUntil = new Map();
     this.loadConfig();
   }
 
@@ -128,7 +104,6 @@ class ViewerStorageService {
         doctors: Array.isArray(catalog.doctors) ? catalog.doctors : [],
         updatedAt: catalog.updatedAt || null,
       },
-      windowsIdentity: windowsIdentity(),
     };
   }
 
@@ -176,7 +151,13 @@ class ViewerStorageService {
     if (!selectedDoctors.size || !selectedPeriods.size) throw new Error("Не выбраны врачи или периоды для импорта");
 
     const previousCatalog = readJson(path.join(root, "catalog.json"), { doctors: [] });
-    const catalogMap = new Map((previousCatalog.doctors || []).map(item => [String(item.doctorId), item]));
+    const catalogMap = new Map((previousCatalog.doctors || []).map(item => [String(item.doctorId), {
+      doctorId: String(item.doctorId),
+      folderId: String(item.folderId || ""),
+      displayName: String(item.displayName || item.doctorId),
+      department: String(item.department || ""),
+      specialization: String(item.specialization || ""),
+    }]));
     const staged = [];
     for (const doctor of preview.doctors.filter(item => selectedDoctors.has(item.doctorId))) {
       const folderId = safeSegment(doctor.folderId, "папка врача");
@@ -253,7 +234,6 @@ class ViewerStorageService {
         displayName: item.doctor.displayName,
         department: item.doctor.department,
         specialization: item.doctor.specialization,
-        windowsAccount: item.doctor.windowsAccount,
       });
     }
 
@@ -264,29 +244,35 @@ class ViewerStorageService {
       updatedAt: now,
       doctors: [...catalogMap.values()].sort((a, b) => a.displayName.localeCompare(b.displayName, "ru")),
     });
-    const aclRows = ["folder;doctor;windows_account"];
-    for (const doctor of catalogMap.values()) {
-      const cell = value => `"${String(value || "").replace(/"/g, '""')}"`;
-      aclRows.push([doctor.folderId, doctor.displayName, doctor.windowsAccount].map(cell).join(";"));
-    }
-    fs.mkdirSync(path.join(root, "_viewer"), { recursive: true });
-    fs.writeFileSync(path.join(root, "_viewer", "acl-mapping.csv"), `\uFEFF${aclRows.join("\r\n")}\r\n`, "utf8");
+    fs.rmSync(path.join(root, "_viewer", "acl-mapping.csv"), { force: true });
     return { packageId: manifest.packageId, doctors: staged.length, periods: selectedPeriods.size, sha256: preview.sha256, importedAt: now };
   }
 
-  doctorLogin({ doctorId, pin, allowWindowsMismatch = false }) {
+  doctorLogin({ doctorId, pin }) {
     const status = this.status();
     const doctor = status.catalog.doctors.find(item => String(item.doctorId) === String(doctorId));
     if (!doctor) throw new Error("Врач не найден в опубликованном каталоге");
-    if (!allowWindowsMismatch && doctor.windowsAccount && !accountMatches(doctor.windowsAccount)) {
-      throw new Error(`Отчёт доступен только Windows-пользователю ${doctor.windowsAccount}`);
+    const key = String(doctor.doctorId);
+    if (Number(this.doctorLockedUntil.get(key) || 0) > Date.now()) {
+      throw new Error("Вход врача временно заблокирован после пяти неверных PIN");
     }
     const folderId = safeSegment(doctor.folderId, "папка врача");
     const doctorRoot = path.join(this.requireRoot(), "doctors", folderId);
     const access = readJson(path.join(doctorRoot, "access.json"), null);
-    if (!access || !verifyPin(pin, access)) throw new Error("Неверный PIN врача");
+    if (!access || !verifyPin(pin, access)) {
+      const failures = Number(this.doctorFailures.get(key) || 0) + 1;
+      if (failures >= 5) {
+        this.doctorFailures.delete(key);
+        this.doctorLockedUntil.set(key, Date.now() + DOCTOR_LOCK_MS);
+        throw new Error("Вход врача заблокирован на 15 минут после пяти неверных PIN");
+      }
+      this.doctorFailures.set(key, failures);
+      throw new Error(`Неверный PIN врача. Осталось попыток: ${5 - failures}`);
+    }
+    this.doctorFailures.delete(key);
+    this.doctorLockedUntil.delete(key);
     const index = readJson(path.join(doctorRoot, "index.json"), { publications: [] });
-    return { doctor, doctorRoot, index };
+    return { doctor, doctorRoot, index, pin: String(pin) };
   }
 
   readReport(session, { periodKey, pageType }) {
@@ -299,8 +285,9 @@ class ViewerStorageService {
     const reportPath = path.resolve(session.doctorRoot, "releases", releaseId, relative);
     const releaseRoot = path.resolve(session.doctorRoot, "releases", releaseId) + path.sep;
     if (!reportPath.startsWith(releaseRoot)) throw new Error("Некорректный путь отчёта");
-    return readJson(reportPath, null);
+    const encrypted = readJson(reportPath, null);
+    return encrypted ? decryptViewerPage(encrypted, session.pin) : null;
   }
 }
 
-module.exports = { ViewerStorageService, accountMatches, atomicWriteJson, verifyPin, windowsIdentity };
+module.exports = { ViewerStorageService, DOCTOR_LOCK_MS, atomicWriteJson, verifyPin };

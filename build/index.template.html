@@ -10,31 +10,6 @@
 </style>
 </head>
 <body>
-<section class="auth-screen hidden" id="authScreen" aria-live="polite">
-  <div class="auth-card">
-    <div class="auth-brand">💓 <b>Пульс клиники — Администратор</b></div>
-    <div id="authSetup" class="hidden">
-      <h1>Создание администратора</h1>
-      <p class="muted">Первый запуск. Создайте учётную запись руководителя.</p>
-      <label class="fld"><span>Логин</span><input id="setupUsername" autocomplete="username"></label>
-      <label class="fld"><span>Имя</span><input id="setupDisplayName" value="Администратор"></label>
-      <label class="fld"><span>Пароль</span><input id="setupPassword" type="password" autocomplete="new-password"></label>
-      <label class="fld"><span>Повторите пароль</span><input id="setupPasswordRepeat" type="password" autocomplete="new-password"></label>
-      <button class="btn primary auth-submit" id="btnSetupAdmin">Создать администратора</button>
-    </div>
-    <div id="authLogin" class="hidden">
-      <h1>Вход</h1>
-      <form class="auth-pane" id="adminLoginForm">
-        <h2>Администратор</h2>
-        <label class="fld"><span>Логин</span><input id="adminLoginUsername" autocomplete="username"></label>
-        <label class="fld"><span>Пароль</span><input id="adminLoginPassword" type="password" autocomplete="current-password"></label>
-        <button class="btn primary auth-submit" type="submit">Войти</button>
-      </form>
-    </div>
-    <div class="notice bad hidden" id="authError"></div>
-  </div>
-</section>
-
 <header class="app-header no-print">
   <div class="logo">💓 <span class="logo-work">Пульс</span> <span class="logo-doctors">клиники</span> <span class="small muted">Администратор</span></div>
   <nav class="tabs">
@@ -46,7 +21,6 @@
     <button data-tab="settings">⚙️ Настройки</button>
   </nav>
   <div class="header-status" id="headerStatus"></div>
-  <div class="header-user hidden" id="headerUser"><span id="headerUserName"></span><button class="btn mini" id="btnAdminChangePassword">Сменить пароль</button><button class="btn mini" id="btnLogout">Сменить пользователя</button></div>
 </header>
 <main>
 
@@ -210,17 +184,6 @@
 </section>
 
 </main>
-<dialog id="changePasswordDialog" class="password-dialog">
-  <form method="dialog">
-    <h2>Смена пароля</h2>
-    <p class="small muted" id="changePasswordHint"></p>
-    <label class="fld"><span>Текущий пароль</span><input id="currentPassword" type="password" autocomplete="current-password"></label>
-    <label class="fld"><span>Новый пароль</span><input id="newPassword" type="password" autocomplete="new-password"></label>
-    <label class="fld"><span>Повторите новый пароль</span><input id="newPasswordRepeat" type="password" autocomplete="new-password"></label>
-    <div class="notice bad hidden" id="changePasswordError"></div>
-    <div class="toolbar"><button class="btn" value="cancel">Отмена</button><button class="btn primary" value="default" id="btnConfirmPasswordChange">Сохранить пароль</button></div>
-  </form>
-</dialog>
 <footer class="app-footer no-print" id="footerText">Административное приложение работает локально. Рабочую базу нельзя размещать в OneDrive или на сетевом пути SMB/UNC.</footer>
 <script type="text/plain" id="lib-xlsx">
 /*__XLSX__*/

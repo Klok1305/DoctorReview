@@ -31,8 +31,6 @@ function showError(id, message) {
 
 async function refreshStatus() {
   state.status = await API.status();
-  const identity = state.status.windowsIdentity;
-  document.getElementById("viewerWindowsIdentity").textContent = identity ? `Windows: ${identity.qualified}` : "";
   document.getElementById("viewerSetup").classList.toggle("hidden", state.status.configured && state.status.online);
   document.getElementById("viewerLogin").classList.toggle("hidden", !state.status.configured || !state.status.online || Boolean(state.doctor));
   document.getElementById("viewerReport").classList.toggle("hidden", !state.doctor);
@@ -79,7 +77,6 @@ function renderAdminMode() {
   document.getElementById("viewerAdminLogin").classList.toggle("hidden", showPanel);
   document.getElementById("viewerAdminPanel").classList.toggle("hidden", !showPanel);
   document.getElementById("viewerBootstrapPinField").classList.toggle("hidden", initialized);
-  document.getElementById("btnOpenAclMapping").classList.toggle("hidden", !initialized);
 }
 
 function openAdminDialog() {
@@ -246,7 +243,6 @@ function bindEvents() {
   document.getElementById("btnAdminLogin").addEventListener("click", loginAdmin);
   document.getElementById("viewerAdminPin").addEventListener("keydown", event => { if (event.key === "Enter") loginAdmin(); });
   document.getElementById("btnAdminChooseStorage").addEventListener("click", chooseStorage);
-  document.getElementById("btnOpenAclMapping").addEventListener("click", () => API.openAclMapping().catch(error => showError("viewerAdminError", error.message)));
   document.getElementById("viewerPackageDrop").addEventListener("click", pickPackage);
   for (const type of ["dragenter", "dragover"]) document.getElementById("viewerPackageDrop").addEventListener(type, event => {
     event.preventDefault(); event.currentTarget.classList.add("dragover");

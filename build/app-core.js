@@ -1240,9 +1240,6 @@ function queueDesktopSnapshot(snapshot) {
 }
 
 function saveLocal() {
-  if (DESKTOP_API && (typeof APP_AUTH === "undefined" || !APP_AUTH || !APP_AUTH.authenticated || APP_AUTH.user.role !== "admin")) {
-    return Promise.resolve(false);
-  }
   if (typeof clearMetricsCache === "function") clearMetricsCache(); // данные/настройки изменились
   let snapshot;
   try {
@@ -1284,8 +1281,7 @@ function loadLocal() {
 async function loadDesktopDatabase() {
   if (!DESKTOP_API) return null;
   DESKTOP_STATE = await DESKTOP_API.initialize();
-  if (DESKTOP_STATE.auth && DESKTOP_STATE.auth.authenticated && DESKTOP_STATE.auth.user.role === "admin"
-      && DESKTOP_STATE.snapshot && !applyLoadedDatabase(DESKTOP_STATE.snapshot)) {
+  if (DESKTOP_STATE.snapshot && !applyLoadedDatabase(DESKTOP_STATE.snapshot)) {
     throw new Error("Рабочая база создана несовместимой версией приложения");
   }
   DESKTOP_DATABASE_LOADED = Boolean(DESKTOP_STATE.snapshot);

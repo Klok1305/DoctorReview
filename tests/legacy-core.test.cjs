@@ -1169,10 +1169,9 @@ test("selected specialization includes doctors found only in the primary-return 
   assert.equal(plain.allPrimaryReturn.pct, 40);
 });
 
-test("desktop autosave serializes the current database before writing SQLite", async () => {
+test("desktop autosave works immediately without an authentication session", async () => {
   const context = createContext({ desktop: true });
   const saved = await vm.runInContext(`(async () => {
-    APP_AUTH = { authenticated: true, user: { role: 'admin' } };
     DB.doctors = { d1: { name: 'Тестов Врач', aliases: [] } };
     DB.months = { '2026-01': emptyMonth() };
     return saveLocal();

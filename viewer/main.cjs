@@ -2,7 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const { ViewerStorageService } = require("./storage-service.cjs");
 
 const APP_NAME = "Пульс клиники — Viewer";
@@ -111,11 +111,7 @@ function registerIpc() {
   });
   ipcMain.handle("viewer:doctor-login", (_event, payload) => {
     const input = payload && typeof payload === "object" ? payload : {};
-    doctorSession = storage.doctorLogin({
-      doctorId: input.doctorId,
-      pin: input.pin,
-      allowWindowsMismatch: Date.now() < adminSessionUntil,
-    });
+    doctorSession = storage.doctorLogin({ doctorId: input.doctorId, pin: input.pin });
     return {
       doctor: doctorSession.doctor,
       periods: (doctorSession.index.publications || []).map(item => ({
@@ -136,13 +132,6 @@ function registerIpc() {
       throw new Error("Некорректный запрос отчёта");
     }
     return storage.readReport(doctorSession, input);
-  });
-  ipcMain.handle("viewer:open-acl-mapping", async () => {
-    requireAdmin();
-    const filePath = path.join(storage.requireRoot(), "_viewer", "acl-mapping.csv");
-    if (!fs.existsSync(filePath)) throw new Error("Сначала импортируйте ZIP");
-    shell.showItemInFolder(filePath);
-    return true;
   });
 }
 

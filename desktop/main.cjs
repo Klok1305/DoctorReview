@@ -14,7 +14,6 @@ const { DatabaseService } = require("./services/database.cjs");
 const { BackupService } = require("./services/backup-service.cjs");
 const { FileService } = require("./services/file-service.cjs");
 const { UpdateService } = require("./services/update-service.cjs");
-const { AuthService } = require("./services/auth-service.cjs");
 const { createViewerPackage } = require("./services/viewer-package-service.cjs");
 
 const PDF_SMOKE_TEST = process.argv.includes("--pdf-smoke");
@@ -56,7 +55,6 @@ let database = null;
 let backupService = null;
 let fileService = null;
 let updateService = null;
-let authService = null;
 
 function logEvent(event, details = {}) {
   const record = JSON.stringify({ time: new Date().toISOString(), event, details });
@@ -80,6 +78,20 @@ app.on("child-process-gone", (_event, details) => {
 function ensureObject(value, label = "данные") {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Некорректные ${label}`);
   return value;
+}
+
+function localAdminActor() {
+  const user = database.ensureLocalAdministrator();
+  return {
+    userId: Number(user.id),
+    role: "admin",
+    user: {
+      id: Number(user.id),
+      username: user.username,
+      displayName: user.display_name,
+      role: "admin",
+    },
+  };
 }
 
 function sanitizeRichTextHtml(value) {
@@ -160,14 +172,7 @@ async function initializeServices() {
     defaultWorkspaceRoot: path.join(localDataDir, APP_NAME, "Рабочие данные"),
   });
   database = new DatabaseService(configStore.databasePath());
-  authService = new AuthService({ database, logger: logEvent });
-  if (SMOKE_TEST && !database.hasUsers()) {
-    authService.setupAdmin({
-      username: "smoke-admin",
-      displayName: "Администратор smoke-теста",
-      password: "SmokeTest2026",
-    });
-  }
+  database.ensureLocalAdministrator();
   backupService = new BackupService({ database, configStore, logger: logEvent });
   fileService = new FileService({ configStore, database, logger: logEvent });
   updateService = new UpdateService({
@@ -1062,25 +1067,8 @@ function registerIpc() {
     });
   });
   ipcMain.handle("app:initialize", () => {
-    const auth = authService.status();
     return {
       app: { name: APP_NAME, version: app.getVersion(), packaged: app.isPackaged, smokeTest: SMOKE_TEST },
-      auth,
-      config: auth.authenticated && auth.user.role === "admin" ? configStore.publicConfig() : null,
-      snapshot: auth.authenticated && auth.user.role === "admin" ? database.loadSnapshot() : null,
-      summary: auth.authenticated && auth.user.role === "admin" ? database.summary() : null,
-      update: auth.authenticated && auth.user.role === "admin" ? updateService.getStatus() : null,
-    };
-  });
-
-  ipcMain.handle("auth:status", () => authService.status());
-  ipcMain.handle("auth:setup-admin", (_event, payload) => authService.setupAdmin(ensureObject(payload, "параметры администратора")));
-  ipcMain.handle("auth:login", (_event, payload) => authService.login(ensureObject(payload, "параметры входа")));
-  ipcMain.handle("auth:logout", () => authService.logout());
-  ipcMain.handle("auth:change-password", (_event, payload) => authService.changePassword(ensureObject(payload, "смена пароля")));
-  ipcMain.handle("admin:state", () => {
-    authService.require("admin");
-    return {
       config: configStore.publicConfig(),
       snapshot: database.loadSnapshot(),
       summary: database.summary(),
@@ -1088,11 +1076,11 @@ function registerIpc() {
     };
   });
   ipcMain.handle("comments:list", (_event, payload) => {
-    authService.require("admin");
+    localAdminActor();
     return database.listComments(ensureObject(payload, "контекст комментариев"));
   });
   ipcMain.handle("comments:save", (_event, payload) => {
-    const session = authService.require("admin");
+    const session = localAdminActor();
     const input = ensureObject(payload, "комментарий");
     const bodyHtml = sanitizeRichTextHtml(input.bodyHtml);
     const bodyText = String(input.bodyText || "").slice(0, 10000);
@@ -1112,29 +1100,29 @@ function registerIpc() {
     return saved;
   });
   ipcMain.handle("comments:history", (_event, id) => {
-    authService.require("admin");
+    localAdminActor();
     return database.listCommentVersions(id);
   });
   ipcMain.handle("comments:archive", (_event, id) => {
-    const session = authService.require("admin");
+    const session = localAdminActor();
     const archived = database.archiveComment(id, session.userId);
     database.audit({ actorUserId: session.userId, action: "comment.archived", targetType: "comment", targetId: String(id) });
     return archived;
   });
   ipcMain.handle("viewer-publication:access", () => {
-    authService.require("admin");
+    localAdminActor();
     return database.viewerAccessSnapshot();
   });
   ipcMain.handle("viewer-publication:update-doctor", (_event, payload) => {
-    const session = authService.require("admin");
+    const session = localAdminActor();
     const input = ensureObject(payload, "настройки доступа врача");
     const updated = database.updateViewerDoctorAccess(input);
     database.audit({ actorUserId: session.userId, action: "viewer-access.updated", targetType: "doctor", targetId: updated.doctorId,
-      details: { active: updated.active, pinVersion: updated.pinVersion, windowsAccount: updated.windowsAccount } });
+      details: { active: updated.active, pinVersion: updated.pinVersion } });
     return updated;
   });
   ipcMain.handle("viewer-publication:set-admin-pin", (_event, payload) => {
-    const session = authService.require("admin");
+    const session = localAdminActor();
     const input = ensureObject(payload, "PIN администратора Viewer");
     const result = database.setViewerAdminPin(input.pin);
     database.audit({ actorUserId: session.userId, action: "viewer-admin-pin.updated", targetType: "viewer", targetId: "admin",
@@ -1142,7 +1130,7 @@ function registerIpc() {
     return result;
   });
   ipcMain.handle("viewer-publication:export", async (_event, payload) => {
-    const session = authService.require("admin");
+    const session = localAdminActor();
     const input = ensureObject(payload, "публикация Viewer");
     if (!Array.isArray(input.doctors) || !Array.isArray(input.periods) || !Array.isArray(input.pages)) {
       throw new Error("Некорректное содержимое публикации Viewer");
@@ -1177,14 +1165,14 @@ function registerIpc() {
     return { canceled: false, path: selected.filePath, ...recorded, doctors: doctorIds.length, periods: input.periods.length };
   });
   ipcMain.handle("database:save", (_event, json) => {
-    authService.require("admin");
+    localAdminActor();
     if (typeof json !== "string" || json.length > 200 * 1024 * 1024) throw new Error("Некорректный размер снимка базы");
     const snapshot = JSON.parse(json);
     return database.saveSnapshot(snapshot);
   });
 
   ipcMain.handle("database:export-json", async (_event, json) => {
-    authService.require("admin");
+    localAdminActor();
     if (typeof json !== "string") throw new Error("Некорректный JSON");
     const date = new Date().toISOString().slice(0, 10);
     const result = await dialog.showSaveDialog(mainWindow, {
@@ -1197,7 +1185,7 @@ function registerIpc() {
   });
 
   ipcMain.handle("config:choose-workspace", async () => {
-    authService.require("admin");
+    localAdminActor();
     const result = await dialog.showOpenDialog(mainWindow, {
       title: "Выберите рабочую папку",
       defaultPath: configStore.publicConfig().workspaceRoot,
@@ -1209,12 +1197,12 @@ function registerIpc() {
     const config = await copyDatabaseToWorkspace(result.filePaths[0]);
     if (!config) return { canceled: true, config: configStore.publicConfig() };
     fileService = new FileService({ configStore, database, logger: logEvent });
-    authService.invalidateSession();
-    return { canceled: false, config, requiresLogin: true };
+    database.ensureLocalAdministrator();
+    return { canceled: false, config };
   });
 
   ipcMain.handle("config:choose-folder", async (_event, kind) => {
-    authService.require("admin");
+    localAdminActor();
     const config = configStore.publicConfig();
     const keyMap = { input: "inputDir", output: "outputDir", backup: "backupDir" };
     if (!keyMap[kind]) throw new Error("Неизвестный тип папки");
@@ -1230,7 +1218,7 @@ function registerIpc() {
   });
 
   ipcMain.handle("path:open", async (_event, kind) => {
-    authService.require("admin");
+    localAdminActor();
     const config = configStore.publicConfig();
     const paths = {
       workspace: config.workspaceRoot,
@@ -1247,7 +1235,7 @@ function registerIpc() {
   });
 
   ipcMain.handle("files:pick-input", async () => {
-    authService.require("admin");
+    localAdminActor();
     const result = await dialog.showOpenDialog(mainWindow, {
       title: "Выберите выгрузки 1С",
       defaultPath: configStore.publicConfig().inputDir,
@@ -1257,45 +1245,45 @@ function registerIpc() {
     if (result.canceled) return [];
     return fileService.describeSelected(result.filePaths);
   });
-  ipcMain.handle("files:scan-input", () => { authService.require("admin"); return fileService.scanInputFolder(); });
+  ipcMain.handle("files:scan-input", () => { localAdminActor(); return fileService.scanInputFolder(); });
   ipcMain.handle("files:list-imported", (_event, reportType) => {
-    authService.require("admin");
+    localAdminActor();
     const type = String(reportType || "");
     if (!new Set(["vyrabotka", "kb", "naznach", "pervichka", "prostoy", "zapis"]).has(type)) {
       throw new Error("Неподдерживаемый тип ранее импортированных данных");
     }
     return fileService.listImportedSources(type);
   });
-  ipcMain.handle("files:read-input", (_event, filePath) => { authService.require("admin"); return fileService.readInputFile(String(filePath)); });
-  ipcMain.handle("import:has-source", (_event, sha256) => { authService.require("admin"); return database.hasSuccessfulSource(String(sha256)); });
+  ipcMain.handle("files:read-input", (_event, filePath) => { localAdminActor(); return fileService.readInputFile(String(filePath)); });
+  ipcMain.handle("import:has-source", (_event, sha256) => { localAdminActor(); return database.hasSuccessfulSource(String(sha256)); });
 
   ipcMain.handle("import:begin", async (_event, payload) => {
-    authService.require("admin");
+    localAdminActor();
     const input = ensureObject(payload || {}, "параметры импорта");
     const backup = await backupService.createAutomatic("перед-импортом");
     return { batchId: database.beginImportBatch({ totalFiles: input.totalFiles, backupPath: backup.path }), backupPath: backup.path };
   });
   ipcMain.handle("import:record", (_event, payload) => {
-    authService.require("admin");
+    localAdminActor();
     const input = ensureObject(payload, "сведения об импорте");
     database.recordImport(input);
     return true;
   });
   ipcMain.handle("import:finish", (_event, payload) => {
-    authService.require("admin");
+    localAdminActor();
     const input = ensureObject(payload, "итоги импорта");
     database.finishImportBatch(input.batchId, input.counts || {});
     return database.summary();
   });
 
-  ipcMain.handle("export:begin", (_event, payload) => { authService.require("admin"); return fileService.beginExportBatch(ensureObject(payload, "параметры выгрузки")); });
-  ipcMain.handle("export:write", (_event, payload) => { authService.require("admin"); return fileService.writeExportFile(ensureObject(payload, "файл выгрузки")); });
-  ipcMain.handle("export:finish", (_event, payload) => { authService.require("admin"); return fileService.finishExportBatch(ensureObject(payload, "итоги выгрузки")); });
-  ipcMain.handle("export:abort", (_event, token) => { authService.require("admin"); return fileService.abortExportBatch(token); });
+  ipcMain.handle("export:begin", (_event, payload) => { localAdminActor(); return fileService.beginExportBatch(ensureObject(payload, "параметры выгрузки")); });
+  ipcMain.handle("export:write", (_event, payload) => { localAdminActor(); return fileService.writeExportFile(ensureObject(payload, "файл выгрузки")); });
+  ipcMain.handle("export:finish", (_event, payload) => { localAdminActor(); return fileService.finishExportBatch(ensureObject(payload, "итоги выгрузки")); });
+  ipcMain.handle("export:abort", (_event, token) => { localAdminActor(); return fileService.abortExportBatch(token); });
 
-  ipcMain.handle("backup:create", async () => { authService.require("admin"); return backupService.createAutomatic("ручная"); });
+  ipcMain.handle("backup:create", async () => { localAdminActor(); return backupService.createAutomatic("ручная"); });
   ipcMain.handle("backup:export", async () => {
-    authService.require("admin");
+    localAdminActor();
     const date = new Date().toISOString().slice(0, 10);
     const result = await dialog.showSaveDialog(mainWindow, {
       title: "Сохранить переносимую резервную копию",
@@ -1307,7 +1295,7 @@ function registerIpc() {
     return Object.assign({ canceled: false }, saved);
   });
   ipcMain.handle("backup:restore", async () => {
-    authService.require("admin");
+    localAdminActor();
     const selected = await dialog.showOpenDialog(mainWindow, {
       title: "Выберите резервную копию",
       defaultPath: configStore.publicConfig().backupDir,
@@ -1333,14 +1321,14 @@ function registerIpc() {
     });
     if (confirmation.response !== 0) return { canceled: true };
     const restored = await backupService.restore(source);
-    authService.invalidateSession();
-    return { canceled: false, restored, requiresLogin: true };
+    database.ensureLocalAdministrator();
+    return { canceled: false, restored };
   });
 
-  ipcMain.handle("update:check", () => { authService.require("admin"); return updateService.check(); });
-  ipcMain.handle("update:install-downloaded", () => { authService.require("admin"); return updateService.installDownloaded(); });
+  ipcMain.handle("update:check", () => { localAdminActor(); return updateService.check(); });
+  ipcMain.handle("update:install-downloaded", () => { localAdminActor(); return updateService.installDownloaded(); });
   ipcMain.handle("update:install-file", async () => {
-    authService.require("admin");
+    localAdminActor();
     const selected = await dialog.showOpenDialog(mainWindow, {
       title: "Выберите установщик новой версии",
       properties: ["openFile"],

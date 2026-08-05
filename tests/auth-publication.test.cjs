@@ -5,7 +5,6 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { AuthService, validatePassword, verifyPassword } = require("../desktop/services/auth-service.cjs");
 const { BackupService } = require("../desktop/services/backup-service.cjs");
 const { ConfigStore } = require("../desktop/services/config-store.cjs");
 const { DatabaseService } = require("../desktop/services/database.cjs");
@@ -24,7 +23,7 @@ function snapshot() {
 }
 
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-admin-auth-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-admin-local-"));
   const config = new ConfigStore({ userDataDir: path.join(root, "config"), documentsDir: path.join(root, "documents") });
   config.setWorkspaceRoot(path.join(root, "workspace"));
   const database = new DatabaseService(config.databasePath());
@@ -33,65 +32,42 @@ function fixture(t) {
     try { database.close(); } catch (_) {}
     fs.rmSync(root, { recursive: true, force: true });
   });
-  return { root, config, database, auth: new AuthService({ database }) };
+  return { root, config, database };
 }
 
-test("password may contain any single character but cannot be empty", () => {
-  assert.equal(validatePassword("я"), "я");
-  assert.equal(validatePassword(" "), " ");
-  assert.throws(() => validatePassword(""), /не может быть пустым/);
+test("local administrator is available without login or password", t => {
+  const { database } = fixture(t);
+  const first = database.ensureLocalAdministrator();
+  assert.equal(first.role, "admin");
+  assert.equal(first.active, 1);
+  assert.equal(first.password_hash, "");
+
+  database.setUserActive(first.id, false);
+  const restored = database.ensureLocalAdministrator();
+  assert.equal(restored.id, first.id);
+  assert.equal(restored.active, 1);
+  assert.equal(database.listUsers().filter(user => user.role === "admin").length, 1);
 });
 
-test("administrator can be created, authenticated and change the password", t => {
-  const { database, auth } = fixture(t);
-  const setup = auth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "1" });
-  assert.equal(setup.user.role, "admin");
-  assert.equal(database.hasAdminUser(), true);
-  assert.equal(verifyPassword("1", database.getUserById(setup.user.id)), true);
-
-  auth.logout();
-  const loggedIn = auth.login({ username: "boss", password: "1" });
-  assert.equal(loggedIn.user.displayName, "Руководитель");
-  auth.changePassword({ currentPassword: "1", newPassword: "новый" });
-  auth.logout();
-  assert.equal(auth.login({ username: "boss", password: "новый" }).user.role, "admin");
-});
-
-test("legacy doctor accounts remain stored but cannot authenticate in the admin build", t => {
-  const { database, auth } = fixture(t);
+test("legacy doctor rows remain stored while the local administrator is created automatically", t => {
+  const { database } = fixture(t);
   database.createUser({
     username: "legacy-doctor",
-    displayName: "Старый врач",
+    displayName: "Старый Врач",
     role: "doctor",
     doctorId: "d1",
     passwordHash: "legacy",
     passwordSalt: "legacy",
     passwordParams: "{}",
   });
-
-  assert.equal(auth.status().needsSetup, true, "a doctor-only legacy database still needs an administrator");
-  assert.throws(() => auth.login({ username: "legacy-doctor", password: "anything" }), /только администратору/);
-  assert.equal(typeof auth.createDoctorUser, "undefined");
-  assert.equal(typeof auth.requireDoctorReady, "undefined");
-
-  auth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "admin" });
-  assert.equal(database.listUsers().length, 2, "legacy rows are preserved for backup compatibility");
-});
-
-test("five failed administrator password attempts lock the account", t => {
-  const { auth } = fixture(t);
-  auth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "correct" });
-  auth.logout();
-  for (let attempt = 1; attempt <= 4; attempt++) {
-    assert.throws(() => auth.login({ username: "boss", password: "wrong" }), /Неверный/);
-  }
-  assert.throws(() => auth.login({ username: "boss", password: "wrong" }), /заблокирован/);
-  assert.throws(() => auth.login({ username: "boss", password: "correct" }), /временно заблокирован/);
+  const admin = database.ensureLocalAdministrator();
+  assert.equal(admin.role, "admin");
+  assert.equal(database.listUsers().length, 2);
 });
 
 test("administrative comments and legacy publications survive a portable backup", async t => {
-  const { root, config, database, auth } = fixture(t);
-  const adminId = auth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "SecureAdmin2026" }).user.id;
+  const { root, config, database } = fixture(t);
+  const adminId = database.ensureLocalAdministrator().id;
   database.saveCommentDraft({
     scopeType: "doctor",
     scopeId: "d1",
@@ -121,18 +97,12 @@ test("administrative comments and legacy publications survive a portable backup"
   assert.match(database.getPublishedPage({ doctorId: "d1", periodKey: "2026-01", pageType: "doctor" }).html, /Версия 1/);
 });
 
-test("a full backup restores data but keeps the target installation paths", async t => {
+test("a full backup restores data, keeps target paths and opens with a local administrator", async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-admin-transfer-"));
-  const sourceConfig = new ConfigStore({
-    userDataDir: path.join(root, "source-config"),
-    documentsDir: path.join(root, "source-documents"),
-  });
+  const sourceConfig = new ConfigStore({ userDataDir: path.join(root, "source-config"), documentsDir: path.join(root, "source-documents") });
   sourceConfig.setWorkspaceRoot(path.join(root, "source-workspace"));
   const sourceDatabase = new DatabaseService(sourceConfig.databasePath());
-  const targetConfig = new ConfigStore({
-    userDataDir: path.join(root, "target-config"),
-    documentsDir: path.join(root, "target-documents"),
-  });
+  const targetConfig = new ConfigStore({ userDataDir: path.join(root, "target-config"), documentsDir: path.join(root, "target-documents") });
   targetConfig.setWorkspaceRoot(path.join(root, "target-workspace"));
   const targetDatabase = new DatabaseService(targetConfig.databasePath());
   t.after(() => {
@@ -142,8 +112,7 @@ test("a full backup restores data but keeps the target installation paths", asyn
   });
 
   sourceDatabase.saveSnapshot(snapshot());
-  const sourceAuth = new AuthService({ database: sourceDatabase });
-  const admin = sourceAuth.setupAdmin({ username: "boss", displayName: "Руководитель", password: "admin" }).user;
+  const admin = sourceDatabase.ensureLocalAdministrator();
   sourceDatabase.saveCommentDraft({
     scopeType: "department",
     scopeId: "Терапия",
@@ -167,5 +136,5 @@ test("a full backup restores data but keeps the target installation paths", asyn
   assert.equal(restored.preview.comments, 1);
   assert.equal(targetConfig.publicConfig().workspaceRoot, targetWorkspace);
   assert.equal(targetDatabase.db.prepare("SELECT COUNT(*) AS n FROM import_events").get().n, 1);
-  assert.equal(new AuthService({ database: targetDatabase }).login({ username: "boss", password: "admin" }).user.role, "admin");
+  assert.equal(targetDatabase.ensureLocalAdministrator().role, "admin");
 });

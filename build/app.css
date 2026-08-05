@@ -22,26 +22,6 @@ body {
   color: var(--ink);
   font-size: 14px;
 }
-.auth-screen {
-  position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center;
-  padding: 24px; background: radial-gradient(circle at top, #e0f2fe, #f4f6fa 55%);
-}
-.auth-screen.hidden { display: none; }
-.auth-card {
-  width: min(900px, 100%); max-height: calc(100vh - 48px); overflow: auto;
-  padding: 28px; border: 1px solid var(--line); border-radius: 18px; background: #fff;
-  box-shadow: 0 24px 70px rgba(15, 23, 42, .16);
-}
-.auth-brand { font-size: 22px; margin-bottom: 22px; }
-.auth-card h1 { margin: 0 0 8px; }
-.auth-pane { padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: #f8fafc; }
-.auth-pane h2 { margin-top: 0; }
-.auth-submit { width: 100%; justify-content: center; margin-top: 8px; }
-.header-user { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
-.header-user.hidden { display: none; }
-.password-dialog { width: min(480px, calc(100vw - 30px)); border: 0; border-radius: 14px; padding: 22px; box-shadow: 0 24px 70px rgba(15,23,42,.24); }
-.password-dialog::backdrop { background: rgba(15,23,42,.48); }
-
 .commented-analytic-row {
   display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px;
   align-items: start; margin-bottom: 14px;

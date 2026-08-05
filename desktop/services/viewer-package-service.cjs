@@ -5,7 +5,10 @@ const path = require("node:path");
 const JSZip = require("../../build/jszip.min.js");
 
 const FORMAT = "pulse-clinic-viewer-package";
-const FORMAT_VERSION = 1;
+const FORMAT_VERSION = 2;
+const ENCRYPTED_PAGE_FORMAT = "pulse-clinic-viewer-encrypted-page";
+const ENCRYPTED_PAGE_VERSION = 1;
+const CONTENT_KDF_PARAMS = Object.freeze({ N: 32768, r: 8, p: 1, keylen: 32 });
 const MAX_PACKAGE_BYTES = 300 * 1024 * 1024;
 const MAX_PAGE_BYTES = 8 * 1024 * 1024;
 const PAGE_TYPES = new Set(["department", "specialization", "doctor"]);
@@ -34,6 +37,64 @@ function sanitizeReportHtml(value) {
 
 function jsonBytes(value) {
   return Buffer.from(JSON.stringify(value, null, 2), "utf8");
+}
+
+function encryptViewerPage(page, pin) {
+  if (!/^\d{4}$/.test(String(pin || ""))) throw new Error("Для шифрования страницы не настроен PIN врача");
+  const salt = crypto.randomBytes(24);
+  const iv = crypto.randomBytes(12);
+  const key = crypto.scryptSync(String(pin), salt, CONTENT_KDF_PARAMS.keylen, {
+    N: CONTENT_KDF_PARAMS.N,
+    r: CONTENT_KDF_PARAMS.r,
+    p: CONTENT_KDF_PARAMS.p,
+    maxmem: 64 * 1024 * 1024,
+  });
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([cipher.update(jsonBytes(page)), cipher.final()]);
+  return {
+    format: ENCRYPTED_PAGE_FORMAT,
+    formatVersion: ENCRYPTED_PAGE_VERSION,
+    periodKey: page.periodKey,
+    pageType: page.pageType,
+    title: page.title,
+    encryption: {
+      algorithm: "aes-256-gcm",
+      kdf: "scrypt",
+      salt: salt.toString("base64"),
+      params: CONTENT_KDF_PARAMS,
+      iv: iv.toString("base64"),
+      tag: cipher.getAuthTag().toString("base64"),
+    },
+    ciphertext: ciphertext.toString("base64"),
+  };
+}
+
+function decryptViewerPage(record, pin) {
+  try {
+    if (!record || record.format !== ENCRYPTED_PAGE_FORMAT || Number(record.formatVersion) !== ENCRYPTED_PAGE_VERSION) {
+      throw new Error("legacy-format");
+    }
+    const encryption = record.encryption || {};
+    if (encryption.algorithm !== "aes-256-gcm" || encryption.kdf !== "scrypt") throw new Error("unsupported-encryption");
+    const params = encryption.params || {};
+    const salt = Buffer.from(encryption.salt, "base64");
+    const key = crypto.scryptSync(String(pin || ""), salt, Number(params.keylen), {
+      N: Number(params.N), r: Number(params.r), p: Number(params.p), maxmem: 64 * 1024 * 1024,
+    });
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(encryption.iv, "base64"));
+    decipher.setAuthTag(Buffer.from(encryption.tag, "base64"));
+    const plaintext = Buffer.concat([decipher.update(Buffer.from(record.ciphertext, "base64")), decipher.final()]);
+    const page = JSON.parse(plaintext.toString("utf8"));
+    if (String(page.periodKey) !== String(record.periodKey) || String(page.pageType) !== String(record.pageType)) {
+      throw new Error("metadata-mismatch");
+    }
+    return page;
+  } catch (error) {
+    if (error && error.message === "legacy-format") {
+      throw new Error("Отчёт создан без PIN-шифрования. Сформируйте и импортируйте новый ZIP");
+    }
+    throw new Error("Не удалось расшифровать отчёт. Проверьте PIN и целостность публикации");
+  }
 }
 
 function normalizePage(page) {
@@ -76,7 +137,6 @@ async function createViewerPackage({ appVersion, doctors, periods, pages, creden
       displayName: String(doctor.displayName || doctorId).slice(0, 240),
       department: String(doctor.department || "").slice(0, 240),
       specialization: String(doctor.specialization || "").slice(0, 240),
-      windowsAccount: String(access.windowsAccount || "").slice(0, 160),
       pinVersion: Number(access.pinVersion),
       access,
     });
@@ -100,12 +160,12 @@ async function createViewerPackage({ appVersion, doctors, periods, pages, creden
 
   for (const doctor of doctorMap.values()) {
     const prefix = `doctors/${doctor.folderId}`;
+    if (!/^\d{4}$/.test(String(doctor.access.pinCode || ""))) throw new Error(`Не настроен PIN Viewer для врача ${doctor.displayName}`);
     addJson(`${prefix}/profile.json`, {
       doctorId: doctor.doctorId,
       displayName: doctor.displayName,
       department: doctor.department,
       specialization: doctor.specialization,
-      windowsAccount: doctor.windowsAccount,
     });
     addJson(`${prefix}/access.json`, {
       pinHash: doctor.access.pinHash,
@@ -115,7 +175,7 @@ async function createViewerPackage({ appVersion, doctors, periods, pages, creden
     });
     const doctorPages = normalizedPages.filter(page => page.doctorId === doctor.doctorId);
     for (const page of doctorPages) {
-      addJson(`${prefix}/reports/${page.periodKey}/${page.pageType}.json`, {
+      const report = {
         packageId,
         createdAt,
         periodKey: page.periodKey,
@@ -123,7 +183,8 @@ async function createViewerPackage({ appVersion, doctors, periods, pages, creden
         scopeId: page.scopeId,
         title: page.title,
         html: page.html,
-      });
+      };
+      addJson(`${prefix}/reports/${page.periodKey}/${page.pageType}.json`, encryptViewerPage(report, doctor.access.pinCode));
     }
   }
 
@@ -141,7 +202,6 @@ async function createViewerPackage({ appVersion, doctors, periods, pages, creden
       displayName: doctor.displayName,
       department: doctor.department,
       specialization: doctor.specialization,
-      windowsAccount: doctor.windowsAccount,
       pinVersion: doctor.pinVersion,
     })),
     adminAccess: {
@@ -193,7 +253,6 @@ async function inspectViewerPackage(buffer, { includeZip = false } = {}) {
       displayName: String(doctor.displayName || doctor.doctorId),
       department: String(doctor.department || ""),
       specialization: String(doctor.specialization || ""),
-      windowsAccount: String(doctor.windowsAccount || ""),
       pinVersion: Number(doctor.pinVersion),
     })),
     periods: manifest.periods.map(String),
@@ -206,8 +265,11 @@ async function inspectViewerPackage(buffer, { includeZip = false } = {}) {
 module.exports = {
   FORMAT,
   FORMAT_VERSION,
+  ENCRYPTED_PAGE_FORMAT,
   MAX_PACKAGE_BYTES,
   createViewerPackage,
+  decryptViewerPage,
+  encryptViewerPage,
   inspectViewerPackage,
   sanitizeReportHtml,
   sha256,

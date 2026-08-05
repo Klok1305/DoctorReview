@@ -6,12 +6,6 @@ const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
 
 contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   initialize: () => invoke("app:initialize"),
-  authStatus: () => invoke("auth:status"),
-  setupAdmin: payload => invoke("auth:setup-admin", payload),
-  login: payload => invoke("auth:login", payload),
-  logout: () => invoke("auth:logout"),
-  changePassword: payload => invoke("auth:change-password", payload),
-  getAdminState: () => invoke("admin:state"),
   listComments: payload => invoke("comments:list", payload),
   saveComment: payload => invoke("comments:save", payload),
   getCommentHistory: id => invoke("comments:history", id),

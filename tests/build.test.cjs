@@ -415,7 +415,7 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "2.2.0");
+  assert.equal(packageJson.version, "2.2.1");
   assert.equal(packageJson.build.productName, "Пульс клиники — Администратор");
   assert.equal(packageJson.build.artifactName, "DoctorReview-Admin-Setup-${version}-${arch}.${ext}");
   assert.equal(packageJson.scripts["dist:portable"], undefined);
@@ -766,7 +766,7 @@ test("client-base table shows overlapping groups and omits unavailable values", 
   assert.doesNotMatch(ui, /Клиентская база по настройкам специализаций|Порог \/ окно/);
 });
 
-test("administrator-only authentication and right-side comments are wired without doctor sharing", () => {
+test("administrator opens locally without login while right-side comments keep a technical author", () => {
   const template = fs.readFileSync(path.join(build, "index.template.html"), "utf8");
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
@@ -774,8 +774,8 @@ test("administrator-only authentication and right-side comments are wired withou
   const main = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const database = fs.readFileSync(path.join(root, "desktop", "services", "database.cjs"), "utf8");
 
-  for (const id of ["authScreen", "adminLoginForm", "changePasswordDialog"]) {
-    assert.match(template, new RegExp(`id="${id}"`));
+  for (const id of ["authScreen", "adminLoginForm", "changePasswordDialog", "btnLogout", "btnAdminChangePassword"]) {
+    assert.doesNotMatch(template, new RegExp(`id="${id}"`));
   }
   for (const id of ["doctorLoginSearch", "doctorViewer", "btnDoctorPreviousPeriod", "btnDoctorNextPeriod", "btnPublishReports", "settingsNavigation", "userManagement"]) {
     assert.doesNotMatch(template, new RegExp(`id="${id}"`));
@@ -791,10 +791,12 @@ test("administrator-only authentication and right-side comments are wired withou
   assert.doesNotMatch(css, /\.doctor-viewer|\.doctor-login|\.user-access-readiness/);
   assert.match(css, /\.commented-analytic-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+340px/);
   assert.match(css, /@media \(max-width:\s*1100px\)[\s\S]*?\.commented-analytic-row\s*\{\s*grid-template-columns:\s*1fr/);
-  assert.match(preload, /login:\s*payload\s*=>\s*invoke\("auth:login"/);
+  assert.doesNotMatch(template + ui + preload + main, /auth:login|auth:setup-admin|auth:change-password|loginAdministrator|setupAdministrator|changePasswordDialog/);
+  assert.equal(fs.existsSync(path.join(root, "desktop", "services", "auth-service.cjs")), false);
   assert.doesNotMatch(preload, /viewer:|doctor-candidates|doctor-user|issue-credentials|export-credentials|set-user-active|rebind-doctor/);
   assert.doesNotMatch(main, /ipcMain\.handle\("(?:viewer:|publication:|auth:doctor|admin:(?:users|create-doctor|reset-password|issue-credentials|export-credentials|set-user-active|rebind-doctor))/);
-  assert.match(main, /ipcMain\.handle\("database:save"[\s\S]*?authService\.require\("admin"\)/);
+  assert.match(main, /function localAdminActor\(\)/);
+  assert.match(main, /database\.ensureLocalAdministrator\(\)/);
   assert.doesNotMatch(main, /mainWindow\.on\("close"|event\.preventDefault\(\)[\s\S]*?app:prepare-close/);
   assert.doesNotMatch(preload, /app:prepare-close|app:close-ready/);
   assert.match(database, /CREATE TABLE users/);
@@ -802,4 +804,25 @@ test("administrator-only authentication and right-side comments are wired withou
   assert.match(database, /CREATE TABLE publications/);
   assert.match(database, /CREATE TABLE published_pages/);
   assert.match(database, /CREATE TABLE audit_log/);
+});
+
+test("Viewer access is name plus PIN with encrypted pages and no Windows or NTFS fields", () => {
+  const adminTemplate = fs.readFileSync(path.join(build, "index.template.html"), "utf8");
+  const adminUi = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const viewerIndex = fs.readFileSync(path.join(root, "viewer", "index.html"), "utf8");
+  const viewerApp = fs.readFileSync(path.join(root, "viewer", "app.js"), "utf8");
+  const viewerMain = fs.readFileSync(path.join(root, "viewer", "main.cjs"), "utf8");
+  const viewerPreload = fs.readFileSync(path.join(root, "viewer", "preload.cjs"), "utf8");
+  const storage = fs.readFileSync(path.join(root, "viewer", "storage-service.cjs"), "utf8");
+  const packages = fs.readFileSync(path.join(root, "desktop", "services", "viewer-package-service.cjs"), "utf8");
+
+  assert.doesNotMatch(adminTemplate + adminUi + viewerIndex + viewerApp + viewerMain + viewerPreload,
+    /windowsAccount|windows_account|openAcl|windowsIdentity|accountMatches|Windows-учётка|NTFS/);
+  assert.match(adminUi, /четырёхзначный PIN/);
+  assert.match(viewerIndex, /<span>Врач<\/span><select id="viewerDoctorSelect"/);
+  assert.match(viewerIndex, /Постоянный PIN/);
+  assert.match(storage, /DOCTOR_LOCK_MS = 15 \* 60 \* 1000/);
+  assert.match(storage, /decryptViewerPage/);
+  assert.match(packages, /aes-256-gcm/);
+  assert.match(packages, /FORMAT_VERSION = 2/);
 });

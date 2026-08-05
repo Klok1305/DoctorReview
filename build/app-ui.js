@@ -34,54 +34,9 @@ const UI = {
   setSpecialization: "",
 };
 
-let APP_AUTH = null;
 let VIEWER_ACCESS = { adminPinConfigured: false, adminPinVersion: 0, doctors: [] };
 let reportRenderRevision = 0;
 let settingsFilterTimer = null;
-
-function showAuthError(message) {
-  const box = document.getElementById("authError");
-  if (!box) return;
-  box.textContent = String(message || "");
-  box.classList.toggle("hidden", !message);
-}
-
-function showAuthScreen(auth) {
-  APP_AUTH = auth;
-  document.getElementById("authScreen").classList.remove("hidden");
-  document.getElementById("authSetup").classList.toggle("hidden", !auth.needsSetup);
-  document.getElementById("authLogin").classList.toggle("hidden", auth.needsSetup);
-  document.querySelector(".app-header").classList.add("hidden");
-  document.querySelector("main").classList.add("hidden");
-  showAuthError("");
-  setTimeout(() => {
-    const target = document.getElementById(auth.needsSetup ? "setupUsername" : "adminLoginUsername");
-    if (target) target.focus();
-  }, 0);
-}
-
-function showAdminApplication(auth) {
-  APP_AUTH = auth;
-  document.getElementById("authScreen").classList.add("hidden");
-  document.querySelector(".app-header").classList.remove("hidden");
-  document.querySelector("main").classList.remove("hidden");
-  const headerUser = document.getElementById("headerUser");
-  headerUser.classList.remove("hidden");
-  document.getElementById("headerUserName").textContent = auth.user.displayName;
-}
-
-async function loadAdminApplication(auth) {
-  const state = await DESKTOP_API.getAdminState();
-  DESKTOP_STATE = Object.assign({}, DESKTOP_STATE || {}, state, { auth });
-  if (state.snapshot && !applyLoadedDatabase(state.snapshot)) {
-    throw new Error("Рабочая база создана несовместимой версией приложения");
-  }
-  setAutosaveStatus(`SQLite · ${state.config.databasePath}`);
-  await refreshViewerPublicationAccess();
-  showAdminApplication(auth);
-  renderDesktopWorkspace();
-  switchTab("data");
-}
 
 async function refreshViewerPublicationAccess() {
   if (!DESKTOP_API || !DESKTOP_API.getViewerPublicationAccess) return VIEWER_ACCESS;
@@ -89,68 +44,6 @@ async function refreshViewerPublicationAccess() {
   return VIEWER_ACCESS;
 }
 
-async function setupAdministrator() {
-  const username = document.getElementById("setupUsername").value;
-  const displayName = document.getElementById("setupDisplayName").value;
-  const password = document.getElementById("setupPassword").value;
-  const repeat = document.getElementById("setupPasswordRepeat").value;
-  if (password !== repeat) { showAuthError("Пароли не совпадают"); return; }
-  try {
-    const auth = await DESKTOP_API.setupAdmin({ username, displayName, password });
-    await loadAdminApplication(auth);
-  } catch (error) {
-    showAuthError(error.message);
-  }
-}
-
-async function loginAdministrator(event) {
-  event.preventDefault();
-  try {
-    const auth = await DESKTOP_API.login({
-      username: document.getElementById("adminLoginUsername").value,
-      password: document.getElementById("adminLoginPassword").value,
-    });
-    await loadAdminApplication(auth);
-  } catch (error) {
-    showAuthError(error.message);
-  }
-}
-
-async function logoutApplication() {
-  try { await DESKTOP_API.logout(); } catch (_) { /* reload still clears renderer memory */ }
-  window.location.reload();
-}
-
-function openPasswordDialog() {
-  const dialog = document.getElementById("changePasswordDialog");
-  document.getElementById("changePasswordHint").textContent = "Можно использовать пароль любой длины и состава. Пустой пароль недопустим.";
-  dialog.querySelector('button[value="cancel"]').classList.remove("hidden");
-  for (const id of ["currentPassword", "newPassword", "newPasswordRepeat"]) document.getElementById(id).value = "";
-  document.getElementById("changePasswordError").classList.add("hidden");
-  dialog.showModal();
-}
-
-async function confirmPasswordChange(event) {
-  event.preventDefault();
-  const currentPassword = document.getElementById("currentPassword").value;
-  const newPassword = document.getElementById("newPassword").value;
-  const repeat = document.getElementById("newPasswordRepeat").value;
-  const errorBox = document.getElementById("changePasswordError");
-  if (newPassword !== repeat) {
-    errorBox.textContent = "Новые пароли не совпадают";
-    errorBox.classList.remove("hidden");
-    return;
-  }
-  try {
-    const user = await DESKTOP_API.changePassword({ currentPassword, newPassword });
-    APP_AUTH.user = user;
-    document.getElementById("changePasswordDialog").close();
-    toast("Пароль изменён");
-  } catch (error) {
-    errorBox.textContent = error.message;
-    errorBox.classList.remove("hidden");
-  }
-}
 
 function setControlsDisabled(ids, disabled) {
   for (const id of ids) {
@@ -289,16 +182,7 @@ async function desktopChooseWorkspace() {
     if (!await saveLocal()) throw new Error("Текущие изменения не записаны; смена рабочей папки отменена");
     const result = await DESKTOP_API.chooseWorkspace();
     if (result.canceled) return;
-    if (result.requiresLogin) {
-      window.location.reload();
-      return;
-    }
-    DESKTOP_STATE.config = result.config;
-    DESKTOP_STATE.summary = result.summary;
-    if (result.snapshot && !applyLoadedDatabase(result.snapshot)) throw new Error("Рабочая база имеет неподдерживаемый формат");
-    renderDesktopWorkspace();
-    renderAll();
-    toast("Рабочая папка изменена; исходная база оставлена на прежнем месте как дополнительная копия");
+    window.location.reload();
   } catch (error) {
     toast("Не удалось изменить рабочую папку: " + error.message, true);
   }
@@ -338,10 +222,7 @@ async function desktopRestoreBackup() {
   try {
     const result = await DESKTOP_API.restoreBackup();
     if (result.canceled) return;
-    if (result.requiresLogin) {
-      window.location.reload();
-      return;
-    }
+    window.location.reload();
   } catch (error) {
     toast("Не удалось восстановить базу: " + error.message, true);
   }
@@ -3996,7 +3877,7 @@ function wrapAnalyticCards(container, context, comments, editable) {
 }
 
 async function decorateAdminReportComments(context, revision) {
-  if (!DESKTOP_API || !APP_AUTH || APP_AUTH.user.role !== "admin") return;
+  if (!DESKTOP_API) return;
   const comments = await DESKTOP_API.listComments({ periodKey: context.periodKey, scopeType: context.scopeType, scopeId: context.scopeId });
   const body = document.getElementById("reportBody");
   const current = reportContextFromScope(UI.repScope, UI.repMonth);
@@ -4181,13 +4062,11 @@ async function exportViewerPackage() {
   try {
     await saveVisibleCommentDrafts();
     if (!await saveLocal()) throw new Error("Не удалось сохранить текущую рабочую базу");
-    const access = new Map(VIEWER_ACCESS.doctors.map(item => [item.doctorId, item]));
     const doctors = doctorIds.map(doctorId => ({
       doctorId,
       displayName: doctorName(doctorId),
       department: resolvedDepartmentName(doctorId) || "",
       specialization: resolvedSpecializationName(doctorId) || "",
-      windowsAccount: access.get(doctorId)?.windowsAccount || "",
     }));
     const pages = [];
     let completed = 0;
@@ -4674,20 +4553,19 @@ function viewerAccessSettingsHtml() {
         <div class="small muted">${esc([department, specialization].filter(Boolean).join(" · ") || "Структура не указана")}</div></td>
       <td><input class="viewer-access-pin" data-viewer-pin type="text" inputmode="numeric" maxlength="4" value="${esc(item.pin)}" aria-label="PIN ${esc(item.displayName)}">
         <div class="small muted">версия ${item.pinVersion}</div></td>
-      <td><input data-viewer-windows-account type="text" value="${esc(item.windowsAccount || "")}" placeholder="DOMAIN\\username"></td>
       <td><button class="btn mini" type="button" onclick="saveViewerDoctorAccess(this)">Сохранить</button></td></tr>`;
   }).join("");
   return `<div class="card" id="viewerAccessSettingsCard"><div class="vhead"><div><h2 class="mt0">👁 Публикация в Viewer</h2>
       <p class="small muted">Viewer не получает рабочую SQLite. Он открывает только ZIP с проверкой SHA-256, готовыми страницами и комментариями.</p></div>
       <span class="badge ${VIEWER_ACCESS.adminPinConfigured ? "good" : "warn"}">${VIEWER_ACCESS.adminPinConfigured ? `Admin PIN настроен · v${VIEWER_ACCESS.adminPinVersion}` : "Admin PIN не задан"}</span></div>
-    <div class="notice blue"><b>Постоянные PIN:</b> четырёхзначный PIN врача не меняется при публикации нового месяца. Он меняется только после ручной правки здесь. За фактическое разграничение отвечает Windows-учётка и NTFS-доступ к папке врача.</div>
+    <div class="notice blue"><b>Вход врача:</b> в Viewer врач выбирает своё имя и вводит постоянный четырёхзначный PIN. PIN не меняется при публикации нового месяца и обновляется только после ручной правки здесь.</div>
     <div class="toolbar"><label>Новый администраторский PIN Viewer: <input id="viewerAdminPin" type="password" inputmode="numeric" minlength="6" maxlength="12" placeholder="6–12 цифр"></label>
       <label>Повтор: <input id="viewerAdminPinRepeat" type="password" inputmode="numeric" minlength="6" maxlength="12"></label>
       <button class="btn primary" type="button" onclick="setViewerAdminPinFromSettings()">Задать / изменить</button>
       <span class="spacer"></span><span class="small muted">Включено ${active} из ${items.length}</span></div>
     <div class="toolbar"><button class="btn mini" type="button" onclick="setAllViewerDoctorsActive(true)">Включить всех</button>
       <button class="btn mini" type="button" onclick="setAllViewerDoctorsActive(false)">Выключить всех</button></div>
-    <div class="scroll-y"><table class="data viewer-access-table"><tr><th>Врач и публикация</th><th>PIN врача</th><th>Windows-учётка</th><th></th></tr>${rows || '<tr><td colspan="4" class="muted">Врачи появятся после импорта данных.</td></tr>'}</table></div>
+    <div class="scroll-y"><table class="data viewer-access-table"><tr><th>Врач и публикация</th><th>PIN врача</th><th></th></tr>${rows || '<tr><td colspan="3" class="muted">Врачи появятся после импорта данных.</td></tr>'}</table></div>
   </div>`;
 }
 
@@ -4716,7 +4594,6 @@ async function saveViewerDoctorAccess(button) {
       doctorId: row.dataset.doctorId,
       active: row.querySelector("[data-viewer-active]").checked,
       pin,
-      windowsAccount: row.querySelector("[data-viewer-windows-account]").value,
     });
     await refreshViewerPublicationAccess();
     toast("Доступ врача сохранён");
@@ -4737,7 +4614,6 @@ async function setAllViewerDoctorsActive(active) {
         doctorId: item.doctorId,
         active,
         pin: item.pin,
-        windowsAccount: item.windowsAccount,
       });
     }
     await refreshViewerPublicationAccess();
@@ -5562,12 +5438,8 @@ async function initApp() {
   Chart.defaults.set("plugins.datalabels", { display: false });
   if (DESKTOP_API) {
     await loadDesktopDatabase();
-    APP_AUTH = DESKTOP_STATE.auth;
-    if (APP_AUTH.authenticated && APP_AUTH.user.role === "admin") {
-      await refreshViewerPublicationAccess();
-      showAdminApplication(APP_AUTH);
-      renderDesktopWorkspace();
-    }
+    await refreshViewerPublicationAccess();
+    renderDesktopWorkspace();
   } else {
     loadLocal();
     restoreAutosave().then(() => { if (UI.tab === "data") renderData(); });
@@ -5633,11 +5505,6 @@ async function initApp() {
   document.getElementById("btnClear").addEventListener("click", clearDB);
   document.getElementById("btnAutosave").addEventListener("click", connectAutosave);
   if (DESKTOP_API) {
-    document.getElementById("btnSetupAdmin").addEventListener("click", setupAdministrator);
-    document.getElementById("adminLoginForm").addEventListener("submit", loginAdministrator);
-    document.getElementById("btnLogout").addEventListener("click", logoutApplication);
-    document.getElementById("btnAdminChangePassword").addEventListener("click", openPasswordDialog);
-    document.getElementById("btnConfirmPasswordChange").addEventListener("click", confirmPasswordChange);
     document.getElementById("btnScanInput").addEventListener("click", desktopScanInput);
     document.getElementById("btnReprocessAppointments").addEventListener("click", desktopReprocessAppointments);
     document.getElementById("btnOpenOutput").addEventListener("click", () => DESKTOP_API.openPath("output").catch(error => toast(error.message, true)));
@@ -5654,17 +5521,6 @@ async function initApp() {
       DESKTOP_STATE.update = status;
       renderUpdateStatus(status);
     });
-    setInterval(async () => {
-      if (!APP_AUTH || !APP_AUTH.authenticated) return;
-      try {
-        const status = await DESKTOP_API.authStatus();
-        if (!status.authenticated) window.location.reload();
-      } catch (_) { /* a later protected action will surface the error */ }
-    }, 30000);
-  }
-  if (DESKTOP_API && (!APP_AUTH || !APP_AUTH.authenticated)) {
-    showAuthScreen(APP_AUTH || { needsSetup: false, authenticated: false });
-    return;
   }
   switchTab("data");
 }

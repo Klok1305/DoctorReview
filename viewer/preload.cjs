@@ -15,5 +15,4 @@ contextBridge.exposeInMainWorld("viewerAPI", Object.freeze({
   doctorLogin: payload => invoke("viewer:doctor-login", payload),
   doctorLogout: () => invoke("viewer:doctor-logout"),
   report: payload => invoke("viewer:report", payload),
-  openAclMapping: () => invoke("viewer:open-acl-mapping"),
 }));
