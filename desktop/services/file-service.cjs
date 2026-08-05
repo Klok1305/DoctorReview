@@ -146,6 +146,24 @@ class FileService {
     return found.sort((a, b) => a.localeCompare(b, "ru-RU")).map(filePath => this.#descriptor(filePath));
   }
 
+  listImportedSources(reportType) {
+    const descriptors = [];
+    const missing = [];
+    for (const sourcePath of this.database.listImportedSourcePaths(reportType)) {
+      try {
+        const stat = fs.statSync(sourcePath);
+        if (!stat.isFile() || !INPUT_EXTENSIONS.has(path.extname(sourcePath).toLowerCase())) {
+          missing.push(sourcePath);
+          continue;
+        }
+        descriptors.push(this.#descriptor(sourcePath));
+      } catch (_) {
+        missing.push(sourcePath);
+      }
+    }
+    return { files: descriptors, missing };
+  }
+
   readInputFile(filePath) {
     const fullPath = path.resolve(filePath);
     const config = this.configStore.publicConfig();

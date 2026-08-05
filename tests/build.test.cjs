@@ -415,11 +415,11 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "2.1.0");
+  assert.equal(packageJson.version, "2.2.0");
   assert.equal(packageJson.build.productName, "Пульс клиники — Администратор");
   assert.equal(packageJson.build.artifactName, "DoctorReview-Admin-Setup-${version}-${arch}.${ext}");
   assert.equal(packageJson.scripts["dist:portable"], undefined);
-  assert.equal(packageJson.scripts["dist:all"], undefined);
+  assert.equal(packageJson.scripts["dist:all"], "pnpm run dist && pnpm run dist:viewer");
   assert.match(source, /const APP_NAME = "Пульс клиники — Администратор"/);
   assert.match(source, /previousUserData[\s\S]*Пульс клиники[\s\S]*Оценка врачей/);
   const visibleWindow = source.indexOf("mainWindow.show();");
@@ -489,23 +489,53 @@ test("appointment details preserve grouped 1C service hierarchy with a flat-repo
   assert.match(parsers, /!file\.__forceReimport/);
 });
 
-test("specialization page highlights its focuses and exposes the original 1C grouping", () => {
+test("old appointment imports can be safely reprocessed into grouped 1C data", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const parsers = fs.readFileSync(path.join(build, "app-parsers.js"), "utf8");
+  const template = fs.readFileSync(path.join(build, "index.template.html"), "utf8");
+  const preload = fs.readFileSync(path.join(root, "desktop", "preload.cjs"), "utf8");
+  const main = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
+  const database = fs.readFileSync(path.join(root, "desktop", "services", "database.cjs"), "utf8");
+  const files = fs.readFileSync(path.join(root, "desktop", "services", "file-service.cjs"), "utf8");
+
+  assert.match(template, /id="btnReprocessAppointments"/);
+  assert.match(ui, /async function desktopReprocessAppointments/);
+  assert.match(ui, /listImportedSources\("naznach"\)/);
+  assert.match(ui, /onlyType: "naznach"[\s\S]*?replaceExisting: true[\s\S]*?forceReimport: true/);
+  assert.match(ui, /Нет группировки из 1С/);
+  assert.match(parsers, /options\.onlyType && type !== options\.onlyType/);
+  assert.match(parsers, /options\.replaceExisting/);
+  assert.match(parsers, /!options\.forceReimport && !file\.__forceReimport/);
+  assert.match(preload, /listImportedSources: reportType => invoke\("files:list-imported", reportType\)/);
+  assert.match(main, /ipcMain\.handle\("files:list-imported"/);
+  assert.match(database, /listImportedSourcePaths\(reportType\)/);
+  assert.match(files, /listImportedSources\(reportType\)/);
+});
+
+test("specialization page shows doctor focus matrix, highlighted summary and no 1C drilldown", () => {
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
 
   assert.match(ui, /function specializationInterdisciplinaryHtml/);
   assert.match(ui, /Фокусы специализации/);
   assert.match(ui, /id="tblSpecializationFocus"/);
-  assert.match(ui, /Итого по фокусам/);
-  assert.match(ui, /Группировка из файла 1С/);
-  assert.match(ui, /врач → вид услуги \/ специализация → номенклатура/);
-  assert.match(ui, /class="specialization-1c-doctor"/);
-  assert.match(ui, /specializationNazGroups\(row\.nz\)/);
-  assert.match(ui, /nz\.sourceGroups && nz\.sourceGroups\.length/);
+  assert.match(ui, /class="data heatmap-table specialization-doctor-focus-table"/);
+  assert.match(ui, /В ячейках: <b>назначено \/ сделано<\/b>/);
+  assert.match(ui, /row\.nz\.focus\.items\[name\]/);
+  assert.match(ui, /fmtNum\(values\.assigned\).*fmtNum\(values\.resultQ\)/);
+  assert.match(ui, /Итого по специализации/);
+  assert.match(ui, /class="data specialization-doctor-summary-table"/);
+  assert.match(ui, /specialization-doctor-summary-chip assigned/);
+  assert.match(ui, /specialization-doctor-summary-focus/);
+  assert.doesNotMatch(ui, /Группировка из файла 1С/);
+  assert.doesNotMatch(ui, /class="specialization-1c-doctor"/);
   assert.match(ui, /specializationInterdisciplinaryHtml\(rows, mk, deptFilter, \{ slide: true/);
   assert.match(css, /\.specialization-focuses\s*\{/);
-  assert.match(css, /\.specialization-1c-doctor\s*\{/);
-  assert.match(css, /@media print[\s\S]*?\.specialization-1c-doctor > \.specialization-table-scroll\s*\{\s*display:\s*block !important/);
+  assert.match(css, /\.specialization-doctor-focus-table \.specialization-doctor-focus-total-col\s*\{/);
+  assert.match(css, /\.specialization-doctor-focus-metric\s*\{/);
+  assert.match(css, /\.specialization-doctor-summary-chip\.assigned\s*\{/);
+  assert.match(css, /\.specialization-doctor-summary-focus\s*\{/);
+  assert.doesNotMatch(css, /\.specialization-1c-doctor\s*\{/);
 });
 
 test("appointment conversion block starts compact and parent groups hide their whole subtree", () => {
@@ -756,7 +786,7 @@ test("administrator-only authentication and right-side comments are wired withou
   assert.match(ui, /function wrapAnalyticCards/);
   assert.doesNotMatch(ui, /function exportDoctorCredentials/);
   assert.doesNotMatch(ui, /function createAllDoctorAccounts/);
-  assert.doesNotMatch(ui, /function saveVisibleCommentDrafts/);
+  assert.match(ui, /function saveVisibleCommentDrafts/);
   assert.match(ui, /data-analytics-block-key="overview"/);
   assert.doesNotMatch(css, /\.doctor-viewer|\.doctor-login|\.user-access-readiness/);
   assert.match(css, /\.commented-analytic-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+340px/);

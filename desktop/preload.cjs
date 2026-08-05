@@ -16,6 +16,10 @@ contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   saveComment: payload => invoke("comments:save", payload),
   getCommentHistory: id => invoke("comments:history", id),
   archiveComment: id => invoke("comments:archive", id),
+  getViewerPublicationAccess: () => invoke("viewer-publication:access"),
+  updateViewerDoctorAccess: payload => invoke("viewer-publication:update-doctor", payload),
+  setViewerAdminPin: pin => invoke("viewer-publication:set-admin-pin", { pin }),
+  exportViewerPackage: payload => invoke("viewer-publication:export", payload),
   saveDatabase: json => invoke("database:save", json),
   exportJson: json => invoke("database:export-json", json),
 
@@ -25,6 +29,7 @@ contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
 
   pickInputFiles: () => invoke("files:pick-input"),
   scanInputFolder: () => invoke("files:scan-input"),
+  listImportedSources: reportType => invoke("files:list-imported", reportType),
   readInputFile: filePath => invoke("files:read-input", filePath),
   hasImportedSource: sha256 => invoke("import:has-source", sha256),
   beginImport: payload => invoke("import:begin", payload),

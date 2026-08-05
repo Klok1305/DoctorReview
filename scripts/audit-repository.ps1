@@ -18,11 +18,13 @@ $allowedPatterns = @(
   '^README\.md$',
   '^index\.html$',
   '^package\.json$',
+  '^electron-builder\.viewer\.json$',
   '^pnpm-lock\.yaml$',
   '^pnpm-workspace\.yaml$',
   '^build/[^/]+\.(js|css|html|ps1)$',
   '^desktop/[^/]+\.cjs$',
   '^desktop/services/[^/]+\.cjs$',
+  '^viewer/[^/]+\.(cjs|js|css|html|json)$',
   '^docs/[^/]+\.md$',
   '^resources/(app-icon\.(ico|png)|update-config\.json)$',
   '^scripts/[^/]+\.(ps1|py)$',
@@ -56,7 +58,7 @@ foreach ($file in $files) {
     $problems.Add("looks like user data, a build artifact, or a secret: $file")
     continue
   }
-  if ($file.EndsWith('.json') -and $file -notin @('package.json', 'resources/update-config.json')) {
+  if ($file.EndsWith('.json') -and $file -notin @('package.json', 'electron-builder.viewer.json', 'viewer/package.json', 'resources/update-config.json')) {
     $problems.Add("JSON is not explicitly allowed and may contain user data: $file")
     continue
   }

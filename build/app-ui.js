@@ -35,6 +35,7 @@ const UI = {
 };
 
 let APP_AUTH = null;
+let VIEWER_ACCESS = { adminPinConfigured: false, adminPinVersion: 0, doctors: [] };
 let reportRenderRevision = 0;
 let settingsFilterTimer = null;
 
@@ -76,9 +77,16 @@ async function loadAdminApplication(auth) {
     throw new Error("Рабочая база создана несовместимой версией приложения");
   }
   setAutosaveStatus(`SQLite · ${state.config.databasePath}`);
+  await refreshViewerPublicationAccess();
   showAdminApplication(auth);
   renderDesktopWorkspace();
   switchTab("data");
+}
+
+async function refreshViewerPublicationAccess() {
+  if (!DESKTOP_API || !DESKTOP_API.getViewerPublicationAccess) return VIEWER_ACCESS;
+  VIEWER_ACCESS = await DESKTOP_API.getViewerPublicationAccess();
+  return VIEWER_ACCESS;
 }
 
 async function setupAdministrator() {
@@ -237,6 +245,40 @@ async function desktopScanInput() {
     else await handleFiles(files);
   } catch (error) {
     toast("Ошибка проверки входной папки: " + error.message, true);
+  } finally {
+    if (button) { button.disabled = false; button.textContent = old; }
+  }
+}
+
+async function desktopReprocessAppointments() {
+  const button = document.getElementById("btnReprocessAppointments");
+  const old = button ? button.textContent : "";
+  if (button) { button.disabled = true; button.textContent = "⏳ Ищу исходные файлы…"; }
+  try {
+    const imported = await DESKTOP_API.listImportedSources("naznach");
+    const scanned = await DESKTOP_API.scanInputFolder();
+    const bySource = new Map();
+    for (const descriptor of [...(imported.files || []), ...(scanned || [])]) {
+      const key = descriptor.sha256 || String(descriptor.path || "").toLocaleLowerCase("ru-RU");
+      if (key && !bySource.has(key)) bySource.set(key, descriptor);
+    }
+    const descriptors = [...bySource.values()];
+    const missing = imported.missing || [];
+    if (!descriptors.length) {
+      toast("Исходные выгрузки назначений не найдены. Нажмите «Выбрать файлы» и укажите их вручную.", true);
+      return;
+    }
+    const missingNote = missing.length ? `\nНе найдено по прежнему адресу: ${missing.length}. Их можно выбрать вручную позже.` : "";
+    if (!confirm(`Переобработать ранее загруженные назначения?\n\nБудут проверены исходные файлы: ${descriptors.length}. Заменятся только отчёты «Назначения»; остальные типы останутся без изменений. Перед операцией будет создана резервная копия.${missingNote}`)) return;
+    const files = await desktopDescriptorsToFiles(descriptors, true);
+    await handleFiles(files, {
+      onlyType: "naznach",
+      replaceExisting: true,
+      forceReimport: true,
+      summaryLabel: "Переобработка назначений завершена",
+    });
+  } catch (error) {
+    toast("Не удалось переобработать назначения: " + error.message, true);
   } finally {
     if (button) { button.disabled = false; button.textContent = old; }
   }
@@ -857,21 +899,6 @@ function specializationNazSummary(result) {
   return Object.values(bySlice).filter(Boolean).sort((a, b) => Number(a.slice || 0) - Number(b.slice || 0))[0] || null;
 }
 
-function specializationNazGroups(nz) {
-  if (nz && nz.sourceGroups && nz.sourceGroups.length) return nz.sourceGroups;
-  if (!nz || !nz.byType) return [];
-  return Object.entries(nz.byType)
-    .filter(([, values]) => values && (values.assigned || values.done || values.soldQ))
-    .map(([name, values]) => ({
-      path: [name],
-      assigned: values.assigned || 0,
-      done: values.done || 0,
-      soldQ: values.soldQ || 0,
-      resultQ: values.resultQ || 0,
-      items: values.items || {},
-    }));
-}
-
 function specializationInterdisciplinaryHtml(rows, mk, specializationName, options = {}) {
   if (!specializationName || specializationName === "all") return "";
   const profile = deptProfile(specializationName);
@@ -887,7 +914,6 @@ function specializationInterdisciplinaryHtml(rows, mk, specializationName, optio
   }
   if (!focusOrder.length && !doctorRows.length) return "";
 
-  const focusMeta = new Map(configuredFocuses.map(item => [item.name, item]));
   const focusTotals = new Map(focusOrder.map(name => [name, { assigned: 0, done: 0, soldQ: 0, resultQ: 0 }]));
   for (const row of doctorRows) {
     for (const [name, values] of Object.entries(row.nz.focus && row.nz.focus.items || {})) {
@@ -906,9 +932,6 @@ function specializationInterdisciplinaryHtml(rows, mk, specializationName, optio
     total.resultQ += values.resultQ;
     return total;
   }, { assigned: 0, done: 0, soldQ: 0, resultQ: 0 });
-  const overallFocusConv = overallFocus.assigned > 0 && overallFocus.resultQ <= overallFocus.assigned
-    ? overallFocus.resultQ / overallFocus.assigned * 100
-    : null;
   const title = profile && profile.crossFocus && profile.crossFocus.title
     ? profile.crossFocus.title
     : "Фокусы междисциплинарного подхода";
@@ -916,24 +939,41 @@ function specializationInterdisciplinaryHtml(rows, mk, specializationName, optio
   const subtitle = options.subtitle || `${specializationName} · ${monthLabel(mk)}`;
   let html = `<div class="${cardClass} specialization-interdisciplinary" data-analytics-block-key="interdisciplinary">
     <h2>🤝 Междисциплинарный подход · ${esc(subtitle)}</h2>
-    <p class="small muted">Фокусы заданы для специализации «${esc(specializationName)}». Ниже — их общий результат и исходная группировка назначений из файла 1С по каждому врачу.</p>`;
+    <p class="small muted">Фокусы заданы для специализации «${esc(specializationName)}». Ниже — результат по каждому врачу и сводные показатели.</p>`;
 
   if (focusOrder.length) {
+    const maxDoctorFocusAssigned = doctorRows.reduce((maxValue, row) => focusOrder.reduce((rowMax, name) => {
+      const values = row.nz.focus && row.nz.focus.items ? row.nz.focus.items[name] : null;
+      return Math.max(rowMax, Number(values && values.assigned) || 0);
+    }, maxValue), 1);
     html += `<section class="specialization-focuses" aria-label="Фокусы специализации">
-      <div class="vhead"><h3>Фокусы специализации <span class="small muted">· ${esc(title)}</span></h3><span class="badge ${overallFocus.resultQ ? "ok" : "mut"}">Результат: ${fmtNum(overallFocus.resultQ)}</span></div>
-      <div class="specialization-table-scroll"><table class="data" id="tblSpecializationFocus"><tr><th>Фокус</th><th class="num">Назначено</th><th class="num">Выполнено</th><th class="num">Продано</th><th class="num">Результат</th><th class="num">Конверсия</th></tr>`;
-    for (const name of focusOrder) {
-      const values = focusTotals.get(name) || { assigned: 0, done: 0, soldQ: 0, resultQ: 0 };
-      const valid = values.assigned >= 0 && values.resultQ <= values.assigned;
-      const conv = valid && values.assigned > 0 ? values.resultQ / values.assigned * 100 : null;
-      const meta = focusMeta.get(name);
-      html += `<tr><td><b>${esc(name)}</b>${meta && meta.core === false ? ' <span class="badge mut">наблюдение</span>' : ""}</td>
-        <td class="num">${fmtNum(values.assigned)}</td><td class="num">${fmtNum(values.done)}</td><td class="num">${fmtNum(values.soldQ)}</td>
-        <td class="num"><b>${fmtNum(values.resultQ)}</b></td><td class="num">${conv != null ? fmtPct(conv) : "—"}</td></tr>`;
+      <div class="vhead"><h3>Фокусы специализации <span class="small muted">· ${esc(title)}</span></h3><span class="badge ${overallFocus.resultQ ? "ok" : "mut"}">Результат: ${fmtNum(overallFocus.resultQ)}</span><span class="spacer"></span>${copyBtn("copyTable", "tblSpecializationFocus")}</div>
+      <p class="small muted specialization-doctor-focus-legend">В ячейках: <b>назначено / сделано</b>. Сделано — выполнено + продано; для товаров учитывается продажа.</p>
+      <div class="heatmap-scroll"><table class="data heatmap-table specialization-doctor-focus-table" id="tblSpecializationFocus" style="--heat-table-min:${330 + focusOrder.length * 150}px"><colgroup><col class="heatmap-specialist-col">${focusOrder.map(() => '<col class="heatmap-focus-col">').join("")}<col class="specialization-doctor-focus-total-col"></colgroup><tr><th>Врач</th>${focusOrder.map(name => `<th class="num heatmap-focus-heading">${esc(name)}<span class="specialization-doctor-focus-heading-note">назначено / сделано</span></th>`).join("")}<th class="num">Итого</th></tr>`;
+    for (const row of doctorRows) {
+      let doctorAssigned = 0;
+      let doctorDone = 0;
+      html += `<tr><td><b>${esc(doctorName(row.id))}</b></td>`;
+      for (const name of focusOrder) {
+        const values = row.nz.focus && row.nz.focus.items && row.nz.focus.items[name]
+          ? row.nz.focus.items[name]
+          : { assigned: 0, resultQ: 0 };
+        const assigned = Number(values.assigned) || 0;
+        const done = Number(values.resultQ) || 0;
+        doctorAssigned += assigned;
+        doctorDone += done;
+        const alpha = assigned ? 0.12 + 0.68 * (assigned / maxDoctorFocusAssigned) : 0;
+        const metric = assigned || done
+          ? `<span class="specialization-doctor-focus-metric"><b>${fmtNum(assigned)}</b><span>/</span><b>${fmtNum(done)}</b></span>`
+          : "·";
+        html += `<td class="num heatmap-focus-cell"><div class="heat-cell" title="${esc(name)}: назначено ${fmtNum(assigned)}, сделано ${fmtNum(done)}" style="background:rgba(37,99,235,${alpha.toFixed(2)});color:${alpha > 0.5 ? "#fff" : "inherit"}">${metric}</div></td>`;
+      }
+      html += `<td class="num specialization-doctor-focus-row-total"><b>${fmtNum(doctorAssigned)} / ${fmtNum(doctorDone)}</b></td></tr>`;
     }
-    html += `<tr class="specialization-focus-total"><td><b>Итого по фокусам</b></td><td class="num"><b>${fmtNum(overallFocus.assigned)}</b></td>
-      <td class="num"><b>${fmtNum(overallFocus.done)}</b></td><td class="num"><b>${fmtNum(overallFocus.soldQ)}</b></td>
-      <td class="num"><b>${fmtNum(overallFocus.resultQ)}</b></td><td class="num"><b>${overallFocusConv != null ? fmtPct(overallFocusConv) : "—"}</b></td></tr></table></div>
+    html += `<tr class="specialization-focus-total"><td><b>Итого по специализации</b></td>${focusOrder.map(name => {
+      const values = focusTotals.get(name) || { assigned: 0, resultQ: 0 };
+      return `<td class="num"><b>${fmtNum(values.assigned)} / ${fmtNum(values.resultQ)}</b></td>`;
+    }).join("")}<td class="num"><b>${fmtNum(overallFocus.assigned)} / ${fmtNum(overallFocus.resultQ)}</b></td></tr></table></div>
       ${doctorRows.length ? "" : '<p class="small muted">Фокусы настроены, но выгрузка «Назначения» за выбранный период ещё не загружена.</p>'}
     </section>`;
   } else {
@@ -941,43 +981,23 @@ function specializationInterdisciplinaryHtml(rows, mk, specializationName, optio
   }
 
   if (doctorRows.length) {
-    html += `<section class="specialization-doctor-results"><h3>Итоги по врачам</h3><div class="specialization-table-scroll"><table class="data" id="tblSpecializationInterdisciplinary"><tr><th>Врач</th><th class="num">Период</th><th class="num">Назначено</th><th class="num">Выполнено</th><th class="num">Продано</th><th class="num">Конверсия</th><th class="num">По фокусам</th><th class="num">Выручка от перенаправлений</th></tr>`;
+    html += `<section class="specialization-doctor-results">
+      <div class="vhead"><h3>Итоги по врачам</h3><span class="spacer"></span>${copyBtn("copyTable", "tblSpecializationInterdisciplinary")}</div>
+      <div class="specialization-table-scroll"><table class="data specialization-doctor-summary-table" id="tblSpecializationInterdisciplinary"><tr><th>Врач</th><th class="num">Период</th><th class="num">Назначено</th><th class="num">Выполнено</th><th class="num">Продано</th><th class="num">Конверсия</th><th class="num">По фокусам<span class="specialization-doctor-focus-heading-note">назначено / сделано</span></th><th class="num">Выручка от перенаправлений</th></tr>`;
     for (const row of doctorRows) {
-      html += `<tr><td><b>${esc(doctorName(row.id))}</b></td><td class="num">${fmtNum(row.nz.slice)} мес.</td>
-        <td class="num">${fmtNum(row.nz.totals.assigned)}</td><td class="num">${fmtNum(row.nz.totals.done)}</td><td class="num">${fmtNum(row.nz.totals.soldQ)}</td>
-        <td class="num"><b>${row.nz.totals.conv != null ? fmtPct(row.nz.totals.conv) : "—"}</b></td>
-        <td class="num">${row.nz.focus ? `${fmtNum(row.nz.focus.assigned)} / ${fmtNum(row.nz.focus.resultQ)}` : "—"}</td>
-        <td class="num">${fmtMoney(row.r.econ.refRevenue)}</td></tr>`;
+      const conv = row.nz.totals.conv;
+      const convClass = conv == null ? "mut" : conv >= 40 ? "ok" : conv >= 20 ? "warn" : "bad";
+      const focusAssigned = row.nz.focus ? row.nz.focus.assigned : 0;
+      const focusDone = row.nz.focus ? row.nz.focus.resultQ : 0;
+      html += `<tr><td class="specialization-doctor-summary-name"><b>${esc(doctorName(row.id))}</b></td><td class="num"><span class="specialization-doctor-summary-period">${fmtNum(row.nz.slice)} мес.</span></td>
+        <td class="num"><span class="specialization-doctor-summary-chip assigned">${fmtNum(row.nz.totals.assigned)}</span></td>
+        <td class="num"><span class="specialization-doctor-summary-chip completed">${fmtNum(row.nz.totals.done)}</span></td>
+        <td class="num"><span class="specialization-doctor-summary-chip sold">${fmtNum(row.nz.totals.soldQ)}</span></td>
+        <td class="num"><span class="badge ${convClass} specialization-doctor-summary-conversion">${conv != null ? fmtPct(conv) : "—"}</span></td>
+        <td class="num"><span class="specialization-doctor-summary-focus"><b>${fmtNum(focusAssigned)}</b><span>/</span><b>${fmtNum(focusDone)}</b></span></td>
+        <td class="num specialization-doctor-summary-revenue">${fmtMoney(row.r.econ.refRevenue)}</td></tr>`;
     }
-    html += `</table></div></section>
-      <section class="specialization-1c-grouping"><h3>Группировка из файла 1С</h3>
-      <p class="small muted">Структура сохраняется в том же порядке, что в исходном отчёте: врач → вид услуги / специализация → номенклатура. Нажмите на врача, чтобы раскрыть строки.</p>`;
-    doctorRows.forEach((row, doctorIndex) => {
-      const groups = specializationNazGroups(row.nz);
-      const maxItems = 120;
-      let renderedItems = 0;
-      const totalItems = groups.reduce((sum, group) => sum + Object.keys(group.items || {}).length, 0);
-      html += `<details class="specialization-1c-doctor" ${doctorIndex === 0 ? "open" : ""}><summary>
-        <span><b>${esc(doctorName(row.id))}</b><small>${fmtNum(groups.length)} групп · ${fmtNum(totalItems)} позиций</small></span>
-        <span class="specialization-1c-doctor-totals"><b>${fmtNum(row.nz.totals.assigned)}</b> назначено · <b>${fmtNum(row.nz.totals.resultQ)}</b> результат</span>
-      </summary><div class="specialization-table-scroll"><table class="data"><tr><th>Группа / номенклатура</th><th class="num">Назначено</th><th class="num">Выполнено</th><th class="num">Продано</th><th class="num">Конверсия</th></tr>`;
-      for (const group of groups) {
-        const valid = group.assigned >= 0 && group.resultQ <= group.assigned;
-        const conv = valid && group.assigned > 0 ? group.resultQ / group.assigned * 100 : null;
-        html += `<tr class="source-group-head source-group-depth-0"><td><span class="source-group-path">${(group.path || []).map(part => `<span class="source-group-level">${esc(part)}</span>`).join('<span class="source-group-separator">›</span>')}</span></td>
-          <td class="num"><b>${fmtNum(group.assigned)}</b></td><td class="num"><b>${fmtNum(group.done)}</b></td><td class="num"><b>${fmtNum(group.soldQ)}</b></td><td class="num"><b>${conv != null ? fmtPct(conv) : "—"}</b></td></tr>`;
-        const itemEntries = Object.entries(group.items || {}).sort((a, b) => ((b[1].assigned || 0) + (b[1].resultQ || 0)) - ((a[1].assigned || 0) + (a[1].resultQ || 0)));
-        for (const [name, values] of itemEntries) {
-          if (renderedItems >= maxItems) break;
-          renderedItems++;
-          html += `<tr><td class="small muted source-nomenclature">${esc(name)}</td><td class="num small muted">${fmtNum(values.assigned)}</td>
-            <td class="num small muted">${fmtNum(values.done)}</td><td class="num small muted">${fmtNum(values.soldQ)}</td><td class="num small muted"></td></tr>`;
-        }
-        if (renderedItems >= maxItems) break;
-      }
-      html += `</table>${totalItems > renderedItems ? `<p class="small muted">Показаны первые ${fmtNum(renderedItems)} из ${fmtNum(totalItems)} позиций. Полная детализация доступна на странице врача.</p>` : ""}</div></details>`;
-    });
-    html += "</section>";
+    html += `</table></div></section>`;
   }
   return html + "</div>";
 }
@@ -3098,6 +3118,7 @@ function renderDoctor() {
     const convTarget = docProfile.scoring && docProfile.scoring.benchmarks ? docProfile.scoring.benchmarks.nazConv : null;
     const convState = trackedMetricState(nz.totals.conv, convTarget);
     const hasConvTarget = convTarget != null && convTarget !== "" && !isNaN(convTarget) && Number(convTarget) > 0;
+    const hasSourceGrouping = Boolean(nz.sourceGroups && nz.sourceGroups.length);
     html += `<details ${collapsibleListAttrs("appointmentConversionBlock", false)}><summary class="collapsible-list-summary appointment-conversion-summary">
       <span>КОНВЕРСИЯ НАЗНАЧЕНИЙ <span class="section-detail">· окно ${nazCur} мес. · назначено ${fmtNum(nz.totals.assigned)} · результат ${fmtNum(nz.totals.resultQ)}</span></span>
       <strong class="appointment-conversion-summary-value ${convState}">${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</strong>
@@ -3110,9 +3131,11 @@ function renderDoctor() {
         <div class="tracked-side"><div class="tracked-value">${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</div><div class="tracked-goal">${hasConvTarget ? `цель ≥ ${fmtPct(Number(convTarget))}` : "цель не установлена"}</div></div>
       </div>
       <details ${collapsibleListAttrs("appointmentDetails", false)}><summary class="collapsible-list-summary"><span>ДЕТАЛИ НАЗНАЧЕНИЙ <span class="section-detail">· назначено ${fmtNum(nz.totals.assigned)} · результат ${fmtNum(nz.totals.resultQ)} · конверсия ${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</span></span><span class="collapse-hint"></span></summary>
-      <div class="collapsible-list-body"><table class="data" id="tblNaz"><tr><th>${nz.sourceGroups && nz.sourceGroups.length ? "Вид услуги / специализация / номенклатура" : "Тип направления"}</th><th class="num">Назначено, шт</th><th class="num">Выполнено, шт</th><th class="num">Продано, шт</th><th class="num">Конверсия</th></tr>`;
+      <div class="collapsible-list-body">
+      ${hasSourceGrouping ? "" : `<div class="notice warn appointment-source-grouping-warning"><b>Нет группировки из 1С.</b> Эти назначения были загружены старой версией. Повторно обработайте исходные файлы на вкладке «Данные». <button class="btn mini no-print" type="button" onclick="switchTab('data')">Перейти к данным</button></div>`}
+      <table class="data" id="tblNaz"><tr><th>${hasSourceGrouping ? "Вид услуги / специализация / номенклатура" : "Тип направления"}</th><th class="num">Назначено, шт</th><th class="num">Выполнено, шт</th><th class="num">Продано, шт</th><th class="num">Конверсия</th></tr>`;
     let ntIdx = 0;
-    if (nz.sourceGroups && nz.sourceGroups.length) {
+    if (hasSourceGrouping) {
       const sourceTree = new Map();
       for (const group of nz.sourceGroups) {
         let siblings = sourceTree;
@@ -3794,7 +3817,7 @@ function renderReport() {
   if (kbControl) kbControl.innerHTML = `<span class="small muted">База:</span> ${segToggle("repKbWinSeg", [
     { v: 12, label: "1 год" }, { v: 24, label: "2 года" }, { v: 36, label: "3 года" },
   ], UI.repKbWin, "setReportKbWin")}`;
-  setControlsDisabled(["repMonth", "repScope", "btnExportAllPdf", "btnPrint"], !months.length);
+  setControlsDisabled(["repMonth", "repScope", "btnExportAllPdf", "btnExportViewerPackage", "btnPrint"], !months.length);
   if (!months.length) {
     body.innerHTML = '<div class="card"><p class="muted">Загрузите данные на вкладке «Данные».</p></div>';
     mSel.innerHTML = ""; sSel.innerHTML = "";
@@ -4038,6 +4061,184 @@ async function archiveAnalyticComment(id) {
     renderReport();
   } catch (error) {
     toast("Не удалось архивировать комментарий: " + error.message, true);
+  }
+}
+
+async function saveVisibleCommentDrafts() {
+  const rails = [...document.querySelectorAll("#reportBody .analytic-comment-rail")];
+  for (const rail of rails) {
+    const input = rail.querySelector(".analytic-comment-input");
+    if (!input || input.value.trim() === input.dataset.savedText) continue;
+    const context = reportContextFromScope(UI.repScope, UI.repMonth);
+    await saveAnalyticComment(rail, context, { silent: true, rerender: false });
+  }
+}
+
+function composeViewerReportHtml(rawHtml, context, comments) {
+  const root = document.createElement("div");
+  root.innerHTML = String(rawHtml || "");
+  root.querySelectorAll(".no-print,button,input,textarea,dialog,script,iframe,object,embed,form").forEach(element => element.remove());
+  root.querySelectorAll("[contenteditable]").forEach(element => element.removeAttribute("contenteditable"));
+  wrapAnalyticCards(root, context, comments, false);
+  return root.innerHTML;
+}
+
+function closeViewerExportDialog() {
+  const dialog = document.getElementById("viewerExportDialog");
+  if (dialog && dialog.open) dialog.close();
+}
+
+function viewerExportDoctorRows() {
+  return (VIEWER_ACCESS.doctors || []).filter(item => item.active && DB.doctors[item.doctorId]);
+}
+
+function updateViewerExportStatus() {
+  const status = document.getElementById("viewerExportStatus");
+  if (!status) return;
+  const doctors = document.querySelectorAll('#viewerExportDoctors input[data-viewer-export-doctor]:checked').length;
+  const periods = document.querySelectorAll('#viewerExportPeriods input:checked').length;
+  status.textContent = `Выбрано: врачей — ${doctors}, периодов — ${periods}`;
+}
+
+function filterViewerExportDoctors(selectMatching) {
+  const department = document.getElementById("viewerExportDepartmentFilter").value;
+  const specialization = document.getElementById("viewerExportSpecializationFilter").value;
+  document.querySelectorAll("#viewerExportDoctors .viewer-doctor-row").forEach(row => {
+    const matches = (!department || row.dataset.department === department)
+      && (!specialization || row.dataset.specialization === specialization);
+    row.classList.toggle("hidden", !matches);
+    if (selectMatching && matches) row.querySelector("input").checked = true;
+  });
+  updateViewerExportStatus();
+}
+
+async function openViewerExportDialog() {
+  try {
+    await refreshViewerPublicationAccess();
+  } catch (error) {
+    toast("Не удалось загрузить настройки Viewer: " + error.message, true);
+    return;
+  }
+  if (!VIEWER_ACCESS.adminPinConfigured) {
+    toast("Сначала задайте администраторский PIN Viewer в Настройках", true);
+    switchTab("settings");
+    return;
+  }
+  const doctors = viewerExportDoctorRows();
+  if (!doctors.length) {
+    toast("В Настройках не включён ни один врач для Viewer", true);
+    switchTab("settings");
+    return;
+  }
+  const months = sortedMonths();
+  const current = UI.repMonth && DB.months[UI.repMonth] ? UI.repMonth : months[months.length - 1];
+  document.getElementById("viewerExportPeriods").innerHTML = months.slice().reverse().map(periodKey =>
+    `<label><input type="checkbox" value="${esc(periodKey)}" ${periodKey === current ? "checked" : ""}> ${esc(monthLabel(periodKey))}</label>`
+  ).join("");
+  document.getElementById("viewerExportPageTypes").innerHTML = [
+    ["doctor", "Личный отчёт", true],
+    ["specialization", "Отчёт специализации", false],
+    ["department", "Отчёт отделения", false],
+  ].map(([value, label, checked]) => `<label><input type="checkbox" value="${value}" ${checked ? "checked" : ""}> ${label}</label>`).join("");
+  const enriched = doctors.map(item => ({
+    ...item,
+    department: resolvedDepartmentName(item.doctorId) || "",
+    specialization: resolvedSpecializationName(item.doctorId) || "",
+  }));
+  const departments = [...new Set(enriched.map(item => item.department).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ru"));
+  const specializations = [...new Set(enriched.map(item => item.specialization).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ru"));
+  document.getElementById("viewerExportDepartmentFilter").innerHTML = '<option value="">все</option>'
+    + departments.map(value => `<option value="${esc(value)}">${esc(value)}</option>`).join("");
+  document.getElementById("viewerExportSpecializationFilter").innerHTML = '<option value="">все</option>'
+    + specializations.map(value => `<option value="${esc(value)}">${esc(value)}</option>`).join("");
+  document.getElementById("viewerExportDoctors").innerHTML = enriched.map(item =>
+    `<label class="viewer-doctor-row" data-department="${esc(item.department)}" data-specialization="${esc(item.specialization)}">
+      <input type="checkbox" data-viewer-export-doctor value="${esc(item.doctorId)}" checked>
+      <b>${esc(item.displayName)}</b><span class="small muted">${esc(item.department || "Без отделения")}</span>
+      <span class="small muted">${esc(item.specialization || "Без специализации")}</span></label>`
+  ).join("");
+  const error = document.getElementById("viewerExportError");
+  error.textContent = "";
+  error.classList.add("hidden");
+  document.getElementById("viewerExportStart").disabled = false;
+  document.getElementById("viewerExportDialog").showModal();
+  updateViewerExportStatus();
+}
+
+async function exportViewerPackage() {
+  const button = document.getElementById("viewerExportStart");
+  const errorBox = document.getElementById("viewerExportError");
+  const periodKeys = [...document.querySelectorAll("#viewerExportPeriods input:checked")].map(input => input.value);
+  const pageTypes = new Set([...document.querySelectorAll("#viewerExportPageTypes input:checked")].map(input => input.value));
+  const doctorIds = [...document.querySelectorAll("#viewerExportDoctors input[data-viewer-export-doctor]:checked")].map(input => input.value);
+  if (!periodKeys.length || !pageTypes.size || !doctorIds.length) {
+    errorBox.textContent = "Выберите хотя бы один период, тип отчёта и врача.";
+    errorBox.classList.remove("hidden");
+    return;
+  }
+  button.disabled = true;
+  errorBox.classList.add("hidden");
+  try {
+    await saveVisibleCommentDrafts();
+    if (!await saveLocal()) throw new Error("Не удалось сохранить текущую рабочую базу");
+    const access = new Map(VIEWER_ACCESS.doctors.map(item => [item.doctorId, item]));
+    const doctors = doctorIds.map(doctorId => ({
+      doctorId,
+      displayName: doctorName(doctorId),
+      department: resolvedDepartmentName(doctorId) || "",
+      specialization: resolvedSpecializationName(doctorId) || "",
+      windowsAccount: access.get(doctorId)?.windowsAccount || "",
+    }));
+    const pages = [];
+    let completed = 0;
+    const total = periodKeys.length * doctorIds.length;
+    for (const periodKey of periodKeys) {
+      if (!DB.months[periodKey]) continue;
+      const comments = await DESKTOP_API.listComments({ periodKey });
+      const departmentCache = new Map();
+      const specializationCache = new Map();
+      for (const doctorId of doctorIds) {
+        const department = resolvedDepartmentName(doctorId) || "";
+        const specialization = resolvedSpecializationName(doctorId) || "";
+        if (pageTypes.has("department") && department) {
+          if (!departmentCache.has(department)) {
+            const context = { scopeType: "department", scopeId: department, periodKey, pageType: "department" };
+            departmentCache.set(department, composeViewerReportHtml(buildDepartmentReport(periodKey, department), context, comments));
+          }
+          pages.push({ doctorId, periodKey, pageType: "department", scopeId: department,
+            title: `Отделение ${department} · ${monthLabel(periodKey)}`, html: departmentCache.get(department) });
+        }
+        if (pageTypes.has("specialization") && specialization) {
+          if (!specializationCache.has(specialization)) {
+            const context = { scopeType: "specialization", scopeId: specialization, periodKey, pageType: "specialization" };
+            specializationCache.set(specialization, composeViewerReportHtml(buildDeptReport(periodKey, specialization, "all"), context, comments));
+          }
+          pages.push({ doctorId, periodKey, pageType: "specialization", scopeId: specialization,
+            title: `Специализация ${specialization} · ${monthLabel(periodKey)}`, html: specializationCache.get(specialization) });
+        }
+        if (pageTypes.has("doctor")) {
+          const context = { scopeType: "doctor", scopeId: doctorId, periodKey, pageType: "doctor" };
+          pages.push({ doctorId, periodKey, pageType: "doctor", scopeId: doctorId,
+            title: `${doctorName(doctorId)} · ${monthLabel(periodKey)}`,
+            html: composeViewerReportHtml(buildDoctorReport(doctorId, periodKey), context, comments) });
+        }
+        completed++;
+        document.getElementById("viewerExportStatus").textContent = `Формирую отчёты: ${completed} из ${total}`;
+        if (completed % 4 === 0) await new Promise(resolve => requestAnimationFrame(resolve));
+      }
+    }
+    const result = await DESKTOP_API.exportViewerPackage({ doctors, periods: periodKeys, pages });
+    if (result.canceled) {
+      updateViewerExportStatus();
+      return;
+    }
+    closeViewerExportDialog();
+    toast(`ZIP создан: врачей — ${result.doctors}, периодов — ${result.periods}. SHA-256: ${result.sha256.slice(0, 12)}…`);
+  } catch (error) {
+    errorBox.textContent = "Публикация не выполнена: " + error.message;
+    errorBox.classList.remove("hidden");
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -4462,6 +4663,91 @@ function scoringBenchmarkDefs(profile) {
   ];
 }
 
+function viewerAccessSettingsHtml() {
+  const items = (VIEWER_ACCESS.doctors || []).filter(item => DB.doctors[item.doctorId]);
+  const active = items.filter(item => item.active).length;
+  const rows = items.map(item => {
+    const department = resolvedDepartmentName(item.doctorId) || "";
+    const specialization = resolvedSpecializationName(item.doctorId) || "";
+    return `<tr data-viewer-access-row data-doctor-id="${esc(item.doctorId)}">
+      <td><label><input type="checkbox" data-viewer-active ${item.active ? "checked" : ""}> <b>${esc(item.displayName)}</b></label>
+        <div class="small muted">${esc([department, specialization].filter(Boolean).join(" · ") || "Структура не указана")}</div></td>
+      <td><input class="viewer-access-pin" data-viewer-pin type="text" inputmode="numeric" maxlength="4" value="${esc(item.pin)}" aria-label="PIN ${esc(item.displayName)}">
+        <div class="small muted">версия ${item.pinVersion}</div></td>
+      <td><input data-viewer-windows-account type="text" value="${esc(item.windowsAccount || "")}" placeholder="DOMAIN\\username"></td>
+      <td><button class="btn mini" type="button" onclick="saveViewerDoctorAccess(this)">Сохранить</button></td></tr>`;
+  }).join("");
+  return `<div class="card" id="viewerAccessSettingsCard"><div class="vhead"><div><h2 class="mt0">👁 Публикация в Viewer</h2>
+      <p class="small muted">Viewer не получает рабочую SQLite. Он открывает только ZIP с проверкой SHA-256, готовыми страницами и комментариями.</p></div>
+      <span class="badge ${VIEWER_ACCESS.adminPinConfigured ? "good" : "warn"}">${VIEWER_ACCESS.adminPinConfigured ? `Admin PIN настроен · v${VIEWER_ACCESS.adminPinVersion}` : "Admin PIN не задан"}</span></div>
+    <div class="notice blue"><b>Постоянные PIN:</b> четырёхзначный PIN врача не меняется при публикации нового месяца. Он меняется только после ручной правки здесь. За фактическое разграничение отвечает Windows-учётка и NTFS-доступ к папке врача.</div>
+    <div class="toolbar"><label>Новый администраторский PIN Viewer: <input id="viewerAdminPin" type="password" inputmode="numeric" minlength="6" maxlength="12" placeholder="6–12 цифр"></label>
+      <label>Повтор: <input id="viewerAdminPinRepeat" type="password" inputmode="numeric" minlength="6" maxlength="12"></label>
+      <button class="btn primary" type="button" onclick="setViewerAdminPinFromSettings()">Задать / изменить</button>
+      <span class="spacer"></span><span class="small muted">Включено ${active} из ${items.length}</span></div>
+    <div class="toolbar"><button class="btn mini" type="button" onclick="setAllViewerDoctorsActive(true)">Включить всех</button>
+      <button class="btn mini" type="button" onclick="setAllViewerDoctorsActive(false)">Выключить всех</button></div>
+    <div class="scroll-y"><table class="data viewer-access-table"><tr><th>Врач и публикация</th><th>PIN врача</th><th>Windows-учётка</th><th></th></tr>${rows || '<tr><td colspan="4" class="muted">Врачи появятся после импорта данных.</td></tr>'}</table></div>
+  </div>`;
+}
+
+async function setViewerAdminPinFromSettings() {
+  const pin = document.getElementById("viewerAdminPin").value;
+  const repeat = document.getElementById("viewerAdminPinRepeat").value;
+  if (!/^\d{6,12}$/.test(pin)) { toast("Администраторский PIN должен содержать от 6 до 12 цифр", true); return; }
+  if (pin !== repeat) { toast("Администраторские PIN не совпадают", true); return; }
+  try {
+    await DESKTOP_API.setViewerAdminPin(pin);
+    await refreshViewerPublicationAccess();
+    toast("Администраторский PIN Viewer сохранён");
+    renderSettings();
+  } catch (error) {
+    toast("Не удалось сохранить PIN: " + error.message, true);
+  }
+}
+
+async function saveViewerDoctorAccess(button) {
+  const row = button.closest("[data-viewer-access-row]");
+  const pin = row.querySelector("[data-viewer-pin]").value.trim();
+  if (!/^\d{4}$/.test(pin)) { toast("PIN врача должен состоять ровно из четырёх цифр", true); return; }
+  button.disabled = true;
+  try {
+    await DESKTOP_API.updateViewerDoctorAccess({
+      doctorId: row.dataset.doctorId,
+      active: row.querySelector("[data-viewer-active]").checked,
+      pin,
+      windowsAccount: row.querySelector("[data-viewer-windows-account]").value,
+    });
+    await refreshViewerPublicationAccess();
+    toast("Доступ врача сохранён");
+    renderSettings();
+  } catch (error) {
+    toast("Не удалось сохранить доступ: " + error.message, true);
+    button.disabled = false;
+  }
+}
+
+async function setAllViewerDoctorsActive(active) {
+  const items = VIEWER_ACCESS.doctors || [];
+  if (!items.length) return;
+  try {
+    for (const item of items) {
+      if (item.active === active) continue;
+      await DESKTOP_API.updateViewerDoctorAccess({
+        doctorId: item.doctorId,
+        active,
+        pin: item.pin,
+        windowsAccount: item.windowsAccount,
+      });
+    }
+    await refreshViewerPublicationAccess();
+    toast(active ? "Все врачи включены для публикации" : "Все врачи выключены для публикации");
+    renderSettings();
+  } catch (error) {
+    toast("Не удалось изменить доступы: " + error.message, true);
+  }
+}
+
 function renderSettings() {
   const settingsBody = document.getElementById("settingsBody");
   const s = DB.settings;
@@ -4506,7 +4792,7 @@ function renderSettings() {
   if (unassignedDoctors.length) {
     structureTree += `<div class="clinic-tree-department clinic-tree-unassigned"><div class="clinic-tree-head"><div><b>Не распределено</b><span class="badge warn">${unassignedDoctors.length}</span>${doctorStructureDragList(unassignedDoctors, "Нет врачей")}</div></div></div>`;
   }
-  let html = "";
+  let html = viewerAccessSettingsHtml();
   // состояние «свёрнуто/развёрнуто» секций настроек — переживает перерисовку
   if (!UI.setOpen) UI.setOpen = { norm: false, expert: false, nom: false, score: false, doctor: true, rules: false };
   // атрибуты для схлопывающейся секции: data-ключ + запоминание при переключении
@@ -5278,6 +5564,7 @@ async function initApp() {
     await loadDesktopDatabase();
     APP_AUTH = DESKTOP_STATE.auth;
     if (APP_AUTH.authenticated && APP_AUTH.user.role === "admin") {
+      await refreshViewerPublicationAccess();
       showAdminApplication(APP_AUTH);
       renderDesktopWorkspace();
     }
@@ -5320,12 +5607,25 @@ async function initApp() {
   document.getElementById("repScope").addEventListener("change", e => { UI.repScope = e.target.value; renderReport(); });
   document.getElementById("btnPrint").addEventListener("click", () => window.print());
   document.getElementById("btnExportAllPdf").addEventListener("click", openPdfExportDialog);
+  document.getElementById("btnExportViewerPackage").addEventListener("click", openViewerExportDialog);
   document.getElementById("pdfExportDialogList").addEventListener("change", updatePdfExportDialogState);
   document.getElementById("pdfExportSelectAll").addEventListener("click", () => setAllPdfExportDialogChoices(true));
   document.getElementById("pdfExportClearAll").addEventListener("click", () => setAllPdfExportDialogChoices(false));
   document.getElementById("pdfExportDialogClose").addEventListener("click", closePdfExportDialog);
   document.getElementById("pdfExportDialogCancel").addEventListener("click", closePdfExportDialog);
   document.getElementById("pdfExportDialogStart").addEventListener("click", () => { startPdfExportFromDialog(); });
+  document.getElementById("viewerExportDialogClose").addEventListener("click", closeViewerExportDialog);
+  document.getElementById("viewerExportDialogCancel").addEventListener("click", closeViewerExportDialog);
+  document.getElementById("viewerExportStart").addEventListener("click", exportViewerPackage);
+  document.getElementById("viewerExportDepartmentFilter").addEventListener("change", () => filterViewerExportDoctors(false));
+  document.getElementById("viewerExportSpecializationFilter").addEventListener("change", () => filterViewerExportDoctors(false));
+  document.getElementById("viewerExportSelectFiltered").addEventListener("click", () => filterViewerExportDoctors(true));
+  document.getElementById("viewerExportClearDoctors").addEventListener("click", () => {
+    document.querySelectorAll('#viewerExportDoctors input[data-viewer-export-doctor]').forEach(input => { input.checked = false; });
+    updateViewerExportStatus();
+  });
+  document.getElementById("viewerExportDoctors").addEventListener("change", updateViewerExportStatus);
+  document.getElementById("viewerExportPeriods").addEventListener("change", updateViewerExportStatus);
   document.getElementById("btnSaveSession").addEventListener("click", saveSessionState);
   document.getElementById("btnExport").addEventListener("click", exportDB);
   document.getElementById("btnImport").addEventListener("click", () => document.getElementById("importInput").click());
@@ -5339,6 +5639,7 @@ async function initApp() {
     document.getElementById("btnAdminChangePassword").addEventListener("click", openPasswordDialog);
     document.getElementById("btnConfirmPasswordChange").addEventListener("click", confirmPasswordChange);
     document.getElementById("btnScanInput").addEventListener("click", desktopScanInput);
+    document.getElementById("btnReprocessAppointments").addEventListener("click", desktopReprocessAppointments);
     document.getElementById("btnOpenOutput").addEventListener("click", () => DESKTOP_API.openPath("output").catch(error => toast(error.message, true)));
     document.getElementById("btnChooseWorkspace").addEventListener("click", desktopChooseWorkspace);
     document.querySelectorAll("[data-choose-folder]").forEach(button => button.addEventListener("click", () => desktopChooseFolder(button.dataset.chooseFolder)));

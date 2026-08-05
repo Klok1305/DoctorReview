@@ -15,6 +15,7 @@ const { BackupService } = require("./services/backup-service.cjs");
 const { FileService } = require("./services/file-service.cjs");
 const { UpdateService } = require("./services/update-service.cjs");
 const { AuthService } = require("./services/auth-service.cjs");
+const { createViewerPackage } = require("./services/viewer-package-service.cjs");
 
 const PDF_SMOKE_TEST = process.argv.includes("--pdf-smoke");
 const SMOKE_TEST = PDF_SMOKE_TEST || process.argv.includes("--smoke-test");
@@ -512,6 +513,25 @@ function createWindow() {
                 && specializationFirstDoctorGroup.open
                 && specializationGrouping.textContent.includes('Клиника')
                 && specializationGrouping.textContent.includes('Фокусные услуги');
+              const specializationDoctorSummary = document.querySelector('#deptBody .specialization-doctor-summary-table');
+              const specializationFocusMatrixDetails = {
+                table: Boolean(specializationFocusTable),
+                total: Boolean(specializationFocusTotal),
+                summary: Boolean(specializationDoctorSummary),
+                headerCount: specializationFocusTable?.querySelectorAll('tr:first-child th').length || 0,
+                doctorRows: specializationFocusNames.length,
+                metrics: specializationFocusTable?.querySelectorAll('.specialization-doctor-focus-metric').length || 0,
+                totalCells: specializationFocusTotal?.cells.length || 0,
+                summaryRows: specializationDoctorSummary?.querySelectorAll('tr').length || 0,
+                legacyGrouping: Boolean(specializationGrouping),
+              };
+              const specializationFocusMatrixValid = Boolean(specializationFocusTable && specializationFocusTotal && specializationDoctorSummary)
+                && specializationFocusTable.querySelectorAll('tr:first-child th').length === 4
+                && specializationFocusNames.length >= 1
+                && specializationFocusTable.querySelectorAll('.specialization-doctor-focus-metric').length >= 1
+                && specializationFocusTotal.cells.length === 4
+                && specializationDoctorSummary.querySelectorAll('tr').length === specializationFocusNames.length + 1
+                && !specializationGrouping;
               UI.repMonth = '2026-02';
               UI.repScope = 'dept';
               switchTab('report');
@@ -783,7 +803,8 @@ function createWindow() {
                 reportLeaderboardsValid,
                 specializationSummaryValid,
                 specializationPrimaryReturnHeaderValid,
-                specializationFocusBlockValid,
+                specializationFocusBlockValid: specializationFocusMatrixValid,
+                specializationFocusMatrixDetails,
                 comparisonHeaders,
                 comparisonHeaderWidths,
                 heatmapLayoutValid,
@@ -1100,6 +1121,61 @@ function registerIpc() {
     database.audit({ actorUserId: session.userId, action: "comment.archived", targetType: "comment", targetId: String(id) });
     return archived;
   });
+  ipcMain.handle("viewer-publication:access", () => {
+    authService.require("admin");
+    return database.viewerAccessSnapshot();
+  });
+  ipcMain.handle("viewer-publication:update-doctor", (_event, payload) => {
+    const session = authService.require("admin");
+    const input = ensureObject(payload, "настройки доступа врача");
+    const updated = database.updateViewerDoctorAccess(input);
+    database.audit({ actorUserId: session.userId, action: "viewer-access.updated", targetType: "doctor", targetId: updated.doctorId,
+      details: { active: updated.active, pinVersion: updated.pinVersion, windowsAccount: updated.windowsAccount } });
+    return updated;
+  });
+  ipcMain.handle("viewer-publication:set-admin-pin", (_event, payload) => {
+    const session = authService.require("admin");
+    const input = ensureObject(payload, "PIN администратора Viewer");
+    const result = database.setViewerAdminPin(input.pin);
+    database.audit({ actorUserId: session.userId, action: "viewer-admin-pin.updated", targetType: "viewer", targetId: "admin",
+      details: { pinVersion: result.version } });
+    return result;
+  });
+  ipcMain.handle("viewer-publication:export", async (_event, payload) => {
+    const session = authService.require("admin");
+    const input = ensureObject(payload, "публикация Viewer");
+    if (!Array.isArray(input.doctors) || !Array.isArray(input.periods) || !Array.isArray(input.pages)) {
+      throw new Error("Некорректное содержимое публикации Viewer");
+    }
+    const snapshot = database.loadSnapshot() || {};
+    const knownDoctors = new Set(Object.keys(snapshot.doctors || {}));
+    const doctorIds = input.doctors.map(doctor => String(doctor.doctorId || ""));
+    if (doctorIds.some(id => !knownDoctors.has(id))) throw new Error("В публикации указан неизвестный врач");
+    const credentials = database.viewerExportCredentials(doctorIds);
+    const created = await createViewerPackage({
+      appVersion: app.getVersion(),
+      doctors: input.doctors,
+      periods: input.periods,
+      pages: input.pages,
+      credentials,
+    });
+    const date = new Date().toISOString().slice(0, 10);
+    const selected = await dialog.showSaveDialog(mainWindow, {
+      title: "Сохранить ZIP для Пульс клиники Viewer",
+      defaultPath: path.join(configStore.publicConfig().outputDir, `Пульс-клиники-отчёты-${date}.zip`),
+      filters: [{ name: "Пакет отчётов Viewer", extensions: ["zip"] }],
+    });
+    if (selected.canceled || !selected.filePath) return { canceled: true };
+    fs.writeFileSync(selected.filePath, created.buffer, { flag: "w" });
+    const recorded = database.recordViewerExport({
+      packageId: created.manifest.packageId,
+      fileName: path.basename(selected.filePath),
+      sha256: created.sha256,
+      manifest: created.manifest,
+      createdBy: session.userId,
+    });
+    return { canceled: false, path: selected.filePath, ...recorded, doctors: doctorIds.length, periods: input.periods.length };
+  });
   ipcMain.handle("database:save", (_event, json) => {
     authService.require("admin");
     if (typeof json !== "string" || json.length > 200 * 1024 * 1024) throw new Error("Некорректный размер снимка базы");
@@ -1182,6 +1258,14 @@ function registerIpc() {
     return fileService.describeSelected(result.filePaths);
   });
   ipcMain.handle("files:scan-input", () => { authService.require("admin"); return fileService.scanInputFolder(); });
+  ipcMain.handle("files:list-imported", (_event, reportType) => {
+    authService.require("admin");
+    const type = String(reportType || "");
+    if (!new Set(["vyrabotka", "kb", "naznach", "pervichka", "prostoy", "zapis"]).has(type)) {
+      throw new Error("Неподдерживаемый тип ранее импортированных данных");
+    }
+    return fileService.listImportedSources(type);
+  });
   ipcMain.handle("files:read-input", (_event, filePath) => { authService.require("admin"); return fileService.readInputFile(String(filePath)); });
   ipcMain.handle("import:has-source", (_event, sha256) => { authService.require("admin"); return database.hasSuccessfulSource(String(sha256)); });
 

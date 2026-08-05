@@ -55,8 +55,8 @@ jobs:
       - name: Запустить тесты
         run: pnpm test
 
-      - name: Собрать администраторский установщик
-        run: pnpm run dist
+      - name: Собрать установщики Admin и Viewer
+        run: pnpm run dist:all
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
@@ -73,7 +73,8 @@ jobs:
           $assets = @(
             "dist/DoctorReview-Admin-Setup-$version-x64.exe",
             "dist/DoctorReview-Admin-Setup-$version-x64.exe.blockmap",
-            "dist/latest.yml"
+            "dist/latest.yml",
+            "dist/viewer/DoctorReview-Viewer-Setup-$version-x64.exe"
           )
           foreach ($asset in $assets) {
             if (-not (Test-Path -LiteralPath $asset)) { throw "Не найден файл релиза: $asset" }

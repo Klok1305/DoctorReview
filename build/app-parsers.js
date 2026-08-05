@@ -650,7 +650,7 @@ function parseZapis(rows) {
 
 /* ---------- обработка файла ---------- */
 
-function acceptSlotReplacement(label, existing, nextValue, log) {
+function acceptSlotReplacement(label, existing, nextValue, log, options = {}) {
   if (existing == null) return true;
   try {
     if (JSON.stringify(existing) === JSON.stringify(nextValue)) {
@@ -660,6 +660,10 @@ function acceptSlotReplacement(label, existing, nextValue, log) {
       return false;
     }
   } catch (_) { /* comparison is only an optimization */ }
+  if (options.replaceExisting) {
+    log.replaced = true;
+    return true;
+  }
   if (!confirm(`${label}: за этот период данные уже загружены.\n\nЗаменить их новой версией? Предыдущее состояние останется в резервной копии перед импортом.`)) {
     log.status = "пропущено";
     log.skipReason = "kept-existing";
@@ -676,7 +680,7 @@ function finalizeFileLog(log) {
   return log;
 }
 
-async function processFile(file) {
+async function processFile(file, options = {}) {
   const log = { name: file.name, type: null, doctor: null, period: null, month: null, status: "ошибка", note: "" };
   try {
     const buf = await file.arrayBuffer();
@@ -687,6 +691,12 @@ async function processFile(file) {
     const type = detectReportType(rows);
     if (!type) throw new Error("не удалось распознать тип отчёта 1С");
     log.type = type;
+    if (options.onlyType && type !== options.onlyType) {
+      log.status = "пропущено";
+      log.skipReason = "filtered-type";
+      log.note = "Другой тип отчёта — при переобработке назначений не изменён";
+      return log;
+    }
     const info = extractHeaderInfo(rows);
     if (!info.period) throw new Error("не найдена строка «Период: …»");
     if (!isFullMonthPeriod(info.period)) {
@@ -716,7 +726,7 @@ async function processFile(file) {
       const m = ensureMonth(monthKey);
       if (!m.naznach[docId]) m.naznach[docId] = {};
       const nextValue = { period: info.period, items: res.items, totals: res.totals };
-      if (!acceptSlotReplacement(`Назначения · ${log.doctor} · ${monthKey} · ${slice} мес.`, m.naznach[docId][slice], nextValue, log)) return finalizeFileLog(log);
+      if (!acceptSlotReplacement(`Назначения · ${log.doctor} · ${monthKey} · ${slice} мес.`, m.naznach[docId][slice], nextValue, log, options)) return finalizeFileLog(log);
       m.naznach[docId][slice] = nextValue;
       log.slot = { t: "naznach", mk: monthKey, doc: docId, sl: slice };
       log.status = "загружено";
@@ -873,20 +883,20 @@ function filesFromDataTransfer(dt) {
 
 let fileImportInProgress = false;
 
-async function handleFiles(fileList) {
+async function handleFiles(fileList, options = {}) {
   if (fileImportInProgress) {
     toast("Импорт уже выполняется — дождитесь его завершения");
     return null;
   }
   fileImportInProgress = true;
-  const controlIds = ["btnPickFiles", "btnPickDir", "btnScanInput"];
+  const controlIds = ["btnPickFiles", "btnPickDir", "btnScanInput", "btnReprocessAppointments"];
   const controls = controlIds.map(id => document.getElementById(id)).filter(Boolean);
   const previousDisabled = controls.map(control => control.disabled);
   controls.forEach(control => { control.disabled = true; });
   const dropzone = document.getElementById("dropzone");
   if (dropzone) dropzone.setAttribute("aria-busy", "true");
   try {
-    return await handleFilesBatch(fileList);
+    return await handleFilesBatch(fileList, options);
   } catch (error) {
     console.error("file import failed", error);
     toast("Импорт не завершён: " + error.message, true);
@@ -898,7 +908,7 @@ async function handleFiles(fileList) {
   }
 }
 
-async function handleFilesBatch(fileList) {
+async function handleFilesBatch(fileList, options = {}) {
   const expanded = await expandZips(fileList);
   let files = expanded.filter(f => /\.(xls|xlsx)$/i.test(f.name));
   const jsons = expanded.filter(f => /\.json$/i.test(f.name));
@@ -909,7 +919,7 @@ async function handleFilesBatch(fileList) {
     const unique = [];
     for (const file of files) {
       const source = await ensureDesktopFileSource(file);
-      if (!file.__forceReimport && (source.imported || await DESKTOP_API.hasImportedSource(source.sha256))) duplicateSkipped++;
+      if (!options.forceReimport && !file.__forceReimport && (source.imported || await DESKTOP_API.hasImportedSource(source.sha256))) duplicateSkipped++;
       else unique.push(file);
     }
     files = unique;
@@ -928,12 +938,12 @@ async function handleFilesBatch(fileList) {
   }
   const processed = [];
   for (const f of files) {
-    const log = await processFile(f);
+    const log = await processFile(f, options);
     processed.push({ file: f, log });
     if (log.status === "загружено") ok++;
     else if (log.status === "пропущено") skipped++;
     else err++;
-    if (DESKTOP_API) {
+    if (DESKTOP_API && log.skipReason !== "filtered-type") {
       try {
         await DESKTOP_API.recordImport({ batchId, source: await ensureDesktopFileSource(f), log });
       } catch (error) {
@@ -952,7 +962,7 @@ async function handleFilesBatch(fileList) {
       const container = item.file.__source && item.file.__source.container;
       if (!container || !container.sha256) continue;
       const state = containers.get(container.sha256) || { source: container, failed: false };
-      if (item.log.status !== 'загружено' && item.log.skipReason !== 'identical') state.failed = true;
+      if (item.log.status !== 'загружено' && !['identical', 'filtered-type'].includes(item.log.skipReason)) state.failed = true;
       containers.set(container.sha256, state);
     }
     for (const state of containers.values()) {
@@ -967,5 +977,7 @@ async function handleFilesBatch(fileList) {
     await DESKTOP_API.finishImport({ batchId, counts: { loaded: ok, errors: err, skipped } });
   }
   renderAll();
-  toast(`Обработано файлов: ${files.length}. Загружено: ${ok}` + (skipped ? `, пропущено: ${skipped}` : "") + (err ? `, с ошибками: ${err}` : ""), err > 0);
+  const summary = `Обработано файлов: ${files.length}. Загружено: ${ok}` + (skipped ? `, пропущено: ${skipped}` : "") + (err ? `, с ошибками: ${err}` : "");
+  toast(options.summaryLabel ? `${options.summaryLabel}. ${summary}` : summary, err > 0);
+  return { files: files.length, loaded: ok, errors: err, skipped };
 }

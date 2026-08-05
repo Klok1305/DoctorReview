@@ -86,6 +86,7 @@
       </div>
       <div class="flex">
         <button class="btn primary" id="btnScanInput">▶ Обработать новые выгрузки</button>
+        <button class="btn" id="btnReprocessAppointments" title="Повторно разобрать старые выгрузки назначений и восстановить группировки 1С">↻ Переобработать назначения</button>
         <button class="btn" id="btnOpenOutput">📂 Открыть результаты</button>
       </div>
     </div>
@@ -151,6 +152,7 @@
     <label>Кому: <select id="repScope" style="min-width:220px"></select></label>
     <label>Месяц: <select id="repMonth"></select></label>
     <button class="btn primary" id="btnExportAllPdf" title="Выбрать отделения, специализации и врачей для PDF-выгрузки">📁 Выгрузить PDF</button>
+    <button class="btn primary" id="btnExportViewerPackage" title="Сформировать ZIP с опубликованными отчётами для отдельного Viewer">⇧ ZIP для Viewer</button>
     <button class="btn" id="btnPrint">🖨 Печать</button>
   </div>
   <div class="notice blue no-print"><b>Как работать:</b> выберите период и адресата, при необходимости добавьте административные комментарии справа от аналитических блоков. Комментарий сохраняется при выходе из поля. «Выгрузить PDF» предложит выбрать нужные отчёты.</div>
@@ -172,6 +174,32 @@
     <div class="pdf-export-dialog-actions">
       <button class="btn" type="button" id="pdfExportDialogCancel">Отмена</button>
       <button class="btn primary" type="button" id="pdfExportDialogStart">Начать выгрузку</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog class="pdf-export-dialog no-print" id="viewerExportDialog" aria-labelledby="viewerExportDialogTitle">
+  <div class="pdf-export-dialog-shell viewer-export-dialog-shell">
+    <div class="pdf-export-dialog-head">
+      <div><h2 id="viewerExportDialogTitle">Публикация для врачей</h2><p class="small muted">В ZIP попадут только выбранные готовые отчёты и опубликованные вместе с ними комментарии.</p></div>
+      <button class="btn mini" type="button" id="viewerExportDialogClose" aria-label="Закрыть окно">✕</button>
+    </div>
+    <div class="viewer-export-grid">
+      <section><h3>Периоды</h3><div id="viewerExportPeriods" class="viewer-choice-list"></div></section>
+      <section><h3>Состав отчёта</h3><div id="viewerExportPageTypes" class="viewer-choice-list"></div></section>
+    </div>
+    <div class="toolbar">
+      <label>Отделение: <select id="viewerExportDepartmentFilter"></select></label>
+      <label>Специализация: <select id="viewerExportSpecializationFilter"></select></label>
+      <button class="btn mini" type="button" id="viewerExportSelectFiltered">Отметить подходящих</button>
+      <button class="btn mini" type="button" id="viewerExportClearDoctors">Снять всё</button>
+    </div>
+    <div class="viewer-doctor-list" id="viewerExportDoctors"></div>
+    <div class="notice bad hidden" id="viewerExportError"></div>
+    <div class="pdf-export-dialog-actions">
+      <span class="small muted" id="viewerExportStatus"></span><span class="spacer"></span>
+      <button class="btn" type="button" id="viewerExportDialogCancel">Отмена</button>
+      <button class="btn primary" type="button" id="viewerExportStart">Сформировать ZIP</button>
     </div>
   </div>
 </dialog>

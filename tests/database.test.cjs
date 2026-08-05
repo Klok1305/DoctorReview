@@ -38,6 +38,13 @@ test("SQLite snapshot, import history and verified backup round-trip", async t =
   database.finishImportBatch(batchId, { loaded: 1 });
   assert.equal(database.hasSuccessfulSource(source.sha256), true);
 
+  const zipPath = path.join(temp, "назначения.zip");
+  const appointmentSource = { sha256: "b".repeat(64), path: `${zipPath}::врачи/Пан.xls`, name: "Пан.xls", size: 456 };
+  const appointmentBatchId = database.beginImportBatch({ totalFiles: 1 });
+  database.recordImport({ batchId: appointmentBatchId, source: appointmentSource, log: { status: "загружено", type: "naznach", month: "2026-06", doctor: "Пан К. А." } });
+  database.finishImportBatch(appointmentBatchId, { loaded: 1 });
+  assert.deepEqual(database.listImportedSourcePaths("naznach"), [zipPath]);
+
   const backup = path.join(temp, "backup.ovbackup");
   const preview = await database.backupTo(backup);
   assert.equal(preview.ok, true);

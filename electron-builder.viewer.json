@@ -1,0 +1,36 @@
+{
+  "appId": "ru.local.doctorperformance.viewer",
+  "productName": "Пульс клиники — Viewer",
+  "artifactName": "DoctorReview-Viewer-Setup-${version}-${arch}.${ext}",
+  "asar": true,
+  "electronLanguages": ["ru", "en-US"],
+  "extraMetadata": {
+    "main": "viewer/main.cjs",
+    "description": "Локальный просмотрщик опубликованных отчётов Пульс клиники"
+  },
+  "files": [
+    "viewer/**",
+    "desktop/services/viewer-package-service.cjs",
+    "build/app.css",
+    "build/jszip.min.js",
+    "resources/app-icon.png",
+    "resources/app-icon.ico",
+    "package.json"
+  ],
+  "directories": {
+    "output": "dist/viewer"
+  },
+  "win": {
+    "icon": "resources/app-icon.ico",
+    "target": ["nsis"]
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "perMachine": false,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "Пульс клиники — Viewer",
+    "deleteAppDataOnUninstall": false
+  }
+}

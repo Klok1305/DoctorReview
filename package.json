@@ -1,6 +1,6 @@
 {
   "name": "doctor-performance-app",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Административное приложение «Пульс клиники» для аналитики врачей и отделений",
   "main": "desktop/main.cjs",
   "author": "Nikita",
@@ -19,10 +19,13 @@
     "assemble": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./build/assemble.ps1",
     "audit:repo": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/audit-repository.ps1",
     "start": "pnpm run assemble && electron .",
+    "start:viewer": "electron ./viewer",
     "test": "node --test tests/*.test.cjs",
     "test:smoke": "pnpm run assemble && electron . --smoke-test",
     "test:pdf": "pnpm run assemble && electron . --pdf-smoke",
-    "dist": "pnpm run assemble && electron-builder --win nsis --publish never"
+    "dist": "pnpm run assemble && electron-builder --win nsis --publish never",
+    "dist:viewer": "electron-builder --config electron-builder.viewer.json --win nsis --publish never",
+    "dist:all": "pnpm run dist && pnpm run dist:viewer"
   },
   "dependencies": {
     "electron-updater": "^6.6.2"
@@ -39,6 +42,7 @@
     "electronLanguages": ["ru", "en-US"],
     "files": [
       "index.html",
+      "build/jszip.min.js",
       "desktop/**",
       "resources/**",
       "docs/**",

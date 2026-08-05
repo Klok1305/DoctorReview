@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { backup, DatabaseSync } = require("node:sqlite");
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const SNAPSHOT_VERSION = 4;
 const MIN_SNAPSHOT_VERSION = 1;
 
@@ -28,6 +28,31 @@ function doctorLoginBase(displayName) {
     .toLocaleLowerCase("ru-RU")
     .replace(/[^a-zа-яё0-9_-]+/gi, "")
     .slice(0, 40);
+}
+
+const VIEWER_PIN_PARAMS = Object.freeze({ N: 32768, r: 8, p: 1, keylen: 64 });
+
+function viewerPinRecord(pin) {
+  const salt = crypto.randomBytes(24);
+  const hash = crypto.scryptSync(String(pin), salt, VIEWER_PIN_PARAMS.keylen, {
+    N: VIEWER_PIN_PARAMS.N,
+    r: VIEWER_PIN_PARAMS.r,
+    p: VIEWER_PIN_PARAMS.p,
+    maxmem: 64 * 1024 * 1024,
+  });
+  return {
+    hash: hash.toString("base64"),
+    salt: salt.toString("base64"),
+    params: JSON.stringify(VIEWER_PIN_PARAMS),
+  };
+}
+
+function randomViewerPin(used) {
+  for (let attempt = 0; attempt < 20000; attempt++) {
+    const pin = String(crypto.randomInt(0, 10000)).padStart(4, "0");
+    if (pin !== "0000" && !used.has(pin)) return pin;
+  }
+  throw new Error("Не удалось подобрать уникальный PIN врача");
 }
 
 class DatabaseService {
@@ -265,6 +290,46 @@ class DatabaseService {
         `);
         this.db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)")
           .run(2, new Date().toISOString());
+      });
+    }
+    if (current < 3) {
+      this.#transaction(() => {
+        this.db.exec(`
+          CREATE TABLE viewer_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            admin_pin_hash TEXT,
+            admin_pin_salt TEXT,
+            admin_pin_params TEXT,
+            admin_pin_version INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+          );
+
+          CREATE TABLE viewer_doctor_access (
+            doctor_id TEXT PRIMARY KEY,
+            active INTEGER NOT NULL DEFAULT 0,
+            pin_code TEXT NOT NULL,
+            pin_hash TEXT NOT NULL,
+            pin_salt TEXT NOT NULL,
+            pin_params TEXT NOT NULL,
+            pin_version INTEGER NOT NULL DEFAULT 1,
+            windows_account TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+          );
+
+          CREATE TABLE viewer_exports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            package_id TEXT NOT NULL UNIQUE,
+            file_name TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            manifest_json TEXT NOT NULL,
+            created_by INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(created_by) REFERENCES users(id)
+          );
+          CREATE INDEX idx_viewer_exports_created ON viewer_exports(created_at DESC);
+        `);
+        this.db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)")
+          .run(3, new Date().toISOString());
       });
     }
     const finalVersion = this.db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get().version;
@@ -691,6 +756,128 @@ class DatabaseService {
     return this.#publicComment(comment);
   }
 
+  viewerAccessSnapshot() {
+    const now = new Date().toISOString();
+    const usedPins = new Set(this.db.prepare("SELECT pin_code FROM viewer_doctor_access").all().map(row => row.pin_code));
+    const doctors = this.db.prepare("SELECT id, data_json FROM doctors ORDER BY id").all();
+    const insert = this.db.prepare(`
+      INSERT OR IGNORE INTO viewer_doctor_access(
+        doctor_id, active, pin_code, pin_hash, pin_salt, pin_params, pin_version, windows_account, updated_at
+      ) VALUES (?, 0, ?, ?, ?, ?, 1, '', ?)
+    `);
+    this.#transaction(() => {
+      for (const doctor of doctors) {
+        const existing = this.db.prepare("SELECT 1 FROM viewer_doctor_access WHERE doctor_id = ?").get(doctor.id);
+        if (existing) continue;
+        const pin = randomViewerPin(usedPins);
+        usedPins.add(pin);
+        const record = viewerPinRecord(pin);
+        insert.run(doctor.id, pin, record.hash, record.salt, record.params, now);
+      }
+    });
+    const settings = this.db.prepare("SELECT * FROM viewer_settings WHERE id = 1").get();
+    const access = new Map(this.db.prepare("SELECT * FROM viewer_doctor_access").all().map(row => [row.doctor_id, row]));
+    return {
+      adminPinConfigured: Boolean(settings && settings.admin_pin_hash),
+      adminPinVersion: settings ? Number(settings.admin_pin_version) : 0,
+      doctors: doctors.map(row => {
+        const doctor = parseJson(row.data_json, {});
+        const item = access.get(row.id);
+        return {
+          doctorId: row.id,
+          displayName: String(doctor.name || row.id),
+          department: String(doctor.department || ""),
+          specialization: String(doctor.specialization || doctor.dept || ""),
+          active: Boolean(item.active),
+          pin: item.pin_code,
+          pinVersion: Number(item.pin_version),
+          windowsAccount: item.windows_account || "",
+          updatedAt: item.updated_at,
+        };
+      }),
+    };
+  }
+
+  setViewerAdminPin(pin) {
+    const value = String(pin || "");
+    if (!/^\d{6,12}$/.test(value)) throw new Error("Администраторский PIN должен содержать от 6 до 12 цифр");
+    const now = new Date().toISOString();
+    const record = viewerPinRecord(value);
+    const current = this.db.prepare("SELECT admin_pin_version FROM viewer_settings WHERE id = 1").get();
+    const version = Number(current ? current.admin_pin_version : 0) + 1;
+    this.db.prepare(`
+      INSERT INTO viewer_settings(id, admin_pin_hash, admin_pin_salt, admin_pin_params, admin_pin_version, updated_at)
+      VALUES (1, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET admin_pin_hash = excluded.admin_pin_hash, admin_pin_salt = excluded.admin_pin_salt,
+        admin_pin_params = excluded.admin_pin_params, admin_pin_version = excluded.admin_pin_version,
+        updated_at = excluded.updated_at
+    `).run(record.hash, record.salt, record.params, version, now);
+    return { configured: true, version };
+  }
+
+  updateViewerDoctorAccess({ doctorId, active, pin, windowsAccount }) {
+    const id = String(doctorId || "");
+    if (!this.db.prepare("SELECT 1 FROM doctors WHERE id = ?").get(id)) throw new Error("Врач не найден в рабочей базе");
+    this.viewerAccessSnapshot();
+    const current = this.db.prepare("SELECT * FROM viewer_doctor_access WHERE doctor_id = ?").get(id);
+    const nextPin = String(pin == null ? current.pin_code : pin);
+    if (!/^\d{4}$/.test(nextPin)) throw new Error("PIN врача должен состоять ровно из четырёх цифр");
+    const duplicate = this.db.prepare("SELECT doctor_id FROM viewer_doctor_access WHERE pin_code = ? AND doctor_id <> ?").get(nextPin, id);
+    if (duplicate) throw new Error("Такой PIN уже назначен другому врачу");
+    const account = String(windowsAccount == null ? current.windows_account : windowsAccount).trim().slice(0, 160);
+    if (account && !/^[^\\/:*?\"<>|\r\n]{1,80}(?:\\[^\\/:*?\"<>|\r\n]{1,80})?$/.test(account)) {
+      throw new Error("Укажите Windows-учётку в формате DOMAIN\\username или username");
+    }
+    const changedPin = nextPin !== current.pin_code;
+    const record = changedPin ? viewerPinRecord(nextPin) : {
+      hash: current.pin_hash, salt: current.pin_salt, params: current.pin_params,
+    };
+    this.db.prepare(`
+      UPDATE viewer_doctor_access SET active = ?, pin_code = ?, pin_hash = ?, pin_salt = ?, pin_params = ?,
+        pin_version = ?, windows_account = ?, updated_at = ? WHERE doctor_id = ?
+    `).run(active == null ? current.active : (active ? 1 : 0), nextPin, record.hash, record.salt, record.params,
+      Number(current.pin_version) + (changedPin ? 1 : 0), account, new Date().toISOString(), id);
+    return this.viewerAccessSnapshot().doctors.find(item => item.doctorId === id);
+  }
+
+  viewerExportCredentials(doctorIds) {
+    const ids = [...new Set((doctorIds || []).map(String))];
+    const settings = this.db.prepare("SELECT * FROM viewer_settings WHERE id = 1").get();
+    if (!settings || !settings.admin_pin_hash) throw new Error("Сначала задайте администраторский PIN Viewer");
+    const doctors = ids.map(id => {
+      const row = this.db.prepare("SELECT * FROM viewer_doctor_access WHERE doctor_id = ?").get(id);
+      if (!row || !row.active) throw new Error(`Доступ врача ${id} не включён`);
+      return {
+        doctorId: id,
+        pinHash: row.pin_hash,
+        pinSalt: row.pin_salt,
+        pinParams: row.pin_params,
+        pinVersion: Number(row.pin_version),
+        windowsAccount: row.windows_account || "",
+      };
+    });
+    return {
+      admin: {
+        pinHash: settings.admin_pin_hash,
+        pinSalt: settings.admin_pin_salt,
+        pinParams: settings.admin_pin_params,
+        pinVersion: Number(settings.admin_pin_version),
+      },
+      doctors,
+    };
+  }
+
+  recordViewerExport({ packageId, fileName, sha256, manifest, createdBy }) {
+    const createdAt = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO viewer_exports(package_id, file_name, sha256, manifest_json, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(String(packageId), String(fileName), String(sha256), stableJson(manifest), Number(createdBy), createdAt);
+    this.audit({ actorUserId: createdBy, action: "viewer-package.created", targetType: "viewer-package", targetId: packageId,
+      details: { fileName, sha256, doctors: manifest.doctors.length, periods: manifest.periods.length } });
+    return { packageId, fileName, sha256, createdAt };
+  }
+
   publish({ periodKey, createdBy, pages }) {
     const now = new Date().toISOString();
     return this.#transaction(() => {
@@ -783,6 +970,29 @@ class DatabaseService {
   hasSuccessfulSource(sha256) {
     const row = this.db.prepare("SELECT successful FROM source_files WHERE sha256 = ?").get(String(sha256 || ""));
     return Boolean(row && row.successful);
+  }
+
+  listImportedSourcePaths(reportType) {
+    const rows = this.db.prepare(`
+      SELECT DISTINCT sf.original_path
+      FROM source_files sf
+      JOIN import_events ie ON ie.source_file_id = sf.id
+      WHERE sf.successful = 1
+        AND ie.report_type = ?
+        AND sf.original_path IS NOT NULL
+        AND TRIM(sf.original_path) <> ''
+      ORDER BY sf.original_path COLLATE NOCASE
+    `).all(String(reportType || ""));
+    const seen = new Set();
+    const paths = [];
+    for (const row of rows) {
+      const originalPath = String(row.original_path || "").split("::", 1)[0].trim();
+      const key = originalPath.toLocaleLowerCase("ru-RU");
+      if (!originalPath || seen.has(key)) continue;
+      seen.add(key);
+      paths.push(originalPath);
+    }
+    return paths;
   }
 
   beginImportBatch({ totalFiles = 0, backupPath = null } = {}) {

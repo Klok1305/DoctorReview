@@ -104,6 +104,43 @@ test("SMB and UNC paths are rejected for every configured working folder", t => 
   assert.throws(() => store.setFolder("backup", "\\\\clinic-server\\backups"), /SMB\/UNC/);
 });
 
+test("previously imported appointment sources can be reopened for safe reprocessing", t => {
+  const root = makeTemp("doctor-app-reprocess-");
+  const store = new ConfigStore({ userDataDir: path.join(root, "config"), documentsDir: path.join(root, "documents") });
+  store.setWorkspaceRoot(path.join(root, "workspace"));
+  const database = new DatabaseService(store.databasePath());
+  t.after(() => {
+    database.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const externalDir = path.join(root, "telegram");
+  fs.mkdirSync(externalDir, { recursive: true });
+  const existingPath = path.join(externalDir, "appointments.xls");
+  const missingPath = path.join(externalDir, "missing.xls");
+  fs.writeFileSync(existingPath, "legacy-xls");
+
+  const batchId = database.beginImportBatch({ totalFiles: 2 });
+  database.recordImport({
+    batchId,
+    source: { sha256: "c".repeat(64), path: existingPath, name: path.basename(existingPath), size: 10 },
+    log: { status: "загружено", type: "naznach", month: "2026-06", doctor: "Пан К. А." },
+  });
+  database.recordImport({
+    batchId,
+    source: { sha256: "d".repeat(64), path: missingPath, name: path.basename(missingPath), size: 10 },
+    log: { status: "загружено", type: "naznach", month: "2026-06", doctor: "Другой врач" },
+  });
+  database.finishImportBatch(batchId, { loaded: 2 });
+
+  const files = new FileService({ configStore: store, database });
+  const result = files.listImportedSources("naznach");
+  assert.equal(result.files.length, 1);
+  assert.equal(result.files[0].path, path.resolve(existingPath));
+  assert.deepEqual(result.missing, [path.resolve(missingPath)]);
+  assert.equal(files.readInputFile(existingPath).length > 0, true);
+});
+
 test("PDF publishing replaces the current set and archives stale files", t => {
   const root = makeTemp("doctor-app-export-");
   const store = new ConfigStore({ userDataDir: path.join(root, "config"), documentsDir: path.join(root, "documents") });

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Пульс клиники — Viewer</title>
+  <link rel="stylesheet" href="../build/app.css">
+  <link rel="stylesheet" href="viewer.css">
+</head>
+<body class="viewer-app">
+  <header class="viewer-header no-print">
+    <div class="logo">💓 <span class="logo-work">Пульс</span> <span class="logo-doctors">клиники</span> <span class="viewer-mark">Viewer</span></div>
+    <div class="viewer-header-actions"><span class="small muted" id="viewerWindowsIdentity"></span><button class="btn mini" id="btnOpenAdmin">Администратор</button></div>
+  </header>
+
+  <main class="viewer-main">
+    <section class="viewer-setup hidden" id="viewerSetup">
+      <div class="card viewer-center-card"><h1>Подключение к отчётам</h1>
+        <p>Выберите общую папку, которую подготовил системный администратор. В ней находятся только опубликованные отчёты — рабочая база 1С и SQLite сюда не копируются.</p>
+        <button class="btn primary" id="btnChooseStorage">Выбрать папку отчётов</button>
+        <div class="notice bad hidden" id="viewerSetupError"></div>
+      </div>
+    </section>
+
+    <section class="viewer-login hidden" id="viewerLogin">
+      <div class="card viewer-center-card"><h1>Мои отчёты</h1>
+        <p class="muted" id="viewerStorageCaption"></p>
+        <label class="fld"><span>Врач</span><select id="viewerDoctorSelect"></select></label>
+        <label class="fld"><span>Постоянный PIN</span><input id="viewerDoctorPin" class="viewer-pin-input" type="password" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="••••"></label>
+        <button class="btn primary viewer-open-button" id="btnDoctorLogin">Открыть отчёты</button>
+        <div class="notice bad hidden" id="viewerLoginError"></div>
+      </div>
+    </section>
+
+    <section class="viewer-report hidden" id="viewerReport">
+      <div class="viewer-report-toolbar no-print">
+        <div><b id="viewerDoctorName"></b><div class="small muted" id="viewerDoctorStructure"></div></div>
+        <span class="spacer"></span>
+        <button class="btn mini" id="btnPreviousPeriod" title="Предыдущий период">←</button>
+        <label>Период: <select id="viewerPeriod"></select></label>
+        <button class="btn mini" id="btnNextPeriod" title="Следующий период">→</button>
+        <button class="btn" id="btnPrintReport">Печать</button>
+        <button class="btn" id="btnDoctorLogout">Сменить врача</button>
+      </div>
+      <nav class="viewer-tabs no-print" id="viewerTabs"></nav>
+      <article class="viewer-report-body" id="viewerReportBody"></article>
+    </section>
+  </main>
+
+  <dialog id="viewerAdminDialog" class="viewer-admin-dialog">
+    <div class="viewer-admin-shell">
+      <div class="pdf-export-dialog-head"><div><h2>Администрирование Viewer</h2><p class="small muted" id="viewerAdminStorage"></p></div><button class="btn mini" id="btnCloseAdmin" aria-label="Закрыть">✕</button></div>
+      <section id="viewerAdminLogin">
+        <p>Введите администраторский PIN, заданный в программе «Пульс клиники — Администратор».</p>
+        <label class="fld"><span>PIN администратора</span><input id="viewerAdminPin" type="password" inputmode="numeric" maxlength="12" autocomplete="off"></label>
+        <button class="btn primary" id="btnAdminLogin">Войти</button>
+      </section>
+      <section class="hidden" id="viewerAdminPanel">
+        <div class="toolbar"><button class="btn" id="btnAdminChooseStorage">Изменить общую папку</button><button class="btn" id="btnOpenAclMapping">Открыть таблицу прав NTFS</button></div>
+        <div class="viewer-package-drop" id="viewerPackageDrop"><b>Перетащите ZIP сюда</b><span>или нажмите, чтобы выбрать файл с диска</span></div>
+        <div class="hidden" id="viewerPackagePreview">
+          <div class="notice blue" id="viewerPackageSummary"></div>
+          <div class="viewer-import-grid"><section><h3>Периоды</h3><div id="viewerImportPeriods"></div></section><section><h3>Врачи</h3><div class="viewer-import-doctors" id="viewerImportDoctors"></div></section></div>
+          <label class="fld hidden" id="viewerBootstrapPinField"><span>Администраторский PIN из программы администратора</span><input id="viewerBootstrapPin" type="password" inputmode="numeric" maxlength="12"></label>
+          <button class="btn primary" id="btnImportPackage">Импортировать выбранное</button>
+        </div>
+      </section>
+      <div class="notice bad hidden" id="viewerAdminError"></div>
+    </div>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

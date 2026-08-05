@@ -17,6 +17,7 @@
 !/index.html
 !/README.md
 !/package.json
+!/electron-builder.viewer.json
 !/pnpm-lock.yaml
 !/pnpm-workspace.yaml
 
@@ -35,6 +36,15 @@
 !/desktop/services/
 /desktop/services/*
 !/desktop/services/*.cjs
+
+# Отдельный on-demand Viewer без рабочей SQLite.
+!/viewer/
+/viewer/*
+!/viewer/*.cjs
+!/viewer/*.js
+!/viewer/*.css
+!/viewer/*.html
+!/viewer/package.json
 
 # Документация, безопасные ресурсы, сценарии и тесты.
 !/docs/
