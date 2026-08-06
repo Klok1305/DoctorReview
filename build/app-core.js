@@ -472,6 +472,7 @@ function defaultSettings() {
       "Физиотерапия": true,
       "Гинекология": true,
     },
+    interdisciplinaryHomeDepartments: {},
     depts: clinicSpecializationProfiles(),
   };
 }
@@ -505,6 +506,21 @@ function departmentGroups() {
   if (unassigned.length) result["Без отделения"] = [...new Set([...(result["Без отделения"] || []), ...unassigned])];
   if (!Object.keys(result).length) result["Общее отделение"] = [];
   return result;
+}
+
+/* Домашнее отделение задаётся один раз для фокуса Вектора 3 и действует
+ * во всех профилях. Ключ нормализован, чтобы регистр названия не создавал
+ * несколько независимых настроек одной и той же услуги. */
+function interdisciplinaryServiceKey(name) {
+  return String(name || "").trim().toLocaleLowerCase("ru-RU");
+}
+
+function interdisciplinaryHomeDepartment(focus) {
+  const focusName = focus && typeof focus === "object" ? focus.name : focus;
+  const key = interdisciplinaryServiceKey(focusName);
+  const configured = (DB.settings && DB.settings.interdisciplinaryHomeDepartments) || {};
+  const value = String(configured[key] || (focus && focus.homeDepartment) || "").trim();
+  return value && Object.prototype.hasOwnProperty.call(departmentGroups(), value) ? value : "";
 }
 
 function departmentUsesSpecializations(name) {
@@ -1126,6 +1142,20 @@ function normalizeProfiles() {
   const unassigned = Object.keys(DB.settings.depts).filter(spec => spec !== "По умолчанию" && !assigned.has(spec));
   if (unassigned.length) normalizedDepartments["Без отделения"] = [...new Set([...(normalizedDepartments["Без отделения"] || []), ...unassigned])];
   DB.settings.departments = normalizedDepartments;
+
+  const sourceHomeDepartments = (DB.settings.interdisciplinaryHomeDepartments
+    && typeof DB.settings.interdisciplinaryHomeDepartments === "object"
+    && !Array.isArray(DB.settings.interdisciplinaryHomeDepartments))
+    ? DB.settings.interdisciplinaryHomeDepartments : {};
+  const normalizedHomeDepartments = {};
+  for (const [rawFocusName, rawDepartmentName] of Object.entries(sourceHomeDepartments)) {
+    const focusKey = interdisciplinaryServiceKey(rawFocusName);
+    const departmentName = String(rawDepartmentName || "").trim();
+    if (!focusKey || !normalizedDepartments[departmentName]) continue;
+    normalizedHomeDepartments[focusKey] = departmentName;
+  }
+  if (JSON.stringify(sourceHomeDepartments) !== JSON.stringify(normalizedHomeDepartments)) metricScopeUpgraded = true;
+  DB.settings.interdisciplinaryHomeDepartments = normalizedHomeDepartments;
 
   const normalizedDepartmentProfiles = {};
   for (const [name, specs] of Object.entries(normalizedDepartments)) {

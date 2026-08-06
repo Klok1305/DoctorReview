@@ -2218,6 +2218,7 @@ function defaultSettings() {
       "Физиотерапия": true,
       "Гинекология": true,
     },
+    interdisciplinaryHomeDepartments: {},
     depts: clinicSpecializationProfiles(),
   };
 }
@@ -2251,6 +2252,21 @@ function departmentGroups() {
   if (unassigned.length) result["Без отделения"] = [...new Set([...(result["Без отделения"] || []), ...unassigned])];
   if (!Object.keys(result).length) result["Общее отделение"] = [];
   return result;
+}
+
+/* Домашнее отделение задаётся один раз для фокуса Вектора 3 и действует
+ * во всех профилях. Ключ нормализован, чтобы регистр названия не создавал
+ * несколько независимых настроек одной и той же услуги. */
+function interdisciplinaryServiceKey(name) {
+  return String(name || "").trim().toLocaleLowerCase("ru-RU");
+}
+
+function interdisciplinaryHomeDepartment(focus) {
+  const focusName = focus && typeof focus === "object" ? focus.name : focus;
+  const key = interdisciplinaryServiceKey(focusName);
+  const configured = (DB.settings && DB.settings.interdisciplinaryHomeDepartments) || {};
+  const value = String(configured[key] || (focus && focus.homeDepartment) || "").trim();
+  return value && Object.prototype.hasOwnProperty.call(departmentGroups(), value) ? value : "";
 }
 
 function departmentUsesSpecializations(name) {
@@ -2872,6 +2888,20 @@ function normalizeProfiles() {
   const unassigned = Object.keys(DB.settings.depts).filter(spec => spec !== "По умолчанию" && !assigned.has(spec));
   if (unassigned.length) normalizedDepartments["Без отделения"] = [...new Set([...(normalizedDepartments["Без отделения"] || []), ...unassigned])];
   DB.settings.departments = normalizedDepartments;
+
+  const sourceHomeDepartments = (DB.settings.interdisciplinaryHomeDepartments
+    && typeof DB.settings.interdisciplinaryHomeDepartments === "object"
+    && !Array.isArray(DB.settings.interdisciplinaryHomeDepartments))
+    ? DB.settings.interdisciplinaryHomeDepartments : {};
+  const normalizedHomeDepartments = {};
+  for (const [rawFocusName, rawDepartmentName] of Object.entries(sourceHomeDepartments)) {
+    const focusKey = interdisciplinaryServiceKey(rawFocusName);
+    const departmentName = String(rawDepartmentName || "").trim();
+    if (!focusKey || !normalizedDepartments[departmentName]) continue;
+    normalizedHomeDepartments[focusKey] = departmentName;
+  }
+  if (JSON.stringify(sourceHomeDepartments) !== JSON.stringify(normalizedHomeDepartments)) metricScopeUpgraded = true;
+  DB.settings.interdisciplinaryHomeDepartments = normalizedHomeDepartments;
 
   const normalizedDepartmentProfiles = {};
   for (const [name, specs] of Object.entries(normalizedDepartments)) {
@@ -4499,6 +4529,39 @@ function refTypeOf(cls) {
   return "Профильные услуги";
 }
 
+function crossFocusMatch(profile, name) {
+  const focusConfig = (profile && profile.crossFocus) || { items: [], rules: [] };
+  const focusItems = Array.isArray(focusConfig.items) ? focusConfig.items : [];
+  const hay = String(name || "").toLocaleLowerCase("ru-RU");
+  const byName = focusName => {
+    const key = interdisciplinaryServiceKey(focusName);
+    return focusItems.find(item => interdisciplinaryServiceKey(item.name) === key)
+      || (focusName ? { name: String(focusName) } : null);
+  };
+  for (const [fragment, focusName] of (focusConfig.rules || [])) {
+    if (fragment && hay.includes(String(fragment).toLocaleLowerCase("ru-RU"))) return byName(focusName);
+  }
+  for (const focus of focusItems) {
+    const synonyms = [...new Set([focus.name, ...((focus.syn && focus.syn.length) ? focus.syn : [])])]
+      .map(value => String(value).toLocaleLowerCase("ru-RU"));
+    if (synonyms.some(value => value && hay.includes(value))) return focus;
+  }
+  return null;
+}
+
+/* Для настроенного фокуса домашнее отделение имеет приоритет над старой
+ * классификацией номенклатуры. Приём остаётся приёмом, остальные домашние
+ * услуги становятся профильными; услуги другого отделения уходят в общий
+ * междисциплинарный блок. */
+function interdisciplinaryRefType(cls, focus, docId) {
+  const homeDepartment = interdisciplinaryHomeDepartment(focus);
+  if (!homeDepartment) return refTypeOf(cls);
+  if (homeDepartment !== resolvedDepartmentName(docId)) return "Другие услуги клиники";
+  const legacyType = refTypeOf(cls);
+  if (["Товары", "Приемы", "Анализы"].includes(legacyType)) return legacyType;
+  return "Профильные услуги";
+}
+
 /* ---------- сводка по выработке (по профилю отделения врача) ---------- */
 function vyrabotkaSummary(docId, monthKey) {
   const m = DB.months[monthKey];
@@ -4600,7 +4663,8 @@ function vyrabotkaSummary(docId, monthKey) {
       }
     }
     if (ref > 0) {
-      const t = refTypeOf(cls);
+      const focus = crossFocusMatch(profile, it.n);
+      const t = interdisciplinaryRefType(cls, focus, docId);
       if (!out.refByType[t]) out.refByType[t] = { s: 0, q: 0, items: {} };
       const bt = out.refByType[t];
       bt.s += ref;
@@ -4625,17 +4689,6 @@ function naznachSummary(docId, monthKey, slice) {
   const focusConfig = profile.crossFocus || { title: "Фокусы междисциплинарного подхода", items: [], rules: [] };
   const focusItems = focusConfig.items || [];
   const coreFocusNames = focusItems.filter(item => item.core !== false).map(item => item.name);
-  const matchFocus = name => {
-    const hay = String(name || "").toLowerCase();
-    for (const [fragment, focusName] of focusConfig.rules || []) {
-      if (fragment && hay.includes(String(fragment).toLowerCase())) return focusName;
-    }
-    for (const focus of focusItems) {
-      const synonyms = (focus.syn && focus.syn.length ? focus.syn : [focus.name]).map(value => String(value).toLowerCase());
-      if (synonyms.some(value => value && hay.includes(value))) return focus.name;
-    }
-    return null;
-  };
   const out = {
     slice: Number(slice), period: nz.period,
     totals: { assigned: 0, done: 0, soldQ: 0, soldSum: 0, resultQ: 0 }, byType: {},
@@ -4658,7 +4711,8 @@ function naznachSummary(docId, monthKey, slice) {
     const done = goods ? 0 : (it.d || 0);
     const soldQ = it.sq || 0;
     const resultQ = done + soldQ;
-    const t = refTypeOf(cls);
+    const focus = crossFocusMatch(profile, it.n);
+    const t = interdisciplinaryRefType(cls, focus, docId);
     const b = out.byType[t];
     b.assigned += it.a; b.done += done; b.soldQ += soldQ; b.soldSum += it.ss; b.resultQ += resultQ;
     if (!b.items[it.n]) b.items[it.n] = { assigned: 0, done: 0, soldQ: 0, soldSum: 0, resultQ: 0, goods };
@@ -4688,8 +4742,8 @@ function naznachSummary(docId, monthKey, slice) {
     sourceItem.soldQ += soldQ;
     sourceItem.soldSum += it.ss;
     sourceItem.resultQ += resultQ;
-    if (out.focus) {
-      const focusName = matchFocus(it.n);
+    if (out.focus && focus) {
+      const focusName = focus.name;
       if (focusName) {
         if (!out.focus.items[focusName]) out.focus.items[focusName] = { assigned: 0, done: 0, soldQ: 0, resultQ: 0 };
         const fi = out.focus.items[focusName];
@@ -10336,12 +10390,23 @@ function renderSettings() {
 
   /* --- 3. Фокусы междисциплинарного подхода (Вектор 3) --- */
   const crossFocus = p.crossFocus || { title: "Фокусы междисциплинарного подхода", items: [] };
+  const crossFocusDepartments = Object.keys(departmentGroups());
+  const crossFocusHomeRows = (crossFocus.items || []).map(item => {
+    const selectedDepartment = interdisciplinaryHomeDepartment(item);
+    return `<tr><td><b>${esc(item.name)}</b></td><td><select data-focus-name="${esc(item.name)}" onchange="setInterdisciplinaryHomeDepartment(this)">
+      <option value="">— не задано (старая классификация) —</option>
+      ${crossFocusDepartments.map(name => `<option value="${esc(name)}" ${selectedDepartment === name ? "selected" : ""}>${esc(name)}</option>`).join("")}
+    </select></td></tr>`;
+  }).join("");
   html += `<details class="card" style="display:block" ${det("crossFocus")}><summary style="cursor:pointer"><b>🤝 Фокусы междисциплинарного подхода (Вектор 3) — «${esc(dn)}»</b></summary>
     <p class="small muted" style="margin-top:8px">Настройте назначения, которые считаются фокусами этого профиля. Они ищутся непосредственно в названиях позиций отчёта «Назначения» и не зависят от категорий выручки.</p>
     <div class="toolbar"><label>Название блока: <input type="text" id="cf_title" value="${esc(crossFocus.title || "")}" style="min-width:280px"></label></div>
     <p class="small muted">Фокусы — по одному в строке: <code>Название = синоним1, синоним2</code>. Звёздочка в начале строки — отслеживать, но не учитывать в широте фокусов. Штуки и выручка берутся из проданных назначений.</p>
     <textarea id="cf_items" placeholder="Название = синоним1, синоним2" style="min-height:150px">${esc((crossFocus.items || []).map(item => (item.core === false ? "* " : "") + item.name + " = " + (item.syn || []).join(", ")).join("\n"))}</textarea>
     ${fmtEx("УЗИ сердца = эхокардиография, эхо-кг\nХолтер = холтер, суточное мониторирование\n* Анализы = лабораторные исследования")}
+    <h3 style="margin:14px 0 6px">Домашнее подразделение услуг</h3>
+    <p class="small muted">Это общая настройка: выбранное подразделение применяется к этому фокусу во всех профилях и отчётах. Для врача домашняя услуга попадёт в «Приёмы» или «Профильные услуги», а услуга другого подразделения — в «Другие услуги клиники».</p>
+    ${crossFocusHomeRows ? `<div class="scroll-y"><table class="data"><tr><th>Услуга / фокус</th><th>Домашнее подразделение</th></tr>${crossFocusHomeRows}</table></div>` : `<div class="notice blue">Сначала добавьте и сохраните фокусы — после этого для них можно выбрать домашнее подразделение.</div>`}
     <p class="small muted">В балл Вектора 3 добавляются широта фокусов и доля их выручки. Цель по доле выручки задаётся ниже в блоке «Баллы и веса».</p>
     <div class="toolbar"><button class="btn primary" onclick="saveCrossFocusSettings()">💾 Сохранить фокусы Вектора 3</button></div>
   </details>`;
@@ -10711,6 +10776,23 @@ function saveCrossFocusSettings() {
   clearMetricsCache();
   saveLocal();
   toast("Фокусы Вектора 3 сохранены: " + items.length + " позиций");
+  renderAll();
+}
+function setInterdisciplinaryHomeDepartment(select) {
+  const focusName = select && select.dataset ? select.dataset.focusName : "";
+  const key = interdisciplinaryServiceKey(focusName);
+  if (!key) return;
+  if (!DB.settings.interdisciplinaryHomeDepartments || typeof DB.settings.interdisciplinaryHomeDepartments !== "object") {
+    DB.settings.interdisciplinaryHomeDepartments = {};
+  }
+  const departmentName = String(select.value || "").trim();
+  if (departmentName) DB.settings.interdisciplinaryHomeDepartments[key] = departmentName;
+  else delete DB.settings.interdisciplinaryHomeDepartments[key];
+  clearMetricsCache();
+  saveLocal();
+  toast(departmentName
+    ? `Домашнее подразделение «${focusName}»: ${departmentName}`
+    : `Домашнее подразделение «${focusName}» сброшено`);
   renderAll();
 }
 function bindCandidate(i, val) {

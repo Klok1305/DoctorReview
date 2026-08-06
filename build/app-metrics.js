@@ -138,6 +138,39 @@ function refTypeOf(cls) {
   return "Профильные услуги";
 }
 
+function crossFocusMatch(profile, name) {
+  const focusConfig = (profile && profile.crossFocus) || { items: [], rules: [] };
+  const focusItems = Array.isArray(focusConfig.items) ? focusConfig.items : [];
+  const hay = String(name || "").toLocaleLowerCase("ru-RU");
+  const byName = focusName => {
+    const key = interdisciplinaryServiceKey(focusName);
+    return focusItems.find(item => interdisciplinaryServiceKey(item.name) === key)
+      || (focusName ? { name: String(focusName) } : null);
+  };
+  for (const [fragment, focusName] of (focusConfig.rules || [])) {
+    if (fragment && hay.includes(String(fragment).toLocaleLowerCase("ru-RU"))) return byName(focusName);
+  }
+  for (const focus of focusItems) {
+    const synonyms = [...new Set([focus.name, ...((focus.syn && focus.syn.length) ? focus.syn : [])])]
+      .map(value => String(value).toLocaleLowerCase("ru-RU"));
+    if (synonyms.some(value => value && hay.includes(value))) return focus;
+  }
+  return null;
+}
+
+/* Для настроенного фокуса домашнее отделение имеет приоритет над старой
+ * классификацией номенклатуры. Приём остаётся приёмом, остальные домашние
+ * услуги становятся профильными; услуги другого отделения уходят в общий
+ * междисциплинарный блок. */
+function interdisciplinaryRefType(cls, focus, docId) {
+  const homeDepartment = interdisciplinaryHomeDepartment(focus);
+  if (!homeDepartment) return refTypeOf(cls);
+  if (homeDepartment !== resolvedDepartmentName(docId)) return "Другие услуги клиники";
+  const legacyType = refTypeOf(cls);
+  if (["Товары", "Приемы", "Анализы"].includes(legacyType)) return legacyType;
+  return "Профильные услуги";
+}
+
 /* ---------- сводка по выработке (по профилю отделения врача) ---------- */
 function vyrabotkaSummary(docId, monthKey) {
   const m = DB.months[monthKey];
@@ -239,7 +272,8 @@ function vyrabotkaSummary(docId, monthKey) {
       }
     }
     if (ref > 0) {
-      const t = refTypeOf(cls);
+      const focus = crossFocusMatch(profile, it.n);
+      const t = interdisciplinaryRefType(cls, focus, docId);
       if (!out.refByType[t]) out.refByType[t] = { s: 0, q: 0, items: {} };
       const bt = out.refByType[t];
       bt.s += ref;
@@ -264,17 +298,6 @@ function naznachSummary(docId, monthKey, slice) {
   const focusConfig = profile.crossFocus || { title: "Фокусы междисциплинарного подхода", items: [], rules: [] };
   const focusItems = focusConfig.items || [];
   const coreFocusNames = focusItems.filter(item => item.core !== false).map(item => item.name);
-  const matchFocus = name => {
-    const hay = String(name || "").toLowerCase();
-    for (const [fragment, focusName] of focusConfig.rules || []) {
-      if (fragment && hay.includes(String(fragment).toLowerCase())) return focusName;
-    }
-    for (const focus of focusItems) {
-      const synonyms = (focus.syn && focus.syn.length ? focus.syn : [focus.name]).map(value => String(value).toLowerCase());
-      if (synonyms.some(value => value && hay.includes(value))) return focus.name;
-    }
-    return null;
-  };
   const out = {
     slice: Number(slice), period: nz.period,
     totals: { assigned: 0, done: 0, soldQ: 0, soldSum: 0, resultQ: 0 }, byType: {},
@@ -297,7 +320,8 @@ function naznachSummary(docId, monthKey, slice) {
     const done = goods ? 0 : (it.d || 0);
     const soldQ = it.sq || 0;
     const resultQ = done + soldQ;
-    const t = refTypeOf(cls);
+    const focus = crossFocusMatch(profile, it.n);
+    const t = interdisciplinaryRefType(cls, focus, docId);
     const b = out.byType[t];
     b.assigned += it.a; b.done += done; b.soldQ += soldQ; b.soldSum += it.ss; b.resultQ += resultQ;
     if (!b.items[it.n]) b.items[it.n] = { assigned: 0, done: 0, soldQ: 0, soldSum: 0, resultQ: 0, goods };
@@ -327,8 +351,8 @@ function naznachSummary(docId, monthKey, slice) {
     sourceItem.soldQ += soldQ;
     sourceItem.soldSum += it.ss;
     sourceItem.resultQ += resultQ;
-    if (out.focus) {
-      const focusName = matchFocus(it.n);
+    if (out.focus && focus) {
+      const focusName = focus.name;
       if (focusName) {
         if (!out.focus.items[focusName]) out.focus.items[focusName] = { assigned: 0, done: 0, soldQ: 0, resultQ: 0 };
         const fi = out.focus.items[focusName];

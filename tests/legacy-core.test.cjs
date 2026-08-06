@@ -640,6 +640,63 @@ test("interdisciplinary focuses expose assigned and completed counts without cha
   assert.equal(plain.scoreWithoutFocus, 100);
 });
 
+test("interdisciplinary home departments split own and foreign services in assignments and referrals", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    const base = normalizeProfileRecord(defaultProfile(), defaultProfile());
+    DB.settings.departments = { 'Косметология': [], 'Хирургия': [] };
+    DB.settings.departmentProfiles = {
+      'Косметология': normalizeProfileRecord(JSON.parse(JSON.stringify(base)), base),
+      'Хирургия': normalizeProfileRecord(JSON.parse(JSON.stringify(base)), base)
+    };
+    DB.settings.departmentUsesSpecializations = { 'Косметология': false, 'Хирургия': false };
+    DB.settings.interdisciplinaryHomeDepartments = {
+      'домашняя процедура': 'Косметология',
+      'домашний приём': 'Косметология',
+      'чужая процедура': 'Хирургия'
+    };
+    DB.doctors = { d1: { name: 'Тестовый Косметолог', aliases: [], department: 'Косметология', structureManual: true } };
+    const profile = DB.settings.departmentProfiles['Косметология'];
+    profile.crossFocus = {
+      title: 'Междисциплинарный подход',
+      items: [
+        { name: 'Домашняя процедура', syn: ['домашняя услуга'], core: true },
+        { name: 'Домашний приём', syn: ['прием косметолога'], core: true },
+        { name: 'Чужая процедура', syn: ['хирургическая услуга'], core: true }
+      ],
+      rules: []
+    };
+    profile.overrides = {
+      'домашняя услуга': { group: 'Другие услуги', sub: 'Прочие' },
+      'прием косметолога': { group: 'Приемы', sub: 'Консультации' },
+      'хирургическая услуга': { group: 'Процедуры', sub: 'Прочее' }
+    };
+    DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].naznach.d1 = { '1': { items: [
+      { n: 'Домашняя услуга', a: 2, d: 1, sq: 0, ss: 0 },
+      { n: 'Прием косметолога', a: 3, d: 1, sq: 1, ss: 100 },
+      { n: 'Хирургическая услуга', a: 4, d: 0, sq: 1, ss: 200 }
+    ] } };
+    DB.months['2026-01'].vyrabotka.d1 = { items: [
+      { sourceForm: 'Направление', cat: '', n: 'Домашняя услуга', q: 1, sOwn: 100, sRef: 0, goods: false },
+      { sourceForm: 'Направление', cat: '', n: 'Прием косметолога', q: 1, sOwn: 200, sRef: 0, goods: false },
+      { sourceForm: 'Направление', cat: '', n: 'Хирургическая услуга', q: 1, sOwn: 300, sRef: 0, goods: false }
+    ] };
+    clearMetricsCache();
+    return {
+      assignments: naznachSummary('d1', '2026-01', 1).byType,
+      referrals: vyrabotkaSummary('d1', '2026-01').refByType
+    };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.equal(plain.assignments['Профильные услуги'].assigned, 2);
+  assert.equal(plain.assignments['Приемы'].assigned, 3);
+  assert.equal(plain.assignments['Другие услуги клиники'].assigned, 4);
+  assert.equal(plain.referrals['Профильные услуги'].s, 100);
+  assert.equal(plain.referrals['Приемы'].s, 200);
+  assert.equal(plain.referrals['Другие услуги клиники'].s, 300);
+});
+
 test("appointment conversion ignores completed count for goods but keeps it for services", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {

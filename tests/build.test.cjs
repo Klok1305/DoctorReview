@@ -147,6 +147,8 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /Факт:/);
   assert.match(actual, /doctor-goal-item \$\{state\}/);
   assert.match(actual, /saveCrossFocusSettings/);
+  assert.match(actual, /setInterdisciplinaryHomeDepartment/);
+  assert.match(actual, /Домашнее подразделение услуг/);
   assert.match(actual, /Фокусы междисциплинарного подхода \(Вектор 3\)/);
   assert.match(actual, /chNazFocusAssigned/);
   assert.match(actual, /chNazFocusResult/);
@@ -415,7 +417,7 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "2.3.0");
+  assert.equal(packageJson.version, "2.4.0");
   assert.equal(packageJson.build.productName, "Пульс клиники — Администратор");
   assert.equal(packageJson.build.artifactName, "DoctorReview-Admin-Setup-${version}-${arch}.${ext}");
   assert.equal(packageJson.scripts["dist:portable"], undefined);

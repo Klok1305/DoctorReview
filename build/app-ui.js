@@ -4828,12 +4828,23 @@ function renderSettings() {
 
   /* --- 3. Фокусы междисциплинарного подхода (Вектор 3) --- */
   const crossFocus = p.crossFocus || { title: "Фокусы междисциплинарного подхода", items: [] };
+  const crossFocusDepartments = Object.keys(departmentGroups());
+  const crossFocusHomeRows = (crossFocus.items || []).map(item => {
+    const selectedDepartment = interdisciplinaryHomeDepartment(item);
+    return `<tr><td><b>${esc(item.name)}</b></td><td><select data-focus-name="${esc(item.name)}" onchange="setInterdisciplinaryHomeDepartment(this)">
+      <option value="">— не задано (старая классификация) —</option>
+      ${crossFocusDepartments.map(name => `<option value="${esc(name)}" ${selectedDepartment === name ? "selected" : ""}>${esc(name)}</option>`).join("")}
+    </select></td></tr>`;
+  }).join("");
   html += `<details class="card" style="display:block" ${det("crossFocus")}><summary style="cursor:pointer"><b>🤝 Фокусы междисциплинарного подхода (Вектор 3) — «${esc(dn)}»</b></summary>
     <p class="small muted" style="margin-top:8px">Настройте назначения, которые считаются фокусами этого профиля. Они ищутся непосредственно в названиях позиций отчёта «Назначения» и не зависят от категорий выручки.</p>
     <div class="toolbar"><label>Название блока: <input type="text" id="cf_title" value="${esc(crossFocus.title || "")}" style="min-width:280px"></label></div>
     <p class="small muted">Фокусы — по одному в строке: <code>Название = синоним1, синоним2</code>. Звёздочка в начале строки — отслеживать, но не учитывать в широте фокусов. Штуки и выручка берутся из проданных назначений.</p>
     <textarea id="cf_items" placeholder="Название = синоним1, синоним2" style="min-height:150px">${esc((crossFocus.items || []).map(item => (item.core === false ? "* " : "") + item.name + " = " + (item.syn || []).join(", ")).join("\n"))}</textarea>
     ${fmtEx("УЗИ сердца = эхокардиография, эхо-кг\nХолтер = холтер, суточное мониторирование\n* Анализы = лабораторные исследования")}
+    <h3 style="margin:14px 0 6px">Домашнее подразделение услуг</h3>
+    <p class="small muted">Это общая настройка: выбранное подразделение применяется к этому фокусу во всех профилях и отчётах. Для врача домашняя услуга попадёт в «Приёмы» или «Профильные услуги», а услуга другого подразделения — в «Другие услуги клиники».</p>
+    ${crossFocusHomeRows ? `<div class="scroll-y"><table class="data"><tr><th>Услуга / фокус</th><th>Домашнее подразделение</th></tr>${crossFocusHomeRows}</table></div>` : `<div class="notice blue">Сначала добавьте и сохраните фокусы — после этого для них можно выбрать домашнее подразделение.</div>`}
     <p class="small muted">В балл Вектора 3 добавляются широта фокусов и доля их выручки. Цель по доле выручки задаётся ниже в блоке «Баллы и веса».</p>
     <div class="toolbar"><button class="btn primary" onclick="saveCrossFocusSettings()">💾 Сохранить фокусы Вектора 3</button></div>
   </details>`;
@@ -5203,6 +5214,23 @@ function saveCrossFocusSettings() {
   clearMetricsCache();
   saveLocal();
   toast("Фокусы Вектора 3 сохранены: " + items.length + " позиций");
+  renderAll();
+}
+function setInterdisciplinaryHomeDepartment(select) {
+  const focusName = select && select.dataset ? select.dataset.focusName : "";
+  const key = interdisciplinaryServiceKey(focusName);
+  if (!key) return;
+  if (!DB.settings.interdisciplinaryHomeDepartments || typeof DB.settings.interdisciplinaryHomeDepartments !== "object") {
+    DB.settings.interdisciplinaryHomeDepartments = {};
+  }
+  const departmentName = String(select.value || "").trim();
+  if (departmentName) DB.settings.interdisciplinaryHomeDepartments[key] = departmentName;
+  else delete DB.settings.interdisciplinaryHomeDepartments[key];
+  clearMetricsCache();
+  saveLocal();
+  toast(departmentName
+    ? `Домашнее подразделение «${focusName}»: ${departmentName}`
+    : `Домашнее подразделение «${focusName}» сброшено`);
   renderAll();
 }
 function bindCandidate(i, val) {
