@@ -9514,7 +9514,7 @@ async function openViewerExportDialog() {
     switchTab("settings");
     return;
   }
-  const months = sortedMonths();
+  const months = monthKeysSorted();
   const current = UI.repMonth && DB.months[UI.repMonth] ? UI.repMonth : months[months.length - 1];
   document.getElementById("viewerExportPeriods").innerHTML = months.slice().reverse().map(periodKey =>
     `<label><input type="checkbox" value="${esc(periodKey)}" ${periodKey === current ? "checked" : ""}> ${esc(monthLabel(periodKey))}</label>`

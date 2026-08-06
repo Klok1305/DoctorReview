@@ -105,7 +105,7 @@ test("encrypted ZIP bootstraps Viewer and doctor enters by name and PIN only", a
   database.updateViewerDoctorAccess({ doctorId: access.doctorId, active: true, pin: "1357" });
   const credentials = database.viewerExportCredentials([access.doctorId]);
   const created = await createViewerPackage({
-    appVersion: "2.2.2",
+    appVersion: "2.2.3",
     periods: ["2026-01"],
     doctors: [{ doctorId: access.doctorId, displayName: "Первый Врач", department: "Терапия", specialization: "Кардиология" }],
     pages: [{
@@ -169,7 +169,7 @@ test("standalone HTML contains the encrypted Viewer and opens with the doctor PI
   const credentials = database.viewerExportCredentials([access.doctorId], { requireAdmin: false });
   assert.equal(credentials.admin, null);
   const created = await createStandaloneViewerHtml({
-    appVersion: "2.2.2",
+    appVersion: "2.2.3",
     periods: ["2026-01"],
     doctors: [{ doctorId: access.doctorId, displayName: "Первый Врач", department: "Терапия", specialization: "Кардиология" }],
     pages: [{
