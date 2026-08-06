@@ -6,6 +6,8 @@ const state = {
   adminAuthenticated: false,
   packagePreview: null,
   doctor: null,
+  subjects: [],
+  subjectDoctorId: null,
   periods: [],
   periodKey: null,
   pageType: "doctor",
@@ -178,13 +180,22 @@ async function loginDoctor() {
   try {
     const result = await API.doctorLogin({ doctorId, pin });
     state.doctor = result.doctor;
-    state.periods = result.periods || [];
+    state.subjects = Array.isArray(result.subjects) ? result.subjects : [];
+    const ownSubject = state.subjects.find(subject => String(subject.doctorId) === String(state.doctor.doctorId)) || state.subjects[0];
+    state.subjectDoctorId = ownSubject ? ownSubject.doctorId : null;
+    state.periods = ownSubject ? ownSubject.periods || [] : [];
     state.periodKey = state.periods[0] ? state.periods[0].periodKey : null;
     state.pageType = state.periods[0] && state.periods[0].pageTypes.includes("doctor") ? "doctor" : (state.periods[0]?.pageTypes[0] || "doctor");
     document.getElementById("viewerDoctorPin").value = "";
     showError("viewerLoginError", "");
     document.getElementById("viewerDoctorName").textContent = state.doctor.displayName;
-    document.getElementById("viewerDoctorStructure").textContent = [state.doctor.department, state.doctor.specialization].filter(Boolean).join(" · ");
+    document.getElementById("viewerDoctorStructure").textContent = [state.subjects.length > 1 ? "Заведующий отделением" : "", state.doctor.department, state.doctor.specialization].filter(Boolean).join(" · ");
+    const subjectControl = document.getElementById("viewerSubjectControl");
+    subjectControl.classList.toggle("hidden", state.subjects.length <= 1);
+    document.getElementById("viewerSubject").innerHTML = state.subjects.map(subject =>
+      `<option value="${esc(subject.doctorId)}">${esc(subject.displayName)}${subject.specialization ? ` · ${esc(subject.specialization)}` : ""}</option>`
+    ).join("");
+    document.getElementById("viewerSubject").value = state.subjectDoctorId || "";
     document.getElementById("viewerPeriod").innerHTML = state.periods.map(item => `<option value="${esc(item.periodKey)}">${esc(monthLabel(item.periodKey))}</option>`).join("");
     await refreshStatus();
     await loadReport();
@@ -203,7 +214,7 @@ async function loadReport() {
   const period = state.periods.find(item => item.periodKey === state.periodKey);
   if (!period) return;
   if (!period.pageTypes.includes(state.pageType)) state.pageType = period.pageTypes.includes("doctor") ? "doctor" : period.pageTypes[0];
-  const labels = { doctor: "Мой отчёт", specialization: "Специализация", department: "Отделение" };
+  const labels = { doctor: state.subjectDoctorId === state.doctor.doctorId ? "Мой отчёт" : "Личный отчёт", specialization: "Специализация", department: "Отделение" };
   document.getElementById("viewerTabs").innerHTML = period.pageTypes.map(pageType =>
     `<button class="btn ${pageType === state.pageType ? "active" : ""}" data-page-type="${pageType}">${labels[pageType] || pageType}</button>`
   ).join("");
@@ -211,13 +222,26 @@ async function loadReport() {
     state.pageType = button.dataset.pageType;
     await loadReport();
   }));
-  const report = await API.report({ periodKey: state.periodKey, pageType: state.pageType });
+  const report = await API.report({ subjectDoctorId: state.subjectDoctorId, periodKey: state.periodKey, pageType: state.pageType });
   document.getElementById("viewerReportBody").innerHTML = report && report.html
     ? report.html
     : '<div class="card"><p class="muted">Для этого периода страница не опубликована.</p></div>';
   document.getElementById("viewerPeriod").value = state.periodKey;
   updatePeriodButtons();
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+async function changeSubject(doctorId) {
+  const subject = state.subjects.find(item => String(item.doctorId) === String(doctorId));
+  if (!subject) return;
+  state.subjectDoctorId = subject.doctorId;
+  state.periods = subject.periods || [];
+  state.periodKey = state.periods[0] ? state.periods[0].periodKey : null;
+  state.pageType = state.periods[0] && state.periods[0].pageTypes.includes("doctor")
+    ? "doctor" : (state.periods[0]?.pageTypes[0] || "doctor");
+  document.getElementById("viewerPeriod").innerHTML = state.periods.map(item =>
+    `<option value="${esc(item.periodKey)}">${esc(monthLabel(item.periodKey))}</option>`).join("");
+  await loadReport();
 }
 
 async function changePeriod(direction) {
@@ -231,6 +255,8 @@ async function changePeriod(direction) {
 async function logoutDoctor() {
   await API.doctorLogout();
   state.doctor = null;
+  state.subjects = [];
+  state.subjectDoctorId = null;
   state.periods = [];
   document.getElementById("viewerReportBody").innerHTML = "";
   await refreshStatus();
@@ -259,6 +285,7 @@ function bindEvents() {
   document.getElementById("viewerDoctorPin").addEventListener("keydown", event => { if (event.key === "Enter") loginDoctor(); });
   document.getElementById("btnDoctorLogout").addEventListener("click", logoutDoctor);
   document.getElementById("viewerPeriod").addEventListener("change", async event => { state.periodKey = event.target.value; await loadReport(); });
+  document.getElementById("viewerSubject").addEventListener("change", async event => { await changeSubject(event.target.value); });
   document.getElementById("btnPreviousPeriod").addEventListener("click", () => changePeriod(1));
   document.getElementById("btnNextPeriod").addEventListener("click", () => changePeriod(-1));
   document.getElementById("btnPrintReport").addEventListener("click", () => window.print());

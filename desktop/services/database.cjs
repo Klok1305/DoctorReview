@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { backup, DatabaseSync } = require("node:sqlite");
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 const SNAPSHOT_VERSION = 4;
 const MIN_SNAPSHOT_VERSION = 1;
 
@@ -354,6 +354,21 @@ class DatabaseService {
         `);
         this.db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)")
           .run(4, new Date().toISOString());
+      });
+    }
+    if (current < 5) {
+      this.#transaction(() => {
+        this.db.exec(`
+          CREATE TABLE viewer_department_heads (
+            department TEXT PRIMARY KEY,
+            doctor_id TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE INDEX idx_viewer_department_heads_doctor
+            ON viewer_department_heads(doctor_id);
+        `);
+        this.db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)")
+          .run(5, new Date().toISOString());
       });
     }
     const finalVersion = this.db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get().version;
@@ -825,9 +840,14 @@ class DatabaseService {
     });
     const settings = this.db.prepare("SELECT * FROM viewer_settings WHERE id = 1").get();
     const access = new Map(this.db.prepare("SELECT * FROM viewer_doctor_access").all().map(row => [row.doctor_id, row]));
+    const knownDoctorIds = new Set(doctors.map(row => String(row.id)));
+    const departmentHeads = Object.fromEntries(this.db.prepare(
+      "SELECT department, doctor_id FROM viewer_department_heads ORDER BY department"
+    ).all().filter(row => knownDoctorIds.has(String(row.doctor_id))).map(row => [String(row.department), String(row.doctor_id)]));
     return {
       adminPinConfigured: Boolean(settings && settings.admin_pin_hash),
       adminPinVersion: settings ? Number(settings.admin_pin_version) : 0,
+      departmentHeads,
       doctors: doctors.map(row => {
         const doctor = parseJson(row.data_json, {});
         const item = access.get(row.id);
@@ -867,6 +887,9 @@ class DatabaseService {
     if (!this.db.prepare("SELECT 1 FROM doctors WHERE id = ?").get(id)) throw new Error("Врач не найден в рабочей базе");
     this.viewerAccessSnapshot();
     const current = this.db.prepare("SELECT * FROM viewer_doctor_access WHERE doctor_id = ?").get(id);
+    if (active === false && this.db.prepare("SELECT 1 FROM viewer_department_heads WHERE doctor_id = ?").get(id)) {
+      throw new Error("Сначала снимите врача с роли заведующего отделением");
+    }
     const nextPin = String(pin == null ? current.pin_code : pin);
     if (!/^\d{4}$/.test(nextPin)) throw new Error("PIN врача должен состоять ровно из четырёх цифр");
     const duplicate = this.db.prepare("SELECT doctor_id FROM viewer_doctor_access WHERE pin_code = ? AND doctor_id <> ?").get(nextPin, id);
@@ -883,10 +906,39 @@ class DatabaseService {
     return this.viewerAccessSnapshot().doctors.find(item => item.doctorId === id);
   }
 
+  updateViewerDepartmentHead({ department, doctorId }) {
+    const name = String(department || "").trim();
+    const id = String(doctorId || "").trim();
+    if (!name || name.length > 240) throw new Error("Некорректное название отделения");
+    if (!id) {
+      this.db.prepare("DELETE FROM viewer_department_heads WHERE department = ?").run(name);
+      return this.viewerAccessSnapshot();
+    }
+    if (!this.db.prepare("SELECT 1 FROM doctors WHERE id = ?").get(id)) throw new Error("Заведующий не найден в рабочей базе");
+    this.viewerAccessSnapshot();
+    const now = new Date().toISOString();
+    this.#transaction(() => {
+      this.db.prepare(`
+        INSERT INTO viewer_department_heads(department, doctor_id, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(department) DO UPDATE SET doctor_id = excluded.doctor_id, updated_at = excluded.updated_at
+      `).run(name, id, now);
+      this.db.prepare("UPDATE viewer_doctor_access SET active = 1, updated_at = ? WHERE doctor_id = ?").run(now, id);
+    });
+    return this.viewerAccessSnapshot();
+  }
+
   viewerExportCredentials(doctorIds, { requireAdmin = true } = {}) {
     const ids = [...new Set((doctorIds || []).map(String))];
     const settings = this.db.prepare("SELECT * FROM viewer_settings WHERE id = 1").get();
     if (requireAdmin && (!settings || !settings.admin_pin_hash)) throw new Error("Сначала задайте администраторский PIN Viewer");
+    const headDepartments = new Map();
+    for (const row of this.db.prepare("SELECT department, doctor_id FROM viewer_department_heads").all()) {
+      const key = String(row.doctor_id);
+      const values = headDepartments.get(key) || [];
+      values.push(String(row.department));
+      headDepartments.set(key, values);
+    }
     const doctors = ids.map(id => {
       const row = this.db.prepare("SELECT * FROM viewer_doctor_access WHERE doctor_id = ?").get(id);
       if (!row || !row.active) throw new Error(`Доступ врача ${id} не включён`);
@@ -897,6 +949,7 @@ class DatabaseService {
         pinSalt: row.pin_salt,
         pinParams: row.pin_params,
         pinVersion: Number(row.pin_version),
+        headDepartments: (headDepartments.get(id) || []).sort((a, b) => a.localeCompare(b, "ru")),
       };
     });
     return {

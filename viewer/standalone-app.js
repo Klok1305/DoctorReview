@@ -4,6 +4,8 @@ const BUNDLE = JSON.parse(document.getElementById("standaloneViewerData").textCo
 const LOCK_MS = 15 * 60 * 1000;
 const state = {
   doctor: null,
+  subjects: [],
+  subjectDoctorId: null,
   reports: [],
   periods: [],
   periodKey: null,
@@ -70,12 +72,12 @@ async function decryptDoctor(doctor, pin) {
   }, key, encrypted));
   const plainBytes = encryption.compression === "gzip" ? await gunzip(decrypted) : decrypted;
   const payload = JSON.parse(new TextDecoder().decode(plainBytes));
-  if (payload.format !== "pulse-clinic-standalone-viewer" || Number(payload.formatVersion) !== 1
+  if (payload.format !== "pulse-clinic-standalone-viewer" || Number(payload.formatVersion) !== 2
     || payload.packageId !== BUNDLE.packageId || String(payload.doctorId) !== String(doctor.doctorId)
-    || !Array.isArray(payload.reports)) {
+    || !Array.isArray(payload.subjects) || !Array.isArray(payload.reports)) {
     throw new Error("Нарушена целостность автономной публикации.");
   }
-  return payload.reports;
+  return payload;
 }
 
 function showLoginError(message) {
@@ -84,9 +86,9 @@ function showLoginError(message) {
   box.classList.toggle("hidden", !message);
 }
 
-function periodsFromReports(reports) {
+function periodsFromReports(reports, subjectDoctorId) {
   const periods = new Map();
-  for (const report of reports) {
+  for (const report of reports.filter(item => String(item.doctorId) === String(subjectDoctorId))) {
     const item = periods.get(report.periodKey) || { periodKey: report.periodKey, pageTypes: [] };
     if (!item.pageTypes.includes(report.pageType)) item.pageTypes.push(report.pageType);
     periods.set(report.periodKey, item);
@@ -107,18 +109,27 @@ async function loginDoctor() {
   button.disabled = true;
   button.textContent = "Проверяю PIN…";
   try {
-    const reports = await decryptDoctor(doctor, pin);
+    const payload = await decryptDoctor(doctor, pin);
     state.failures.delete(doctorId);
     state.lockedUntil.delete(doctorId);
     state.doctor = doctor;
-    state.reports = reports;
-    state.periods = periodsFromReports(reports);
+    state.subjects = payload.subjects;
+    state.reports = payload.reports;
+    const ownSubject = state.subjects.find(subject => String(subject.doctorId) === String(doctor.doctorId)) || state.subjects[0];
+    state.subjectDoctorId = ownSubject ? ownSubject.doctorId : null;
+    state.periods = periodsFromReports(state.reports, state.subjectDoctorId);
     state.periodKey = state.periods[0] ? state.periods[0].periodKey : null;
     state.pageType = state.periods[0] && state.periods[0].pageTypes.includes("doctor")
       ? "doctor" : (state.periods[0] && state.periods[0].pageTypes[0]) || "doctor";
     document.getElementById("viewerDoctorPin").value = "";
     document.getElementById("viewerDoctorName").textContent = doctor.displayName;
-    document.getElementById("viewerDoctorStructure").textContent = [doctor.department, doctor.specialization].filter(Boolean).join(" · ");
+    document.getElementById("viewerDoctorStructure").textContent = [state.subjects.length > 1 ? "Заведующий отделением" : "", doctor.department, doctor.specialization].filter(Boolean).join(" · ");
+    const subjectControl = document.getElementById("viewerSubjectControl");
+    subjectControl.classList.toggle("hidden", state.subjects.length <= 1);
+    document.getElementById("viewerSubject").innerHTML = state.subjects.map(subject =>
+      `<option value="${esc(subject.doctorId)}">${esc(subject.displayName)}${subject.specialization ? ` · ${esc(subject.specialization)}` : ""}</option>`
+    ).join("");
+    document.getElementById("viewerSubject").value = state.subjectDoctorId || "";
     document.getElementById("viewerPeriod").innerHTML = state.periods.map(item =>
       `<option value="${esc(item.periodKey)}">${esc(monthLabel(item.periodKey))}</option>`).join("");
     document.getElementById("viewerLogin").classList.add("hidden");
@@ -155,7 +166,7 @@ function loadReport() {
   if (!period.pageTypes.includes(state.pageType)) {
     state.pageType = period.pageTypes.includes("doctor") ? "doctor" : period.pageTypes[0];
   }
-  const labels = { doctor: "Мой отчёт", specialization: "Специализация", department: "Отделение" };
+  const labels = { doctor: state.subjectDoctorId === state.doctor.doctorId ? "Мой отчёт" : "Личный отчёт", specialization: "Специализация", department: "Отделение" };
   document.getElementById("viewerTabs").innerHTML = period.pageTypes.map(pageType =>
     `<button class="btn ${pageType === state.pageType ? "active" : ""}" data-page-type="${esc(pageType)}">${esc(labels[pageType] || pageType)}</button>`
   ).join("");
@@ -163,12 +174,26 @@ function loadReport() {
     state.pageType = button.dataset.pageType;
     loadReport();
   }));
-  const report = state.reports.find(item => item.periodKey === state.periodKey && item.pageType === state.pageType);
+  const report = state.reports.find(item => String(item.doctorId) === String(state.subjectDoctorId)
+    && item.periodKey === state.periodKey && item.pageType === state.pageType);
   document.getElementById("viewerReportBody").innerHTML = report && report.html
     ? report.html : '<div class="card"><p class="muted">Для этого периода страница не опубликована.</p></div>';
   document.getElementById("viewerPeriod").value = state.periodKey;
   updatePeriodButtons();
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function changeSubject(doctorId) {
+  const subject = state.subjects.find(item => String(item.doctorId) === String(doctorId));
+  if (!subject) return;
+  state.subjectDoctorId = subject.doctorId;
+  state.periods = periodsFromReports(state.reports, state.subjectDoctorId);
+  state.periodKey = state.periods[0] ? state.periods[0].periodKey : null;
+  state.pageType = state.periods[0] && state.periods[0].pageTypes.includes("doctor")
+    ? "doctor" : (state.periods[0]?.pageTypes[0] || "doctor");
+  document.getElementById("viewerPeriod").innerHTML = state.periods.map(item =>
+    `<option value="${esc(item.periodKey)}">${esc(monthLabel(item.periodKey))}</option>`).join("");
+  loadReport();
 }
 
 function changePeriod(direction) {
@@ -181,6 +206,8 @@ function changePeriod(direction) {
 
 function logoutDoctor() {
   state.doctor = null;
+  state.subjects = [];
+  state.subjectDoctorId = null;
   state.reports = [];
   state.periods = [];
   document.getElementById("viewerReportBody").innerHTML = "";
@@ -190,7 +217,7 @@ function logoutDoctor() {
 }
 
 function initialize() {
-  if (BUNDLE.format !== "pulse-clinic-standalone-viewer" || Number(BUNDLE.formatVersion) !== 1 || !Array.isArray(BUNDLE.doctors)) {
+  if (BUNDLE.format !== "pulse-clinic-standalone-viewer" || Number(BUNDLE.formatVersion) !== 2 || !Array.isArray(BUNDLE.doctors)) {
     showLoginError("Формат автономного Viewer не поддерживается.");
     document.getElementById("btnDoctorLogin").disabled = true;
     return;
@@ -204,6 +231,7 @@ function initialize() {
   document.getElementById("viewerDoctorPin").addEventListener("keydown", event => { if (event.key === "Enter") loginDoctor(); });
   document.getElementById("btnDoctorLogout").addEventListener("click", logoutDoctor);
   document.getElementById("viewerPeriod").addEventListener("change", event => { state.periodKey = event.target.value; loadReport(); });
+  document.getElementById("viewerSubject").addEventListener("change", event => changeSubject(event.target.value));
   document.getElementById("btnPreviousPeriod").addEventListener("click", () => changePeriod(1));
   document.getElementById("btnNextPeriod").addEventListener("click", () => changePeriod(-1));
   document.getElementById("btnPrintReport").addEventListener("click", () => window.print());

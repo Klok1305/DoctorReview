@@ -48,6 +48,27 @@ function atomicWriteJson(filePath, value) {
   }
 }
 
+function normalizeDoctorSubjects(index, doctor) {
+  if (index && Array.isArray(index.subjects) && index.subjects.length) {
+    return index.subjects.map(subject => ({
+      doctorId: String(subject.doctorId),
+      folderId: String(subject.folderId || ""),
+      displayName: String(subject.displayName || subject.doctorId),
+      department: String(subject.department || ""),
+      specialization: String(subject.specialization || ""),
+      publications: Array.isArray(subject.publications) ? subject.publications : [],
+    }));
+  }
+  return [{
+    doctorId: String(doctor.doctorId),
+    folderId: String(doctor.folderId || ""),
+    displayName: String(doctor.displayName || doctor.doctorId),
+    department: String(doctor.department || ""),
+    specialization: String(doctor.specialization || ""),
+    publications: index && Array.isArray(index.publications) ? index.publications : [],
+  }];
+}
+
 class ViewerStorageService {
   constructor({ configPath }) {
     this.configPath = configPath;
@@ -157,7 +178,9 @@ class ViewerStorageService {
       displayName: String(item.displayName || item.doctorId),
       department: String(item.department || ""),
       specialization: String(item.specialization || ""),
+      managedDepartments: Array.isArray(item.managedDepartments) ? item.managedDepartments.map(String) : [],
     }]));
+    const subjectMap = new Map((preview.subjects || preview.doctors).map(item => [String(item.doctorId), item]));
     const staged = [];
     for (const doctor of preview.doctors.filter(item => selectedDoctors.has(item.doctorId))) {
       const folderId = safeSegment(doctor.folderId, "папка врача");
@@ -182,17 +205,27 @@ class ViewerStorageService {
       fs.mkdirSync(stagingRoot, { recursive: true });
       const importedPages = [];
       try {
-        for (const periodKey of selectedPeriods) {
-          for (const pageType of ["department", "specialization", "doctor"]) {
-            const archivePath = `doctors/${folderId}/reports/${periodKey}/${pageType}.json`;
-            const entry = zip.file(archivePath);
-            if (!entry) continue;
-            const report = JSON.parse(await entry.async("string"));
-            const relativePath = path.join("reports", periodKey, `${pageType}.json`);
-            const targetPath = path.join(stagingRoot, relativePath);
-            fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-            fs.writeFileSync(targetPath, JSON.stringify(report), "utf8");
-            importedPages.push({ periodKey, pageType, title: report.title, relativePath: relativePath.replace(/\\/g, "/") });
+        const visibleDoctorIds = preview.formatVersion >= 3 ? doctor.visibleDoctorIds : [doctor.doctorId];
+        for (const subjectDoctorId of visibleDoctorIds) {
+          const subject = subjectMap.get(String(subjectDoctorId));
+          if (!subject) throw new Error(`В ZIP отсутствует профиль врача ${subjectDoctorId}`);
+          for (const periodKey of selectedPeriods) {
+            for (const pageType of ["department", "specialization", "doctor"]) {
+              const archivePath = preview.formatVersion >= 3
+                ? `doctors/${folderId}/subjects/${subject.folderId}/reports/${periodKey}/${pageType}.json`
+                : `doctors/${folderId}/reports/${periodKey}/${pageType}.json`;
+              const entry = zip.file(archivePath);
+              if (!entry) continue;
+              const report = JSON.parse(await entry.async("string"));
+              const relativePath = preview.formatVersion >= 3
+                ? path.join("subjects", subject.folderId, "reports", periodKey, `${pageType}.json`)
+                : path.join("reports", periodKey, `${pageType}.json`);
+              const targetPath = path.join(stagingRoot, relativePath);
+              fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+              fs.writeFileSync(targetPath, JSON.stringify(report), "utf8");
+              importedPages.push({ doctorId: String(subjectDoctorId), periodKey, pageType, title: report.title,
+                relativePath: relativePath.replace(/\\/g, "/") });
+            }
           }
         }
         if (!importedPages.length) throw new Error(`Для врача ${doctor.displayName} нет выбранных страниц`);
@@ -208,8 +241,24 @@ class ViewerStorageService {
     for (const item of staged) {
       fs.mkdirSync(item.doctorRoot, { recursive: true });
       const previousIndex = readJson(path.join(item.doctorRoot, "index.json"), { publications: [] });
-      const periodsMap = new Map((previousIndex.publications || []).map(publication => [publication.periodKey, publication]));
+      const previousSubjects = new Map(normalizeDoctorSubjects(previousIndex, item.doctor).map(subject => [subject.doctorId, subject]));
+      const visibleDoctorIds = preview.formatVersion >= 3 ? item.doctor.visibleDoctorIds : [item.doctor.doctorId];
+      const nextSubjects = new Map(visibleDoctorIds.map(doctorId => {
+        const subject = subjectMap.get(String(doctorId)) || item.doctor;
+        const previous = previousSubjects.get(String(doctorId));
+        return [String(doctorId), {
+          doctorId: String(doctorId),
+          folderId: String(subject.folderId || ""),
+          displayName: String(subject.displayName || doctorId),
+          department: String(subject.department || ""),
+          specialization: String(subject.specialization || ""),
+          publications: previous && Array.isArray(previous.publications) ? previous.publications : [],
+        }];
+      }));
       for (const page of item.importedPages) {
+        const subject = nextSubjects.get(page.doctorId);
+        if (!subject) continue;
+        const periodsMap = new Map((subject.publications || []).map(publication => [publication.periodKey, publication]));
         const publication = periodsMap.get(page.periodKey) || { periodKey: page.periodKey, pages: {}, updatedAt: null };
         publication.pages[page.pageType] = {
           releaseId: item.releaseId,
@@ -220,12 +269,13 @@ class ViewerStorageService {
         };
         publication.updatedAt = new Date().toISOString();
         periodsMap.set(page.periodKey, publication);
+        subject.publications = [...periodsMap.values()].sort((a, b) => b.periodKey.localeCompare(a.periodKey));
       }
       atomicWriteJson(path.join(item.doctorRoot, "profile.json"), item.profile);
       atomicWriteJson(path.join(item.doctorRoot, "access.json"), item.incomingAccess);
       atomicWriteJson(path.join(item.doctorRoot, "index.json"), {
         doctorId: item.doctor.doctorId,
-        publications: [...periodsMap.values()].sort((a, b) => b.periodKey.localeCompare(a.periodKey)),
+        subjects: [...nextSubjects.values()],
         updatedAt: new Date().toISOString(),
       });
       catalogMap.set(item.doctor.doctorId, {
@@ -234,6 +284,7 @@ class ViewerStorageService {
         displayName: item.doctor.displayName,
         department: item.doctor.department,
         specialization: item.doctor.specialization,
+        managedDepartments: item.doctor.managedDepartments || [],
       });
     }
 
@@ -272,12 +323,17 @@ class ViewerStorageService {
     this.doctorFailures.delete(key);
     this.doctorLockedUntil.delete(key);
     const index = readJson(path.join(doctorRoot, "index.json"), { publications: [] });
-    return { doctor, doctorRoot, index, pin: String(pin) };
+    const subjects = normalizeDoctorSubjects(index, doctor);
+    return { doctor, doctorRoot, index, subjects, pin: String(pin) };
   }
 
-  readReport(session, { periodKey, pageType }) {
+  readReport(session, { subjectDoctorId, periodKey, pageType }) {
     if (!session || !session.doctorRoot || !session.index) throw new Error("Сессия врача не открыта");
-    const publication = (session.index.publications || []).find(item => item.periodKey === String(periodKey));
+    const subjectId = String(subjectDoctorId || session.doctor.doctorId);
+    const subject = (session.subjects || normalizeDoctorSubjects(session.index, session.doctor))
+      .find(item => item.doctorId === subjectId);
+    if (!subject) return null;
+    const publication = (subject.publications || []).find(item => item.periodKey === String(periodKey));
     const page = publication && publication.pages ? publication.pages[String(pageType)] : null;
     if (!page) return null;
     const releaseId = safeSegment(page.releaseId, "версия отчёта");

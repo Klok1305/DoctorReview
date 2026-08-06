@@ -65,6 +65,24 @@ test("doctor PINs are unique, persistent and independent from Windows accounts",
   assert.equal(changed.pin, replacement);
 });
 
+test("department head assignment persists, enables the head and reaches export credentials", t => {
+  const { database } = fixture(t);
+  const before = database.viewerAccessSnapshot();
+  assert.deepEqual(before.departmentHeads, {});
+  const assigned = database.updateViewerDepartmentHead({ department: "Терапия", doctorId: "d1" });
+  assert.equal(assigned.departmentHeads["Терапия"], "d1");
+  assert.equal(assigned.doctors.find(item => item.doctorId === "d1").active, true);
+  const databasePath = database.databasePath;
+  database.close();
+  database.open(databasePath);
+  assert.equal(database.viewerAccessSnapshot().departmentHeads["Терапия"], "d1");
+  const credentials = database.viewerExportCredentials(["d1"], { requireAdmin: false });
+  assert.deepEqual(credentials.doctors[0].headDepartments, ["Терапия"]);
+  assert.throws(() => database.updateViewerDoctorAccess({ doctorId: "d1", active: false }), /снимите врача с роли заведующего/);
+  const cleared = database.updateViewerDepartmentHead({ department: "Терапия", doctorId: "" });
+  assert.deepEqual(cleared.departmentHeads, {});
+});
+
 test("schema 3 viewer access migrates without losing PINs and drops the Windows account column", t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pulse-viewer-v3-"));
   const dbPath = path.join(root, "legacy.sqlite");
@@ -92,10 +110,12 @@ test("schema 3 viewer access migrates without losing PINs and drops the Windows 
     fs.rmSync(root, { recursive: true, force: true });
   });
   const columns = database.db.prepare("PRAGMA table_info(viewer_doctor_access)").all().map(row => row.name);
+  const headTable = database.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'viewer_department_heads'").get();
   const row = database.db.prepare("SELECT * FROM viewer_doctor_access WHERE doctor_id = 'd1'").get();
   assert.equal(columns.includes("windows_account"), false);
   assert.equal(row.pin_code, "1357");
   assert.equal(row.pin_version, 3);
+  assert.ok(headTable);
 });
 
 test("encrypted ZIP bootstraps Viewer and doctor enters by name and PIN only", async t => {
@@ -105,7 +125,7 @@ test("encrypted ZIP bootstraps Viewer and doctor enters by name and PIN only", a
   database.updateViewerDoctorAccess({ doctorId: access.doctorId, active: true, pin: "1357" });
   const credentials = database.viewerExportCredentials([access.doctorId]);
   const created = await createViewerPackage({
-    appVersion: "2.2.3",
+    appVersion: "2.3.0",
     periods: ["2026-01"],
     doctors: [{ doctorId: access.doctorId, displayName: "Первый Врач", department: "Терапия", specialization: "Кардиология" }],
     pages: [{
@@ -121,7 +141,7 @@ test("encrypted ZIP bootstraps Viewer and doctor enters by name and PIN only", a
   const inspected = await inspectViewerPackage(created.buffer, { includeZip: true });
   assert.equal(inspected.preview.doctors.length, 1);
   assert.equal(inspected.preview.periods[0], "2026-01");
-  assert.equal(inspected.manifest.formatVersion, 2);
+  assert.equal(inspected.manifest.formatVersion, 3);
   assert.equal(inspected.manifest.adminAccess.pinVersion, 1);
   assert.equal("pinCode" in inspected.manifest.adminAccess, false);
   assert.equal("windowsAccount" in inspected.manifest.doctors[0], false);
@@ -129,7 +149,7 @@ test("encrypted ZIP bootstraps Viewer and doctor enters by name and PIN only", a
   const folderId = inspected.manifest.doctors[0].folderId;
   const profile = JSON.parse(await inspected.zip.file(`doctors/${folderId}/profile.json`).async("string"));
   const publishedAccess = JSON.parse(await inspected.zip.file(`doctors/${folderId}/access.json`).async("string"));
-  const encryptedText = await inspected.zip.file(`doctors/${folderId}/reports/2026-01/doctor.json`).async("string");
+  const encryptedText = await inspected.zip.file(`doctors/${folderId}/subjects/${folderId}/reports/2026-01/doctor.json`).async("string");
   const encrypted = JSON.parse(encryptedText);
   assert.equal(encrypted.format, ENCRYPTED_PAGE_FORMAT);
   assert.equal("pinCode" in publishedAccess, false);
@@ -169,7 +189,7 @@ test("standalone HTML contains the encrypted Viewer and opens with the doctor PI
   const credentials = database.viewerExportCredentials([access.doctorId], { requireAdmin: false });
   assert.equal(credentials.admin, null);
   const created = await createStandaloneViewerHtml({
-    appVersion: "2.2.3",
+    appVersion: "2.3.0",
     periods: ["2026-01"],
     doctors: [{ doctorId: access.doctorId, displayName: "Первый Врач", department: "Терапия", specialization: "Кардиология" }],
     pages: [{
@@ -205,4 +225,70 @@ test("standalone HTML contains the encrypted Viewer and opens with the doctor PI
   assert.equal(payload.doctorId, access.doctorId);
   assert.match(payload.reports[0].html, /Секретный отчёт|Комментарий врача/);
   assert.doesNotMatch(payload.reports[0].html, /<script/i);
+});
+
+test("department head sees every doctor in the department while a regular doctor stays personal", async t => {
+  const { root, database } = fixture(t);
+  database.setViewerAdminPin("654321");
+  database.updateViewerDoctorAccess({ doctorId: "d1", active: true, pin: "1357" });
+  database.updateViewerDoctorAccess({ doctorId: "d2", active: true, pin: "2468" });
+  database.updateViewerDepartmentHead({ department: "Терапия", doctorId: "d1" });
+  const credentials = database.viewerExportCredentials(["d1", "d2"]);
+  const doctors = [
+    { doctorId: "d1", displayName: "Первый Врач", department: "Терапия", specialization: "Кардиология" },
+    { doctorId: "d2", displayName: "Второй Врач", department: "Терапия", specialization: "Неврология" },
+  ];
+  const pages = doctors.map(doctor => ({
+    doctorId: doctor.doctorId,
+    periodKey: "2026-01",
+    pageType: "doctor",
+    scopeId: doctor.doctorId,
+    title: `Отчёт ${doctor.displayName}`,
+    html: `<div>${doctor.doctorId === "d1" ? "Секрет первого" : "Секрет второго"}</div>`,
+  }));
+
+  const created = await createViewerPackage({ appVersion: "2.3.0", periods: ["2026-01"], doctors, subjects: doctors, pages, credentials });
+  const inspected = await inspectViewerPackage(created.buffer, { includeZip: true });
+  const head = inspected.manifest.doctors.find(item => item.doctorId === "d1");
+  const regular = inspected.manifest.doctors.find(item => item.doctorId === "d2");
+  assert.deepEqual(head.visibleDoctorIds, ["d1", "d2"]);
+  assert.deepEqual(regular.visibleDoctorIds, ["d2"]);
+  const headFolder = head.folderId;
+  const regularFolder = regular.folderId;
+  assert.ok(inspected.zip.file(`doctors/${headFolder}/subjects/${regularFolder}/reports/2026-01/doctor.json`));
+  assert.equal(inspected.zip.file(`doctors/${regularFolder}/subjects/${headFolder}/reports/2026-01/doctor.json`), null);
+
+  const archive = path.join(root, "department-head.zip");
+  fs.writeFileSync(archive, created.buffer);
+  const storageRoot = path.join(root, "department-share");
+  fs.mkdirSync(storageRoot, { recursive: true });
+  const viewer = new ViewerStorageService({ configPath: path.join(root, "department-viewer-config.json") });
+  viewer.setStorageRoot(storageRoot);
+  await viewer.importPackageFile(archive, { bootstrapPin: "654321" });
+  const headSession = viewer.doctorLogin({ doctorId: "d1", pin: "1357" });
+  assert.equal(headSession.subjects.length, 2);
+  assert.match(viewer.readReport(headSession, { subjectDoctorId: "d2", periodKey: "2026-01", pageType: "doctor" }).html, /Секрет второго/);
+  const regularSession = viewer.doctorLogin({ doctorId: "d2", pin: "2468" });
+  assert.equal(regularSession.subjects.length, 1);
+  assert.equal(viewer.readReport(regularSession, { subjectDoctorId: "d1", periodKey: "2026-01", pageType: "doctor" }), null);
+
+  const standalone = await createStandaloneViewerHtml({ appVersion: "2.3.0", periods: ["2026-01"], doctors, subjects: doctors, pages,
+    credentials: database.viewerExportCredentials(["d1", "d2"], { requireAdmin: false }) });
+  const embedded = standalone.buffer.toString("utf8").match(/<script id="standaloneViewerData" type="application\/json">([\s\S]*?)<\/script>/);
+  const bundle = JSON.parse(embedded[1]);
+  const decrypt = (doctor, pin) => {
+    const key = crypto.pbkdf2Sync(pin, Buffer.from(doctor.encryption.salt, "base64"), doctor.encryption.iterations,
+      doctor.encryption.keyLength / 8, "sha256");
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(doctor.encryption.iv, "base64"));
+    decipher.setAuthTag(Buffer.from(doctor.encryption.tag, "base64"));
+    return JSON.parse(zlib.gunzipSync(Buffer.concat([
+      decipher.update(Buffer.from(doctor.ciphertext, "base64")), decipher.final(),
+    ])).toString("utf8"));
+  };
+  const headPayload = decrypt(bundle.doctors.find(item => item.doctorId === "d1"), "1357");
+  const regularPayload = decrypt(bundle.doctors.find(item => item.doctorId === "d2"), "2468");
+  assert.deepEqual(headPayload.subjects.map(item => item.doctorId), ["d1", "d2"]);
+  assert.deepEqual(regularPayload.subjects.map(item => item.doctorId), ["d2"]);
+  assert.equal(headPayload.reports.length, 2);
+  assert.equal(regularPayload.reports.length, 1);
 });

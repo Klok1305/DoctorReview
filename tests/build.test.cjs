@@ -415,7 +415,7 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "2.2.3");
+  assert.equal(packageJson.version, "2.3.0");
   assert.equal(packageJson.build.productName, "Пульс клиники — Администратор");
   assert.equal(packageJson.build.artifactName, "DoctorReview-Admin-Setup-${version}-${arch}.${ext}");
   assert.equal(packageJson.scripts["dist:portable"], undefined);
@@ -826,7 +826,7 @@ test("Viewer access is name plus PIN with encrypted pages and no Windows or NTFS
   assert.match(storage, /DOCTOR_LOCK_MS = 15 \* 60 \* 1000/);
   assert.match(storage, /decryptViewerPage/);
   assert.match(packages, /aes-256-gcm/);
-  assert.match(packages, /FORMAT_VERSION = 2/);
+  assert.match(packages, /FORMAT_VERSION = 3/);
   assert.match(adminTemplate, /Один автономный HTML/);
   assert.match(adminTemplate, /ZIP для установленного Viewer/);
   assert.match(adminUi, /exportViewerPackage\("html"\)/);
@@ -834,6 +834,9 @@ test("Viewer access is name plus PIN with encrypted pages and no Windows or NTFS
   assert.match(standaloneIndex, /standaloneViewerData/);
   assert.match(standaloneApp, /crypto\.subtle\.deriveKey/);
   assert.match(standaloneApp, /DecompressionStream\("gzip"\)/);
+  assert.match(adminUi, /saveViewerDepartmentHead/);
+  assert.match(adminUi, /subjects/);
+  assert.match(standaloneApp, /viewerSubject/);
 });
 
 test("Viewer export dialog uses the shared sorted month helper", () => {

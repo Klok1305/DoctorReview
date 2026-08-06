@@ -7,11 +7,12 @@ const zlib = require("node:zlib");
 const JSZip = require("../../build/jszip.min.js");
 
 const FORMAT = "pulse-clinic-viewer-package";
-const FORMAT_VERSION = 2;
+const FORMAT_VERSION = 3;
+const LEGACY_FORMAT_VERSION = 2;
 const ENCRYPTED_PAGE_FORMAT = "pulse-clinic-viewer-encrypted-page";
 const ENCRYPTED_PAGE_VERSION = 1;
 const STANDALONE_FORMAT = "pulse-clinic-standalone-viewer";
-const STANDALONE_FORMAT_VERSION = 1;
+const STANDALONE_FORMAT_VERSION = 2;
 const CONTENT_KDF_PARAMS = Object.freeze({ N: 32768, r: 8, p: 1, keylen: 32 });
 const STANDALONE_KDF_PARAMS = Object.freeze({ iterations: 600000, hash: "sha256", keylen: 32 });
 const MAX_PACKAGE_BYTES = 300 * 1024 * 1024;
@@ -62,6 +63,7 @@ function encryptViewerPage(page, pin) {
     formatVersion: ENCRYPTED_PAGE_VERSION,
     periodKey: page.periodKey,
     pageType: page.pageType,
+    doctorId: page.doctorId ? String(page.doctorId) : undefined,
     title: page.title,
     encryption: {
       algorithm: "aes-256-gcm",
@@ -91,7 +93,8 @@ function decryptViewerPage(record, pin) {
     decipher.setAuthTag(Buffer.from(encryption.tag, "base64"));
     const plaintext = Buffer.concat([decipher.update(Buffer.from(record.ciphertext, "base64")), decipher.final()]);
     const page = JSON.parse(plaintext.toString("utf8"));
-    if (String(page.periodKey) !== String(record.periodKey) || String(page.pageType) !== String(record.pageType)) {
+    if (String(page.periodKey) !== String(record.periodKey) || String(page.pageType) !== String(record.pageType)
+      || (record.doctorId && String(page.doctorId) !== String(record.doctorId))) {
       throw new Error("metadata-mismatch");
     }
     return page;
@@ -121,8 +124,9 @@ function normalizePage(page) {
   };
 }
 
-function prepareViewerPublication({ doctors, periods, pages, credentials }) {
+function prepareViewerPublication({ doctors, subjects = doctors, periods, pages, credentials }) {
   if (!Array.isArray(doctors) || !doctors.length || doctors.length > 1000) throw new Error("Не выбраны врачи для публикации");
+  if (!Array.isArray(subjects) || !subjects.length || subjects.length > 1000) throw new Error("Не выбраны врачи для отчётов");
   if (!Array.isArray(periods) || !periods.length || periods.length > 120) throw new Error("Не выбраны периоды публикации");
   if (!Array.isArray(pages) || !pages.length || pages.length > 10000) throw new Error("В публикации нет страниц");
   if (!credentials || !Array.isArray(credentials.doctors)) throw new Error("Не настроены доступы Viewer");
@@ -144,22 +148,43 @@ function prepareViewerPublication({ doctors, periods, pages, credentials }) {
       department: String(doctor.department || "").slice(0, 240),
       specialization: String(doctor.specialization || "").slice(0, 240),
       pinVersion: Number(access.pinVersion),
+      managedDepartments: [...new Set((access.headDepartments || []).map(String).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ru")),
       access,
     });
   }
 
+  const subjectMap = new Map();
+  for (const subject of subjects) {
+    const doctorId = String(subject.doctorId || "");
+    if (!doctorId || subjectMap.has(doctorId)) throw new Error("Некорректный список врачей для отчётов");
+    subjectMap.set(doctorId, {
+      doctorId,
+      folderId: sha256(doctorId).slice(0, 24),
+      displayName: String(subject.displayName || doctorId).slice(0, 240),
+      department: String(subject.department || "").slice(0, 240),
+      specialization: String(subject.specialization || "").slice(0, 240),
+    });
+  }
+  for (const doctor of doctorMap.values()) {
+    if (!subjectMap.has(doctor.doctorId)) throw new Error(`Для врача ${doctor.displayName} отсутствует личный отчёт`);
+    const managed = new Set(doctor.managedDepartments);
+    doctor.visibleDoctorIds = [...subjectMap.values()]
+      .filter(subject => subject.doctorId === doctor.doctorId || managed.has(subject.department))
+      .map(subject => subject.doctorId);
+  }
+
   const normalizedPages = pages.map(normalizePage);
   for (const page of normalizedPages) {
-    if (!doctorMap.has(page.doctorId)) throw new Error("Страница относится к невыбранному врачу");
+    if (!subjectMap.has(page.doctorId)) throw new Error("Страница относится к невыбранному врачу");
     if (!normalizedPeriods.includes(page.periodKey)) throw new Error("Страница относится к невыбранному периоду");
   }
 
-  return { normalizedPeriods, normalizedPages, doctorMap };
+  return { normalizedPeriods, normalizedPages, doctorMap, subjectMap };
 }
 
 async function createViewerPackage(input) {
   const { appVersion, credentials } = input;
-  const { normalizedPeriods, normalizedPages, doctorMap } = prepareViewerPublication(input);
+  const { normalizedPeriods, normalizedPages, doctorMap, subjectMap } = prepareViewerPublication(input);
   if (!credentials.admin) throw new Error("Сначала задайте администраторский PIN Viewer");
 
   const packageId = crypto.randomUUID();
@@ -180,6 +205,8 @@ async function createViewerPackage(input) {
       displayName: doctor.displayName,
       department: doctor.department,
       specialization: doctor.specialization,
+      managedDepartments: doctor.managedDepartments,
+      visibleDoctorIds: doctor.visibleDoctorIds,
     });
     addJson(`${prefix}/access.json`, {
       pinHash: doctor.access.pinHash,
@@ -187,18 +214,20 @@ async function createViewerPackage(input) {
       pinParams: doctor.access.pinParams,
       pinVersion: doctor.pinVersion,
     });
-    const doctorPages = normalizedPages.filter(page => page.doctorId === doctor.doctorId);
+    const doctorPages = normalizedPages.filter(page => doctor.visibleDoctorIds.includes(page.doctorId));
     for (const page of doctorPages) {
+      const subject = subjectMap.get(page.doctorId);
       const report = {
         packageId,
         createdAt,
+        doctorId: page.doctorId,
         periodKey: page.periodKey,
         pageType: page.pageType,
         scopeId: page.scopeId,
         title: page.title,
         html: page.html,
       };
-      addJson(`${prefix}/reports/${page.periodKey}/${page.pageType}.json`, encryptViewerPage(report, doctor.access.pinCode));
+      addJson(`${prefix}/subjects/${subject.folderId}/reports/${page.periodKey}/${page.pageType}.json`, encryptViewerPage(report, doctor.access.pinCode));
     }
   }
 
@@ -217,6 +246,15 @@ async function createViewerPackage(input) {
       department: doctor.department,
       specialization: doctor.specialization,
       pinVersion: doctor.pinVersion,
+      managedDepartments: doctor.managedDepartments,
+      visibleDoctorIds: doctor.visibleDoctorIds,
+    })),
+    subjects: [...subjectMap.values()].map(subject => ({
+      doctorId: subject.doctorId,
+      folderId: subject.folderId,
+      displayName: subject.displayName,
+      department: subject.department,
+      specialization: subject.specialization,
     })),
     adminAccess: {
       pinHash: credentials.admin.pinHash,
@@ -267,15 +305,16 @@ function jsonForInlineScript(value) {
 
 async function createStandaloneViewerHtml(input) {
   const { appVersion } = input;
-  const { normalizedPeriods, normalizedPages, doctorMap } = prepareViewerPublication(input);
+  const { normalizedPeriods, normalizedPages, doctorMap, subjectMap } = prepareViewerPublication(input);
   const packageId = crypto.randomUUID();
   const createdAt = new Date().toISOString();
   const encryptedDoctors = [];
 
   for (const doctor of doctorMap.values()) {
     const reports = normalizedPages
-      .filter(page => page.doctorId === doctor.doctorId)
+      .filter(page => doctor.visibleDoctorIds.includes(page.doctorId))
       .map(page => ({
+        doctorId: page.doctorId,
         periodKey: page.periodKey,
         pageType: page.pageType,
         scopeId: page.scopeId,
@@ -288,6 +327,7 @@ async function createStandaloneViewerHtml(input) {
       formatVersion: STANDALONE_FORMAT_VERSION,
       packageId,
       doctorId: doctor.doctorId,
+      subjects: doctor.visibleDoctorIds.map(doctorId => subjectMap.get(doctorId)),
       reports,
     }, doctor.access.pinCode);
     encryptedDoctors.push({
@@ -296,6 +336,8 @@ async function createStandaloneViewerHtml(input) {
       department: doctor.department,
       specialization: doctor.specialization,
       pinVersion: doctor.pinVersion,
+      managedDepartments: doctor.managedDepartments,
+      visibleDoctorIds: doctor.visibleDoctorIds,
       periods: [...new Set(reports.map(report => report.periodKey))].sort().reverse(),
       pageTypes: [...new Set(reports.map(report => report.pageType))].sort(),
       ...encrypted,
@@ -310,6 +352,7 @@ async function createStandaloneViewerHtml(input) {
     appVersion: String(appVersion || ""),
     periods: normalizedPeriods,
     pageTypes: [...new Set(normalizedPages.map(page => page.pageType))].sort(),
+    subjects: [...subjectMap.values()],
     doctors: encryptedDoctors.map(({ encryption, ciphertext, ...doctor }) => doctor),
   };
   const bundle = { ...manifest, doctors: encryptedDoctors };
@@ -334,7 +377,8 @@ async function inspectViewerPackage(buffer, { includeZip = false } = {}) {
   const manifestEntry = zip.file("manifest.json");
   if (!manifestEntry) throw new Error("В архиве отсутствует manifest.json");
   const manifest = JSON.parse(await manifestEntry.async("string"));
-  if (manifest.format !== FORMAT || Number(manifest.formatVersion) !== FORMAT_VERSION) {
+  const formatVersion = Number(manifest.formatVersion);
+  if (manifest.format !== FORMAT || ![LEGACY_FORMAT_VERSION, FORMAT_VERSION].includes(formatVersion)) {
     throw new Error("Формат архива Viewer не поддерживается");
   }
   safeSegment(manifest.packageId, "идентификатор пакета");
@@ -354,6 +398,7 @@ async function inspectViewerPackage(buffer, { includeZip = false } = {}) {
     packageId: manifest.packageId,
     createdAt: manifest.createdAt,
     appVersion: manifest.appVersion,
+    formatVersion,
     doctors: manifest.doctors.map(doctor => ({
       doctorId: String(doctor.doctorId),
       folderId: safeSegment(doctor.folderId, "каталог врача"),
@@ -361,6 +406,15 @@ async function inspectViewerPackage(buffer, { includeZip = false } = {}) {
       department: String(doctor.department || ""),
       specialization: String(doctor.specialization || ""),
       pinVersion: Number(doctor.pinVersion),
+      managedDepartments: Array.isArray(doctor.managedDepartments) ? doctor.managedDepartments.map(String) : [],
+      visibleDoctorIds: Array.isArray(doctor.visibleDoctorIds) ? doctor.visibleDoctorIds.map(String) : [String(doctor.doctorId)],
+    })),
+    subjects: (Array.isArray(manifest.subjects) ? manifest.subjects : manifest.doctors).map(doctor => ({
+      doctorId: String(doctor.doctorId),
+      folderId: safeSegment(doctor.folderId, "каталог врача"),
+      displayName: String(doctor.displayName || doctor.doctorId),
+      department: String(doctor.department || ""),
+      specialization: String(doctor.specialization || ""),
     })),
     periods: manifest.periods.map(String),
     pageTypes: Array.isArray(manifest.pageTypes) ? manifest.pageTypes.map(String) : [],

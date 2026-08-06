@@ -114,10 +114,16 @@ function registerIpc() {
     doctorSession = storage.doctorLogin({ doctorId: input.doctorId, pin: input.pin });
     return {
       doctor: doctorSession.doctor,
-      periods: (doctorSession.index.publications || []).map(item => ({
-        periodKey: item.periodKey,
-        pageTypes: Object.keys(item.pages || {}),
-        updatedAt: item.updatedAt,
+      subjects: doctorSession.subjects.map(subject => ({
+        doctorId: subject.doctorId,
+        displayName: subject.displayName,
+        department: subject.department,
+        specialization: subject.specialization,
+        periods: (subject.publications || []).map(item => ({
+          periodKey: item.periodKey,
+          pageTypes: Object.keys(item.pages || {}),
+          updatedAt: item.updatedAt,
+        })),
       })),
     };
   });

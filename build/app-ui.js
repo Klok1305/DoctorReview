@@ -34,7 +34,7 @@ const UI = {
   setSpecialization: "",
 };
 
-let VIEWER_ACCESS = { adminPinConfigured: false, adminPinVersion: 0, doctors: [] };
+let VIEWER_ACCESS = { adminPinConfigured: false, adminPinVersion: 0, departmentHeads: {}, doctors: [] };
 let reportRenderRevision = 0;
 let settingsFilterTimer = null;
 
@@ -4065,15 +4065,31 @@ async function exportViewerPackage(format = "html") {
       department: resolvedDepartmentName(doctorId) || "",
       specialization: resolvedSpecializationName(doctorId) || "",
     }));
+    const selectedDoctorIds = new Set(doctorIds);
+    const managedDepartments = new Set(Object.entries(VIEWER_ACCESS.departmentHeads || {})
+      .filter(([, headDoctorId]) => selectedDoctorIds.has(String(headDoctorId)))
+      .map(([department]) => department));
+    const subjectIds = new Set(doctorIds);
+    if (managedDepartments.size) {
+      for (const doctorId of Object.keys(DB.doctors)) {
+        if (managedDepartments.has(resolvedDepartmentName(doctorId) || "")) subjectIds.add(doctorId);
+      }
+    }
+    const subjects = [...subjectIds].map(doctorId => ({
+      doctorId,
+      displayName: doctorName(doctorId),
+      department: resolvedDepartmentName(doctorId) || "",
+      specialization: resolvedSpecializationName(doctorId) || "",
+    }));
     const pages = [];
     let completed = 0;
-    const total = periodKeys.length * doctorIds.length;
+    const total = periodKeys.length * subjectIds.size;
     for (const periodKey of periodKeys) {
       if (!DB.months[periodKey]) continue;
       const comments = await DESKTOP_API.listComments({ periodKey });
       const departmentCache = new Map();
       const specializationCache = new Map();
-      for (const doctorId of doctorIds) {
+      for (const doctorId of subjectIds) {
         const department = resolvedDepartmentName(doctorId) || "";
         const specialization = resolvedSpecializationName(doctorId) || "";
         if (pageTypes.has("department") && department) {
@@ -4103,7 +4119,7 @@ async function exportViewerPackage(format = "html") {
         if (completed % 4 === 0) await new Promise(resolve => requestAnimationFrame(resolve));
       }
     }
-    const result = await DESKTOP_API.exportViewerPackage({ format, doctors, periods: periodKeys, pages });
+    const result = await DESKTOP_API.exportViewerPackage({ format, doctors, subjects, periods: periodKeys, pages });
     if (result.canceled) {
       updateViewerExportStatus();
       return;
@@ -4544,11 +4560,25 @@ function scoringBenchmarkDefs(profile) {
 function viewerAccessSettingsHtml() {
   const items = (VIEWER_ACCESS.doctors || []).filter(item => DB.doctors[item.doctorId]);
   const active = items.filter(item => item.active).length;
+  const departmentHeads = VIEWER_ACCESS.departmentHeads || {};
+  const departmentNames = Object.keys(departmentGroups()).sort((a, b) => a.localeCompare(b, "ru"));
+  const headDoctorIds = new Set(Object.values(departmentHeads).map(String));
+  const headRows = departmentNames.map(department => {
+    const doctorIds = Object.keys(DB.doctors)
+      .filter(doctorId => resolvedDepartmentName(doctorId) === department)
+      .sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru"));
+    const selected = String(departmentHeads[department] || "");
+    const options = ['<option value="">Не назначен</option>'].concat(doctorIds.map(doctorId =>
+      `<option value="${esc(doctorId)}" ${doctorId === selected ? "selected" : ""}>${esc(doctorName(doctorId))}</option>`
+    )).join("");
+    return `<tr><td><b>${esc(department)}</b><div class="small muted">Видит личные отчёты всех врачей этого отделения</div></td>
+      <td><select data-viewer-department-head data-department="${esc(department)}" onchange="saveViewerDepartmentHead(this)">${options}</select></td></tr>`;
+  }).join("");
   const rows = items.map(item => {
     const department = resolvedDepartmentName(item.doctorId) || "";
     const specialization = resolvedSpecializationName(item.doctorId) || "";
     return `<tr data-viewer-access-row data-doctor-id="${esc(item.doctorId)}">
-      <td><label><input type="checkbox" data-viewer-active ${item.active ? "checked" : ""}> <b>${esc(item.displayName)}</b></label>
+      <td><label><input type="checkbox" data-viewer-active ${item.active ? "checked" : ""} ${headDoctorIds.has(String(item.doctorId)) ? "disabled" : ""}> <b>${esc(item.displayName)}</b></label>${headDoctorIds.has(String(item.doctorId)) ? ' <span class="badge info">Заведующий · доступ включён</span>' : ""}
         <div class="small muted">${esc([department, specialization].filter(Boolean).join(" · ") || "Структура не указана")}</div></td>
       <td><input class="viewer-access-pin" data-viewer-pin type="text" inputmode="numeric" maxlength="4" value="${esc(item.pin)}" aria-label="PIN ${esc(item.displayName)}">
         <div class="small muted">версия ${item.pinVersion}</div></td>
@@ -4557,7 +4587,10 @@ function viewerAccessSettingsHtml() {
   return `<div class="card" id="viewerAccessSettingsCard"><div class="vhead"><div><h2 class="mt0">👁 Публикация в Viewer</h2>
       <p class="small muted">Viewer не получает рабочую SQLite. Он открывает только ZIP с проверкой SHA-256, готовыми страницами и комментариями.</p></div>
       <span class="badge ${VIEWER_ACCESS.adminPinConfigured ? "good" : "warn"}">${VIEWER_ACCESS.adminPinConfigured ? `Admin PIN настроен · v${VIEWER_ACCESS.adminPinVersion}` : "Admin PIN не задан"}</span></div>
-    <div class="notice blue"><b>Вход врача:</b> в Viewer врач выбирает своё имя и вводит постоянный четырёхзначный PIN. PIN не меняется при публикации нового месяца и обновляется только после ручной правки здесь.</div>
+    <div class="notice blue"><b>Вход врача:</b> в Viewer врач выбирает своё имя и вводит постоянный четырёхзначный PIN. Обычный врач видит только свои страницы. Назначенный заведующий дополнительно может переключаться между всеми врачами своего отделения.</div>
+    <h3>Заведующие отделениями</h3>
+    <p class="small muted">Назначение сохраняется один раз в администраторской базе. При выборе заведующего доступ к Viewer для него включается автоматически.</p>
+    <div class="scroll-y"><table class="data viewer-heads-table"><tr><th>Отделение</th><th>Заведующий</th></tr>${headRows || '<tr><td colspan="2" class="muted">Сначала настройте структуру отделений и врачей.</td></tr>'}</table></div>
     <div class="toolbar"><label>Новый администраторский PIN Viewer: <input id="viewerAdminPin" type="password" inputmode="numeric" minlength="6" maxlength="12" placeholder="6–12 цифр"></label>
       <label>Повтор: <input id="viewerAdminPinRepeat" type="password" inputmode="numeric" minlength="6" maxlength="12"></label>
       <button class="btn primary" type="button" onclick="setViewerAdminPinFromSettings()">Задать / изменить</button>
@@ -4566,6 +4599,21 @@ function viewerAccessSettingsHtml() {
       <button class="btn mini" type="button" onclick="setAllViewerDoctorsActive(false)">Выключить всех</button></div>
     <div class="scroll-y"><table class="data viewer-access-table"><tr><th>Врач и публикация</th><th>PIN врача</th><th></th></tr>${rows || '<tr><td colspan="3" class="muted">Врачи появятся после импорта данных.</td></tr>'}</table></div>
   </div>`;
+}
+
+async function saveViewerDepartmentHead(select) {
+  const department = select.dataset.department;
+  const doctorId = select.value;
+  select.disabled = true;
+  try {
+    await DESKTOP_API.updateViewerDepartmentHead({ department, doctorId });
+    await refreshViewerPublicationAccess();
+    toast(doctorId ? `Заведующий отделения «${department}» сохранён` : `Заведующий отделения «${department}» снят`);
+    renderSettings();
+  } catch (error) {
+    toast("Не удалось сохранить заведующего: " + error.message, true);
+    select.disabled = false;
+  }
 }
 
 async function setViewerAdminPinFromSettings() {
@@ -4605,9 +4653,11 @@ async function saveViewerDoctorAccess(button) {
 
 async function setAllViewerDoctorsActive(active) {
   const items = VIEWER_ACCESS.doctors || [];
+  const headDoctorIds = new Set(Object.values(VIEWER_ACCESS.departmentHeads || {}).map(String));
   if (!items.length) return;
   try {
     for (const item of items) {
+      if (!active && headDoctorIds.has(String(item.doctorId))) continue;
       if (item.active === active) continue;
       await DESKTOP_API.updateViewerDoctorAccess({
         doctorId: item.doctorId,

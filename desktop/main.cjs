@@ -1121,6 +1121,14 @@ function registerIpc() {
       details: { active: updated.active, pinVersion: updated.pinVersion } });
     return updated;
   });
+  ipcMain.handle("viewer-publication:update-department-head", (_event, payload) => {
+    const session = localAdminActor();
+    const input = ensureObject(payload, "назначение заведующего отделением");
+    const snapshot = database.updateViewerDepartmentHead(input);
+    database.audit({ actorUserId: session.userId, action: "viewer-department-head.updated", targetType: "department",
+      targetId: String(input.department || ""), details: { doctorId: String(input.doctorId || "") } });
+    return snapshot;
+  });
   ipcMain.handle("viewer-publication:set-admin-pin", (_event, payload) => {
     const session = localAdminActor();
     const input = ensureObject(payload, "PIN администратора Viewer");
@@ -1139,12 +1147,16 @@ function registerIpc() {
     const knownDoctors = new Set(Object.keys(snapshot.doctors || {}));
     const doctorIds = input.doctors.map(doctor => String(doctor.doctorId || ""));
     if (doctorIds.some(id => !knownDoctors.has(id))) throw new Error("В публикации указан неизвестный врач");
+    const subjects = Array.isArray(input.subjects) ? input.subjects : input.doctors;
+    const subjectIds = subjects.map(doctor => String(doctor.doctorId || ""));
+    if (subjectIds.some(id => !knownDoctors.has(id))) throw new Error("В публикации указан неизвестный врач отделения");
     const format = String(input.format || "html");
     if (format !== "html" && format !== "zip") throw new Error("Неизвестный формат публикации Viewer");
     const credentials = database.viewerExportCredentials(doctorIds, { requireAdmin: format === "zip" });
     const publication = {
       appVersion: app.getVersion(),
       doctors: input.doctors,
+      subjects,
       periods: input.periods,
       pages: input.pages,
       credentials,
