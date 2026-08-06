@@ -3978,7 +3978,8 @@ function updateViewerExportStatus() {
   if (!status) return;
   const doctors = document.querySelectorAll('#viewerExportDoctors input[data-viewer-export-doctor]:checked').length;
   const periods = document.querySelectorAll('#viewerExportPeriods input:checked').length;
-  status.textContent = `Выбрано: врачей — ${doctors}, периодов — ${periods}`;
+  const zipHint = VIEWER_ACCESS.adminPinConfigured ? "" : " · ZIP недоступен, пока не задан PIN администратора Viewer";
+  status.textContent = `Выбрано: врачей — ${doctors}, периодов — ${periods}${zipHint}`;
 }
 
 function filterViewerExportDoctors(selectMatching) {
@@ -3998,11 +3999,6 @@ async function openViewerExportDialog() {
     await refreshViewerPublicationAccess();
   } catch (error) {
     toast("Не удалось загрузить настройки Viewer: " + error.message, true);
-    return;
-  }
-  if (!VIEWER_ACCESS.adminPinConfigured) {
-    toast("Сначала задайте администраторский PIN Viewer в Настройках", true);
-    switchTab("settings");
     return;
   }
   const doctors = viewerExportDoctorRows();
@@ -4042,12 +4038,13 @@ async function openViewerExportDialog() {
   error.textContent = "";
   error.classList.add("hidden");
   document.getElementById("viewerExportStart").disabled = false;
+  document.getElementById("viewerExportZip").disabled = !VIEWER_ACCESS.adminPinConfigured;
   document.getElementById("viewerExportDialog").showModal();
   updateViewerExportStatus();
 }
 
-async function exportViewerPackage() {
-  const button = document.getElementById("viewerExportStart");
+async function exportViewerPackage(format = "html") {
+  const buttons = [document.getElementById("viewerExportStart"), document.getElementById("viewerExportZip")];
   const errorBox = document.getElementById("viewerExportError");
   const periodKeys = [...document.querySelectorAll("#viewerExportPeriods input:checked")].map(input => input.value);
   const pageTypes = new Set([...document.querySelectorAll("#viewerExportPageTypes input:checked")].map(input => input.value));
@@ -4057,7 +4054,7 @@ async function exportViewerPackage() {
     errorBox.classList.remove("hidden");
     return;
   }
-  button.disabled = true;
+  buttons.forEach(button => { button.disabled = true; });
   errorBox.classList.add("hidden");
   try {
     await saveVisibleCommentDrafts();
@@ -4106,18 +4103,20 @@ async function exportViewerPackage() {
         if (completed % 4 === 0) await new Promise(resolve => requestAnimationFrame(resolve));
       }
     }
-    const result = await DESKTOP_API.exportViewerPackage({ doctors, periods: periodKeys, pages });
+    const result = await DESKTOP_API.exportViewerPackage({ format, doctors, periods: periodKeys, pages });
     if (result.canceled) {
       updateViewerExportStatus();
       return;
     }
     closeViewerExportDialog();
-    toast(`ZIP создан: врачей — ${result.doctors}, периодов — ${result.periods}. SHA-256: ${result.sha256.slice(0, 12)}…`);
+    const label = result.format === "html" ? "Автономный HTML создан" : "ZIP создан";
+    toast(`${label}: врачей — ${result.doctors}, периодов — ${result.periods}. SHA-256: ${result.sha256.slice(0, 12)}…`);
   } catch (error) {
     errorBox.textContent = "Публикация не выполнена: " + error.message;
     errorBox.classList.remove("hidden");
   } finally {
-    button.disabled = false;
+    document.getElementById("viewerExportStart").disabled = false;
+    document.getElementById("viewerExportZip").disabled = !VIEWER_ACCESS.adminPinConfigured;
   }
 }
 
@@ -5488,7 +5487,8 @@ async function initApp() {
   document.getElementById("pdfExportDialogStart").addEventListener("click", () => { startPdfExportFromDialog(); });
   document.getElementById("viewerExportDialogClose").addEventListener("click", closeViewerExportDialog);
   document.getElementById("viewerExportDialogCancel").addEventListener("click", closeViewerExportDialog);
-  document.getElementById("viewerExportStart").addEventListener("click", exportViewerPackage);
+  document.getElementById("viewerExportStart").addEventListener("click", () => exportViewerPackage("html"));
+  document.getElementById("viewerExportZip").addEventListener("click", () => exportViewerPackage("zip"));
   document.getElementById("viewerExportDepartmentFilter").addEventListener("change", () => filterViewerExportDoctors(false));
   document.getElementById("viewerExportSpecializationFilter").addEventListener("change", () => filterViewerExportDoctors(false));
   document.getElementById("viewerExportSelectFiltered").addEventListener("click", () => filterViewerExportDoctors(true));

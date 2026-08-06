@@ -1184,7 +1184,7 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
     <label>Кому: <select id="repScope" style="min-width:220px"></select></label>
     <label>Месяц: <select id="repMonth"></select></label>
     <button class="btn primary" id="btnExportAllPdf" title="Выбрать отделения, специализации и врачей для PDF-выгрузки">📁 Выгрузить PDF</button>
-    <button class="btn primary" id="btnExportViewerPackage" title="Сформировать ZIP с опубликованными отчётами для отдельного Viewer">⇧ ZIP для Viewer</button>
+    <button class="btn primary" id="btnExportViewerPackage" title="Сформировать один автономный HTML или ZIP для установленного Viewer">⇧ Файл для Viewer</button>
     <button class="btn" id="btnPrint">🖨 Печать</button>
   </div>
   <div class="notice blue no-print"><b>Как работать:</b> выберите период и адресата, при необходимости добавьте административные комментарии справа от аналитических блоков. Комментарий сохраняется при выходе из поля. «Выгрузить PDF» предложит выбрать нужные отчёты.</div>
@@ -1213,7 +1213,7 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
 <dialog class="pdf-export-dialog no-print" id="viewerExportDialog" aria-labelledby="viewerExportDialogTitle">
   <div class="pdf-export-dialog-shell viewer-export-dialog-shell">
     <div class="pdf-export-dialog-head">
-      <div><h2 id="viewerExportDialogTitle">Публикация для врачей</h2><p class="small muted">В ZIP попадут только выбранные готовые отчёты и опубликованные вместе с ними комментарии.</p></div>
+      <div><h2 id="viewerExportDialogTitle">Публикация для врачей</h2><p class="small muted">Один HTML можно сразу передать и открыть без установки. ZIP предназначен для импорта в установленный Viewer и общую папку.</p></div>
       <button class="btn mini" type="button" id="viewerExportDialogClose" aria-label="Закрыть окно">✕</button>
     </div>
     <div class="viewer-export-grid">
@@ -1231,7 +1231,8 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
     <div class="pdf-export-dialog-actions">
       <span class="small muted" id="viewerExportStatus"></span><span class="spacer"></span>
       <button class="btn" type="button" id="viewerExportDialogCancel">Отмена</button>
-      <button class="btn primary" type="button" id="viewerExportStart">Сформировать ZIP</button>
+      <button class="btn" type="button" id="viewerExportZip">ZIP для установленного Viewer</button>
+      <button class="btn primary" type="button" id="viewerExportStart">Один автономный HTML</button>
     </div>
   </div>
 </dialog>
@@ -9484,7 +9485,8 @@ function updateViewerExportStatus() {
   if (!status) return;
   const doctors = document.querySelectorAll('#viewerExportDoctors input[data-viewer-export-doctor]:checked').length;
   const periods = document.querySelectorAll('#viewerExportPeriods input:checked').length;
-  status.textContent = `Выбрано: врачей — ${doctors}, периодов — ${periods}`;
+  const zipHint = VIEWER_ACCESS.adminPinConfigured ? "" : " · ZIP недоступен, пока не задан PIN администратора Viewer";
+  status.textContent = `Выбрано: врачей — ${doctors}, периодов — ${periods}${zipHint}`;
 }
 
 function filterViewerExportDoctors(selectMatching) {
@@ -9504,11 +9506,6 @@ async function openViewerExportDialog() {
     await refreshViewerPublicationAccess();
   } catch (error) {
     toast("Не удалось загрузить настройки Viewer: " + error.message, true);
-    return;
-  }
-  if (!VIEWER_ACCESS.adminPinConfigured) {
-    toast("Сначала задайте администраторский PIN Viewer в Настройках", true);
-    switchTab("settings");
     return;
   }
   const doctors = viewerExportDoctorRows();
@@ -9548,12 +9545,13 @@ async function openViewerExportDialog() {
   error.textContent = "";
   error.classList.add("hidden");
   document.getElementById("viewerExportStart").disabled = false;
+  document.getElementById("viewerExportZip").disabled = !VIEWER_ACCESS.adminPinConfigured;
   document.getElementById("viewerExportDialog").showModal();
   updateViewerExportStatus();
 }
 
-async function exportViewerPackage() {
-  const button = document.getElementById("viewerExportStart");
+async function exportViewerPackage(format = "html") {
+  const buttons = [document.getElementById("viewerExportStart"), document.getElementById("viewerExportZip")];
   const errorBox = document.getElementById("viewerExportError");
   const periodKeys = [...document.querySelectorAll("#viewerExportPeriods input:checked")].map(input => input.value);
   const pageTypes = new Set([...document.querySelectorAll("#viewerExportPageTypes input:checked")].map(input => input.value));
@@ -9563,7 +9561,7 @@ async function exportViewerPackage() {
     errorBox.classList.remove("hidden");
     return;
   }
-  button.disabled = true;
+  buttons.forEach(button => { button.disabled = true; });
   errorBox.classList.add("hidden");
   try {
     await saveVisibleCommentDrafts();
@@ -9612,18 +9610,20 @@ async function exportViewerPackage() {
         if (completed % 4 === 0) await new Promise(resolve => requestAnimationFrame(resolve));
       }
     }
-    const result = await DESKTOP_API.exportViewerPackage({ doctors, periods: periodKeys, pages });
+    const result = await DESKTOP_API.exportViewerPackage({ format, doctors, periods: periodKeys, pages });
     if (result.canceled) {
       updateViewerExportStatus();
       return;
     }
     closeViewerExportDialog();
-    toast(`ZIP создан: врачей — ${result.doctors}, периодов — ${result.periods}. SHA-256: ${result.sha256.slice(0, 12)}…`);
+    const label = result.format === "html" ? "Автономный HTML создан" : "ZIP создан";
+    toast(`${label}: врачей — ${result.doctors}, периодов — ${result.periods}. SHA-256: ${result.sha256.slice(0, 12)}…`);
   } catch (error) {
     errorBox.textContent = "Публикация не выполнена: " + error.message;
     errorBox.classList.remove("hidden");
   } finally {
-    button.disabled = false;
+    document.getElementById("viewerExportStart").disabled = false;
+    document.getElementById("viewerExportZip").disabled = !VIEWER_ACCESS.adminPinConfigured;
   }
 }
 
@@ -10994,7 +10994,8 @@ async function initApp() {
   document.getElementById("pdfExportDialogStart").addEventListener("click", () => { startPdfExportFromDialog(); });
   document.getElementById("viewerExportDialogClose").addEventListener("click", closeViewerExportDialog);
   document.getElementById("viewerExportDialogCancel").addEventListener("click", closeViewerExportDialog);
-  document.getElementById("viewerExportStart").addEventListener("click", exportViewerPackage);
+  document.getElementById("viewerExportStart").addEventListener("click", () => exportViewerPackage("html"));
+  document.getElementById("viewerExportZip").addEventListener("click", () => exportViewerPackage("zip"));
   document.getElementById("viewerExportDepartmentFilter").addEventListener("change", () => filterViewerExportDoctors(false));
   document.getElementById("viewerExportSpecializationFilter").addEventListener("change", () => filterViewerExportDoctors(false));
   document.getElementById("viewerExportSelectFiltered").addEventListener("click", () => filterViewerExportDoctors(true));

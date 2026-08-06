@@ -415,7 +415,7 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "2.2.1");
+  assert.equal(packageJson.version, "2.2.2");
   assert.equal(packageJson.build.productName, "Пульс клиники — Администратор");
   assert.equal(packageJson.build.artifactName, "DoctorReview-Admin-Setup-${version}-${arch}.${ext}");
   assert.equal(packageJson.scripts["dist:portable"], undefined);
@@ -815,6 +815,8 @@ test("Viewer access is name plus PIN with encrypted pages and no Windows or NTFS
   const viewerPreload = fs.readFileSync(path.join(root, "viewer", "preload.cjs"), "utf8");
   const storage = fs.readFileSync(path.join(root, "viewer", "storage-service.cjs"), "utf8");
   const packages = fs.readFileSync(path.join(root, "desktop", "services", "viewer-package-service.cjs"), "utf8");
+  const standaloneIndex = fs.readFileSync(path.join(root, "viewer", "standalone.html"), "utf8");
+  const standaloneApp = fs.readFileSync(path.join(root, "viewer", "standalone-app.js"), "utf8");
 
   assert.doesNotMatch(adminTemplate + adminUi + viewerIndex + viewerApp + viewerMain + viewerPreload,
     /windowsAccount|windows_account|openAcl|windowsIdentity|accountMatches|Windows-учётка|NTFS/);
@@ -825,4 +827,11 @@ test("Viewer access is name plus PIN with encrypted pages and no Windows or NTFS
   assert.match(storage, /decryptViewerPage/);
   assert.match(packages, /aes-256-gcm/);
   assert.match(packages, /FORMAT_VERSION = 2/);
+  assert.match(adminTemplate, /Один автономный HTML/);
+  assert.match(adminTemplate, /ZIP для установленного Viewer/);
+  assert.match(adminUi, /exportViewerPackage\("html"\)/);
+  assert.match(adminUi, /exportViewerPackage\("zip"\)/);
+  assert.match(standaloneIndex, /standaloneViewerData/);
+  assert.match(standaloneApp, /crypto\.subtle\.deriveKey/);
+  assert.match(standaloneApp, /DecompressionStream\("gzip"\)/);
 });

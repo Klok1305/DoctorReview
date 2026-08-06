@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Пульс клиники — автономный Viewer</title>
+  <style>
+/*__APP_CSS__*/
+/*__VIEWER_CSS__*/
+    .standalone-caption { margin: 4px 0 0; }
+    .standalone-file-note { margin-top: 18px; }
+    @media (max-width: 760px) {
+      .viewer-main { padding: 12px; }
+      .viewer-header { padding: 11px 14px; }
+      .viewer-report-toolbar { align-items: stretch; flex-wrap: wrap; }
+      .viewer-report-toolbar .spacer { display: none; }
+      .viewer-report-toolbar > div:first-child { width: 100%; }
+    }
+  </style>
+</head>
+<body class="viewer-app">
+  <header class="viewer-header no-print">
+    <div class="logo">💓 <span class="logo-work">Пульс</span> <span class="logo-doctors">клиники</span> <span class="viewer-mark">Viewer</span></div>
+    <div class="small muted">Автономный файл</div>
+  </header>
+
+  <main class="viewer-main">
+    <section id="viewerLogin">
+      <div class="card viewer-center-card">
+        <h1>Мои отчёты</h1>
+        <p class="muted standalone-caption" id="viewerPublicationCaption"></p>
+        <label class="fld"><span>Врач</span><select id="viewerDoctorSelect"></select></label>
+        <label class="fld"><span>Постоянный PIN</span><input id="viewerDoctorPin" class="viewer-pin-input" type="password" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="••••"></label>
+        <button class="btn primary viewer-open-button" id="btnDoctorLogin">Открыть отчёты</button>
+        <div class="notice bad hidden" id="viewerLoginError"></div>
+        <div class="notice blue standalone-file-note"><b>Интернет не требуется.</b> Отчёты зашифрованы внутри этого HTML и открываются только после ввода PIN врача.</div>
+      </div>
+    </section>
+
+    <section class="viewer-report hidden" id="viewerReport">
+      <div class="viewer-report-toolbar no-print">
+        <div><b id="viewerDoctorName"></b><div class="small muted" id="viewerDoctorStructure"></div></div>
+        <span class="spacer"></span>
+        <button class="btn mini" id="btnPreviousPeriod" title="Предыдущий период">←</button>
+        <label>Период: <select id="viewerPeriod"></select></label>
+        <button class="btn mini" id="btnNextPeriod" title="Следующий период">→</button>
+        <button class="btn" id="btnPrintReport">Печать</button>
+        <button class="btn" id="btnDoctorLogout">Сменить врача</button>
+      </div>
+      <nav class="viewer-tabs no-print" id="viewerTabs"></nav>
+      <article class="viewer-report-body" id="viewerReportBody"></article>
+    </section>
+  </main>
+
+  <noscript><div class="notice bad">Для открытия зашифрованных отчётов разрешите JavaScript в браузере.</div></noscript>
+  <script id="standaloneViewerData" type="application/json">/*__STANDALONE_DATA__*/</script>
+  <script>
+/*__STANDALONE_APP__*/
+  </script>
+</body>
+</html>

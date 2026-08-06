@@ -1,14 +1,18 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const zlib = require("node:zlib");
 const { DatabaseSync } = require("node:sqlite");
 const { DatabaseService } = require("../desktop/services/database.cjs");
 const {
   ENCRYPTED_PAGE_FORMAT,
+  STANDALONE_FORMAT,
+  createStandaloneViewerHtml,
   createViewerPackage,
   inspectViewerPackage,
 } = require("../desktop/services/viewer-package-service.cjs");
@@ -101,7 +105,7 @@ test("encrypted ZIP bootstraps Viewer and doctor enters by name and PIN only", a
   database.updateViewerDoctorAccess({ doctorId: access.doctorId, active: true, pin: "1357" });
   const credentials = database.viewerExportCredentials([access.doctorId]);
   const created = await createViewerPackage({
-    appVersion: "2.2.1",
+    appVersion: "2.2.2",
     periods: ["2026-01"],
     doctors: [{ doctorId: access.doctorId, displayName: "Первый Врач", department: "Терапия", specialization: "Кардиология" }],
     pages: [{
@@ -156,4 +160,49 @@ test("encrypted ZIP bootstraps Viewer and doctor enters by name and PIN only", a
   }
   assert.throws(() => viewer.doctorLogin({ doctorId: access.doctorId, pin: "0000" }), /заблокирован/);
   assert.throws(() => viewer.doctorLogin({ doctorId: access.doctorId, pin: "1357" }), /временно заблокирован/);
+});
+
+test("standalone HTML contains the encrypted Viewer and opens with the doctor PIN", async t => {
+  const { database } = fixture(t);
+  const access = database.viewerAccessSnapshot().doctors[0];
+  database.updateViewerDoctorAccess({ doctorId: access.doctorId, active: true, pin: "1357" });
+  const credentials = database.viewerExportCredentials([access.doctorId], { requireAdmin: false });
+  assert.equal(credentials.admin, null);
+  const created = await createStandaloneViewerHtml({
+    appVersion: "2.2.2",
+    periods: ["2026-01"],
+    doctors: [{ doctorId: access.doctorId, displayName: "Первый Врач", department: "Терапия", specialization: "Кардиология" }],
+    pages: [{
+      doctorId: access.doctorId,
+      periodKey: "2026-01",
+      pageType: "doctor",
+      scopeId: access.doctorId,
+      title: "Январский отчёт",
+      html: '<div class="card"><h1>Секретный отчёт</h1><script>bad()</script><p>Комментарий врача</p></div>',
+    }],
+    credentials,
+  });
+
+  const html = created.buffer.toString("utf8");
+  assert.equal(created.manifest.format, STANDALONE_FORMAT);
+  assert.match(html, /Автономный файл/);
+  assert.match(html, /DecompressionStream/);
+  assert.doesNotMatch(html, /Секретный отчёт|Комментарий врача|<script>bad/);
+  assert.doesNotMatch(html, /<script[^>]+src=|<link[^>]+href=/i);
+
+  const embedded = html.match(/<script id="standaloneViewerData" type="application\/json">([\s\S]*?)<\/script>/);
+  assert.ok(embedded, "standalone data must be embedded into the HTML");
+  const bundle = JSON.parse(embedded[1]);
+  assert.equal(bundle.doctors.length, 1);
+  assert.equal(JSON.stringify(bundle).includes('"pinCode"'), false);
+  const doctor = bundle.doctors[0];
+  const key = crypto.pbkdf2Sync("1357", Buffer.from(doctor.encryption.salt, "base64"),
+    doctor.encryption.iterations, doctor.encryption.keyLength / 8, "sha256");
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(doctor.encryption.iv, "base64"));
+  decipher.setAuthTag(Buffer.from(doctor.encryption.tag, "base64"));
+  const compressed = Buffer.concat([decipher.update(Buffer.from(doctor.ciphertext, "base64")), decipher.final()]);
+  const payload = JSON.parse(zlib.gunzipSync(compressed).toString("utf8"));
+  assert.equal(payload.doctorId, access.doctorId);
+  assert.match(payload.reports[0].html, /Секретный отчёт|Комментарий врача/);
+  assert.doesNotMatch(payload.reports[0].html, /<script/i);
 });

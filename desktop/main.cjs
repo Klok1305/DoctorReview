@@ -14,7 +14,7 @@ const { DatabaseService } = require("./services/database.cjs");
 const { BackupService } = require("./services/backup-service.cjs");
 const { FileService } = require("./services/file-service.cjs");
 const { UpdateService } = require("./services/update-service.cjs");
-const { createViewerPackage } = require("./services/viewer-package-service.cjs");
+const { createStandaloneViewerHtml, createViewerPackage } = require("./services/viewer-package-service.cjs");
 
 const PDF_SMOKE_TEST = process.argv.includes("--pdf-smoke");
 const SMOKE_TEST = PDF_SMOKE_TEST || process.argv.includes("--smoke-test");
@@ -1139,19 +1139,26 @@ function registerIpc() {
     const knownDoctors = new Set(Object.keys(snapshot.doctors || {}));
     const doctorIds = input.doctors.map(doctor => String(doctor.doctorId || ""));
     if (doctorIds.some(id => !knownDoctors.has(id))) throw new Error("В публикации указан неизвестный врач");
-    const credentials = database.viewerExportCredentials(doctorIds);
-    const created = await createViewerPackage({
+    const format = String(input.format || "html");
+    if (format !== "html" && format !== "zip") throw new Error("Неизвестный формат публикации Viewer");
+    const credentials = database.viewerExportCredentials(doctorIds, { requireAdmin: format === "zip" });
+    const publication = {
       appVersion: app.getVersion(),
       doctors: input.doctors,
       periods: input.periods,
       pages: input.pages,
       credentials,
-    });
+    };
+    const created = format === "html"
+      ? await createStandaloneViewerHtml(publication)
+      : await createViewerPackage(publication);
     const date = new Date().toISOString().slice(0, 10);
     const selected = await dialog.showSaveDialog(mainWindow, {
-      title: "Сохранить ZIP для Пульс клиники Viewer",
-      defaultPath: path.join(configStore.publicConfig().outputDir, `Пульс-клиники-отчёты-${date}.zip`),
-      filters: [{ name: "Пакет отчётов Viewer", extensions: ["zip"] }],
+      title: format === "html" ? "Сохранить автономный Viewer" : "Сохранить ZIP для Пульс клиники Viewer",
+      defaultPath: path.join(configStore.publicConfig().outputDir, `Пульс-клиники-отчёты-${date}.${format}`),
+      filters: format === "html"
+        ? [{ name: "Автономный HTML Viewer", extensions: ["html"] }]
+        : [{ name: "Пакет отчётов Viewer", extensions: ["zip"] }],
     });
     if (selected.canceled || !selected.filePath) return { canceled: true };
     fs.writeFileSync(selected.filePath, created.buffer, { flag: "w" });
@@ -1162,7 +1169,7 @@ function registerIpc() {
       manifest: created.manifest,
       createdBy: session.userId,
     });
-    return { canceled: false, path: selected.filePath, ...recorded, doctors: doctorIds.length, periods: input.periods.length };
+    return { canceled: false, format, path: selected.filePath, ...recorded, doctors: doctorIds.length, periods: input.periods.length };
   });
   ipcMain.handle("database:save", (_event, json) => {
     localAdminActor();

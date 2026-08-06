@@ -1,6 +1,6 @@
 {
   "name": "doctor-performance-app",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "Административное приложение «Пульс клиники» для аналитики врачей и отделений",
   "main": "desktop/main.cjs",
   "author": "Nikita",
@@ -42,8 +42,12 @@
     "electronLanguages": ["ru", "en-US"],
     "files": [
       "index.html",
+      "build/app.css",
       "build/jszip.min.js",
       "desktop/**",
+      "viewer/standalone.html",
+      "viewer/standalone-app.js",
+      "viewer/viewer.css",
       "resources/**",
       "docs/**",
       "package.json"

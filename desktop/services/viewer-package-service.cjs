@@ -1,15 +1,21 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const fs = require("node:fs");
 const path = require("node:path");
+const zlib = require("node:zlib");
 const JSZip = require("../../build/jszip.min.js");
 
 const FORMAT = "pulse-clinic-viewer-package";
 const FORMAT_VERSION = 2;
 const ENCRYPTED_PAGE_FORMAT = "pulse-clinic-viewer-encrypted-page";
 const ENCRYPTED_PAGE_VERSION = 1;
+const STANDALONE_FORMAT = "pulse-clinic-standalone-viewer";
+const STANDALONE_FORMAT_VERSION = 1;
 const CONTENT_KDF_PARAMS = Object.freeze({ N: 32768, r: 8, p: 1, keylen: 32 });
+const STANDALONE_KDF_PARAMS = Object.freeze({ iterations: 600000, hash: "sha256", keylen: 32 });
 const MAX_PACKAGE_BYTES = 300 * 1024 * 1024;
+const MAX_STANDALONE_BYTES = 400 * 1024 * 1024;
 const MAX_PAGE_BYTES = 8 * 1024 * 1024;
 const PAGE_TYPES = new Set(["department", "specialization", "doctor"]);
 
@@ -115,11 +121,11 @@ function normalizePage(page) {
   };
 }
 
-async function createViewerPackage({ appVersion, doctors, periods, pages, credentials }) {
+function prepareViewerPublication({ doctors, periods, pages, credentials }) {
   if (!Array.isArray(doctors) || !doctors.length || doctors.length > 1000) throw new Error("Не выбраны врачи для публикации");
   if (!Array.isArray(periods) || !periods.length || periods.length > 120) throw new Error("Не выбраны периоды публикации");
   if (!Array.isArray(pages) || !pages.length || pages.length > 10000) throw new Error("В публикации нет страниц");
-  if (!credentials || !credentials.admin || !Array.isArray(credentials.doctors)) throw new Error("Не настроены доступы Viewer");
+  if (!credentials || !Array.isArray(credentials.doctors)) throw new Error("Не настроены доступы Viewer");
 
   const normalizedPeriods = [...new Set(periods.map(String))].sort();
   if (normalizedPeriods.some(value => !/^\d{4}-\d{2}$/.test(value))) throw new Error("Некорректный период публикации");
@@ -147,6 +153,14 @@ async function createViewerPackage({ appVersion, doctors, periods, pages, creden
     if (!doctorMap.has(page.doctorId)) throw new Error("Страница относится к невыбранному врачу");
     if (!normalizedPeriods.includes(page.periodKey)) throw new Error("Страница относится к невыбранному периоду");
   }
+
+  return { normalizedPeriods, normalizedPages, doctorMap };
+}
+
+async function createViewerPackage(input) {
+  const { appVersion, credentials } = input;
+  const { normalizedPeriods, normalizedPages, doctorMap } = prepareViewerPublication(input);
+  if (!credentials.admin) throw new Error("Сначала задайте администраторский PIN Viewer");
 
   const packageId = crypto.randomUUID();
   const createdAt = new Date().toISOString();
@@ -218,6 +232,99 @@ async function createViewerPackage({ appVersion, doctors, periods, pages, creden
   return { buffer, manifest, sha256: sha256(buffer) };
 }
 
+function encryptStandaloneDoctorPayload(payload, pin) {
+  if (!/^\d{4}$/.test(String(pin || ""))) throw new Error("Для автономного Viewer не настроен PIN врача");
+  const salt = crypto.randomBytes(24);
+  const iv = crypto.randomBytes(12);
+  const key = crypto.pbkdf2Sync(String(pin), salt, STANDALONE_KDF_PARAMS.iterations,
+    STANDALONE_KDF_PARAMS.keylen, STANDALONE_KDF_PARAMS.hash);
+  const compressed = zlib.gzipSync(Buffer.from(JSON.stringify(payload), "utf8"), { level: 9 });
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([cipher.update(compressed), cipher.final()]);
+  return {
+    encryption: {
+      algorithm: "aes-256-gcm",
+      kdf: "pbkdf2",
+      hash: "sha-256",
+      iterations: STANDALONE_KDF_PARAMS.iterations,
+      keyLength: STANDALONE_KDF_PARAMS.keylen * 8,
+      compression: "gzip",
+      salt: salt.toString("base64"),
+      iv: iv.toString("base64"),
+      tag: cipher.getAuthTag().toString("base64"),
+    },
+    ciphertext: ciphertext.toString("base64"),
+  };
+}
+
+function standaloneAsset(relativePath) {
+  return fs.readFileSync(path.resolve(__dirname, "../..", relativePath), "utf8");
+}
+
+function jsonForInlineScript(value) {
+  return JSON.stringify(value).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+}
+
+async function createStandaloneViewerHtml(input) {
+  const { appVersion } = input;
+  const { normalizedPeriods, normalizedPages, doctorMap } = prepareViewerPublication(input);
+  const packageId = crypto.randomUUID();
+  const createdAt = new Date().toISOString();
+  const encryptedDoctors = [];
+
+  for (const doctor of doctorMap.values()) {
+    const reports = normalizedPages
+      .filter(page => page.doctorId === doctor.doctorId)
+      .map(page => ({
+        periodKey: page.periodKey,
+        pageType: page.pageType,
+        scopeId: page.scopeId,
+        title: page.title,
+        html: page.html,
+      }));
+    if (!reports.length) throw new Error(`Для врача ${doctor.displayName} нет выбранных страниц`);
+    const encrypted = encryptStandaloneDoctorPayload({
+      format: STANDALONE_FORMAT,
+      formatVersion: STANDALONE_FORMAT_VERSION,
+      packageId,
+      doctorId: doctor.doctorId,
+      reports,
+    }, doctor.access.pinCode);
+    encryptedDoctors.push({
+      doctorId: doctor.doctorId,
+      displayName: doctor.displayName,
+      department: doctor.department,
+      specialization: doctor.specialization,
+      pinVersion: doctor.pinVersion,
+      periods: [...new Set(reports.map(report => report.periodKey))].sort().reverse(),
+      pageTypes: [...new Set(reports.map(report => report.pageType))].sort(),
+      ...encrypted,
+    });
+  }
+
+  const manifest = {
+    format: STANDALONE_FORMAT,
+    formatVersion: STANDALONE_FORMAT_VERSION,
+    packageId,
+    createdAt,
+    appVersion: String(appVersion || ""),
+    periods: normalizedPeriods,
+    pageTypes: [...new Set(normalizedPages.map(page => page.pageType))].sort(),
+    doctors: encryptedDoctors.map(({ encryption, ciphertext, ...doctor }) => doctor),
+  };
+  const bundle = { ...manifest, doctors: encryptedDoctors };
+  const template = standaloneAsset("viewer/standalone.html");
+  const html = template
+    .replace("/*__APP_CSS__*/", standaloneAsset("build/app.css"))
+    .replace("/*__VIEWER_CSS__*/", standaloneAsset("viewer/viewer.css"))
+    .replace("/*__STANDALONE_DATA__*/", jsonForInlineScript(bundle))
+    .replace("/*__STANDALONE_APP__*/", standaloneAsset("viewer/standalone-app.js"));
+  if (/\/\*__[A-Z0-9_]+__\*\//.test(html)) throw new Error("Не удалось собрать автономный HTML Viewer");
+  const buffer = Buffer.from(html, "utf8");
+  if (buffer.length > MAX_STANDALONE_BYTES) throw new Error("Автономный HTML Viewer превышает 400 МБ");
+  return { buffer, manifest, sha256: sha256(buffer) };
+}
+
 async function inspectViewerPackage(buffer, { includeZip = false } = {}) {
   const bytes = Buffer.from(buffer || []);
   if (!bytes.length || bytes.length > MAX_PACKAGE_BYTES || bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
@@ -266,7 +373,10 @@ module.exports = {
   FORMAT,
   FORMAT_VERSION,
   ENCRYPTED_PAGE_FORMAT,
+  STANDALONE_FORMAT,
+  STANDALONE_FORMAT_VERSION,
   MAX_PACKAGE_BYTES,
+  createStandaloneViewerHtml,
   createViewerPackage,
   decryptViewerPage,
   encryptViewerPage,

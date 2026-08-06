@@ -883,10 +883,10 @@ class DatabaseService {
     return this.viewerAccessSnapshot().doctors.find(item => item.doctorId === id);
   }
 
-  viewerExportCredentials(doctorIds) {
+  viewerExportCredentials(doctorIds, { requireAdmin = true } = {}) {
     const ids = [...new Set((doctorIds || []).map(String))];
     const settings = this.db.prepare("SELECT * FROM viewer_settings WHERE id = 1").get();
-    if (!settings || !settings.admin_pin_hash) throw new Error("Сначала задайте администраторский PIN Viewer");
+    if (requireAdmin && (!settings || !settings.admin_pin_hash)) throw new Error("Сначала задайте администраторский PIN Viewer");
     const doctors = ids.map(id => {
       const row = this.db.prepare("SELECT * FROM viewer_doctor_access WHERE doctor_id = ?").get(id);
       if (!row || !row.active) throw new Error(`Доступ врача ${id} не включён`);
@@ -900,12 +900,12 @@ class DatabaseService {
       };
     });
     return {
-      admin: {
+      admin: settings && settings.admin_pin_hash ? {
         pinHash: settings.admin_pin_hash,
         pinSalt: settings.admin_pin_salt,
         pinParams: settings.admin_pin_params,
         pinVersion: Number(settings.admin_pin_version),
-      },
+      } : null,
       doctors,
     };
   }

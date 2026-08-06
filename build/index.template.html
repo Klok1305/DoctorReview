@@ -126,7 +126,7 @@
     <label>Кому: <select id="repScope" style="min-width:220px"></select></label>
     <label>Месяц: <select id="repMonth"></select></label>
     <button class="btn primary" id="btnExportAllPdf" title="Выбрать отделения, специализации и врачей для PDF-выгрузки">📁 Выгрузить PDF</button>
-    <button class="btn primary" id="btnExportViewerPackage" title="Сформировать ZIP с опубликованными отчётами для отдельного Viewer">⇧ ZIP для Viewer</button>
+    <button class="btn primary" id="btnExportViewerPackage" title="Сформировать один автономный HTML или ZIP для установленного Viewer">⇧ Файл для Viewer</button>
     <button class="btn" id="btnPrint">🖨 Печать</button>
   </div>
   <div class="notice blue no-print"><b>Как работать:</b> выберите период и адресата, при необходимости добавьте административные комментарии справа от аналитических блоков. Комментарий сохраняется при выходе из поля. «Выгрузить PDF» предложит выбрать нужные отчёты.</div>
@@ -155,7 +155,7 @@
 <dialog class="pdf-export-dialog no-print" id="viewerExportDialog" aria-labelledby="viewerExportDialogTitle">
   <div class="pdf-export-dialog-shell viewer-export-dialog-shell">
     <div class="pdf-export-dialog-head">
-      <div><h2 id="viewerExportDialogTitle">Публикация для врачей</h2><p class="small muted">В ZIP попадут только выбранные готовые отчёты и опубликованные вместе с ними комментарии.</p></div>
+      <div><h2 id="viewerExportDialogTitle">Публикация для врачей</h2><p class="small muted">Один HTML можно сразу передать и открыть без установки. ZIP предназначен для импорта в установленный Viewer и общую папку.</p></div>
       <button class="btn mini" type="button" id="viewerExportDialogClose" aria-label="Закрыть окно">✕</button>
     </div>
     <div class="viewer-export-grid">
@@ -173,7 +173,8 @@
     <div class="pdf-export-dialog-actions">
       <span class="small muted" id="viewerExportStatus"></span><span class="spacer"></span>
       <button class="btn" type="button" id="viewerExportDialogCancel">Отмена</button>
-      <button class="btn primary" type="button" id="viewerExportStart">Сформировать ZIP</button>
+      <button class="btn" type="button" id="viewerExportZip">ZIP для установленного Viewer</button>
+      <button class="btn primary" type="button" id="viewerExportStart">Один автономный HTML</button>
     </div>
   </div>
 </dialog>
