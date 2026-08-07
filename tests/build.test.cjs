@@ -426,7 +426,7 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "2.5.0");
+  assert.equal(packageJson.version, "2.5.1");
   assert.equal(packageJson.build.productName, "КлинВект Щербатова — Администратор");
   assert.equal(packageJson.build.artifactName, "KlinVekt-Shcherbatova-Admin-Setup-${version}-${arch}.${ext}");
   assert.equal(packageJson.scripts["dist:portable"], undefined);
@@ -861,7 +861,19 @@ test("Viewer export dialog uses the shared sorted month helper", () => {
   assert.notEqual(end, -1);
   const handler = adminUi.slice(start, end);
   assert.match(handler, /const months = monthKeysSorted\(\);/);
+  assert.match(adminUi, /doctorHasDashboardData\(item\.doctorId, monthKey\)/);
   assert.doesNotMatch(handler, /sortedMonths\(\)/);
+});
+
+test("dashboard participation requires an individual work report", () => {
+  const metrics = fs.readFileSync(path.join(build, "app-metrics.js"), "utf8");
+  const adminUi = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  assert.match(metrics, /function doctorHasDashboardData\(docId, monthKey\)/);
+  assert.match(metrics, /Object\.prototype\.hasOwnProperty\.call\(m\.vyrabotka, id\)/);
+  assert.match(metrics, /function doctorsInMonth\(monthKey\)[\s\S]*Object\.keys\(m\.vyrabotka \|\| \{\}\)/);
+  assert.match(adminUi, /const eligibleDoctorIds = doctorIds\.filter\(doctorId =>[\s\S]*doctorHasDashboardData\(doctorId, periodKey\)/);
+  assert.match(adminUi, /const periodSubjectIds = \[\.\.\.subjectIds\]\.filter\(doctorId => doctorHasDashboardData\(doctorId, periodKey\)\)/);
+  assert.match(adminUi, /periods: publicationPeriodKeys/);
 });
 
 test("Viewer publication snapshots the canonical dashboards instead of separate report builders", () => {

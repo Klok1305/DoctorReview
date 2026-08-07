@@ -708,7 +708,7 @@ function departmentDoctorRows(mk, departmentFilter = UI.departmentFilter) {
 function doctorAverageScoreToMonth(docId, mk) {
   const year = String(mk).slice(0, 4);
   const scoredMonths = monthKeysSorted()
-    .filter(key => key.startsWith(year + "-") && key <= mk)
+    .filter(key => key.startsWith(year + "-") && key <= mk && doctorHasDashboardData(docId, key))
     .map(key => {
       const result = computeMetrics(docId, key);
       const rawScore = result && result.scores && result.scores.total != null
@@ -1060,7 +1060,9 @@ function renderDept() {
     html += `<div class="card"><h2>Клиентская база <span class="spacer"></span>${copyBtn("copyTable", "tblRisk")}</h2><table class="data" id="tblRisk"><tr><th>Специалист</th><th class="num">Период</th><th class="num">Общая база</th>${visibleGroups.map(group => `<th class="num">${esc(clientBaseGroupLabel(group))}</th>`).join("")}</tr>`;
     for (const x of withKb) {
       const kb = x.kb;
-      const previousResult = computeMetrics(x.id, previousMonth);
+      const previousResult = doctorHasDashboardData(x.id, previousMonth)
+        ? computeMetrics(x.id, previousMonth)
+        : null;
       const previousKb = previousResult && previousResult.akb ? previousResult.akb.wins[kb.window] : null;
       html += `<tr><td>${esc(doctorName(x.id))}<br><span class="small muted">${esc(resolvedSpecializationName(x.id) || resolvedDepartmentName(x.id))}</span></td>
         <td class="num">${fmtNum(kb.window)} мес.</td><td class="num"><b>${fmtNum(kb.total)}</b>${compactBaseTrend(kb.total, previousKb ? previousKb.total : null)}</td>
@@ -2584,6 +2586,7 @@ function kbTrendMarkup(current, baseline, lowerBetter, mode) {
 function doctorMetricDynamics(docId, endMk, getValue) {
   const prevKey = prevMonthKey(endMk, 1);
   const valueAt = key => {
+    if (!doctorHasDashboardData(docId, key)) return null;
     const rr = computeMetrics(docId, key);
     if (!rr) return null;
     const value = getValue(rr);
@@ -4005,7 +4008,12 @@ function closeViewerExportDialog() {
 }
 
 function viewerExportDoctorRows() {
-  return (VIEWER_ACCESS.doctors || []).filter(item => item.active && DB.doctors[item.doctorId]);
+  const months = monthKeysSorted();
+  return (VIEWER_ACCESS.doctors || []).filter(item =>
+    item.active
+    && DB.doctors[item.doctorId]
+    && months.some(monthKey => doctorHasDashboardData(item.doctorId, monthKey))
+  );
 }
 
 function updateViewerExportStatus() {
@@ -4038,7 +4046,7 @@ async function openViewerExportDialog() {
   }
   const doctors = viewerExportDoctorRows();
   if (!doctors.length) {
-    toast("В Настройках не включён ни один врач для Viewer", true);
+    toast("Нет включённых врачей с загруженным отчётом «Выработка»", true);
     switchTab("settings");
     return;
   }
@@ -4089,6 +4097,15 @@ async function exportViewerPackage(format = "html") {
     errorBox.classList.remove("hidden");
     return;
   }
+  const eligibleDoctorIds = doctorIds.filter(doctorId =>
+    periodKeys.some(periodKey => doctorHasDashboardData(doctorId, periodKey))
+  );
+  if (!eligibleDoctorIds.length) {
+    errorBox.textContent = "У выбранных врачей нет отчёта «Выработка» ни за один выбранный период.";
+    errorBox.classList.remove("hidden");
+    return;
+  }
+  const skippedDoctors = doctorIds.length - eligibleDoctorIds.length;
   buttons.forEach(button => { button.disabled = true; });
   errorBox.classList.add("hidden");
   const previousUi = {
@@ -4102,20 +4119,23 @@ async function exportViewerPackage(format = "html") {
   try {
     await saveVisibleCommentDrafts();
     if (!await saveLocal()) throw new Error("Не удалось сохранить текущую рабочую базу");
-    const doctors = doctorIds.map(doctorId => ({
+    const doctors = eligibleDoctorIds.map(doctorId => ({
       doctorId,
       displayName: doctorName(doctorId),
       department: resolvedDepartmentName(doctorId) || "",
       specialization: resolvedSpecializationName(doctorId) || "",
     }));
-    const selectedDoctorIds = new Set(doctorIds);
+    const selectedDoctorIds = new Set(eligibleDoctorIds);
     const managedDepartments = new Set(Object.entries(VIEWER_ACCESS.departmentHeads || {})
       .filter(([, headDoctorId]) => selectedDoctorIds.has(String(headDoctorId)))
       .map(([department]) => department));
-    const subjectIds = new Set(doctorIds);
+    const subjectIds = new Set(eligibleDoctorIds);
     if (managedDepartments.size) {
       for (const doctorId of Object.keys(DB.doctors)) {
-        if (managedDepartments.has(resolvedDepartmentName(doctorId) || "")) subjectIds.add(doctorId);
+        if (managedDepartments.has(resolvedDepartmentName(doctorId) || "")
+          && periodKeys.some(periodKey => doctorHasDashboardData(doctorId, periodKey))) {
+          subjectIds.add(doctorId);
+        }
       }
     }
     const subjects = [...subjectIds].map(doctorId => ({
@@ -4126,13 +4146,19 @@ async function exportViewerPackage(format = "html") {
     }));
     const pages = [];
     let completed = 0;
-    const total = periodKeys.length * subjectIds.size;
-    for (const periodKey of periodKeys) {
+    const publicationPeriodKeys = periodKeys.filter(periodKey =>
+      [...subjectIds].some(doctorId => doctorHasDashboardData(doctorId, periodKey))
+    );
+    const total = publicationPeriodKeys.reduce((sum, periodKey) =>
+      sum + [...subjectIds].filter(doctorId => doctorHasDashboardData(doctorId, periodKey)).length,
+    0);
+    for (const periodKey of publicationPeriodKeys) {
       if (!DB.months[periodKey]) continue;
       const comments = await DESKTOP_API.listComments({ periodKey });
       const departmentCache = new Map();
       const specializationCache = new Map();
-      for (const doctorId of subjectIds) {
+      const periodSubjectIds = [...subjectIds].filter(doctorId => doctorHasDashboardData(doctorId, periodKey));
+      for (const doctorId of periodSubjectIds) {
         const department = resolvedDepartmentName(doctorId) || "";
         const specialization = resolvedSpecializationName(doctorId) || "";
         if (pageTypes.has("department") && department) {
@@ -4169,14 +4195,15 @@ async function exportViewerPackage(format = "html") {
         if (completed % 4 === 0) await new Promise(resolve => requestAnimationFrame(resolve));
       }
     }
-    const result = await DESKTOP_API.exportViewerPackage({ format, doctors, subjects, periods: periodKeys, pages });
+    const result = await DESKTOP_API.exportViewerPackage({ format, doctors, subjects, periods: publicationPeriodKeys, pages });
     if (result.canceled) {
       updateViewerExportStatus();
       return;
     }
     closeViewerExportDialog();
     const label = result.format === "html" ? "Автономный HTML создан" : "ZIP создан";
-    toast(`${label}: врачей — ${result.doctors}, периодов — ${result.periods}. SHA-256: ${result.sha256.slice(0, 12)}…`);
+    const skippedSuffix = skippedDoctors ? ` Исключено без «Выработки»: ${skippedDoctors}.` : "";
+    toast(`${label}: врачей — ${result.doctors}, периодов — ${result.periods}.${skippedSuffix} SHA-256: ${result.sha256.slice(0, 12)}…`);
   } catch (error) {
     errorBox.textContent = "Публикация не выполнена: " + error.message;
     errorBox.classList.remove("hidden");
@@ -4361,6 +4388,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
 }
 
 function buildDoctorReport(docId, mk) {
+  if (!doctorHasDashboardData(docId, mk)) return '<div class="card"><p class="muted">Нет индивидуального отчёта «Выработка» за выбранный месяц.</p></div>';
   const r = computeMetrics(docId, mk);
   if (!r) return '<div class="card"><p class="muted">Нет данных.</p></div>';
   const e = r.econ;

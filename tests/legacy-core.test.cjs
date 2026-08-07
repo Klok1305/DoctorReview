@@ -177,6 +177,7 @@ test("long-threshold groups are absent at 12 months and available at 36 months",
     profile.lostM = 18;
     profile.riskM = 18;
     DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].vyrabotka.d1 = { items: [] };
     const patient = { name: 'Потерянный Пациент', patientId: 'P-1', s: 1000, v: 2, r: 600 };
     DB.months['2026-01'].kb.d1 = { '12': { clients: [patient] } };
     clearMetricsCache();
@@ -739,6 +740,8 @@ test("department ratios are weighted and patients are deduplicated by stable ide
       d2: { name: 'Второй Врач', aliases: [], dept: 'По умолчанию' }
     };
     DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].vyrabotka.d1 = { items: [] };
+    DB.months['2026-01'].vyrabotka.d2 = { items: [] };
     DB.months['2026-01'].kb.d1 = { '1': { clients: [{ name: 'Общий Пациент', patientId: '42', s: 100, v: 2, r: 1 }] } };
     DB.months['2026-01'].kb.d2 = { '1': { clients: [{ name: 'Общий Пациент', patientId: '42', s: 200, v: 3, r: 1 }] } };
     DB.months['2026-01'].zapis.d1 = { zapis: 1 };
@@ -1185,7 +1188,7 @@ test("department aggregate combines only its selected specializations", () => {
   assert.equal(result.doctors, 2);
 });
 
-test("selected specialization includes doctors found only in the primary-return report", () => {
+test("dashboards exclude doctors without an individual work report", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
     const therapy = '\\u0422\\u0435\\u0440\\u0430\\u043f\\u0438\\u044f';
@@ -1198,6 +1201,10 @@ test("selected specialization includes doctors found only in the primary-return 
     DB.months['2026-06'].vyrabotka.d1 = {
       items: [{ form: '', cat: 'Visit', n: 'Visit', q: 1, sOwn: 100, sRef: 0, goods: false }],
     };
+    DB.months['2026-06'].kb.d2 = { window: 1, patients: [{ group: 'new' }] };
+    DB.months['2026-06'].naznach.d2 = { slices: { 1: { count: 2, sum: 50 } } };
+    DB.months['2026-06'].prostoy.d2 = { busy: 10, total: 20 };
+    DB.months['2026-06'].zapis.d2 = { total: 5, booked: 4 };
     DB.months['2026-06'].pervichka['6'] = {
       period: null,
       perDoc: {
@@ -1209,6 +1216,8 @@ test("selected specialization includes doctors found only in the primary-return 
     const selected = aggregateDeptMonth('2026-06', [endocrine]);
     const all = aggregateDeptMonth('2026-06', 'all');
     return {
+      d1Eligible: doctorHasDashboardData('d1', '2026-06'),
+      d2Eligible: doctorHasDashboardData('d2', '2026-06'),
       scopedDoctors: doctorsForScopeInMonth('2026-06', true),
       selectedDoctors: selected.doctors,
       selectedPrimaryReturn: selected.loyalty.pvSlices[6],
@@ -1217,11 +1226,13 @@ test("selected specialization includes doctors found only in the primary-return 
     };
   })()`, context);
   const plain = JSON.parse(JSON.stringify(result));
-  assert.deepEqual(plain.scopedDoctors, ["d1", "d2"]);
-  assert.equal(plain.selectedDoctors, 2);
-  assert.equal(plain.selectedPrimaryReturn.first, 150);
-  assert.equal(plain.selectedPrimaryReturn.ret, 50);
-  assert.equal(plain.selectedPrimaryReturn.pct, 50 / 150 * 100);
+  assert.equal(plain.d1Eligible, true);
+  assert.equal(plain.d2Eligible, false);
+  assert.deepEqual(plain.scopedDoctors, ["d1"]);
+  assert.equal(plain.selectedDoctors, 1);
+  assert.equal(plain.selectedPrimaryReturn.first, 100);
+  assert.equal(plain.selectedPrimaryReturn.ret, 40);
+  assert.equal(plain.selectedPrimaryReturn.pct, 40);
   assert.equal(plain.allDoctors, 1);
   assert.equal(plain.allPrimaryReturn.pct, 40);
 });

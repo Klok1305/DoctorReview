@@ -831,30 +831,29 @@ function computeMetricsRaw(docId, monthKey) {
   };
 }
 
+/* В дашборды месяца попадают только врачи с загруженным персональным
+   отчётом «Выработка». Общие отчёты не должны создавать врача в сводках. */
+function doctorHasDashboardData(docId, monthKey) {
+  const m = DB.months[monthKey];
+  if (!m || !m.vyrabotka) return false;
+  const id = String(docId);
+  return Object.prototype.hasOwnProperty.call(m.vyrabotka, id)
+    && Boolean(m.vyrabotka[id] && typeof m.vyrabotka[id] === "object");
+}
+
 /* Врачи месяца */
 function doctorsInMonth(monthKey) {
   const m = DB.months[monthKey];
   if (!m) return [];
-  const set = new Set();
-  for (const src of ["vyrabotka", "kb", "naznach", "prostoy", "zapis"]) {
-    Object.keys(m[src] || {}).forEach(id => set.add(id));
-  }
-  for (const sl of Object.values(m.pervichka)) {
-    Object.keys(sl.perDoc).forEach(id => set.add(id));
-  }
-  return [...set].sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru"));
+  return Object.keys(m.vyrabotka || {})
+    .filter(id => doctorHasDashboardData(id, monthKey))
+    .sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru"));
 }
 function coreDoctorsInMonth(monthKey) {
-  const m = DB.months[monthKey];
-  if (!m) return [];
-  const set = new Set([...Object.keys(m.vyrabotka), ...Object.keys(m.kb), ...Object.keys(m.naznach || {})]);
-  return [...set].sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru"));
+  return doctorsInMonth(monthKey);
 }
 function doctorsForScopeInMonth(monthKey, scoped = false) {
-  const all = doctorsInMonth(monthKey);
-  if (scoped) return all;
-  const core = coreDoctorsInMonth(monthKey);
-  return core.length ? core : all;
+  return doctorsInMonth(monthKey);
 }
 function monthKeysSorted() {
   return Object.keys(DB.months).sort();
@@ -970,7 +969,13 @@ function buildDynamics(monthsAll, endMk, getResult, maxMonths, profile) {
 }
 
 function computeDoctorDynamics(docId, endMk) {
-  return buildDynamics(monthKeysSorted(), endMk, k => computeMetrics(docId, k), 6, profileForDoctor(docId));
+  return buildDynamics(
+    monthKeysSorted(),
+    endMk,
+    k => doctorHasDashboardData(docId, k) ? computeMetrics(docId, k) : null,
+    6,
+    profileForDoctor(docId)
+  );
 }
 
 /* Агрегат отделения за месяц — «виртуальный r» с теми же полями, что читают dynMetricDefs */
