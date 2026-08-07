@@ -71,10 +71,10 @@ jobs:
           $version = (Get-Content -Raw package.json | ConvertFrom-Json).version
           $displayVersion = $version -replace '\.0$', ''
           $assets = @(
-            "dist/DoctorReview-Admin-Setup-$version-x64.exe",
-            "dist/DoctorReview-Admin-Setup-$version-x64.exe.blockmap",
+            "dist/KlinVekt-Shcherbatova-Admin-Setup-$version-x64.exe",
+            "dist/KlinVekt-Shcherbatova-Admin-Setup-$version-x64.exe.blockmap",
             "dist/latest.yml",
-            "dist/viewer/DoctorReview-Viewer-Setup-$version-x64.exe"
+            "dist/viewer/KlinVekt-Shcherbatova-Viewer-Setup-$version-x64.exe"
           )
           foreach ($asset in $assets) {
             if (-not (Test-Path -LiteralPath $asset)) { throw "Не найден файл релиза: $asset" }

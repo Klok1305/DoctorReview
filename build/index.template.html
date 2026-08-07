@@ -4,23 +4,24 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
-<title>Пульс клиники — Администратор</title>
+<link rel="icon" type="image/png" href="resources/app-icon.png">
+<title>КлинВект Щербатова — Администратор</title>
 <style>
 /*__CSS__*/
 </style>
 </head>
 <body>
 <header class="app-header no-print">
-  <div class="logo">💓 <span class="logo-work">Пульс</span> <span class="logo-doctors">клиники</span> <span class="small muted">Администратор</span></div>
+  <div class="logo"><img class="brand-symbol" src="resources/app-icon.png" alt=""><span class="logo-work">КлинВект</span> <span class="logo-doctors">Щербатова</span> <span class="small muted">Администратор</span></div>
   <nav class="tabs">
     <button data-tab="data">📥 Данные</button>
     <button data-tab="department">🏥 Отделение</button>
     <button data-tab="dept">🩺 Специализации</button>
     <button data-tab="doctor">👤 Врач</button>
-    <button data-tab="report">📄 Отчёт</button>
     <button data-tab="settings">⚙️ Настройки</button>
   </nav>
   <div class="header-status" id="headerStatus"></div>
+  <div class="app-version-badge desktop-only hidden" id="headerAppVersion"></div>
 </header>
 <main>
 
@@ -118,21 +119,6 @@
   <div id="doctorBody"></div>
 </section>
 
-<section id="page-report" class="page">
-  <div class="toolbar no-print">
-    <h2 style="margin:0">Отчёт для печати</h2>
-    <span class="spacer"></span>
-    <span id="repKbWinControl" title="Период анализа клиентской базы"></span>
-    <label>Кому: <select id="repScope" style="min-width:220px"></select></label>
-    <label>Месяц: <select id="repMonth"></select></label>
-    <button class="btn primary" id="btnExportAllPdf" title="Выбрать отделения, специализации и врачей для PDF-выгрузки">📁 Выгрузить PDF</button>
-    <button class="btn primary" id="btnExportViewerPackage" title="Сформировать один автономный HTML или ZIP для установленного Viewer">⇧ Файл для Viewer</button>
-    <button class="btn" id="btnPrint">🖨 Печать</button>
-  </div>
-  <div class="notice blue no-print"><b>Как работать:</b> выберите период и адресата, при необходимости добавьте административные комментарии справа от аналитических блоков. Комментарий сохраняется при выходе из поля. «Выгрузить PDF» предложит выбрать нужные отчёты.</div>
-  <div id="reportBody"></div>
-</section>
-
 <dialog class="pdf-export-dialog no-print" id="pdfExportDialog" aria-labelledby="pdfExportDialogTitle">
   <div class="pdf-export-dialog-shell">
     <div class="pdf-export-dialog-head">
@@ -182,6 +168,17 @@
 
 <section id="page-settings" class="page">
   <h2>Настройки</h2>
+  <div class="card settings-export-card">
+    <div class="settings-export-heading">
+      <div><h2 class="mt0">📤 Экспорт и публикация</h2><p class="small muted">PDF и Viewer формируются из тех же дашбордов, которые показаны на вкладках «Отделение», «Специализации» и «Врач».</p></div>
+      <div class="small muted">Установленная версия: <b id="settingsAppVersion">—</b></div>
+    </div>
+    <div class="toolbar">
+      <label>Период: <select id="repMonth"></select></label>
+      <button class="btn primary" id="btnExportAllPdf" title="Выбрать отделения, специализации и врачей для PDF-выгрузки">📁 Выгрузить PDF</button>
+      <button class="btn primary" id="btnExportViewerPackage" title="Сформировать один автономный HTML или ZIP для установленного Viewer">⇧ Файл для Viewer</button>
+    </div>
+  </div>
   <div id="settingsBody"></div>
 </section>
 

@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer, webUtils } = require("electron");
 const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
 
 contextBridge.exposeInMainWorld("viewerAPI", Object.freeze({
+  appInfo: () => invoke("viewer:app-info"),
   status: () => invoke("viewer:status"),
   chooseStorage: () => invoke("viewer:choose-storage"),
   adminLogin: pin => invoke("viewer:admin-login", pin),

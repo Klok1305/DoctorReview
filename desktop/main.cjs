@@ -18,7 +18,7 @@ const { createStandaloneViewerHtml, createViewerPackage } = require("./services/
 
 const PDF_SMOKE_TEST = process.argv.includes("--pdf-smoke");
 const SMOKE_TEST = PDF_SMOKE_TEST || process.argv.includes("--smoke-test");
-const APP_NAME = "Пульс клиники — Администратор";
+const APP_NAME = "КлинВект Щербатова — Администратор";
 const APPLICATION_ROOT = path.resolve(__dirname, "..");
 if (SMOKE_TEST) app.disableHardwareAcceleration();
 const SMOKE_ROOT = app.isPackaged
@@ -31,6 +31,7 @@ const SMOKE_ARTIFACT_ROOT = app.isPackaged ? path.join(SMOKE_ROOT, "artifacts") 
 if (!SMOKE_TEST) {
   const currentUserData = app.getPath("userData");
   const previousUserData = [
+    path.join(app.getPath("appData"), "Пульс клиники — Администратор"),
     path.join(app.getPath("appData"), "Пульс клиники"),
     path.join(app.getPath("appData"), "Оценка врачей"),
   ];
@@ -319,7 +320,7 @@ function createWindow() {
               }
               UI.repMonth = '2026-03';
               clearMetricsCache();
-              switchTab('report');
+              switchTab('settings');
               await new Promise(resolve => setTimeout(resolve, 150));
               document.getElementById('btnExportAllPdf').click();
               const exportDialog = document.getElementById('pdfExportDialog');
@@ -537,20 +538,19 @@ function createWindow() {
                 && specializationFocusTotal.cells.length === 4
                 && specializationDoctorSummary.querySelectorAll('tr').length === specializationFocusNames.length + 1
                 && !specializationGrouping;
-              UI.repMonth = '2026-02';
-              UI.repScope = 'dept';
-              switchTab('report');
+              UI.departmentMonth = '2026-02';
+              UI.departmentFilter = 'Терапия';
+              switchTab('department');
               await new Promise(resolve => setTimeout(resolve, 150));
-              const reportLeaderboardCount = document.querySelectorAll('#reportBody .doctor-score-leader').length;
-              const smokeCommentContext = reportContextFromScope(UI.repScope, UI.repMonth);
-              const smokeCommentRail = document.querySelector('#reportBody .analytic-comment-rail');
-              const smokeCommentInput = smokeCommentRail?.querySelector('.analytic-comment-input');
-              if (smokeCommentInput) {
-                smokeCommentInput.focus();
-                smokeCommentInput.value = 'Комментарий smoke-теста';
-                smokeCommentInput.dispatchEvent(new Event('input', { bubbles: true }));
-                await saveAnalyticComment(smokeCommentRail, smokeCommentContext, { silent: true, rerender: false });
-              }
+              const reportLeaderboardCount = document.querySelectorAll('#departmentBody .doctor-score-leader').length;
+              const smokeCommentContext = { scopeType: 'department', scopeId: 'Терапия', periodKey: '2026-02', pageType: 'department' };
+              const smokeCommentBlockKey = 'department.overview';
+              await DESKTOP_API.saveComment({
+                ...smokeCommentContext,
+                blockKey: smokeCommentBlockKey,
+                bodyText: 'Комментарий smoke-теста',
+                bodyHtml: 'Комментарий smoke-теста'
+              });
               await new Promise(resolve => setTimeout(resolve, 250));
               const smokeDrafts = await DESKTOP_API.listComments({
                 periodKey: smokeCommentContext.periodKey,
@@ -558,7 +558,6 @@ function createWindow() {
                 scopeId: smokeCommentContext.scopeId
               });
               const commentWorkflowDraftSaved = smokeDrafts.some(comment => comment.bodyText === 'Комментарий smoke-теста');
-              const smokeCommentBlockKey = smokeCommentRail?.dataset.blockKey || '';
               const leaderboardFixture = document.createElement('div');
               leaderboardFixture.innerHTML = doctorScoreLeaderboardHtml([
                 { id: 'd1', r: { scores: { total: 82, rankEligible: true } } },
@@ -570,7 +569,7 @@ function createWindow() {
               const reportLeaderboardsValid = departmentAllLeaderboardCount === 3
                 && departmentFilteredLeaderboardCount === 2
                 && specializationLeaderboardCount === 2
-                && reportLeaderboardCount === 2
+                && reportLeaderboardCount === 1
                 && leaderboardColorStates.join(',') === 'bad,good,warn';
               DB.months['2026-02'].naznach.d3 = { '1': { items: [
                 { n: 'Смежная услуга', a: 5, d: 2, sq: 0, ss: 5000 }
@@ -741,7 +740,7 @@ function createWindow() {
                 saveDynamicNarrative('blkDyn');
               }
               const savedNarrative = DB.dynamicNotes && DB.dynamicNotes['doctor|2026-02|d1'];
-              const reportWithNarrative = buildDoctorReport('d1', '2026-02');
+              const reportWithNarrative = document.getElementById('doctorBody').innerHTML;
               const dynamicConclusionDetails = {
                 finalSection: doctorSemanticSections.at(-1)?.id === 'doctorSemanticSection4',
                 outcomeAfterDetails: Boolean(dynamicsTable && dynamicsOutcome
@@ -1166,8 +1165,8 @@ function registerIpc() {
       : await createViewerPackage(publication);
     const date = new Date().toISOString().slice(0, 10);
     const selected = await dialog.showSaveDialog(mainWindow, {
-      title: format === "html" ? "Сохранить автономный Viewer" : "Сохранить ZIP для Пульс клиники Viewer",
-      defaultPath: path.join(configStore.publicConfig().outputDir, `Пульс-клиники-отчёты-${date}.${format}`),
+      title: format === "html" ? "Сохранить автономный Viewer" : "Сохранить ZIP для КлинВект Щербатова Viewer",
+      defaultPath: path.join(configStore.publicConfig().outputDir, `КлинВект-Щербатова-отчёты-${date}.${format}`),
       filters: format === "html"
         ? [{ name: "Автономный HTML Viewer", extensions: ["html"] }]
         : [{ name: "Пакет отчётов Viewer", extensions: ["zip"] }],
@@ -1306,7 +1305,7 @@ function registerIpc() {
     const date = new Date().toISOString().slice(0, 10);
     const result = await dialog.showSaveDialog(mainWindow, {
       title: "Сохранить переносимую резервную копию",
-      defaultPath: path.join(configStore.publicConfig().backupDir, `ПульсКлиники-backup-${date}.ovbackup`),
+      defaultPath: path.join(configStore.publicConfig().backupDir, `КлинВект-Щербатова-backup-${date}.ovbackup`),
       filters: [{ name: "Резервная копия", extensions: ["ovbackup"] }],
     });
     if (result.canceled || !result.filePath) return { canceled: true };

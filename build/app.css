@@ -59,9 +59,10 @@ h3 { font-size: 15px; }
   top: 0;
   z-index: 50;
 }
-.app-header .logo { font-size: 16px; font-weight: 700; white-space: nowrap; }
-.app-header .logo .logo-work { color: #65a30d; }
-.app-header .logo .logo-doctors { color: #7c3aed; }
+.app-header .logo { display: inline-flex; align-items: center; gap: 7px; font-size: 16px; font-weight: 750; white-space: nowrap; }
+.brand-symbol { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 8px; }
+.app-header .logo .logo-work { color: #1d4ed8; }
+.app-header .logo .logo-doctors { color: #0f766e; }
 nav.tabs { display: flex; gap: 4px; flex: 1; }
 nav.tabs button {
   border: none;
@@ -76,6 +77,10 @@ nav.tabs button {
 nav.tabs button:hover { background: var(--bg); color: var(--ink); }
 nav.tabs button.active { background: var(--accent-soft); color: var(--accent); }
 .header-status { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.app-version-badge {
+  flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px;
+  background: #fff; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums;
+}
 main { padding: 20px 24px 60px; max-width: 1500px; margin: 0 auto; }
 .page { display: none; }
 .page.active { display: block; }
@@ -1041,6 +1046,13 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .seg-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 8px; }
 .seg-legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
 footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; padding: 18px; }
+.settings-export-card { border-color: #bfdbfe; background: linear-gradient(135deg, #fff 0%, #f8fbff 100%); }
+.settings-export-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.settings-export-heading p { margin: 0; }
+.settings-export-heading > :last-child { white-space: nowrap; }
+@media (max-width: 760px) {
+  .settings-export-heading { flex-direction: column; gap: 8px; }
+}
 .viewer-export-dialog-shell { width: min(980px, calc(100vw - 40px)); }
 .viewer-export-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .viewer-export-grid section { border: 1px solid var(--line); border-radius: 10px; padding: 12px; }

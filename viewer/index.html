@@ -4,14 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
-  <title>Пульс клиники — Viewer</title>
+  <link rel="icon" type="image/png" href="../resources/app-icon.png">
+  <title>КлинВект Щербатова — Viewer</title>
   <link rel="stylesheet" href="../build/app.css">
   <link rel="stylesheet" href="viewer.css">
 </head>
 <body class="viewer-app">
   <header class="viewer-header no-print">
-    <div class="logo">💓 <span class="logo-work">Пульс</span> <span class="logo-doctors">клиники</span> <span class="viewer-mark">Viewer</span></div>
-    <div class="viewer-header-actions"><button class="btn mini" id="btnOpenAdmin">Администратор</button></div>
+    <div class="logo"><img class="brand-symbol" src="../resources/app-icon.png" alt=""><span class="logo-work">КлинВект</span> <span class="logo-doctors">Щербатова</span> <span class="viewer-mark">Viewer</span></div>
+    <div class="viewer-header-actions"><span class="small muted viewer-version" id="viewerAppVersion"></span><button class="btn mini" id="btnOpenAdmin">Администратор</button></div>
   </header>
 
   <main class="viewer-main">
@@ -53,7 +54,7 @@
     <div class="viewer-admin-shell">
       <div class="pdf-export-dialog-head"><div><h2>Администрирование Viewer</h2><p class="small muted" id="viewerAdminStorage"></p></div><button class="btn mini" id="btnCloseAdmin" aria-label="Закрыть">✕</button></div>
       <section id="viewerAdminLogin">
-        <p>Введите администраторский PIN, заданный в программе «Пульс клиники — Администратор».</p>
+        <p>Введите администраторский PIN, заданный в программе «КлинВект Щербатова — Администратор».</p>
         <label class="fld"><span>PIN администратора</span><input id="viewerAdminPin" type="password" inputmode="numeric" maxlength="12" autocomplete="off"></label>
         <button class="btn primary" id="btnAdminLogin">Войти</button>
       </section>

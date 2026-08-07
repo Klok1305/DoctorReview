@@ -1,12 +1,12 @@
 {
   "appId": "ru.local.doctorperformance.viewer",
-  "productName": "Пульс клиники — Viewer",
-  "artifactName": "DoctorReview-Viewer-Setup-${version}-${arch}.${ext}",
+  "productName": "КлинВект Щербатова — Viewer",
+  "artifactName": "KlinVekt-Shcherbatova-Viewer-Setup-${version}-${arch}.${ext}",
   "asar": true,
   "electronLanguages": ["ru", "en-US"],
   "extraMetadata": {
     "main": "viewer/main.cjs",
-    "description": "Локальный просмотрщик опубликованных отчётов Пульс клиники"
+    "description": "Локальный просмотрщик опубликованных отчётов КлинВект Щербатова"
   },
   "files": [
     "viewer/**",
@@ -30,7 +30,7 @@
     "perMachine": false,
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
-    "shortcutName": "Пульс клиники — Viewer",
+    "shortcutName": "КлинВект Щербатова — Viewer",
     "deleteAppDataOnUninstall": false
   }
 }

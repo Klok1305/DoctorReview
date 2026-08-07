@@ -56,7 +56,7 @@ class ConfigStore {
   }
 
   #defaultRoot() {
-    const root = this.defaultWorkspaceRoot || path.join(this.documentsDir, "Пульс клиники");
+    const root = this.defaultWorkspaceRoot || path.join(this.documentsDir, "КлинВект Щербатова");
     assertSupportedStoragePath(root);
     return root;
   }

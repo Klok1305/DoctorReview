@@ -223,6 +223,9 @@ function initialize() {
     return;
   }
   document.getElementById("viewerPublicationCaption").textContent = `Сформировано ${new Date(BUNDLE.createdAt).toLocaleString("ru-RU")} · периодов: ${BUNDLE.periods.length}`;
+  document.getElementById("viewerAppVersion").textContent = BUNDLE.appVersion
+    ? `Версия отчётов ${BUNDLE.appVersion} · автономный файл`
+    : "Автономный файл";
   document.getElementById("viewerDoctorSelect").innerHTML = BUNDLE.doctors.map(doctor =>
     `<option value="${esc(doctor.doctorId)}">${esc(doctor.displayName)}${doctor.department ? ` · ${esc(doctor.department)}` : ""}</option>`
   ).join("");

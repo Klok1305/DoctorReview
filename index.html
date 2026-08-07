@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
-<title>Пульс клиники — Администратор</title>
+<link rel="icon" type="image/png" href="resources/app-icon.png">
+<title>КлинВект Щербатова — Администратор</title>
 <style>
 :root {
   --bg: #f4f6fa;
@@ -67,9 +68,10 @@ h3 { font-size: 15px; }
   top: 0;
   z-index: 50;
 }
-.app-header .logo { font-size: 16px; font-weight: 700; white-space: nowrap; }
-.app-header .logo .logo-work { color: #65a30d; }
-.app-header .logo .logo-doctors { color: #7c3aed; }
+.app-header .logo { display: inline-flex; align-items: center; gap: 7px; font-size: 16px; font-weight: 750; white-space: nowrap; }
+.brand-symbol { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 8px; }
+.app-header .logo .logo-work { color: #1d4ed8; }
+.app-header .logo .logo-doctors { color: #0f766e; }
 nav.tabs { display: flex; gap: 4px; flex: 1; }
 nav.tabs button {
   border: none;
@@ -84,6 +86,10 @@ nav.tabs button {
 nav.tabs button:hover { background: var(--bg); color: var(--ink); }
 nav.tabs button.active { background: var(--accent-soft); color: var(--accent); }
 .header-status { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.app-version-badge {
+  flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px;
+  background: #fff; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums;
+}
 main { padding: 20px 24px 60px; max-width: 1500px; margin: 0 auto; }
 .page { display: none; }
 .page.active { display: block; }
@@ -1049,6 +1055,13 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .seg-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 8px; }
 .seg-legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
 footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; padding: 18px; }
+.settings-export-card { border-color: #bfdbfe; background: linear-gradient(135deg, #fff 0%, #f8fbff 100%); }
+.settings-export-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.settings-export-heading p { margin: 0; }
+.settings-export-heading > :last-child { white-space: nowrap; }
+@media (max-width: 760px) {
+  .settings-export-heading { flex-direction: column; gap: 8px; }
+}
 .viewer-export-dialog-shell { width: min(980px, calc(100vw - 40px)); }
 .viewer-export-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .viewer-export-grid section { border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
@@ -1069,16 +1082,16 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
 </head>
 <body>
 <header class="app-header no-print">
-  <div class="logo">💓 <span class="logo-work">Пульс</span> <span class="logo-doctors">клиники</span> <span class="small muted">Администратор</span></div>
+  <div class="logo"><img class="brand-symbol" src="resources/app-icon.png" alt=""><span class="logo-work">КлинВект</span> <span class="logo-doctors">Щербатова</span> <span class="small muted">Администратор</span></div>
   <nav class="tabs">
     <button data-tab="data">📥 Данные</button>
     <button data-tab="department">🏥 Отделение</button>
     <button data-tab="dept">🩺 Специализации</button>
     <button data-tab="doctor">👤 Врач</button>
-    <button data-tab="report">📄 Отчёт</button>
     <button data-tab="settings">⚙️ Настройки</button>
   </nav>
   <div class="header-status" id="headerStatus"></div>
+  <div class="app-version-badge desktop-only hidden" id="headerAppVersion"></div>
 </header>
 <main>
 
@@ -1176,21 +1189,6 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
   <div id="doctorBody"></div>
 </section>
 
-<section id="page-report" class="page">
-  <div class="toolbar no-print">
-    <h2 style="margin:0">Отчёт для печати</h2>
-    <span class="spacer"></span>
-    <span id="repKbWinControl" title="Период анализа клиентской базы"></span>
-    <label>Кому: <select id="repScope" style="min-width:220px"></select></label>
-    <label>Месяц: <select id="repMonth"></select></label>
-    <button class="btn primary" id="btnExportAllPdf" title="Выбрать отделения, специализации и врачей для PDF-выгрузки">📁 Выгрузить PDF</button>
-    <button class="btn primary" id="btnExportViewerPackage" title="Сформировать один автономный HTML или ZIP для установленного Viewer">⇧ Файл для Viewer</button>
-    <button class="btn" id="btnPrint">🖨 Печать</button>
-  </div>
-  <div class="notice blue no-print"><b>Как работать:</b> выберите период и адресата, при необходимости добавьте административные комментарии справа от аналитических блоков. Комментарий сохраняется при выходе из поля. «Выгрузить PDF» предложит выбрать нужные отчёты.</div>
-  <div id="reportBody"></div>
-</section>
-
 <dialog class="pdf-export-dialog no-print" id="pdfExportDialog" aria-labelledby="pdfExportDialogTitle">
   <div class="pdf-export-dialog-shell">
     <div class="pdf-export-dialog-head">
@@ -1240,6 +1238,17 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
 
 <section id="page-settings" class="page">
   <h2>Настройки</h2>
+  <div class="card settings-export-card">
+    <div class="settings-export-heading">
+      <div><h2 class="mt0">📤 Экспорт и публикация</h2><p class="small muted">PDF и Viewer формируются из тех же дашбордов, которые показаны на вкладках «Отделение», «Специализации» и «Врач».</p></div>
+      <div class="small muted">Установленная версия: <b id="settingsAppVersion">—</b></div>
+    </div>
+    <div class="toolbar">
+      <label>Период: <select id="repMonth"></select></label>
+      <button class="btn primary" id="btnExportAllPdf" title="Выбрать отделения, специализации и врачей для PDF-выгрузки">📁 Выгрузить PDF</button>
+      <button class="btn primary" id="btnExportViewerPackage" title="Сформировать один автономный HTML или ZIP для установленного Viewer">⇧ Файл для Viewer</button>
+    </div>
+  </div>
   <div id="settingsBody"></div>
 </section>
 
@@ -5638,9 +5647,13 @@ function renderDesktopWorkspace() {
     const el = document.getElementById(id);
     if (el) { el.textContent = value; el.title = value; }
   }
+  const displayVersion = String(DESKTOP_STATE.app.version || "");
   const version = document.getElementById("desktopAppVersion");
-  const displayVersion = String(DESKTOP_STATE.app.version || "").replace(/\.0$/, "");
-  if (version) version.textContent = `Версия ${displayVersion} · база SQLite ${DESKTOP_STATE.summary.schemaVersion}`;
+  if (version) version.textContent = `Установленная версия ${displayVersion} · база SQLite ${DESKTOP_STATE.summary.schemaVersion}`;
+  const headerVersion = document.getElementById("headerAppVersion");
+  if (headerVersion) headerVersion.textContent = `v${displayVersion}`;
+  const settingsVersion = document.getElementById("settingsAppVersion");
+  if (settingsVersion) settingsVersion.textContent = displayVersion;
   const footer = document.getElementById("footerText");
   if (footer) footer.textContent = "Приложение работает локально. Рабочая база сохраняется автоматически в SQLite; резервные копии создаются перед импортом и обновлением.";
   const autosaveButton = document.getElementById("btnAutosave");
@@ -5648,6 +5661,19 @@ function renderDesktopWorkspace() {
   const autosaveStatus = document.getElementById("autosaveStatus");
   if (autosaveStatus) autosaveStatus.classList.add("hidden");
   renderUpdateStatus(DESKTOP_STATE.update);
+}
+
+function renderReportExportSettings() {
+  const months = monthKeysSorted();
+  const select = document.getElementById("repMonth");
+  if (!select) return;
+  if (!UI.repMonth || !DB.months[UI.repMonth]) UI.repMonth = months[months.length - 1] || null;
+  select.innerHTML = months.map(monthKey => `<option value="${monthKey}" ${monthKey === UI.repMonth ? "selected" : ""}>${monthLabel(monthKey)}</option>`).join("");
+  setControlsDisabled(["repMonth", "btnExportAllPdf", "btnExportViewerPackage"], !months.length);
+  const settingsVersion = document.getElementById("settingsAppVersion");
+  if (settingsVersion) settingsVersion.textContent = DESKTOP_STATE && DESKTOP_STATE.app
+    ? String(DESKTOP_STATE.app.version || "—")
+    : "браузерная сборка";
 }
 
 function renderUpdateStatus(status) {
@@ -7262,7 +7288,7 @@ async function settlePdfCharts(source) {
   await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 }
 
-async function cloneDashboardForPdf(source) {
+async function cloneDashboardSnapshot(source, { chartMimeType = "image/png", chartQuality } = {}) {
   await settlePdfCharts(source);
   const clone = source.cloneNode(true);
   const sourceCanvases = [...source.querySelectorAll("canvas")];
@@ -7272,7 +7298,9 @@ async function cloneDashboardForPdf(source) {
     const targetCanvas = cloneCanvases[index];
     if (!targetCanvas || !canvas.width || !canvas.height) return;
     const image = document.createElement("img");
-    image.src = canvas.toDataURL("image/png");
+    image.src = chartQuality == null
+      ? canvas.toDataURL(chartMimeType)
+      : canvas.toDataURL(chartMimeType, chartQuality);
     image.alt = canvas.getAttribute("aria-label") || "График";
     image.className = "pdf-chart-image";
     image.dataset.pdfChart = "true";
@@ -7291,6 +7319,14 @@ async function cloneDashboardForPdf(source) {
     image.onload = image.onerror = resolve;
   })));
   return { clone, chartImages };
+}
+
+async function cloneDashboardForPdf(source) {
+  return cloneDashboardSnapshot(source);
+}
+
+async function cloneDashboardForViewer(source) {
+  return cloneDashboardSnapshot(source, { chartMimeType: "image/webp", chartQuality: 0.9 });
 }
 
 function splitDynamicPdfSection(section) {
@@ -9526,6 +9562,14 @@ function composeViewerReportHtml(rawHtml, context, comments) {
   return root.innerHTML;
 }
 
+async function composeViewerDashboardHtml(target, periodKey, context, comments) {
+  const source = pdfTargetSource(target, periodKey);
+  if (!source) throw new Error("не найден дашборд для Viewer");
+  const { clone } = await cloneDashboardForViewer(source);
+  const html = composeViewerReportHtml(clone.innerHTML, context, comments);
+  return `<div class="viewer-dashboard-snapshot" data-source-tab="${esc(target.tab)}">${html}</div>`;
+}
+
 function closeViewerExportDialog() {
   const dialog = document.getElementById("viewerExportDialog");
   if (dialog && dialog.open) dialog.close();
@@ -9618,6 +9662,14 @@ async function exportViewerPackage(format = "html") {
   }
   buttons.forEach(button => { button.disabled = true; });
   errorBox.classList.add("hidden");
+  const previousUi = {
+    tab: UI.tab,
+    departmentMonth: UI.departmentMonth, departmentFilter: UI.departmentFilter,
+    deptMonth: UI.deptMonth, deptFilter: UI.deptFilter, subFilter: UI.subFilter,
+    docMonth: UI.docMonth, docId: UI.docId,
+    showLabels: UI.showLabels,
+  };
+  UI.showLabels = true;
   try {
     await saveVisibleCommentDrafts();
     if (!await saveLocal()) throw new Error("Не удалось сохранить текущую рабочую базу");
@@ -9657,24 +9709,31 @@ async function exportViewerPackage(format = "html") {
         if (pageTypes.has("department") && department) {
           if (!departmentCache.has(department)) {
             const context = { scopeType: "department", scopeId: department, periodKey, pageType: "department" };
-            departmentCache.set(department, composeViewerReportHtml(buildDepartmentReport(periodKey, department), context, comments));
+            const target = { tab: "department", departmentName: department };
+            departmentCache.set(department, await composeViewerDashboardHtml(target, periodKey, context, comments));
           }
           pages.push({ doctorId, periodKey, pageType: "department", scopeId: department,
             title: `Отделение ${department} · ${monthLabel(periodKey)}`, html: departmentCache.get(department) });
         }
         if (pageTypes.has("specialization") && specialization) {
-          if (!specializationCache.has(specialization)) {
+          const specializationKey = `${department}\u0000${specialization}`;
+          if (!specializationCache.has(specializationKey)) {
             const context = { scopeType: "specialization", scopeId: specialization, periodKey, pageType: "specialization" };
-            specializationCache.set(specialization, composeViewerReportHtml(buildDeptReport(periodKey, specialization, "all"), context, comments));
+            const target = {
+              tab: "dept", departmentName: department, specializationName: specialization,
+              deptFilter: specialization, subFilter: "all",
+            };
+            specializationCache.set(specializationKey, await composeViewerDashboardHtml(target, periodKey, context, comments));
           }
           pages.push({ doctorId, periodKey, pageType: "specialization", scopeId: specialization,
-            title: `Специализация ${specialization} · ${monthLabel(periodKey)}`, html: specializationCache.get(specialization) });
+            title: `Специализация ${specialization} · ${monthLabel(periodKey)}`, html: specializationCache.get(specializationKey) });
         }
         if (pageTypes.has("doctor")) {
           const context = { scopeType: "doctor", scopeId: doctorId, periodKey, pageType: "doctor" };
+          const target = { tab: "doctor", doctorId, departmentName: department, specializationName: specialization };
           pages.push({ doctorId, periodKey, pageType: "doctor", scopeId: doctorId,
             title: `${doctorName(doctorId)} · ${monthLabel(periodKey)}`,
-            html: composeViewerReportHtml(buildDoctorReport(doctorId, periodKey), context, comments) });
+            html: await composeViewerDashboardHtml(target, periodKey, context, comments) });
         }
         completed++;
         document.getElementById("viewerExportStatus").textContent = `Формирую отчёты: ${completed} из ${total}`;
@@ -9693,6 +9752,8 @@ async function exportViewerPackage(format = "html") {
     errorBox.textContent = "Публикация не выполнена: " + error.message;
     errorBox.classList.remove("hidden");
   } finally {
+    Object.assign(UI, previousUi);
+    switchTab(previousUi.tab);
     document.getElementById("viewerExportStart").disabled = false;
     document.getElementById("viewerExportZip").disabled = !VIEWER_ACCESS.adminPinConfigured;
   }
@@ -10237,6 +10298,8 @@ async function setAllViewerDoctorsActive(active) {
 
 function renderSettings() {
   const settingsBody = document.getElementById("settingsBody");
+  renderReportExportSettings();
+  if (DESKTOP_API) renderDesktopWorkspace();
   const s = DB.settings;
   const departmentName = curSetDepartment();
   const specializationNames = departmentGroups()[departmentName] || [];
@@ -11068,7 +11131,6 @@ function renderAll() {
   if (UI.tab === "department") renderDepartment();
   if (UI.tab === "dept") renderDept();
   if (UI.tab === "doctor") renderDoctor();
-  if (UI.tab === "report") renderReport();
   if (UI.tab === "settings") renderSettings();
 }
 
@@ -11114,9 +11176,7 @@ async function initApp() {
   document.getElementById("btnXlsx").addEventListener("click", exportDeptXlsx);
   document.getElementById("docMonth").addEventListener("change", e => { UI.docMonth = e.target.value; renderDoctor(); });
   document.getElementById("docSelect").addEventListener("change", e => { UI.docId = e.target.value; renderDoctor(); });
-  document.getElementById("repMonth").addEventListener("change", e => { UI.repMonth = e.target.value; renderReport(); });
-  document.getElementById("repScope").addEventListener("change", e => { UI.repScope = e.target.value; renderReport(); });
-  document.getElementById("btnPrint").addEventListener("click", () => window.print());
+  document.getElementById("repMonth").addEventListener("change", e => { UI.repMonth = e.target.value; });
   document.getElementById("btnExportAllPdf").addEventListener("click", openPdfExportDialog);
   document.getElementById("btnExportViewerPackage").addEventListener("click", openViewerExportDialog);
   document.getElementById("pdfExportDialogList").addEventListener("change", updatePdfExportDialogState);

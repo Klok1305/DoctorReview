@@ -76,9 +76,13 @@ function renderDesktopWorkspace() {
     const el = document.getElementById(id);
     if (el) { el.textContent = value; el.title = value; }
   }
+  const displayVersion = String(DESKTOP_STATE.app.version || "");
   const version = document.getElementById("desktopAppVersion");
-  const displayVersion = String(DESKTOP_STATE.app.version || "").replace(/\.0$/, "");
-  if (version) version.textContent = `Версия ${displayVersion} · база SQLite ${DESKTOP_STATE.summary.schemaVersion}`;
+  if (version) version.textContent = `Установленная версия ${displayVersion} · база SQLite ${DESKTOP_STATE.summary.schemaVersion}`;
+  const headerVersion = document.getElementById("headerAppVersion");
+  if (headerVersion) headerVersion.textContent = `v${displayVersion}`;
+  const settingsVersion = document.getElementById("settingsAppVersion");
+  if (settingsVersion) settingsVersion.textContent = displayVersion;
   const footer = document.getElementById("footerText");
   if (footer) footer.textContent = "Приложение работает локально. Рабочая база сохраняется автоматически в SQLite; резервные копии создаются перед импортом и обновлением.";
   const autosaveButton = document.getElementById("btnAutosave");
@@ -86,6 +90,19 @@ function renderDesktopWorkspace() {
   const autosaveStatus = document.getElementById("autosaveStatus");
   if (autosaveStatus) autosaveStatus.classList.add("hidden");
   renderUpdateStatus(DESKTOP_STATE.update);
+}
+
+function renderReportExportSettings() {
+  const months = monthKeysSorted();
+  const select = document.getElementById("repMonth");
+  if (!select) return;
+  if (!UI.repMonth || !DB.months[UI.repMonth]) UI.repMonth = months[months.length - 1] || null;
+  select.innerHTML = months.map(monthKey => `<option value="${monthKey}" ${monthKey === UI.repMonth ? "selected" : ""}>${monthLabel(monthKey)}</option>`).join("");
+  setControlsDisabled(["repMonth", "btnExportAllPdf", "btnExportViewerPackage"], !months.length);
+  const settingsVersion = document.getElementById("settingsAppVersion");
+  if (settingsVersion) settingsVersion.textContent = DESKTOP_STATE && DESKTOP_STATE.app
+    ? String(DESKTOP_STATE.app.version || "—")
+    : "браузерная сборка";
 }
 
 function renderUpdateStatus(status) {
@@ -1700,7 +1717,7 @@ async function settlePdfCharts(source) {
   await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 }
 
-async function cloneDashboardForPdf(source) {
+async function cloneDashboardSnapshot(source, { chartMimeType = "image/png", chartQuality } = {}) {
   await settlePdfCharts(source);
   const clone = source.cloneNode(true);
   const sourceCanvases = [...source.querySelectorAll("canvas")];
@@ -1710,7 +1727,9 @@ async function cloneDashboardForPdf(source) {
     const targetCanvas = cloneCanvases[index];
     if (!targetCanvas || !canvas.width || !canvas.height) return;
     const image = document.createElement("img");
-    image.src = canvas.toDataURL("image/png");
+    image.src = chartQuality == null
+      ? canvas.toDataURL(chartMimeType)
+      : canvas.toDataURL(chartMimeType, chartQuality);
     image.alt = canvas.getAttribute("aria-label") || "График";
     image.className = "pdf-chart-image";
     image.dataset.pdfChart = "true";
@@ -1729,6 +1748,14 @@ async function cloneDashboardForPdf(source) {
     image.onload = image.onerror = resolve;
   })));
   return { clone, chartImages };
+}
+
+async function cloneDashboardForPdf(source) {
+  return cloneDashboardSnapshot(source);
+}
+
+async function cloneDashboardForViewer(source) {
+  return cloneDashboardSnapshot(source, { chartMimeType: "image/webp", chartQuality: 0.9 });
 }
 
 function splitDynamicPdfSection(section) {
@@ -3964,6 +3991,14 @@ function composeViewerReportHtml(rawHtml, context, comments) {
   return root.innerHTML;
 }
 
+async function composeViewerDashboardHtml(target, periodKey, context, comments) {
+  const source = pdfTargetSource(target, periodKey);
+  if (!source) throw new Error("не найден дашборд для Viewer");
+  const { clone } = await cloneDashboardForViewer(source);
+  const html = composeViewerReportHtml(clone.innerHTML, context, comments);
+  return `<div class="viewer-dashboard-snapshot" data-source-tab="${esc(target.tab)}">${html}</div>`;
+}
+
 function closeViewerExportDialog() {
   const dialog = document.getElementById("viewerExportDialog");
   if (dialog && dialog.open) dialog.close();
@@ -4056,6 +4091,14 @@ async function exportViewerPackage(format = "html") {
   }
   buttons.forEach(button => { button.disabled = true; });
   errorBox.classList.add("hidden");
+  const previousUi = {
+    tab: UI.tab,
+    departmentMonth: UI.departmentMonth, departmentFilter: UI.departmentFilter,
+    deptMonth: UI.deptMonth, deptFilter: UI.deptFilter, subFilter: UI.subFilter,
+    docMonth: UI.docMonth, docId: UI.docId,
+    showLabels: UI.showLabels,
+  };
+  UI.showLabels = true;
   try {
     await saveVisibleCommentDrafts();
     if (!await saveLocal()) throw new Error("Не удалось сохранить текущую рабочую базу");
@@ -4095,24 +4138,31 @@ async function exportViewerPackage(format = "html") {
         if (pageTypes.has("department") && department) {
           if (!departmentCache.has(department)) {
             const context = { scopeType: "department", scopeId: department, periodKey, pageType: "department" };
-            departmentCache.set(department, composeViewerReportHtml(buildDepartmentReport(periodKey, department), context, comments));
+            const target = { tab: "department", departmentName: department };
+            departmentCache.set(department, await composeViewerDashboardHtml(target, periodKey, context, comments));
           }
           pages.push({ doctorId, periodKey, pageType: "department", scopeId: department,
             title: `Отделение ${department} · ${monthLabel(periodKey)}`, html: departmentCache.get(department) });
         }
         if (pageTypes.has("specialization") && specialization) {
-          if (!specializationCache.has(specialization)) {
+          const specializationKey = `${department}\u0000${specialization}`;
+          if (!specializationCache.has(specializationKey)) {
             const context = { scopeType: "specialization", scopeId: specialization, periodKey, pageType: "specialization" };
-            specializationCache.set(specialization, composeViewerReportHtml(buildDeptReport(periodKey, specialization, "all"), context, comments));
+            const target = {
+              tab: "dept", departmentName: department, specializationName: specialization,
+              deptFilter: specialization, subFilter: "all",
+            };
+            specializationCache.set(specializationKey, await composeViewerDashboardHtml(target, periodKey, context, comments));
           }
           pages.push({ doctorId, periodKey, pageType: "specialization", scopeId: specialization,
-            title: `Специализация ${specialization} · ${monthLabel(periodKey)}`, html: specializationCache.get(specialization) });
+            title: `Специализация ${specialization} · ${monthLabel(periodKey)}`, html: specializationCache.get(specializationKey) });
         }
         if (pageTypes.has("doctor")) {
           const context = { scopeType: "doctor", scopeId: doctorId, periodKey, pageType: "doctor" };
+          const target = { tab: "doctor", doctorId, departmentName: department, specializationName: specialization };
           pages.push({ doctorId, periodKey, pageType: "doctor", scopeId: doctorId,
             title: `${doctorName(doctorId)} · ${monthLabel(periodKey)}`,
-            html: composeViewerReportHtml(buildDoctorReport(doctorId, periodKey), context, comments) });
+            html: await composeViewerDashboardHtml(target, periodKey, context, comments) });
         }
         completed++;
         document.getElementById("viewerExportStatus").textContent = `Формирую отчёты: ${completed} из ${total}`;
@@ -4131,6 +4181,8 @@ async function exportViewerPackage(format = "html") {
     errorBox.textContent = "Публикация не выполнена: " + error.message;
     errorBox.classList.remove("hidden");
   } finally {
+    Object.assign(UI, previousUi);
+    switchTab(previousUi.tab);
     document.getElementById("viewerExportStart").disabled = false;
     document.getElementById("viewerExportZip").disabled = !VIEWER_ACCESS.adminPinConfigured;
   }
@@ -4675,6 +4727,8 @@ async function setAllViewerDoctorsActive(active) {
 
 function renderSettings() {
   const settingsBody = document.getElementById("settingsBody");
+  renderReportExportSettings();
+  if (DESKTOP_API) renderDesktopWorkspace();
   const s = DB.settings;
   const departmentName = curSetDepartment();
   const specializationNames = departmentGroups()[departmentName] || [];
@@ -5506,7 +5560,6 @@ function renderAll() {
   if (UI.tab === "department") renderDepartment();
   if (UI.tab === "dept") renderDept();
   if (UI.tab === "doctor") renderDoctor();
-  if (UI.tab === "report") renderReport();
   if (UI.tab === "settings") renderSettings();
 }
 
@@ -5552,9 +5605,7 @@ async function initApp() {
   document.getElementById("btnXlsx").addEventListener("click", exportDeptXlsx);
   document.getElementById("docMonth").addEventListener("change", e => { UI.docMonth = e.target.value; renderDoctor(); });
   document.getElementById("docSelect").addEventListener("change", e => { UI.docId = e.target.value; renderDoctor(); });
-  document.getElementById("repMonth").addEventListener("change", e => { UI.repMonth = e.target.value; renderReport(); });
-  document.getElementById("repScope").addEventListener("change", e => { UI.repScope = e.target.value; renderReport(); });
-  document.getElementById("btnPrint").addEventListener("click", () => window.print());
+  document.getElementById("repMonth").addEventListener("change", e => { UI.repMonth = e.target.value; });
   document.getElementById("btnExportAllPdf").addEventListener("click", openPdfExportDialog);
   document.getElementById("btnExportViewerPackage").addEventListener("click", openViewerExportDialog);
   document.getElementById("pdfExportDialogList").addEventListener("change", updatePdfExportDialogState);

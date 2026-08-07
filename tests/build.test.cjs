@@ -40,11 +40,16 @@ test("assembled HTML is reproducible and complete", () => {
   for (const id of ["lib-xlsx", "lib-jszip", "lib-html2canvas", "lib-jspdf"]) {
     assert.match(actual, new RegExp(`<script type="text/plain" id="${id}">`));
   }
-  for (const required of ["btnExportAllPdf", "btnSaveSession", "desktopWorkspaceCard", "btnScanInput", "Content-Security-Policy", "departmentBody", "departmentFilter", "departmentMonth"]) {
+  for (const required of ["btnExportAllPdf", "btnSaveSession", "desktopWorkspaceCard", "btnScanInput", "Content-Security-Policy", "departmentBody", "departmentFilter", "departmentMonth", "settingsAppVersion", "headerAppVersion"]) {
     assert.match(actual, new RegExp(required));
   }
+  assert.doesNotMatch(actual, /data-tab="report"|id="page-report"/);
+  assert.match(actual, /Экспорт и публикация/);
+  assert.match(actual, /PDF и Viewer формируются из тех же дашбордов/);
   assert.match(actual, /function pdfReportTargets/);
   assert.match(actual, /function cloneDashboardForPdf/);
+  assert.match(actual, /function cloneDashboardForViewer/);
+  assert.match(actual, /function composeViewerDashboardHtml/);
   assert.match(actual, /function splitDynamicPdfSection/);
   assert.match(actual, /function splitOversizedPdfSection/);
   assert.match(actual, /el\.querySelector\("\.pdf-chart-image"\)/);
@@ -90,9 +95,11 @@ test("assembled HTML is reproducible and complete", () => {
     assert.match(actual, new RegExp(profileMetric));
   }
   assert.doesNotMatch(actual, /📅 Количество визитов за месяц/);
-  assert.match(actual, /<title>Пульс клиники — Администратор<\/title>/);
-  assert.match(actual, /class="logo-work">Пульс<\/span>/);
-  assert.match(actual, /class="logo-doctors">клиники<\/span>/);
+  assert.match(actual, /<title>КлинВект Щербатова — Администратор<\/title>/);
+  assert.match(actual, /rel="icon"[^>]+resources\/app-icon\.png/);
+  assert.match(actual, /class="brand-symbol"[^>]+resources\/app-icon\.png/);
+  assert.match(actual, /class="logo-work">КлинВект<\/span>/);
+  assert.match(actual, /class="logo-doctors">Щербатова<\/span>/);
   assert.match(actual, /Загрузка расписания/);
   assert.match(actual, /Пациенты за месяц/);
   assert.match(actual, /Загрузка отделения/);
@@ -206,8 +213,8 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /Обновить выводы по показателям/);
   assert.match(actual, /\.dyn-narrative-editor[^}]*font-family:\s*"Segoe UI"/);
   assert.doesNotMatch(actual, /Описание по цифрам|автоописание|Автоматическое описание|Вернуть автоописание/);
-  assert.match(actual, /\.logo-work\s*\{\s*color:\s*#65a30d;/);
-  assert.match(actual, /\.logo-doctors\s*\{\s*color:\s*#7c3aed;/);
+  assert.match(actual, /\.logo-work\s*\{\s*color:\s*#1d4ed8;/);
+  assert.match(actual, /\.logo-doctors\s*\{\s*color:\s*#0f766e;/);
   assert.doesNotMatch(actual, /Трафик: визиты за месяц/);
 });
 
@@ -241,7 +248,9 @@ test("PDF export waits for a modal selection of exact reports", () => {
   assert.match(template, /id="pdfExportClearAll"/);
   assert.match(template, /id="pdfExportDialogCancel"/);
   assert.match(template, /id="pdfExportDialogStart"/);
-  assert.match(template, /«Выгрузить PDF» предложит выбрать нужные отчёты/);
+  assert.match(template, /PDF и Viewer формируются из тех же дашбордов/);
+  assert.match(template, /<section id="page-settings"[\s\S]*id="btnExportAllPdf"/);
+  assert.doesNotMatch(template, /data-tab="report"|id="page-report"/);
   assert.match(ui, /btnExportAllPdf"\)\.addEventListener\("click", openPdfExportDialog\)/);
   assert.doesNotMatch(ui, /btnExportAllPdf"\)\.addEventListener\("click", exportAllReportsToFolder\)/);
   assert.match(ui, /data-pdf-target-index/);
@@ -417,13 +426,16 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "2.4.0");
-  assert.equal(packageJson.build.productName, "Пульс клиники — Администратор");
-  assert.equal(packageJson.build.artifactName, "DoctorReview-Admin-Setup-${version}-${arch}.${ext}");
+  assert.equal(packageJson.version, "2.5.0");
+  assert.equal(packageJson.build.productName, "КлинВект Щербатова — Администратор");
+  assert.equal(packageJson.build.artifactName, "KlinVekt-Shcherbatova-Admin-Setup-${version}-${arch}.${ext}");
   assert.equal(packageJson.scripts["dist:portable"], undefined);
   assert.equal(packageJson.scripts["dist:all"], "pnpm run dist && pnpm run dist:viewer");
-  assert.match(source, /const APP_NAME = "Пульс клиники — Администратор"/);
-  assert.match(source, /previousUserData[\s\S]*Пульс клиники[\s\S]*Оценка врачей/);
+  assert.match(source, /const APP_NAME = "КлинВект Щербатова — Администратор"/);
+  assert.match(source, /previousUserData[\s\S]*Пульс клиники — Администратор[\s\S]*Пульс клиники[\s\S]*Оценка врачей/);
+  const viewerSource = fs.readFileSync(path.join(root, "viewer", "main.cjs"), "utf8");
+  assert.match(viewerSource, /const APP_NAME = "КлинВект Щербатова — Viewer"/);
+  assert.match(viewerSource, /previousUserData[\s\S]*Пульс клиники — Viewer[\s\S]*viewer-config\.json[\s\S]*app\.setPath\("userData"/);
   const visibleWindow = source.indexOf("mainWindow.show();");
   const firstRunPrompt = source.indexOf("promptForWorkspaceOnFirstRun().catch");
   assert.ok(visibleWindow >= 0, "the main window must be shown during startup");
@@ -850,4 +862,20 @@ test("Viewer export dialog uses the shared sorted month helper", () => {
   const handler = adminUi.slice(start, end);
   assert.match(handler, /const months = monthKeysSorted\(\);/);
   assert.doesNotMatch(handler, /sortedMonths\(\)/);
+});
+
+test("Viewer publication snapshots the canonical dashboards instead of separate report builders", () => {
+  const adminUi = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const start = adminUi.indexOf("async function exportViewerPackage");
+  const end = adminUi.indexOf("function reportHeader", start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const handler = adminUi.slice(start, end);
+
+  assert.match(handler, /composeViewerDashboardHtml\(target, periodKey, context, comments\)/);
+  assert.match(handler, /tab: "department"/);
+  assert.match(handler, /tab: "dept"/);
+  assert.match(handler, /tab: "doctor"/);
+  assert.doesNotMatch(handler, /buildDepartmentReport|buildDeptReport|buildDoctorReport/);
+  assert.match(adminUi, /cloneDashboardSnapshot\(source, \{ chartMimeType: "image\/webp", chartQuality: 0\.9 \}\)/);
 });

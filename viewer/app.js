@@ -293,5 +293,9 @@ function bindEvents() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   bindEvents();
-  try { await refreshStatus(); } catch (error) { showError("viewerSetupError", error.message); }
+  try {
+    const appInfo = await API.appInfo();
+    document.getElementById("viewerAppVersion").textContent = `v${appInfo.version}`;
+    await refreshStatus();
+  } catch (error) { showError("viewerSetupError", error.message); }
 });

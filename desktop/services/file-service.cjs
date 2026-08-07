@@ -257,7 +257,7 @@ class FileService {
       }
       removeEmptyExportDirectories(batch.targetDir);
       const protocol = [
-        "Пульс клиники — протокол выгрузки",
+        "КлинВект Щербатова — протокол выгрузки",
         `Дата: ${new Date().toLocaleString("ru-RU")}`,
         `Месяц: ${batch.month || "не указан"}`,
         `Тип: ${batch.kind}`,

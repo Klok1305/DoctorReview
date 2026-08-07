@@ -134,7 +134,7 @@ test("encrypted ZIP bootstraps Viewer and doctor enters by name and PIN only", a
       pageType: "doctor",
       scopeId: access.doctorId,
       title: "Январский отчёт",
-      html: '<div class="card"><h1>Отчёт</h1><script>bad()</script><p>Комментарий</p></div>',
+      html: '<div class="card"><h1>Отчёт</h1><script>bad()</script><p>Комментарий</p><img class="pdf-chart-image" src="data:image/webp;base64,UklGRg==" alt="График"></div>',
     }],
     credentials,
   });
@@ -172,6 +172,7 @@ test("encrypted ZIP bootstraps Viewer and doctor enters by name and PIN only", a
   const session = viewer.doctorLogin({ doctorId: access.doctorId, pin: "1357" });
   const report = viewer.readReport(session, { periodKey: "2026-01", pageType: "doctor" });
   assert.match(report.html, /Комментарий/);
+  assert.match(report.html, /data:image\/webp;base64,UklGRg==/);
   assert.doesNotMatch(report.html, /<script/i);
   assert.equal(viewer.readReport(session, { periodKey: "2026-01", pageType: "department" }), null);
 
@@ -204,11 +205,15 @@ test("standalone HTML contains the encrypted Viewer and opens with the doctor PI
   });
 
   const html = created.buffer.toString("utf8");
+  assert.match(html, /<title>КлинВект Щербатова — автономный Viewer<\/title>/);
+  assert.match(html, /rel="icon" type="image\/png" href="data:image\/png;base64,[A-Za-z0-9+/=]+"/);
+  assert.match(html, /class="brand-symbol" src="data:image\/png;base64,[A-Za-z0-9+/=]+"/);
+  assert.doesNotMatch(html, /\/\*__FAVICON__\*\//);
   assert.equal(created.manifest.format, STANDALONE_FORMAT);
   assert.match(html, /Автономный файл/);
   assert.match(html, /DecompressionStream/);
   assert.doesNotMatch(html, /Секретный отчёт|Комментарий врача|<script>bad/);
-  assert.doesNotMatch(html, /<script[^>]+src=|<link[^>]+href=/i);
+  assert.doesNotMatch(html, /<script[^>]+src=|<link[^>]+href=["'](?!data:image\/png)/i);
 
   const embedded = html.match(/<script id="standaloneViewerData" type="application\/json">([\s\S]*?)<\/script>/);
   assert.ok(embedded, "standalone data must be embedded into the HTML");

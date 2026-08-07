@@ -5,7 +5,7 @@ const path = require("node:path");
 const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const { ViewerStorageService } = require("./storage-service.cjs");
 
-const APP_NAME = "Пульс клиники — Viewer";
+const APP_NAME = "КлинВект Щербатова — Viewer";
 const ADMIN_SESSION_MS = 10 * 60 * 1000;
 let mainWindow = null;
 let storage = null;
@@ -13,6 +13,14 @@ let adminSessionUntil = 0;
 let adminFailures = 0;
 let adminLockedUntil = 0;
 let doctorSession = null;
+
+// Сохраняем выбранную общую папку после переименования Viewer.
+const currentUserData = app.getPath("userData");
+const previousUserData = path.join(app.getPath("appData"), "Пульс клиники — Viewer");
+if (!fs.existsSync(path.join(currentUserData, "viewer-config.json"))
+  && fs.existsSync(path.join(previousUserData, "viewer-config.json"))) {
+  app.setPath("userData", previousUserData);
+}
 
 app.setName(APP_NAME);
 
@@ -48,6 +56,7 @@ function createWindow() {
 }
 
 function registerIpc() {
+  ipcMain.handle("viewer:app-info", () => ({ name: APP_NAME, version: app.getVersion(), packaged: app.isPackaged }));
   ipcMain.handle("viewer:status", () => storage.status());
   ipcMain.handle("viewer:choose-storage", async () => {
     const selected = await dialog.showOpenDialog(mainWindow, {
@@ -84,7 +93,7 @@ function registerIpc() {
     const selected = await dialog.showOpenDialog(mainWindow, {
       title: "Выберите ZIP с отчётами",
       properties: ["openFile"],
-      filters: [{ name: "ZIP-пакет Пульс клиники", extensions: ["zip"] }],
+      filters: [{ name: "ZIP-пакет КлинВект Щербатова", extensions: ["zip"] }],
     });
     if (selected.canceled || !selected.filePaths[0]) return { canceled: true };
     return { canceled: false, preview: await storage.inspectPackageFile(selected.filePaths[0]) };

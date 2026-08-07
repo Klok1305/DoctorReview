@@ -299,6 +299,10 @@ function standaloneAsset(relativePath) {
   return fs.readFileSync(path.resolve(__dirname, "../..", relativePath), "utf8");
 }
 
+function standaloneAssetBase64(relativePath) {
+  return fs.readFileSync(path.resolve(__dirname, "../..", relativePath)).toString("base64");
+}
+
 function jsonForInlineScript(value) {
   return JSON.stringify(value).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
 }
@@ -358,6 +362,7 @@ async function createStandaloneViewerHtml(input) {
   const bundle = { ...manifest, doctors: encryptedDoctors };
   const template = standaloneAsset("viewer/standalone.html");
   const html = template
+    .replaceAll("/*__FAVICON__*/", standaloneAssetBase64("resources/app-icon.png"))
     .replace("/*__APP_CSS__*/", standaloneAsset("build/app.css"))
     .replace("/*__VIEWER_CSS__*/", standaloneAsset("viewer/viewer.css"))
     .replace("/*__STANDALONE_DATA__*/", jsonForInlineScript(bundle))
