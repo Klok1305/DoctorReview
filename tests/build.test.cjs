@@ -430,7 +430,7 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "2.5.2");
+  assert.equal(packageJson.version, "2.5.3");
   assert.equal(packageJson.build.productName, "КлинВект Щербатова — Администратор");
   assert.equal(packageJson.build.artifactName, "KlinVekt-Shcherbatova-Admin-Setup-${version}-${arch}.${ext}");
   assert.equal(packageJson.scripts["dist:portable"], undefined);
@@ -834,6 +834,7 @@ test("Viewer access is name plus PIN with encrypted pages and no Windows or NTFS
   const viewerApp = fs.readFileSync(path.join(root, "viewer", "app.js"), "utf8");
   const viewerMain = fs.readFileSync(path.join(root, "viewer", "main.cjs"), "utf8");
   const viewerPreload = fs.readFileSync(path.join(root, "viewer", "preload.cjs"), "utf8");
+  const adminPreload = fs.readFileSync(path.join(root, "desktop", "preload.cjs"), "utf8");
   const storage = fs.readFileSync(path.join(root, "viewer", "storage-service.cjs"), "utf8");
   const packages = fs.readFileSync(path.join(root, "desktop", "services", "viewer-package-service.cjs"), "utf8");
   const standaloneIndex = fs.readFileSync(path.join(root, "viewer", "standalone.html"), "utf8");
@@ -856,6 +857,14 @@ test("Viewer access is name plus PIN with encrypted pages and no Windows or NTFS
   assert.match(standaloneApp, /crypto\.subtle\.deriveKey/);
   assert.match(standaloneApp, /DecompressionStream\("gzip"\)/);
   assert.match(adminUi, /saveViewerDepartmentHead/);
+  assert.match(adminUi, /function exportViewerPinsTable\(\)/);
+  assert.match(adminUi, /Выгрузить все PIN в Excel/);
+  assert.match(adminUi, /\[\["Врач", "PIN"\]/);
+  assert.match(adminUi, /padStart\(4, "0"\)/);
+  assert.match(adminPreload, /exportViewerPins: payload => invoke\("viewer-publication:export-pins", payload\)/);
+  const adminMain = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
+  assert.match(adminMain, /ipcMain\.handle\("viewer-publication:export-pins"/);
+  assert.match(adminMain, /viewer-pins\.exported/);
   assert.match(adminUi, /subjects/);
   assert.match(standaloneApp, /viewerSubject/);
 });

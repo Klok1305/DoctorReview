@@ -1182,6 +1182,30 @@ function registerIpc() {
     });
     return { canceled: false, format, path: selected.filePath, ...recorded, doctors: doctorIds.length, periods: input.periods.length };
   });
+  ipcMain.handle("viewer-publication:export-pins", async (_event, payload) => {
+    const session = localAdminActor();
+    const input = ensureObject(payload, "таблица PIN Viewer");
+    let buffer;
+    try {
+      buffer = Buffer.from(input.bytes || []);
+    } catch (_) {
+      throw new Error("Некорректный файл таблицы PIN Viewer");
+    }
+    if (!buffer.length || buffer.length > 20 * 1024 * 1024) throw new Error("Некорректный размер таблицы PIN Viewer");
+    const doctorCount = Number(input.doctorCount);
+    if (!Number.isInteger(doctorCount) || doctorCount < 1 || doctorCount > 10000) throw new Error("Некорректное количество врачей в таблице PIN Viewer");
+    const date = new Date().toISOString().slice(0, 10);
+    const selected = await dialog.showSaveDialog(mainWindow, {
+      title: "Сохранить таблицу PIN Viewer",
+      defaultPath: path.join(configStore.publicConfig().outputDir, `PIN-коды-Viewer-${date}.xlsx`),
+      filters: [{ name: "Таблица Excel", extensions: ["xlsx"] }],
+    });
+    if (selected.canceled || !selected.filePath) return { canceled: true };
+    fs.writeFileSync(selected.filePath, buffer, { flag: "w" });
+    database.audit({ actorUserId: session.userId, action: "viewer-pins.exported", targetType: "viewer", targetId: "doctor-pins",
+      details: { doctorCount, fileName: path.basename(selected.filePath) } });
+    return { canceled: false, path: selected.filePath, doctorCount };
+  });
   ipcMain.handle("database:save", (_event, json) => {
     localAdminActor();
     if (typeof json !== "string" || json.length > 200 * 1024 * 1024) throw new Error("Некорректный размер снимка базы");

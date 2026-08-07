@@ -4664,7 +4664,9 @@ function scoringBenchmarkDefs(profile) {
 }
 
 function viewerAccessSettingsHtml() {
-  const items = (VIEWER_ACCESS.doctors || []).filter(item => DB.doctors[item.doctorId]);
+  const items = (VIEWER_ACCESS.doctors || [])
+    .filter(item => DB.doctors[item.doctorId])
+    .sort((a, b) => String(a.displayName || "").localeCompare(String(b.displayName || ""), "ru"));
   const active = items.filter(item => item.active).length;
   const departmentHeads = VIEWER_ACCESS.departmentHeads || {};
   const departmentNames = Object.keys(departmentGroups()).sort((a, b) => a.localeCompare(b, "ru"));
@@ -4702,9 +4704,42 @@ function viewerAccessSettingsHtml() {
       <button class="btn primary" type="button" onclick="setViewerAdminPinFromSettings()">Задать / изменить</button>
       <span class="spacer"></span><span class="small muted">Включено ${active} из ${items.length}</span></div>
     <div class="toolbar"><button class="btn mini" type="button" onclick="setAllViewerDoctorsActive(true)">Включить всех</button>
-      <button class="btn mini" type="button" onclick="setAllViewerDoctorsActive(false)">Выключить всех</button></div>
+      <button class="btn mini" type="button" onclick="setAllViewerDoctorsActive(false)">Выключить всех</button>
+      <button class="btn mini" type="button" onclick="exportViewerPinsTable()" ${items.length ? "" : "disabled"}>📊 Выгрузить все PIN в Excel</button>
+      <span class="small muted">Две колонки: врач и сохранённый PIN</span></div>
     <div class="scroll-y"><table class="data viewer-access-table"><tr><th>Врач и публикация</th><th>PIN врача</th><th></th></tr>${rows || '<tr><td colspan="3" class="muted">Врачи появятся после импорта данных.</td></tr>'}</table></div>
   </div>`;
+}
+
+async function exportViewerPinsTable() {
+  const items = (VIEWER_ACCESS.doctors || [])
+    .filter(item => DB.doctors[item.doctorId])
+    .sort((a, b) => String(a.displayName || "").localeCompare(String(b.displayName || ""), "ru"));
+  if (!items.length) { toast("Нет врачей для выгрузки PIN", true); return; }
+  loadBundledLibrary("lib-xlsx", "XLSX");
+  const rows = [["Врач", "PIN"], ...items.map(item => [String(item.displayName || doctorName(item.doctorId)), String(item.pin || "").padStart(4, "0")])];
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  sheet["!cols"] = [{ wch: 42 }, { wch: 12 }];
+  for (let index = 2; index <= rows.length; index++) {
+    const cell = sheet[`B${index}`];
+    if (cell) { cell.t = "s"; cell.z = "@"; }
+  }
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "PIN врачей");
+  const fileName = `PIN-коды-Viewer-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  try {
+    if (DESKTOP_API) {
+      const bytes = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
+      const result = await DESKTOP_API.exportViewerPins({ bytes: new Uint8Array(bytes), doctorCount: items.length });
+      if (result.canceled) return;
+      toast(`Таблица PIN сохранена: ${result.path}`);
+      return;
+    }
+    XLSX.writeFile(workbook, fileName);
+    toast(`Файл ${fileName} скачан`);
+  } catch (error) {
+    toast("Не удалось выгрузить таблицу PIN: " + error.message, true);
+  }
 }
 
 async function saveViewerDepartmentHead(select) {
