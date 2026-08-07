@@ -44,6 +44,33 @@ async function refreshViewerPublicationAccess() {
   return VIEWER_ACCESS;
 }
 
+async function syncConfiguredViewerDepartmentHeads() {
+  if (!DESKTOP_API || !DESKTOP_API.updateViewerDepartmentHead) return VIEWER_ACCESS;
+  const configured = (DB.settings.departmentHeadDoctorIds
+    && typeof DB.settings.departmentHeadDoctorIds === "object"
+    && !Array.isArray(DB.settings.departmentHeadDoctorIds))
+    ? DB.settings.departmentHeadDoctorIds : {};
+  const entries = Object.entries(configured).filter(([, doctorId]) => DB.doctors[doctorId]);
+  if (!entries.length) return VIEWER_ACCESS;
+
+  let accessDoctorIds = new Set((VIEWER_ACCESS.doctors || []).map(item => String(item.doctorId)));
+  if (entries.some(([, doctorId]) => !accessDoctorIds.has(String(doctorId)))) {
+    if (!await saveLocal()) throw new Error("Не удалось сохранить врачей перед назначением заведующего");
+    await refreshViewerPublicationAccess();
+    accessDoctorIds = new Set((VIEWER_ACCESS.doctors || []).map(item => String(item.doctorId)));
+  }
+
+  let changed = false;
+  for (const [department, doctorId] of entries) {
+    if (!accessDoctorIds.has(String(doctorId))) continue;
+    if (String((VIEWER_ACCESS.departmentHeads || {})[department] || "") === String(doctorId)) continue;
+    VIEWER_ACCESS = await DESKTOP_API.updateViewerDepartmentHead({ department, doctorId });
+    changed = true;
+  }
+  if (changed) await refreshViewerPublicationAccess();
+  return VIEWER_ACCESS;
+}
+
 
 function setControlsDisabled(ids, disabled) {
   for (const id of ids) {
@@ -881,7 +908,7 @@ function specializationInterdisciplinaryHtml(rows, mk, specializationName, optio
   if (doctorRows.length) {
     html += `<section class="specialization-doctor-results">
       <div class="vhead"><h3>Итоги по врачам</h3><span class="spacer"></span>${copyBtn("copyTable", "tblSpecializationInterdisciplinary")}</div>
-      <div class="specialization-table-scroll"><table class="data specialization-doctor-summary-table" id="tblSpecializationInterdisciplinary"><tr><th>Врач</th><th class="num">Период</th><th class="num">Назначено</th><th class="num">Выполнено</th><th class="num">Продано</th><th class="num">Конверсия</th><th class="num">По фокусам<span class="specialization-doctor-focus-heading-note">назначено / сделано</span></th><th class="num">Выручка от перенаправлений</th></tr>`;
+      <div class="specialization-table-scroll"><table class="data specialization-doctor-summary-table" id="tblSpecializationInterdisciplinary"><tr><th>Врач</th><th class="num">Период</th><th class="num">Назначено</th><th class="num">Выполнено + продано</th><th class="num">Конверсия</th><th class="num">По фокусам<span class="specialization-doctor-focus-heading-note">назначено / сделано</span></th><th class="num">Выручка от перенаправлений</th></tr>`;
     for (const row of doctorRows) {
       const conv = row.nz.totals.conv;
       const convClass = conv == null ? "mut" : conv >= 40 ? "ok" : conv >= 20 ? "warn" : "bad";
@@ -889,8 +916,7 @@ function specializationInterdisciplinaryHtml(rows, mk, specializationName, optio
       const focusDone = row.nz.focus ? row.nz.focus.resultQ : 0;
       html += `<tr><td class="specialization-doctor-summary-name"><b>${esc(doctorName(row.id))}</b></td><td class="num"><span class="specialization-doctor-summary-period">${fmtNum(row.nz.slice)} мес.</span></td>
         <td class="num"><span class="specialization-doctor-summary-chip assigned">${fmtNum(row.nz.totals.assigned)}</span></td>
-        <td class="num"><span class="specialization-doctor-summary-chip completed">${fmtNum(row.nz.totals.done)}</span></td>
-        <td class="num"><span class="specialization-doctor-summary-chip sold">${fmtNum(row.nz.totals.soldQ)}</span></td>
+        <td class="num"><span class="specialization-doctor-summary-chip completed">${fmtNum(row.nz.totals.resultQ)}</span></td>
         <td class="num"><span class="badge ${convClass} specialization-doctor-summary-conversion">${conv != null ? fmtPct(conv) : "—"}</span></td>
         <td class="num"><span class="specialization-doctor-summary-focus"><b>${fmtNum(focusAssigned)}</b><span>/</span><b>${fmtNum(focusDone)}</b></span></td>
         <td class="num specialization-doctor-summary-revenue">${fmtMoney(row.r.econ.refRevenue)}</td></tr>`;
@@ -4687,6 +4713,12 @@ async function saveViewerDepartmentHead(select) {
   select.disabled = true;
   try {
     await DESKTOP_API.updateViewerDepartmentHead({ department, doctorId });
+    if (!DB.settings.departmentHeadDoctorIds || typeof DB.settings.departmentHeadDoctorIds !== "object") {
+      DB.settings.departmentHeadDoctorIds = {};
+    }
+    if (doctorId) DB.settings.departmentHeadDoctorIds[department] = doctorId;
+    else delete DB.settings.departmentHeadDoctorIds[department];
+    if (!await saveLocal()) throw new Error("назначение не записано в рабочую базу");
     await refreshViewerPublicationAccess();
     toast(doctorId ? `Заведующий отделения «${department}» сохранён` : `Заведующий отделения «${department}» снят`);
     renderSettings();
@@ -4924,8 +4956,8 @@ function renderSettings() {
     <p class="small muted">Фокусы — по одному в строке: <code>Название = синоним1, синоним2</code>. Звёздочка в начале строки — отслеживать, но не учитывать в широте фокусов. Штуки и выручка берутся из проданных назначений.</p>
     <textarea id="cf_items" placeholder="Название = синоним1, синоним2" style="min-height:150px">${esc((crossFocus.items || []).map(item => (item.core === false ? "* " : "") + item.name + " = " + (item.syn || []).join(", ")).join("\n"))}</textarea>
     ${fmtEx("УЗИ сердца = эхокардиография, эхо-кг\nХолтер = холтер, суточное мониторирование\n* Анализы = лабораторные исследования")}
-    <h3 style="margin:14px 0 6px">Домашнее подразделение услуг</h3>
-    <p class="small muted">Это общая настройка: выбранное подразделение применяется к этому фокусу во всех профилях и отчётах. Для врача домашняя услуга попадёт в «Приёмы» или «Профильные услуги», а услуга другого подразделения — в «Другие услуги клиники».</p>
+    <h3 style="margin:14px 0 6px">Резервная привязка фокусов к подразделению</h3>
+    <p class="small muted">Эта общая настройка применяется ко всем услугам, совпавшим с фокусом. Точную привязку конкретной услуги задайте ниже в «Номенклатуре» — она имеет приоритет. Для врача домашняя услуга попадёт в «Приёмы» или «Профильные услуги», а услуга другого подразделения — в «Другие услуги клиники».</p>
     ${crossFocusHomeRows ? `<div class="scroll-y"><table class="data"><tr><th>Услуга / фокус</th><th>Домашнее подразделение</th></tr>${crossFocusHomeRows}</table></div>` : `<div class="notice blue">Сначала добавьте и сохраните фокусы — после этого для них можно выбрать домашнее подразделение.</div>`}
     <p class="small muted">В балл Вектора 3 добавляются широта фокусов и доля их выручки. Цель по доле выручки задаётся ниже в блоке «Баллы и веса».</p>
     <div class="toolbar"><button class="btn primary" onclick="saveCrossFocusSettings()">💾 Сохранить фокусы Вектора 3</button></div>
@@ -4953,18 +4985,21 @@ function renderSettings() {
     return o;
   };
   html += `<details class="card" style="display:block" ${det("nom")}><summary style="cursor:pointer"><b>🧩 Номенклатура — «${esc(dn)}»</b> <span class="small muted">(${nomAll.length} позиций, неразобрано: ${unmappedCnt})</span></summary>
-    <p class="small muted" style="margin-top:8px">Скрипт разложил всё автоматически — здесь можно поправить руками: вид позиции, категорию и привязку к «${esc(exp.title)}». На графиках всегда показываются и количество, и выручка. Ручная правка помечается ✋ и применяется ко всем месяцам.</p>
+    <p class="small muted" style="margin-top:8px">Скрипт разложил всё автоматически — здесь можно поправить руками: вид позиции, категорию, домашнее подразделение услуги и привязку к «${esc(exp.title)}». Домашнее подразделение распределяет обычные услуги из «Выработки» между «Профильными услугами» и «Другими услугами клиники». Товары, приёмы и анализы всегда остаются самостоятельными категориями. Точная привязка номенклатуры имеет приоритет над привязкой фокуса и применяется ко всем месяцам.</p>
     <div class="toolbar">
       <input type="text" id="nomFilter" placeholder="поиск по названию…" value="${esc(UI.nomFilter || "")}">
       <label class="small"><input type="checkbox" id="nomUnm" ${showUnmappedOnly ? "checked" : ""} onchange="UI.nomUnmappedOnly=this.checked;renderSettings()"> только неразобранные</label>
     </div>
-    <div class="scroll-y" id="nomScroll" style="max-height:520px"><table class="data"><tr><th>Позиция</th><th class="num">Шт / Сумма</th><th>Вид</th><th>Категория</th><th title="Привязка к отслеживаемой позиции экспертности">${esc(exp.title)}</th><th></th></tr>`;
+    <div class="scroll-y" id="nomScroll" style="max-height:520px;overflow:auto"><table class="data"><tr><th>Позиция</th><th class="num">Шт / Сумма</th><th>Вид</th><th>Категория</th><th title="Подразделение, которому принадлежит услуга">Подразделение услуги</th><th title="Привязка к отслеживаемой позиции экспертности">${esc(exp.title)}</th><th></th></tr>`;
   nomItems.slice(0, 300).forEach((u, i) => {
     const ov = u.override || {};
     const autoKind = u.goods ? "товар" : "услуга";
     const kindSel = ov.type || "";
     const catSel = ov.group ? ov.group + "||" + (ov.sub || "") : "";
     const exSel = "expertItem" in ov ? (ov.expertItem || "__none__") : "";
+    const homeDepartment = interdisciplinaryHomeDepartment(u.n);
+    const fixedReferralType = refTypeOf(u.cls);
+    const hasFixedReferralType = ["Товары", "Приемы", "Анализы"].includes(fixedReferralType);
     html += `<tr>
       <td class="small">${esc(u.n.length > 60 ? u.n.slice(0, 60) + "…" : u.n)}${Object.keys(ov).length ? ' <span title="есть ручные правки">✋</span>' : ""}<br><span class="muted">${esc(u.cat || "")}</span></td>
       <td class="num small">${fmtNum(u.q)} / ${fmtMoney(u.s)}</td>
@@ -4977,6 +5012,10 @@ function renderSettings() {
       </select></td>
       <td><select onchange="nomSetCat(${i}, this.value)">${groupSelOptions(catSel)}</select>
         <div class="small muted">сейчас: ${esc(u.cls.group)}${u.cls.sub ? " → " + esc(u.cls.sub) : ""}${u.cls.unmapped ? ' <span class="badge bad">неразобрано</span>' : ""}</div></td>
+      <td>${hasFixedReferralType ? `<span class="small muted">${esc(fixedReferralType)} — отдельная категория</span>` : `<select data-service-name="${esc(u.n)}" onchange="setInterdisciplinaryHomeDepartment(this)">
+        <option value="">— не задано —</option>
+        ${crossFocusDepartments.map(name => `<option value="${esc(name)}" ${homeDepartment === name ? "selected" : ""}>${esc(name)}</option>`).join("")}
+      </select>`}</td>
       <td><select onchange="nomSetExpert(${i}, this.value)">
         <option value="" ${!exSel ? "selected" : ""}>авто${u.cls.expertItem ? ": " + esc(u.cls.expertItem) : ": —"}</option>
         ${(exp.items || []).map(d => `<option value="${esc(d.name)}" ${exSel === d.name ? "selected" : ""}>${esc(d.name)}</option>`).join("")}
@@ -4984,7 +5023,7 @@ function renderSettings() {
       </select></td>
       <td>${Object.keys(ov).length ? `<button class="btn mini" onclick="nomReset(${i})" title="убрать ручные правки">↺</button>` : ""}</td></tr>`;
   });
-  if (nomItems.length > 300) html += `<tr><td colspan="6" class="small muted">Показаны первые 300 — уточните поиск.</td></tr>`;
+  if (nomItems.length > 300) html += `<tr><td colspan="7" class="small muted">Показаны первые 300 — уточните поиск.</td></tr>`;
   html += `</table></div>
     <details style="margin-top:10px" ${det("rules")}><summary class="small muted" style="cursor:pointer">Расширенное: правила по подстрокам (${(p.rules || []).length})</summary>
       <p class="small muted">Формат строки: <code>подстрока = Группа / Подгруппа / вид</code>. Подгруппу и вид (<i>услуга</i> или <i>товар</i>) можно не писать. Правила проверяются по порядку; ручные правки номенклатуры выше сильнее правил.</p>
@@ -5299,8 +5338,9 @@ function saveCrossFocusSettings() {
   renderAll();
 }
 function setInterdisciplinaryHomeDepartment(select) {
-  const focusName = select && select.dataset ? select.dataset.focusName : "";
-  const key = interdisciplinaryServiceKey(focusName);
+  const serviceName = select && select.dataset
+    ? (select.dataset.serviceName || select.dataset.focusName || "") : "";
+  const key = interdisciplinaryServiceKey(serviceName);
   if (!key) return;
   if (!DB.settings.interdisciplinaryHomeDepartments || typeof DB.settings.interdisciplinaryHomeDepartments !== "object") {
     DB.settings.interdisciplinaryHomeDepartments = {};
@@ -5311,8 +5351,8 @@ function setInterdisciplinaryHomeDepartment(select) {
   clearMetricsCache();
   saveLocal();
   toast(departmentName
-    ? `Домашнее подразделение «${focusName}»: ${departmentName}`
-    : `Домашнее подразделение «${focusName}» сброшено`);
+    ? `Домашнее подразделение «${serviceName}»: ${departmentName}`
+    : `Домашнее подразделение «${serviceName}» сброшено`);
   renderAll();
 }
 function bindCandidate(i, val) {
@@ -5597,6 +5637,7 @@ async function initApp() {
   if (DESKTOP_API) {
     await loadDesktopDatabase();
     await refreshViewerPublicationAccess();
+    await syncConfiguredViewerDepartmentHeads();
     renderDesktopWorkspace();
   } else {
     loadLocal();

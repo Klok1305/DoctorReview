@@ -2108,13 +2108,19 @@ function profilePhysiotherapy() {
   return p;
 }
 
-const CLINIC_STRUCTURE_VERSION = 1;
+const CLINIC_STRUCTURE_VERSION = 2;
+const CARDIOLOGY_DIAGNOSTICS_DEPARTMENT = "Кардиология и Функциональная диагностика";
 const CLINIC_DEPARTMENT_SPECS = Object.freeze({
-  "Хирургия": ["Маммология", "Флебология", "УЗИ"],
-  "Терапия": ["Эндокринология", "Кардиология", "Неврология", "Психотерапия"],
+  "Хирургия": ["Маммология", "Флебология"],
+  "Терапия": ["Эндокринология", "Неврология", "Психотерапия"],
   "Косметология": ["Косметология", "Эстетисты"],
   "Физиотерапия": ["Специалисты по телу", "Остеопатия"],
   "Гинекология": ["Гинекология", "Урология"],
+  [CARDIOLOGY_DIAGNOSTICS_DEPARTMENT]: ["Кардиология", "Функциональная диагностика"],
+});
+
+const CLINIC_DEPARTMENT_HEAD_SURNAMES = Object.freeze({
+  [CARDIOLOGY_DIAGNOSTICS_DEPARTMENT]: "пан",
 });
 
 const CLINIC_DOCTOR_STRUCTURE = Object.freeze([
@@ -2124,9 +2130,9 @@ const CLINIC_DOCTOR_STRUCTURE = Object.freeze([
   { surnames: ["королева"], department: "Гинекология", specialization: "Урология" },
   { surnames: ["дубровская"], department: "Хирургия", specialization: "Флебология" },
   { surnames: ["самсонова", "никифорова"], department: "Хирургия", specialization: "Маммология" },
-  { surnames: ["перцхелия"], department: "Хирургия", specialization: "УЗИ" },
+  { surnames: ["перцхелия"], department: CARDIOLOGY_DIAGNOSTICS_DEPARTMENT, specialization: "Функциональная диагностика" },
   { surnames: ["бузина", "гоголева", "мановицкая", "жуйков"], department: "Терапия", specialization: "Эндокринология" },
-  { surnames: ["пан", "провоторова", "ахильгова"], department: "Терапия", specialization: "Кардиология" },
+  { surnames: ["пан", "провоторова", "провторова", "ахильгова"], department: CARDIOLOGY_DIAGNOSTICS_DEPARTMENT, specialization: "Кардиология" },
   { surnames: ["федроов", "федоров"], department: "Терапия", specialization: "Неврология" },
   { surnames: ["кузьменков"], department: "Терапия", specialization: "Психотерапия" },
 ]);
@@ -2140,12 +2146,25 @@ const CLINIC_STAFF = Object.freeze([
 function defaultDoctors() {
   const doctors = {};
   CLINIC_STAFF.forEach((name, index) => {
+    const displayName = name === "Пан" ? "Пан Константин Александрович" : name;
     doctors[`clinic_${String(index + 1).padStart(2, "0")}`] = {
-      name,
-      aliases: name === "Федроов" ? ["Федоров"] : [],
+      name: displayName,
+      aliases: name === "Федроов" ? ["Федоров"]
+        : (name === "Пан" ? ["Пан"] : (name === "Провоторова" ? ["Провторова"] : [])),
     };
   });
   return doctors;
+}
+
+function clinicDepartmentHeadDoctorIds(doctors) {
+  const entries = Object.entries(doctors || {});
+  const result = {};
+  for (const [departmentName, surname] of Object.entries(CLINIC_DEPARTMENT_HEAD_SURNAMES)) {
+    const match = entries.find(([, doctor]) => [doctor.name, ...((doctor && doctor.aliases) || [])]
+      .some(name => fioTokens(name).includes(surname)));
+    if (match) result[departmentName] = match[0];
+  }
+  return result;
 }
 
 function ensureClinicDoctors() {
@@ -2176,9 +2195,9 @@ function clinicSpecializationProfiles() {
     "По умолчанию": defaultProfile(),
     "Маммология": cloneProfile(profileSurgery(), ["маммолог", "онкодермат", "дермотоонко"]),
     "Флебология": cloneProfile(profileSurgery(), ["флеболог"]),
-    "УЗИ": cloneProfile(profileSurgery(), ["узи", "ультразвуков"]),
     "Эндокринология": cloneProfile(profileTherapy(), ["эндокрин"]),
     "Кардиология": cloneProfile(profileTherapy(), ["кардио"]),
+    "Функциональная диагностика": cloneProfile(profileTherapy(), ["функциональн", "узд", "узи", "ультразвуков", "эхокг", "экг", "холтер"]),
     "Неврология": cloneProfile(profileTherapy(), ["невролог"]),
     "Психотерапия": cloneProfile(profileTherapy(), ["психотерап", "психиат"]),
     "Косметология": cloneProfile(profileCosmetology(), ["косметолог", "дермат"]),
@@ -2196,15 +2215,18 @@ function clinicSpecializationProfiles() {
 
 function clinicDepartmentProfiles() {
   const therapy = profileTherapy();
-  therapy.matchers = therapy.matchers.filter(matcher => matcher !== "уролог");
+  therapy.matchers = therapy.matchers.filter(matcher => !["уролог", "кардио"].includes(matcher));
   const gynecology = profileGynecology();
   gynecology.matchers = [...gynecology.matchers, "уролог"];
+  const cardiologyDiagnostics = profileTherapy();
+  cardiologyDiagnostics.matchers = ["кардио", "функциональн", "узд", "узи", "ультразвуков", "эхокг", "экг", "холтер"];
   return {
     "Хирургия": profileSurgery(),
     "Терапия": therapy,
     "Косметология": profileCosmetology(),
     "Физиотерапия": profilePhysiotherapy(),
     "Гинекология": gynecology,
+    [CARDIOLOGY_DIAGNOSTICS_DEPARTMENT]: cardiologyDiagnostics,
   };
 }
 
@@ -2226,7 +2248,9 @@ function defaultSettings() {
       "Косметология": true,
       "Физиотерапия": true,
       "Гинекология": true,
+      [CARDIOLOGY_DIAGNOSTICS_DEPARTMENT]: true,
     },
+    departmentHeadDoctorIds: clinicDepartmentHeadDoctorIds(defaultDoctors()),
     interdisciplinaryHomeDepartments: {},
     depts: clinicSpecializationProfiles(),
   };
@@ -2263,9 +2287,9 @@ function departmentGroups() {
   return result;
 }
 
-/* Домашнее отделение задаётся один раз для фокуса Вектора 3 и действует
- * во всех профилях. Ключ нормализован, чтобы регистр названия не создавал
- * несколько независимых настроек одной и той же услуги. */
+/* Домашнее отделение задаётся один раз для точной строки номенклатуры или
+ * фокуса Вектора 3 и действует во всех профилях. Ключ нормализован, чтобы
+ * регистр названия не создавал несколько настроек одной и той же услуги. */
 function interdisciplinaryServiceKey(name) {
   return String(name || "").trim().toLocaleLowerCase("ru-RU");
 }
@@ -2807,15 +2831,72 @@ function normalizeProfileRecord(raw, inherited) {
   return p;
 }
 
+/* v2 выделяет кардиологию и функциональную диагностику из прежних
+ * отделений. Пользовательские настройки профилей сохраняются: профиль
+ * «Кардиология» переносится как есть, а прежний профиль «УЗИ» становится
+ * стартовой точкой для «Функциональной диагностики». */
+function upgradeCardiologyDiagnosticsStructure(defaults) {
+  const copy = value => JSON.parse(JSON.stringify(value));
+  const departments = (DB.settings.departments && typeof DB.settings.departments === "object" && !Array.isArray(DB.settings.departments))
+    ? copy(DB.settings.departments) : copy(defaults.departments);
+  const profiles = (DB.settings.depts && typeof DB.settings.depts === "object")
+    ? copy(DB.settings.depts) : copy(defaults.depts);
+  const departmentProfiles = (DB.settings.departmentProfiles && typeof DB.settings.departmentProfiles === "object")
+    ? copy(DB.settings.departmentProfiles) : {};
+  const flags = (DB.settings.departmentUsesSpecializations && typeof DB.settings.departmentUsesSpecializations === "object")
+    ? copy(DB.settings.departmentUsesSpecializations) : {};
+
+  for (const [departmentName, specs] of Object.entries(departments)) {
+    departments[departmentName] = (Array.isArray(specs) ? specs : [])
+      .filter(specName => !["Кардиология", "УЗИ", "Функциональная диагностика"].includes(specName));
+  }
+  departments[CARDIOLOGY_DIAGNOSTICS_DEPARTMENT] = ["Кардиология", "Функциональная диагностика"];
+
+  if (!profiles["Кардиология"]) profiles["Кардиология"] = copy(defaults.depts["Кардиология"]);
+  const functionalSeed = profiles["Функциональная диагностика"] || profiles["УЗИ"] || defaults.depts["Функциональная диагностика"];
+  profiles["Функциональная диагностика"] = copy(functionalSeed);
+  profiles["Функциональная диагностика"].matchers = defaults.depts["Функциональная диагностика"].matchers.slice();
+  profiles["Функциональная диагностика"].inheritGoals = true;
+  delete profiles["УЗИ"];
+
+  if (!departmentProfiles[CARDIOLOGY_DIAGNOSTICS_DEPARTMENT]) {
+    departmentProfiles[CARDIOLOGY_DIAGNOSTICS_DEPARTMENT] = copy(defaults.departmentProfiles[CARDIOLOGY_DIAGNOSTICS_DEPARTMENT]);
+  }
+  flags[CARDIOLOGY_DIAGNOSTICS_DEPARTMENT] = true;
+
+  for (const doctor of Object.values(DB.doctors || {})) {
+    if (!doctor || typeof doctor !== "object") continue;
+    const oldSpecialization = doctor.specialization || doctor.dept;
+    if (oldSpecialization === "Кардиология") {
+      doctor.department = CARDIOLOGY_DIAGNOSTICS_DEPARTMENT;
+      doctor.specialization = "Кардиология";
+      doctor.dept = "Кардиология";
+    } else if (oldSpecialization === "УЗИ") {
+      doctor.department = CARDIOLOGY_DIAGNOSTICS_DEPARTMENT;
+      doctor.specialization = "Функциональная диагностика";
+      doctor.dept = "Функциональная диагностика";
+    }
+  }
+
+  DB.settings.departments = departments;
+  DB.settings.departmentProfiles = departmentProfiles;
+  DB.settings.departmentUsesSpecializations = flags;
+  DB.settings.depts = profiles;
+  DB.settings.structureV = CLINIC_STRUCTURE_VERSION;
+  return true;
+}
+
 function upgradeClinicStructure(defaults) {
-  if (Number(DB.settings.structureV || 0) >= CLINIC_STRUCTURE_VERSION) return false;
+  const sourceVersion = Number(DB.settings.structureV || 0);
+  if (sourceVersion >= CLINIC_STRUCTURE_VERSION) return false;
+  if (sourceVersion === 1) return upgradeCardiologyDiagnosticsStructure(defaults);
   const sourceProfiles = (DB.settings.depts && typeof DB.settings.depts === "object") ? DB.settings.depts : {};
   const sourceDepartments = (DB.settings.departments && typeof DB.settings.departments === "object" && !Array.isArray(DB.settings.departments)) ? DB.settings.departments : {};
   const sourceDepartmentProfiles = (DB.settings.departmentProfiles && typeof DB.settings.departmentProfiles === "object") ? DB.settings.departmentProfiles : {};
   const sourceFlags = (DB.settings.departmentUsesSpecializations && typeof DB.settings.departmentUsesSpecializations === "object") ? DB.settings.departmentUsesSpecializations : {};
   const sourceBySpecialization = {
-    "Маммология": "Хирургия", "Флебология": "Хирургия", "УЗИ": "Хирургия",
-    "Эндокринология": "Терапия", "Кардиология": "Терапия", "Неврология": "Терапия", "Психотерапия": "Терапия",
+    "Маммология": "Хирургия", "Флебология": "Хирургия",
+    "Эндокринология": "Терапия", "Кардиология": "Терапия", "Функциональная диагностика": "УЗИ", "Неврология": "Терапия", "Психотерапия": "Терапия",
     "Эстетисты": "Косметология", "Специалисты по телу": "Физиотерапия", "Остеопатия": "Физиотерапия",
     "Урология": "Терапия",
   };
@@ -2849,7 +2930,7 @@ function upgradeClinicStructure(defaults) {
     targetDepartmentProfiles[departmentName] = copy(sourceDepartmentProfiles[departmentName] || sourceProfiles[departmentName] || defaults.depts["По умолчанию"]);
     targetFlags[departmentName] = sourceFlags[departmentName] === true;
   }
-  const legacyGeneralProfiles = new Set(["Хирургия", "Терапия", "Физиотерапия"]);
+  const legacyGeneralProfiles = new Set(["Хирургия", "Терапия", "Физиотерапия", "УЗИ"]);
   for (const [profileName, profile] of Object.entries(sourceProfiles)) {
     if (profileName === "По умолчанию" || targetProfiles[profileName] || legacyGeneralProfiles.has(profileName)) continue;
     targetProfiles[profileName] = copy(profile);
@@ -2867,6 +2948,7 @@ function upgradeClinicStructure(defaults) {
    достроить отделение -> опциональные специализации. */
 function normalizeProfiles() {
   const defaults = defaultSettings();
+  const sourceStructureVersion = Number(DB.settings.structureV || 0);
   const structureUpgraded = upgradeClinicStructure(defaults);
   let metricScopeUpgraded = false;
   if (!DB.settings.depts || typeof DB.settings.depts !== "object") DB.settings.depts = defaults.depts;
@@ -2972,7 +3054,32 @@ function normalizeProfiles() {
     }
   }
   const rosterExpanded = ensureClinicDoctors();
-  return structureUpgraded || metricScopeUpgraded || rosterExpanded;
+  const panDoctorEntry = Object.entries(DB.doctors || {}).find(([, doctor]) =>
+    [doctor.name, ...((doctor && doctor.aliases) || [])].some(name => fioTokens(name).includes("пан")));
+  let departmentHeadsUpgraded = false;
+  if (panDoctorEntry) {
+    const [panDoctorId, panDoctor] = panDoctorEntry;
+    if (fioTokens(panDoctor.name).length === 1) {
+      if (!Array.isArray(panDoctor.aliases)) panDoctor.aliases = [];
+      if (!panDoctor.aliases.includes(panDoctor.name)) panDoctor.aliases.push(panDoctor.name);
+      panDoctor.name = "Пан Константин Александрович";
+      departmentHeadsUpgraded = true;
+    }
+    const configuredHeads = (DB.settings.departmentHeadDoctorIds
+      && typeof DB.settings.departmentHeadDoctorIds === "object"
+      && !Array.isArray(DB.settings.departmentHeadDoctorIds))
+      ? DB.settings.departmentHeadDoctorIds : {};
+    const normalizedHeads = {};
+    for (const [departmentName, doctorId] of Object.entries(configuredHeads)) {
+      if (normalizedDepartments[departmentName] && DB.doctors[doctorId]) normalizedHeads[departmentName] = doctorId;
+    }
+    if (sourceStructureVersion < 2 && !normalizedHeads[CARDIOLOGY_DIAGNOSTICS_DEPARTMENT]) {
+      normalizedHeads[CARDIOLOGY_DIAGNOSTICS_DEPARTMENT] = panDoctorId;
+    }
+    if (JSON.stringify(configuredHeads) !== JSON.stringify(normalizedHeads)) departmentHeadsUpgraded = true;
+    DB.settings.departmentHeadDoctorIds = normalizedHeads;
+  }
+  return structureUpgraded || metricScopeUpgraded || rosterExpanded || departmentHeadsUpgraded;
 }
 
 function applyLoadedDatabase(parsed) {
@@ -4558,16 +4665,19 @@ function crossFocusMatch(profile, name) {
   return null;
 }
 
-/* Для настроенного фокуса домашнее отделение имеет приоритет над старой
- * классификацией номенклатуры. Приём остаётся приёмом, остальные домашние
- * услуги становятся профильными; услуги другого отделения уходят в общий
- * междисциплинарный блок. */
-function interdisciplinaryRefType(cls, focus, docId) {
-  const homeDepartment = interdisciplinaryHomeDepartment(focus);
-  if (!homeDepartment) return refTypeOf(cls);
-  if (homeDepartment !== resolvedDepartmentName(docId)) return "Другие услуги клиники";
+/* Точная привязка строки номенклатуры имеет приоритет над привязкой фокуса.
+ * Приём остаётся приёмом, остальные домашние услуги становятся профильными;
+ * услуги другого отделения уходят в общий междисциплинарный блок. */
+function interdisciplinaryRefType(cls, focus, docId, nomenclatureName) {
   const legacyType = refTypeOf(cls);
+  // Домашнее подразделение распределяет только услуги, для которых нет
+  // самостоятельной категории. Товары, приёмы и анализы не должны
+  // превращаться в «Другие услуги клиники» из-за чужого подразделения.
   if (["Товары", "Приемы", "Анализы"].includes(legacyType)) return legacyType;
+  const homeDepartment = interdisciplinaryHomeDepartment(nomenclatureName)
+    || interdisciplinaryHomeDepartment(focus);
+  if (!homeDepartment) return legacyType;
+  if (homeDepartment !== resolvedDepartmentName(docId)) return "Другие услуги клиники";
   return "Профильные услуги";
 }
 
@@ -4673,7 +4783,7 @@ function vyrabotkaSummary(docId, monthKey) {
     }
     if (ref > 0) {
       const focus = crossFocusMatch(profile, it.n);
-      const t = interdisciplinaryRefType(cls, focus, docId);
+      const t = interdisciplinaryRefType(cls, focus, docId, it.n);
       if (!out.refByType[t]) out.refByType[t] = { s: 0, q: 0, items: {} };
       const bt = out.refByType[t];
       bt.s += ref;
@@ -4721,7 +4831,7 @@ function naznachSummary(docId, monthKey, slice) {
     const soldQ = it.sq || 0;
     const resultQ = done + soldQ;
     const focus = crossFocusMatch(profile, it.n);
-    const t = interdisciplinaryRefType(cls, focus, docId);
+    const t = interdisciplinaryRefType(cls, focus, docId, it.n);
     const b = out.byType[t];
     b.assigned += it.a; b.done += done; b.soldQ += soldQ; b.soldSum += it.ss; b.resultQ += resultQ;
     if (!b.items[it.n]) b.items[it.n] = { assigned: 0, done: 0, soldQ: 0, soldSum: 0, resultQ: 0, goods };
@@ -5620,6 +5730,33 @@ async function refreshViewerPublicationAccess() {
   return VIEWER_ACCESS;
 }
 
+async function syncConfiguredViewerDepartmentHeads() {
+  if (!DESKTOP_API || !DESKTOP_API.updateViewerDepartmentHead) return VIEWER_ACCESS;
+  const configured = (DB.settings.departmentHeadDoctorIds
+    && typeof DB.settings.departmentHeadDoctorIds === "object"
+    && !Array.isArray(DB.settings.departmentHeadDoctorIds))
+    ? DB.settings.departmentHeadDoctorIds : {};
+  const entries = Object.entries(configured).filter(([, doctorId]) => DB.doctors[doctorId]);
+  if (!entries.length) return VIEWER_ACCESS;
+
+  let accessDoctorIds = new Set((VIEWER_ACCESS.doctors || []).map(item => String(item.doctorId)));
+  if (entries.some(([, doctorId]) => !accessDoctorIds.has(String(doctorId)))) {
+    if (!await saveLocal()) throw new Error("Не удалось сохранить врачей перед назначением заведующего");
+    await refreshViewerPublicationAccess();
+    accessDoctorIds = new Set((VIEWER_ACCESS.doctors || []).map(item => String(item.doctorId)));
+  }
+
+  let changed = false;
+  for (const [department, doctorId] of entries) {
+    if (!accessDoctorIds.has(String(doctorId))) continue;
+    if (String((VIEWER_ACCESS.departmentHeads || {})[department] || "") === String(doctorId)) continue;
+    VIEWER_ACCESS = await DESKTOP_API.updateViewerDepartmentHead({ department, doctorId });
+    changed = true;
+  }
+  if (changed) await refreshViewerPublicationAccess();
+  return VIEWER_ACCESS;
+}
+
 
 function setControlsDisabled(ids, disabled) {
   for (const id of ids) {
@@ -6457,7 +6594,7 @@ function specializationInterdisciplinaryHtml(rows, mk, specializationName, optio
   if (doctorRows.length) {
     html += `<section class="specialization-doctor-results">
       <div class="vhead"><h3>Итоги по врачам</h3><span class="spacer"></span>${copyBtn("copyTable", "tblSpecializationInterdisciplinary")}</div>
-      <div class="specialization-table-scroll"><table class="data specialization-doctor-summary-table" id="tblSpecializationInterdisciplinary"><tr><th>Врач</th><th class="num">Период</th><th class="num">Назначено</th><th class="num">Выполнено</th><th class="num">Продано</th><th class="num">Конверсия</th><th class="num">По фокусам<span class="specialization-doctor-focus-heading-note">назначено / сделано</span></th><th class="num">Выручка от перенаправлений</th></tr>`;
+      <div class="specialization-table-scroll"><table class="data specialization-doctor-summary-table" id="tblSpecializationInterdisciplinary"><tr><th>Врач</th><th class="num">Период</th><th class="num">Назначено</th><th class="num">Выполнено + продано</th><th class="num">Конверсия</th><th class="num">По фокусам<span class="specialization-doctor-focus-heading-note">назначено / сделано</span></th><th class="num">Выручка от перенаправлений</th></tr>`;
     for (const row of doctorRows) {
       const conv = row.nz.totals.conv;
       const convClass = conv == null ? "mut" : conv >= 40 ? "ok" : conv >= 20 ? "warn" : "bad";
@@ -6465,8 +6602,7 @@ function specializationInterdisciplinaryHtml(rows, mk, specializationName, optio
       const focusDone = row.nz.focus ? row.nz.focus.resultQ : 0;
       html += `<tr><td class="specialization-doctor-summary-name"><b>${esc(doctorName(row.id))}</b></td><td class="num"><span class="specialization-doctor-summary-period">${fmtNum(row.nz.slice)} мес.</span></td>
         <td class="num"><span class="specialization-doctor-summary-chip assigned">${fmtNum(row.nz.totals.assigned)}</span></td>
-        <td class="num"><span class="specialization-doctor-summary-chip completed">${fmtNum(row.nz.totals.done)}</span></td>
-        <td class="num"><span class="specialization-doctor-summary-chip sold">${fmtNum(row.nz.totals.soldQ)}</span></td>
+        <td class="num"><span class="specialization-doctor-summary-chip completed">${fmtNum(row.nz.totals.resultQ)}</span></td>
         <td class="num"><span class="badge ${convClass} specialization-doctor-summary-conversion">${conv != null ? fmtPct(conv) : "—"}</span></td>
         <td class="num"><span class="specialization-doctor-summary-focus"><b>${fmtNum(focusAssigned)}</b><span>/</span><b>${fmtNum(focusDone)}</b></span></td>
         <td class="num specialization-doctor-summary-revenue">${fmtMoney(row.r.econ.refRevenue)}</td></tr>`;
@@ -10263,6 +10399,12 @@ async function saveViewerDepartmentHead(select) {
   select.disabled = true;
   try {
     await DESKTOP_API.updateViewerDepartmentHead({ department, doctorId });
+    if (!DB.settings.departmentHeadDoctorIds || typeof DB.settings.departmentHeadDoctorIds !== "object") {
+      DB.settings.departmentHeadDoctorIds = {};
+    }
+    if (doctorId) DB.settings.departmentHeadDoctorIds[department] = doctorId;
+    else delete DB.settings.departmentHeadDoctorIds[department];
+    if (!await saveLocal()) throw new Error("назначение не записано в рабочую базу");
     await refreshViewerPublicationAccess();
     toast(doctorId ? `Заведующий отделения «${department}» сохранён` : `Заведующий отделения «${department}» снят`);
     renderSettings();
@@ -10500,8 +10642,8 @@ function renderSettings() {
     <p class="small muted">Фокусы — по одному в строке: <code>Название = синоним1, синоним2</code>. Звёздочка в начале строки — отслеживать, но не учитывать в широте фокусов. Штуки и выручка берутся из проданных назначений.</p>
     <textarea id="cf_items" placeholder="Название = синоним1, синоним2" style="min-height:150px">${esc((crossFocus.items || []).map(item => (item.core === false ? "* " : "") + item.name + " = " + (item.syn || []).join(", ")).join("\n"))}</textarea>
     ${fmtEx("УЗИ сердца = эхокардиография, эхо-кг\nХолтер = холтер, суточное мониторирование\n* Анализы = лабораторные исследования")}
-    <h3 style="margin:14px 0 6px">Домашнее подразделение услуг</h3>
-    <p class="small muted">Это общая настройка: выбранное подразделение применяется к этому фокусу во всех профилях и отчётах. Для врача домашняя услуга попадёт в «Приёмы» или «Профильные услуги», а услуга другого подразделения — в «Другие услуги клиники».</p>
+    <h3 style="margin:14px 0 6px">Резервная привязка фокусов к подразделению</h3>
+    <p class="small muted">Эта общая настройка применяется ко всем услугам, совпавшим с фокусом. Точную привязку конкретной услуги задайте ниже в «Номенклатуре» — она имеет приоритет. Для врача домашняя услуга попадёт в «Приёмы» или «Профильные услуги», а услуга другого подразделения — в «Другие услуги клиники».</p>
     ${crossFocusHomeRows ? `<div class="scroll-y"><table class="data"><tr><th>Услуга / фокус</th><th>Домашнее подразделение</th></tr>${crossFocusHomeRows}</table></div>` : `<div class="notice blue">Сначала добавьте и сохраните фокусы — после этого для них можно выбрать домашнее подразделение.</div>`}
     <p class="small muted">В балл Вектора 3 добавляются широта фокусов и доля их выручки. Цель по доле выручки задаётся ниже в блоке «Баллы и веса».</p>
     <div class="toolbar"><button class="btn primary" onclick="saveCrossFocusSettings()">💾 Сохранить фокусы Вектора 3</button></div>
@@ -10529,18 +10671,21 @@ function renderSettings() {
     return o;
   };
   html += `<details class="card" style="display:block" ${det("nom")}><summary style="cursor:pointer"><b>🧩 Номенклатура — «${esc(dn)}»</b> <span class="small muted">(${nomAll.length} позиций, неразобрано: ${unmappedCnt})</span></summary>
-    <p class="small muted" style="margin-top:8px">Скрипт разложил всё автоматически — здесь можно поправить руками: вид позиции, категорию и привязку к «${esc(exp.title)}». На графиках всегда показываются и количество, и выручка. Ручная правка помечается ✋ и применяется ко всем месяцам.</p>
+    <p class="small muted" style="margin-top:8px">Скрипт разложил всё автоматически — здесь можно поправить руками: вид позиции, категорию, домашнее подразделение услуги и привязку к «${esc(exp.title)}». Домашнее подразделение распределяет обычные услуги из «Выработки» между «Профильными услугами» и «Другими услугами клиники». Товары, приёмы и анализы всегда остаются самостоятельными категориями. Точная привязка номенклатуры имеет приоритет над привязкой фокуса и применяется ко всем месяцам.</p>
     <div class="toolbar">
       <input type="text" id="nomFilter" placeholder="поиск по названию…" value="${esc(UI.nomFilter || "")}">
       <label class="small"><input type="checkbox" id="nomUnm" ${showUnmappedOnly ? "checked" : ""} onchange="UI.nomUnmappedOnly=this.checked;renderSettings()"> только неразобранные</label>
     </div>
-    <div class="scroll-y" id="nomScroll" style="max-height:520px"><table class="data"><tr><th>Позиция</th><th class="num">Шт / Сумма</th><th>Вид</th><th>Категория</th><th title="Привязка к отслеживаемой позиции экспертности">${esc(exp.title)}</th><th></th></tr>`;
+    <div class="scroll-y" id="nomScroll" style="max-height:520px;overflow:auto"><table class="data"><tr><th>Позиция</th><th class="num">Шт / Сумма</th><th>Вид</th><th>Категория</th><th title="Подразделение, которому принадлежит услуга">Подразделение услуги</th><th title="Привязка к отслеживаемой позиции экспертности">${esc(exp.title)}</th><th></th></tr>`;
   nomItems.slice(0, 300).forEach((u, i) => {
     const ov = u.override || {};
     const autoKind = u.goods ? "товар" : "услуга";
     const kindSel = ov.type || "";
     const catSel = ov.group ? ov.group + "||" + (ov.sub || "") : "";
     const exSel = "expertItem" in ov ? (ov.expertItem || "__none__") : "";
+    const homeDepartment = interdisciplinaryHomeDepartment(u.n);
+    const fixedReferralType = refTypeOf(u.cls);
+    const hasFixedReferralType = ["Товары", "Приемы", "Анализы"].includes(fixedReferralType);
     html += `<tr>
       <td class="small">${esc(u.n.length > 60 ? u.n.slice(0, 60) + "…" : u.n)}${Object.keys(ov).length ? ' <span title="есть ручные правки">✋</span>' : ""}<br><span class="muted">${esc(u.cat || "")}</span></td>
       <td class="num small">${fmtNum(u.q)} / ${fmtMoney(u.s)}</td>
@@ -10553,6 +10698,10 @@ function renderSettings() {
       </select></td>
       <td><select onchange="nomSetCat(${i}, this.value)">${groupSelOptions(catSel)}</select>
         <div class="small muted">сейчас: ${esc(u.cls.group)}${u.cls.sub ? " → " + esc(u.cls.sub) : ""}${u.cls.unmapped ? ' <span class="badge bad">неразобрано</span>' : ""}</div></td>
+      <td>${hasFixedReferralType ? `<span class="small muted">${esc(fixedReferralType)} — отдельная категория</span>` : `<select data-service-name="${esc(u.n)}" onchange="setInterdisciplinaryHomeDepartment(this)">
+        <option value="">— не задано —</option>
+        ${crossFocusDepartments.map(name => `<option value="${esc(name)}" ${homeDepartment === name ? "selected" : ""}>${esc(name)}</option>`).join("")}
+      </select>`}</td>
       <td><select onchange="nomSetExpert(${i}, this.value)">
         <option value="" ${!exSel ? "selected" : ""}>авто${u.cls.expertItem ? ": " + esc(u.cls.expertItem) : ": —"}</option>
         ${(exp.items || []).map(d => `<option value="${esc(d.name)}" ${exSel === d.name ? "selected" : ""}>${esc(d.name)}</option>`).join("")}
@@ -10560,7 +10709,7 @@ function renderSettings() {
       </select></td>
       <td>${Object.keys(ov).length ? `<button class="btn mini" onclick="nomReset(${i})" title="убрать ручные правки">↺</button>` : ""}</td></tr>`;
   });
-  if (nomItems.length > 300) html += `<tr><td colspan="6" class="small muted">Показаны первые 300 — уточните поиск.</td></tr>`;
+  if (nomItems.length > 300) html += `<tr><td colspan="7" class="small muted">Показаны первые 300 — уточните поиск.</td></tr>`;
   html += `</table></div>
     <details style="margin-top:10px" ${det("rules")}><summary class="small muted" style="cursor:pointer">Расширенное: правила по подстрокам (${(p.rules || []).length})</summary>
       <p class="small muted">Формат строки: <code>подстрока = Группа / Подгруппа / вид</code>. Подгруппу и вид (<i>услуга</i> или <i>товар</i>) можно не писать. Правила проверяются по порядку; ручные правки номенклатуры выше сильнее правил.</p>
@@ -10875,8 +11024,9 @@ function saveCrossFocusSettings() {
   renderAll();
 }
 function setInterdisciplinaryHomeDepartment(select) {
-  const focusName = select && select.dataset ? select.dataset.focusName : "";
-  const key = interdisciplinaryServiceKey(focusName);
+  const serviceName = select && select.dataset
+    ? (select.dataset.serviceName || select.dataset.focusName || "") : "";
+  const key = interdisciplinaryServiceKey(serviceName);
   if (!key) return;
   if (!DB.settings.interdisciplinaryHomeDepartments || typeof DB.settings.interdisciplinaryHomeDepartments !== "object") {
     DB.settings.interdisciplinaryHomeDepartments = {};
@@ -10887,8 +11037,8 @@ function setInterdisciplinaryHomeDepartment(select) {
   clearMetricsCache();
   saveLocal();
   toast(departmentName
-    ? `Домашнее подразделение «${focusName}»: ${departmentName}`
-    : `Домашнее подразделение «${focusName}» сброшено`);
+    ? `Домашнее подразделение «${serviceName}»: ${departmentName}`
+    : `Домашнее подразделение «${serviceName}» сброшено`);
   renderAll();
 }
 function bindCandidate(i, val) {
@@ -11173,6 +11323,7 @@ async function initApp() {
   if (DESKTOP_API) {
     await loadDesktopDatabase();
     await refreshViewerPublicationAccess();
+    await syncConfiguredViewerDepartmentHeads();
     renderDesktopWorkspace();
   } else {
     loadLocal();

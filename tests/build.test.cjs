@@ -155,7 +155,11 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /doctor-goal-item \$\{state\}/);
   assert.match(actual, /saveCrossFocusSettings/);
   assert.match(actual, /setInterdisciplinaryHomeDepartment/);
-  assert.match(actual, /Домашнее подразделение услуг/);
+  assert.match(actual, /Резервная привязка фокусов к подразделению/);
+  assert.match(actual, /data-service-name/);
+  assert.match(actual, /Точная привязка номенклатуры имеет приоритет/);
+  assert.match(actual, /Товары, приёмы и анализы всегда остаются самостоятельными категориями/);
+  assert.match(actual, /fixedReferralType/);
   assert.match(actual, /Фокусы междисциплинарного подхода \(Вектор 3\)/);
   assert.match(actual, /chNazFocusAssigned/);
   assert.match(actual, /chNazFocusResult/);
@@ -426,7 +430,7 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "2.5.1");
+  assert.equal(packageJson.version, "2.5.2");
   assert.equal(packageJson.build.productName, "КлинВект Щербатова — Администратор");
   assert.equal(packageJson.build.artifactName, "KlinVekt-Shcherbatova-Admin-Setup-${version}-${arch}.${ext}");
   assert.equal(packageJson.scripts["dist:portable"], undefined);
@@ -540,6 +544,9 @@ test("specialization page shows doctor focus matrix, highlighted summary and no 
   assert.match(ui, /Итого по специализации/);
   assert.match(ui, /class="data specialization-doctor-summary-table"/);
   assert.match(ui, /specialization-doctor-summary-chip assigned/);
+  assert.match(ui, /<th class="num">Выполнено \+ продано<\/th>/);
+  assert.match(ui, /specialization-doctor-summary-chip completed[^\n]*row\.nz\.totals\.resultQ/);
+  assert.doesNotMatch(ui, /specialization-doctor-summary-chip sold/);
   assert.match(ui, /specialization-doctor-summary-focus/);
   assert.doesNotMatch(ui, /Группировка из файла 1С/);
   assert.doesNotMatch(ui, /class="specialization-1c-doctor"/);

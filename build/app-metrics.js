@@ -158,16 +158,19 @@ function crossFocusMatch(profile, name) {
   return null;
 }
 
-/* Для настроенного фокуса домашнее отделение имеет приоритет над старой
- * классификацией номенклатуры. Приём остаётся приёмом, остальные домашние
- * услуги становятся профильными; услуги другого отделения уходят в общий
- * междисциплинарный блок. */
-function interdisciplinaryRefType(cls, focus, docId) {
-  const homeDepartment = interdisciplinaryHomeDepartment(focus);
-  if (!homeDepartment) return refTypeOf(cls);
-  if (homeDepartment !== resolvedDepartmentName(docId)) return "Другие услуги клиники";
+/* Точная привязка строки номенклатуры имеет приоритет над привязкой фокуса.
+ * Приём остаётся приёмом, остальные домашние услуги становятся профильными;
+ * услуги другого отделения уходят в общий междисциплинарный блок. */
+function interdisciplinaryRefType(cls, focus, docId, nomenclatureName) {
   const legacyType = refTypeOf(cls);
+  // Домашнее подразделение распределяет только услуги, для которых нет
+  // самостоятельной категории. Товары, приёмы и анализы не должны
+  // превращаться в «Другие услуги клиники» из-за чужого подразделения.
   if (["Товары", "Приемы", "Анализы"].includes(legacyType)) return legacyType;
+  const homeDepartment = interdisciplinaryHomeDepartment(nomenclatureName)
+    || interdisciplinaryHomeDepartment(focus);
+  if (!homeDepartment) return legacyType;
+  if (homeDepartment !== resolvedDepartmentName(docId)) return "Другие услуги клиники";
   return "Профильные услуги";
 }
 
@@ -273,7 +276,7 @@ function vyrabotkaSummary(docId, monthKey) {
     }
     if (ref > 0) {
       const focus = crossFocusMatch(profile, it.n);
-      const t = interdisciplinaryRefType(cls, focus, docId);
+      const t = interdisciplinaryRefType(cls, focus, docId, it.n);
       if (!out.refByType[t]) out.refByType[t] = { s: 0, q: 0, items: {} };
       const bt = out.refByType[t];
       bt.s += ref;
@@ -321,7 +324,7 @@ function naznachSummary(docId, monthKey, slice) {
     const soldQ = it.sq || 0;
     const resultQ = done + soldQ;
     const focus = crossFocusMatch(profile, it.n);
-    const t = interdisciplinaryRefType(cls, focus, docId);
+    const t = interdisciplinaryRefType(cls, focus, docId, it.n);
     const b = out.byType[t];
     b.assigned += it.a; b.done += done; b.soldQ += soldQ; b.soldSum += it.ss; b.resultQ += resultQ;
     if (!b.items[it.n]) b.items[it.n] = { assigned: 0, done: 0, soldQ: 0, soldSum: 0, resultQ: 0, goods };

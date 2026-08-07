@@ -353,13 +353,19 @@ function profilePhysiotherapy() {
   return p;
 }
 
-const CLINIC_STRUCTURE_VERSION = 1;
+const CLINIC_STRUCTURE_VERSION = 2;
+const CARDIOLOGY_DIAGNOSTICS_DEPARTMENT = "Кардиология и Функциональная диагностика";
 const CLINIC_DEPARTMENT_SPECS = Object.freeze({
-  "Хирургия": ["Маммология", "Флебология", "УЗИ"],
-  "Терапия": ["Эндокринология", "Кардиология", "Неврология", "Психотерапия"],
+  "Хирургия": ["Маммология", "Флебология"],
+  "Терапия": ["Эндокринология", "Неврология", "Психотерапия"],
   "Косметология": ["Косметология", "Эстетисты"],
   "Физиотерапия": ["Специалисты по телу", "Остеопатия"],
   "Гинекология": ["Гинекология", "Урология"],
+  [CARDIOLOGY_DIAGNOSTICS_DEPARTMENT]: ["Кардиология", "Функциональная диагностика"],
+});
+
+const CLINIC_DEPARTMENT_HEAD_SURNAMES = Object.freeze({
+  [CARDIOLOGY_DIAGNOSTICS_DEPARTMENT]: "пан",
 });
 
 const CLINIC_DOCTOR_STRUCTURE = Object.freeze([
@@ -369,9 +375,9 @@ const CLINIC_DOCTOR_STRUCTURE = Object.freeze([
   { surnames: ["королева"], department: "Гинекология", specialization: "Урология" },
   { surnames: ["дубровская"], department: "Хирургия", specialization: "Флебология" },
   { surnames: ["самсонова", "никифорова"], department: "Хирургия", specialization: "Маммология" },
-  { surnames: ["перцхелия"], department: "Хирургия", specialization: "УЗИ" },
+  { surnames: ["перцхелия"], department: CARDIOLOGY_DIAGNOSTICS_DEPARTMENT, specialization: "Функциональная диагностика" },
   { surnames: ["бузина", "гоголева", "мановицкая", "жуйков"], department: "Терапия", specialization: "Эндокринология" },
-  { surnames: ["пан", "провоторова", "ахильгова"], department: "Терапия", specialization: "Кардиология" },
+  { surnames: ["пан", "провоторова", "провторова", "ахильгова"], department: CARDIOLOGY_DIAGNOSTICS_DEPARTMENT, specialization: "Кардиология" },
   { surnames: ["федроов", "федоров"], department: "Терапия", specialization: "Неврология" },
   { surnames: ["кузьменков"], department: "Терапия", specialization: "Психотерапия" },
 ]);
@@ -385,12 +391,25 @@ const CLINIC_STAFF = Object.freeze([
 function defaultDoctors() {
   const doctors = {};
   CLINIC_STAFF.forEach((name, index) => {
+    const displayName = name === "Пан" ? "Пан Константин Александрович" : name;
     doctors[`clinic_${String(index + 1).padStart(2, "0")}`] = {
-      name,
-      aliases: name === "Федроов" ? ["Федоров"] : [],
+      name: displayName,
+      aliases: name === "Федроов" ? ["Федоров"]
+        : (name === "Пан" ? ["Пан"] : (name === "Провоторова" ? ["Провторова"] : [])),
     };
   });
   return doctors;
+}
+
+function clinicDepartmentHeadDoctorIds(doctors) {
+  const entries = Object.entries(doctors || {});
+  const result = {};
+  for (const [departmentName, surname] of Object.entries(CLINIC_DEPARTMENT_HEAD_SURNAMES)) {
+    const match = entries.find(([, doctor]) => [doctor.name, ...((doctor && doctor.aliases) || [])]
+      .some(name => fioTokens(name).includes(surname)));
+    if (match) result[departmentName] = match[0];
+  }
+  return result;
 }
 
 function ensureClinicDoctors() {
@@ -421,9 +440,9 @@ function clinicSpecializationProfiles() {
     "По умолчанию": defaultProfile(),
     "Маммология": cloneProfile(profileSurgery(), ["маммолог", "онкодермат", "дермотоонко"]),
     "Флебология": cloneProfile(profileSurgery(), ["флеболог"]),
-    "УЗИ": cloneProfile(profileSurgery(), ["узи", "ультразвуков"]),
     "Эндокринология": cloneProfile(profileTherapy(), ["эндокрин"]),
     "Кардиология": cloneProfile(profileTherapy(), ["кардио"]),
+    "Функциональная диагностика": cloneProfile(profileTherapy(), ["функциональн", "узд", "узи", "ультразвуков", "эхокг", "экг", "холтер"]),
     "Неврология": cloneProfile(profileTherapy(), ["невролог"]),
     "Психотерапия": cloneProfile(profileTherapy(), ["психотерап", "психиат"]),
     "Косметология": cloneProfile(profileCosmetology(), ["косметолог", "дермат"]),
@@ -441,15 +460,18 @@ function clinicSpecializationProfiles() {
 
 function clinicDepartmentProfiles() {
   const therapy = profileTherapy();
-  therapy.matchers = therapy.matchers.filter(matcher => matcher !== "уролог");
+  therapy.matchers = therapy.matchers.filter(matcher => !["уролог", "кардио"].includes(matcher));
   const gynecology = profileGynecology();
   gynecology.matchers = [...gynecology.matchers, "уролог"];
+  const cardiologyDiagnostics = profileTherapy();
+  cardiologyDiagnostics.matchers = ["кардио", "функциональн", "узд", "узи", "ультразвуков", "эхокг", "экг", "холтер"];
   return {
     "Хирургия": profileSurgery(),
     "Терапия": therapy,
     "Косметология": profileCosmetology(),
     "Физиотерапия": profilePhysiotherapy(),
     "Гинекология": gynecology,
+    [CARDIOLOGY_DIAGNOSTICS_DEPARTMENT]: cardiologyDiagnostics,
   };
 }
 
@@ -471,7 +493,9 @@ function defaultSettings() {
       "Косметология": true,
       "Физиотерапия": true,
       "Гинекология": true,
+      [CARDIOLOGY_DIAGNOSTICS_DEPARTMENT]: true,
     },
+    departmentHeadDoctorIds: clinicDepartmentHeadDoctorIds(defaultDoctors()),
     interdisciplinaryHomeDepartments: {},
     depts: clinicSpecializationProfiles(),
   };
@@ -508,9 +532,9 @@ function departmentGroups() {
   return result;
 }
 
-/* Домашнее отделение задаётся один раз для фокуса Вектора 3 и действует
- * во всех профилях. Ключ нормализован, чтобы регистр названия не создавал
- * несколько независимых настроек одной и той же услуги. */
+/* Домашнее отделение задаётся один раз для точной строки номенклатуры или
+ * фокуса Вектора 3 и действует во всех профилях. Ключ нормализован, чтобы
+ * регистр названия не создавал несколько настроек одной и той же услуги. */
 function interdisciplinaryServiceKey(name) {
   return String(name || "").trim().toLocaleLowerCase("ru-RU");
 }
@@ -1052,15 +1076,72 @@ function normalizeProfileRecord(raw, inherited) {
   return p;
 }
 
+/* v2 выделяет кардиологию и функциональную диагностику из прежних
+ * отделений. Пользовательские настройки профилей сохраняются: профиль
+ * «Кардиология» переносится как есть, а прежний профиль «УЗИ» становится
+ * стартовой точкой для «Функциональной диагностики». */
+function upgradeCardiologyDiagnosticsStructure(defaults) {
+  const copy = value => JSON.parse(JSON.stringify(value));
+  const departments = (DB.settings.departments && typeof DB.settings.departments === "object" && !Array.isArray(DB.settings.departments))
+    ? copy(DB.settings.departments) : copy(defaults.departments);
+  const profiles = (DB.settings.depts && typeof DB.settings.depts === "object")
+    ? copy(DB.settings.depts) : copy(defaults.depts);
+  const departmentProfiles = (DB.settings.departmentProfiles && typeof DB.settings.departmentProfiles === "object")
+    ? copy(DB.settings.departmentProfiles) : {};
+  const flags = (DB.settings.departmentUsesSpecializations && typeof DB.settings.departmentUsesSpecializations === "object")
+    ? copy(DB.settings.departmentUsesSpecializations) : {};
+
+  for (const [departmentName, specs] of Object.entries(departments)) {
+    departments[departmentName] = (Array.isArray(specs) ? specs : [])
+      .filter(specName => !["Кардиология", "УЗИ", "Функциональная диагностика"].includes(specName));
+  }
+  departments[CARDIOLOGY_DIAGNOSTICS_DEPARTMENT] = ["Кардиология", "Функциональная диагностика"];
+
+  if (!profiles["Кардиология"]) profiles["Кардиология"] = copy(defaults.depts["Кардиология"]);
+  const functionalSeed = profiles["Функциональная диагностика"] || profiles["УЗИ"] || defaults.depts["Функциональная диагностика"];
+  profiles["Функциональная диагностика"] = copy(functionalSeed);
+  profiles["Функциональная диагностика"].matchers = defaults.depts["Функциональная диагностика"].matchers.slice();
+  profiles["Функциональная диагностика"].inheritGoals = true;
+  delete profiles["УЗИ"];
+
+  if (!departmentProfiles[CARDIOLOGY_DIAGNOSTICS_DEPARTMENT]) {
+    departmentProfiles[CARDIOLOGY_DIAGNOSTICS_DEPARTMENT] = copy(defaults.departmentProfiles[CARDIOLOGY_DIAGNOSTICS_DEPARTMENT]);
+  }
+  flags[CARDIOLOGY_DIAGNOSTICS_DEPARTMENT] = true;
+
+  for (const doctor of Object.values(DB.doctors || {})) {
+    if (!doctor || typeof doctor !== "object") continue;
+    const oldSpecialization = doctor.specialization || doctor.dept;
+    if (oldSpecialization === "Кардиология") {
+      doctor.department = CARDIOLOGY_DIAGNOSTICS_DEPARTMENT;
+      doctor.specialization = "Кардиология";
+      doctor.dept = "Кардиология";
+    } else if (oldSpecialization === "УЗИ") {
+      doctor.department = CARDIOLOGY_DIAGNOSTICS_DEPARTMENT;
+      doctor.specialization = "Функциональная диагностика";
+      doctor.dept = "Функциональная диагностика";
+    }
+  }
+
+  DB.settings.departments = departments;
+  DB.settings.departmentProfiles = departmentProfiles;
+  DB.settings.departmentUsesSpecializations = flags;
+  DB.settings.depts = profiles;
+  DB.settings.structureV = CLINIC_STRUCTURE_VERSION;
+  return true;
+}
+
 function upgradeClinicStructure(defaults) {
-  if (Number(DB.settings.structureV || 0) >= CLINIC_STRUCTURE_VERSION) return false;
+  const sourceVersion = Number(DB.settings.structureV || 0);
+  if (sourceVersion >= CLINIC_STRUCTURE_VERSION) return false;
+  if (sourceVersion === 1) return upgradeCardiologyDiagnosticsStructure(defaults);
   const sourceProfiles = (DB.settings.depts && typeof DB.settings.depts === "object") ? DB.settings.depts : {};
   const sourceDepartments = (DB.settings.departments && typeof DB.settings.departments === "object" && !Array.isArray(DB.settings.departments)) ? DB.settings.departments : {};
   const sourceDepartmentProfiles = (DB.settings.departmentProfiles && typeof DB.settings.departmentProfiles === "object") ? DB.settings.departmentProfiles : {};
   const sourceFlags = (DB.settings.departmentUsesSpecializations && typeof DB.settings.departmentUsesSpecializations === "object") ? DB.settings.departmentUsesSpecializations : {};
   const sourceBySpecialization = {
-    "Маммология": "Хирургия", "Флебология": "Хирургия", "УЗИ": "Хирургия",
-    "Эндокринология": "Терапия", "Кардиология": "Терапия", "Неврология": "Терапия", "Психотерапия": "Терапия",
+    "Маммология": "Хирургия", "Флебология": "Хирургия",
+    "Эндокринология": "Терапия", "Кардиология": "Терапия", "Функциональная диагностика": "УЗИ", "Неврология": "Терапия", "Психотерапия": "Терапия",
     "Эстетисты": "Косметология", "Специалисты по телу": "Физиотерапия", "Остеопатия": "Физиотерапия",
     "Урология": "Терапия",
   };
@@ -1094,7 +1175,7 @@ function upgradeClinicStructure(defaults) {
     targetDepartmentProfiles[departmentName] = copy(sourceDepartmentProfiles[departmentName] || sourceProfiles[departmentName] || defaults.depts["По умолчанию"]);
     targetFlags[departmentName] = sourceFlags[departmentName] === true;
   }
-  const legacyGeneralProfiles = new Set(["Хирургия", "Терапия", "Физиотерапия"]);
+  const legacyGeneralProfiles = new Set(["Хирургия", "Терапия", "Физиотерапия", "УЗИ"]);
   for (const [profileName, profile] of Object.entries(sourceProfiles)) {
     if (profileName === "По умолчанию" || targetProfiles[profileName] || legacyGeneralProfiles.has(profileName)) continue;
     targetProfiles[profileName] = copy(profile);
@@ -1112,6 +1193,7 @@ function upgradeClinicStructure(defaults) {
    достроить отделение -> опциональные специализации. */
 function normalizeProfiles() {
   const defaults = defaultSettings();
+  const sourceStructureVersion = Number(DB.settings.structureV || 0);
   const structureUpgraded = upgradeClinicStructure(defaults);
   let metricScopeUpgraded = false;
   if (!DB.settings.depts || typeof DB.settings.depts !== "object") DB.settings.depts = defaults.depts;
@@ -1217,7 +1299,32 @@ function normalizeProfiles() {
     }
   }
   const rosterExpanded = ensureClinicDoctors();
-  return structureUpgraded || metricScopeUpgraded || rosterExpanded;
+  const panDoctorEntry = Object.entries(DB.doctors || {}).find(([, doctor]) =>
+    [doctor.name, ...((doctor && doctor.aliases) || [])].some(name => fioTokens(name).includes("пан")));
+  let departmentHeadsUpgraded = false;
+  if (panDoctorEntry) {
+    const [panDoctorId, panDoctor] = panDoctorEntry;
+    if (fioTokens(panDoctor.name).length === 1) {
+      if (!Array.isArray(panDoctor.aliases)) panDoctor.aliases = [];
+      if (!panDoctor.aliases.includes(panDoctor.name)) panDoctor.aliases.push(panDoctor.name);
+      panDoctor.name = "Пан Константин Александрович";
+      departmentHeadsUpgraded = true;
+    }
+    const configuredHeads = (DB.settings.departmentHeadDoctorIds
+      && typeof DB.settings.departmentHeadDoctorIds === "object"
+      && !Array.isArray(DB.settings.departmentHeadDoctorIds))
+      ? DB.settings.departmentHeadDoctorIds : {};
+    const normalizedHeads = {};
+    for (const [departmentName, doctorId] of Object.entries(configuredHeads)) {
+      if (normalizedDepartments[departmentName] && DB.doctors[doctorId]) normalizedHeads[departmentName] = doctorId;
+    }
+    if (sourceStructureVersion < 2 && !normalizedHeads[CARDIOLOGY_DIAGNOSTICS_DEPARTMENT]) {
+      normalizedHeads[CARDIOLOGY_DIAGNOSTICS_DEPARTMENT] = panDoctorId;
+    }
+    if (JSON.stringify(configuredHeads) !== JSON.stringify(normalizedHeads)) departmentHeadsUpgraded = true;
+    DB.settings.departmentHeadDoctorIds = normalizedHeads;
+  }
+  return structureUpgraded || metricScopeUpgraded || rosterExpanded || departmentHeadsUpgraded;
 }
 
 function applyLoadedDatabase(parsed) {

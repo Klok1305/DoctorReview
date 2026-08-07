@@ -698,6 +698,104 @@ test("interdisciplinary home departments split own and foreign services in assig
   assert.equal(plain.referrals['Другие услуги клиники'].s, 300);
 });
 
+test("exact nomenclature departments split performed referrals without adding services to focuses", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    const base = normalizeProfileRecord(defaultProfile(), defaultProfile());
+    DB.settings.departments = { 'Косметология': [], 'Хирургия': [] };
+    DB.settings.departmentProfiles = {
+      'Косметология': normalizeProfileRecord(JSON.parse(JSON.stringify(base)), base),
+      'Хирургия': normalizeProfileRecord(JSON.parse(JSON.stringify(base)), base)
+    };
+    DB.settings.departmentUsesSpecializations = { 'Косметология': false, 'Хирургия': false };
+    DB.settings.interdisciplinaryHomeDepartments = {
+      'своя процедура (с/0001)': 'Косметология',
+      'чужая процедура (с/0002)': 'Хирургия'
+    };
+    DB.doctors = { d1: { name: 'Тестовый Косметолог', aliases: [], department: 'Косметология', structureManual: true } };
+    const profile = DB.settings.departmentProfiles['Косметология'];
+    profile.crossFocus = { title: 'Междисциплинарный подход', items: [], rules: [] };
+    profile.overrides = {
+      'своя процедура (с/0001)': { group: 'Другие услуги', sub: 'Прочие' },
+      'чужая процедура (с/0002)': { group: 'Процедуры', sub: 'Прочее' }
+    };
+    DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].naznach.d1 = { '1': { items: [
+      { n: 'Своя процедура (С/0001)', a: 2, d: 1, sq: 0, ss: 0 },
+      { n: 'Чужая процедура (С/0002)', a: 3, d: 1, sq: 0, ss: 0 }
+    ] } };
+    DB.months['2026-01'].vyrabotka.d1 = { items: [
+      { sourceForm: 'Направление', cat: '', n: 'Своя процедура (С/0001)', q: 1, sOwn: 100, sRef: 0, goods: false },
+      { sourceForm: 'Направление', cat: '', n: 'Чужая процедура (С/0002)', q: 1, sOwn: 300, sRef: 0, goods: false }
+    ] };
+    clearMetricsCache();
+    return {
+      assignments: naznachSummary('d1', '2026-01', 1).byType,
+      referrals: vyrabotkaSummary('d1', '2026-01').refByType
+    };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.equal(plain.assignments['Профильные услуги'].assigned, 2);
+  assert.equal(plain.assignments['Другие услуги клиники'].assigned, 3);
+  assert.equal(plain.referrals['Профильные услуги'].s, 100);
+  assert.equal(plain.referrals['Другие услуги клиники'].s, 300);
+});
+
+test("home departments split ordinary services but keep goods appointments and analyses in fixed categories", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    const base = normalizeProfileRecord(defaultProfile(), defaultProfile());
+    DB.settings.departments = { 'Косметология': [], 'Хирургия': [] };
+    DB.settings.departmentProfiles = {
+      'Косметология': normalizeProfileRecord(JSON.parse(JSON.stringify(base)), base),
+      'Хирургия': normalizeProfileRecord(JSON.parse(JSON.stringify(base)), base)
+    };
+    DB.settings.departmentUsesSpecializations = { 'Косметология': false, 'Хирургия': false };
+    DB.settings.interdisciplinaryHomeDepartments = {
+      'чужая услуга': 'Хирургия',
+      'чужой товар': 'Хирургия',
+      'чужой прием': 'Хирургия',
+      'чужой анализ': 'Хирургия'
+    };
+    DB.doctors = { d1: { name: 'Тестовый Косметолог', aliases: [], department: 'Косметология', structureManual: true } };
+    const profile = DB.settings.departmentProfiles['Косметология'];
+    profile.crossFocus = { title: 'Междисциплинарный подход', items: [], rules: [] };
+    profile.overrides = {
+      'чужая услуга': { type: 'услуга', group: 'Процедуры', sub: 'Прочее' },
+      'чужой товар': { type: 'товар', group: 'Товары', sub: 'Аптека и процедурка' },
+      'чужой прием': { type: 'услуга', group: 'Приемы', sub: '' },
+      'чужой анализ': { type: 'услуга', group: 'Анализы', sub: '' }
+    };
+    DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].naznach.d1 = { '1': { items: [
+      { n: 'Чужая услуга', a: 1, d: 1, sq: 0, ss: 0 },
+      { n: 'Чужой товар', a: 2, d: 0, sq: 2, ss: 200, goods: true },
+      { n: 'Чужой прием', a: 3, d: 1, sq: 0, ss: 0 },
+      { n: 'Чужой анализ', a: 4, d: 1, sq: 0, ss: 0 }
+    ] } };
+    DB.months['2026-01'].vyrabotka.d1 = { items: [
+      { sourceForm: 'Направление', cat: '', n: 'Чужая услуга', q: 1, sOwn: 100, sRef: 0, goods: false },
+      { sourceForm: 'Направление', cat: '', n: 'Чужой товар', q: 2, sOwn: 200, sRef: 0, goods: true },
+      { sourceForm: 'Направление', cat: '', n: 'Чужой прием', q: 3, sOwn: 300, sRef: 0, goods: false },
+      { sourceForm: 'Направление', cat: '', n: 'Чужой анализ', q: 4, sOwn: 400, sRef: 0, goods: false }
+    ] };
+    clearMetricsCache();
+    return {
+      assignments: naznachSummary('d1', '2026-01', 1).byType,
+      referrals: vyrabotkaSummary('d1', '2026-01').refByType
+    };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.equal(plain.assignments['Другие услуги клиники'].assigned, 1);
+  assert.equal(plain.assignments['Товары'].assigned, 2);
+  assert.equal(plain.assignments['Приемы'].assigned, 3);
+  assert.equal(plain.assignments['Анализы'].assigned, 4);
+  assert.equal(plain.referrals['Другие услуги клиники'].s, 100);
+  assert.equal(plain.referrals['Товары'].s, 200);
+  assert.equal(plain.referrals['Приемы'].s, 300);
+  assert.equal(plain.referrals['Анализы'].s, 400);
+});
+
 test("appointment conversion ignores completed count for goods but keeps it for services", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
@@ -778,12 +876,13 @@ test("default settings expose the clinic departments and hide the system fallbac
   })()`, context);
   assert.deepEqual(JSON.parse(JSON.stringify(result.before)), JSON.parse(JSON.stringify(result.after)));
   const groups = JSON.parse(JSON.stringify(result.groups));
-  assert.deepEqual(Object.keys(groups), ["Хирургия", "Терапия", "Косметология", "Физиотерапия", "Гинекология"]);
-  assert.deepEqual(groups["Хирургия"], ["Маммология", "Флебология", "УЗИ"]);
-  assert.deepEqual(groups["Терапия"], ["Эндокринология", "Кардиология", "Неврология", "Психотерапия"]);
+  assert.deepEqual(Object.keys(groups), ["Хирургия", "Терапия", "Косметология", "Физиотерапия", "Гинекология", "Кардиология и Функциональная диагностика"]);
+  assert.deepEqual(groups["Хирургия"], ["Маммология", "Флебология"]);
+  assert.deepEqual(groups["Терапия"], ["Эндокринология", "Неврология", "Психотерапия"]);
   assert.deepEqual(groups["Косметология"], ["Косметология", "Эстетисты"]);
   assert.deepEqual(groups["Физиотерапия"], ["Специалисты по телу", "Остеопатия"]);
   assert.deepEqual(groups["Гинекология"], ["Гинекология", "Урология"]);
+  assert.deepEqual(groups["Кардиология и Функциональная диагностика"], ["Кардиология", "Функциональная диагностика"]);
   assert.ok(!Object.values(groups).flat().includes("По умолчанию"));
 });
 
@@ -793,7 +892,7 @@ test("the clinic roster is available before the first import", () => {
   assert.deepEqual(JSON.parse(JSON.stringify(names)), [
     "Пудовкина", "Чернигова", "Гайнутдинова", "Лушникова", "Кожикина", "Римашевская",
     "Кузьменко", "Лятифова", "Бережная", "Королева", "Дубровская", "Самсонова", "Никифорова", "Перцхелия",
-    "Бузина", "Гоголева", "Мановицкая", "Жуйков", "Пан", "Провоторова", "Ахильгова", "Федроов", "Кузьменков",
+    "Бузина", "Гоголева", "Мановицкая", "Жуйков", "Пан Константин Александрович", "Провоторова", "Ахильгова", "Федроов", "Кузьменков",
   ]);
   const structures = vm.runInContext("Object.fromEntries(Object.entries(DB.doctors).map(([id, d]) => [d.name, doctorStructureLabel(id)]))", context);
   assert.deepEqual(JSON.parse(JSON.stringify(structures)), {
@@ -802,12 +901,16 @@ test("the clinic roster is available before the first import", () => {
     "Кожикина": "Косметология · Эстетисты", "Римашевская": "Косметология · Эстетисты",
     "Кузьменко": "Гинекология · Гинекология", "Лятифова": "Гинекология · Гинекология", "Бережная": "Гинекология · Гинекология",
     "Королева": "Гинекология · Урология", "Дубровская": "Хирургия · Флебология",
-    "Самсонова": "Хирургия · Маммология", "Никифорова": "Хирургия · Маммология", "Перцхелия": "Хирургия · УЗИ",
+    "Самсонова": "Хирургия · Маммология", "Никифорова": "Хирургия · Маммология", "Перцхелия": "Кардиология и Функциональная диагностика · Функциональная диагностика",
     "Бузина": "Терапия · Эндокринология", "Гоголева": "Терапия · Эндокринология",
     "Мановицкая": "Терапия · Эндокринология", "Жуйков": "Терапия · Эндокринология",
-    "Пан": "Терапия · Кардиология", "Провоторова": "Терапия · Кардиология", "Ахильгова": "Терапия · Кардиология",
+    "Пан Константин Александрович": "Кардиология и Функциональная диагностика · Кардиология",
+    "Провоторова": "Кардиология и Функциональная диагностика · Кардиология",
+    "Ахильгова": "Кардиология и Функциональная диагностика · Кардиология",
     "Федроов": "Терапия · Неврология", "Кузьменков": "Терапия · Психотерапия",
   });
+  const headDoctorId = vm.runInContext(`DB.settings.departmentHeadDoctorIds["Кардиология и Функциональная диагностика"]`, context);
+  assert.equal(vm.runInContext(`doctorName(${JSON.stringify(headDoctorId)})`, context), "Пан Константин Александрович");
 });
 
 test("full names from imports enrich roster cards instead of creating duplicates", () => {
@@ -855,7 +958,7 @@ test("listed doctors are assigned to their specialization by surname", () => {
       d3: { name: 'Королева Мария', aliases: [] },
       d4: { name: 'Дубровская Ольга', aliases: [] },
       d5: { name: 'Перцхелия Нино', aliases: [] },
-      d6: { name: 'Провоторова Елена', aliases: [] },
+      d6: { name: 'Провторова Елена', aliases: [] },
       d7: { name: 'Федоров Иван', aliases: [] },
       d8: { name: 'Кузьменков Петр', aliases: [] }
     };
@@ -869,8 +972,8 @@ test("listed doctors are assigned to their specialization by surname", () => {
   assert.deepEqual(plain.d2, { department: "Косметология", specialization: "Эстетисты" });
   assert.deepEqual(plain.d3, { department: "Гинекология", specialization: "Урология" });
   assert.deepEqual(plain.d4, { department: "Хирургия", specialization: "Флебология" });
-  assert.deepEqual(plain.d5, { department: "Хирургия", specialization: "УЗИ" });
-  assert.deepEqual(plain.d6, { department: "Терапия", specialization: "Кардиология" });
+  assert.deepEqual(plain.d5, { department: "Кардиология и Функциональная диагностика", specialization: "Функциональная диагностика" });
+  assert.deepEqual(plain.d6, { department: "Кардиология и Функциональная диагностика", specialization: "Кардиология" });
   assert.deepEqual(plain.d7, { department: "Терапия", specialization: "Неврология" });
   assert.deepEqual(plain.d8, { department: "Терапия", specialization: "Психотерапия" });
 });
@@ -894,7 +997,9 @@ test("job-title fallback follows the new department hierarchy", () => {
     DB.doctors = {
       d1: { name: 'Новый Уролог', aliases: [], spec: 'врач-уролог' },
       d2: { name: 'Новый Остеопат', aliases: [], spec: 'врач-остеопат' },
-      d3: { name: 'Новый Маммолог', aliases: [], spec: 'врач-маммолог' }
+      d3: { name: 'Новый Маммолог', aliases: [], spec: 'врач-маммолог' },
+      d4: { name: 'Новый Кардиолог', aliases: [], spec: 'врач-кардиолог' },
+      d5: { name: 'Новый Диагност', aliases: [], spec: 'врач функциональной диагностики' }
     };
     return Object.fromEntries(Object.keys(DB.doctors).map(id => [id, doctorStructureLabel(id)]));
   })()`, context);
@@ -902,6 +1007,8 @@ test("job-title fallback follows the new department hierarchy", () => {
   assert.equal(plain.d1, "Гинекология · Урология");
   assert.equal(plain.d2, "Физиотерапия · Остеопатия");
   assert.equal(plain.d3, "Хирургия · Маммология");
+  assert.equal(plain.d4, "Кардиология и Функциональная диагностика · Кардиология");
+  assert.equal(plain.d5, "Кардиология и Функциональная диагностика · Функциональная диагностика");
 });
 
 test("same department and specialization names keep separate metric profiles", () => {
@@ -959,10 +1066,65 @@ test("v1.0.8 structure migrates once and preserves configured profile values", (
     };
   })()`, context);
   const plain = JSON.parse(JSON.stringify(result));
-  assert.equal(plain.version, 1);
-  assert.deepEqual(plain.departments, ["Хирургия", "Терапия", "Косметология", "Физиотерапия", "Гинекология"]);
+  assert.equal(plain.version, 2);
+  assert.deepEqual(plain.departments, ["Хирургия", "Терапия", "Косметология", "Физиотерапия", "Гинекология", "Кардиология и Функциональная диагностика"]);
   assert.equal(plain.inheritedActiveM, 9);
   assert.deepEqual(plain.doctor, { department: "Косметология", specialization: "Эстетисты" });
+});
+
+test("structure v1 moves cardiology and ultrasound diagnostics into the new department without losing profiles", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    const cardiology = cloneProfile(profileTherapy(), ['кардио']);
+    cardiology.activeM = 7;
+    const ultrasound = cloneProfile(profileSurgery(), ['узи', 'ультразвуков']);
+    ultrasound.activeM = 11;
+    DB.settings = defaultSettings();
+    DB.settings.structureV = 1;
+    DB.settings.departments = {
+      'Хирургия': ['Маммология', 'Флебология', 'УЗИ'],
+      'Терапия': ['Эндокринология', 'Кардиология', 'Неврология', 'Психотерапия'],
+      'Косметология': ['Косметология', 'Эстетисты'],
+      'Физиотерапия': ['Специалисты по телу', 'Остеопатия'],
+      'Гинекология': ['Гинекология', 'Урология']
+    };
+    DB.settings.depts['Кардиология'] = cardiology;
+    DB.settings.depts['УЗИ'] = ultrasound;
+    delete DB.settings.depts['Функциональная диагностика'];
+    delete DB.settings.departmentProfiles['Кардиология и Функциональная диагностика'];
+    delete DB.settings.departmentUsesSpecializations['Кардиология и Функциональная диагностика'];
+    delete DB.settings.departmentHeadDoctorIds;
+    DB.doctors = {
+      d1: { name: 'Провоторова Елена', aliases: [], structureManual: true, department: 'Терапия', specialization: 'Кардиология' },
+      d2: { name: 'Перцхелия Нино', aliases: [], structureManual: true, department: 'Хирургия', specialization: 'УЗИ' },
+      d3: { name: 'Пан', aliases: [] }
+    };
+    normalizeProfiles();
+    const headId = DB.settings.departmentHeadDoctorIds['Кардиология и Функциональная диагностика'];
+    return {
+      version: DB.settings.structureV,
+      groups: departmentGroups(),
+      cardiologyActiveM: DB.settings.depts['Кардиология'].activeM,
+      diagnosticsActiveM: DB.settings.depts['Функциональная диагностика'].activeM,
+      hasLegacyUltrasound: Boolean(DB.settings.depts['УЗИ']),
+      doctors: {
+        d1: doctorStructureLabel('d1'), d2: doctorStructureLabel('d2'), d3: doctorStructureLabel('d3')
+      },
+      headName: doctorName(headId)
+    };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.equal(plain.version, 2);
+  assert.deepEqual(plain.groups['Кардиология и Функциональная диагностика'], ['Кардиология', 'Функциональная диагностика']);
+  assert.deepEqual(plain.groups['Хирургия'], ['Маммология', 'Флебология']);
+  assert.deepEqual(plain.groups['Терапия'], ['Эндокринология', 'Неврология', 'Психотерапия']);
+  assert.equal(plain.cardiologyActiveM, 7);
+  assert.equal(plain.diagnosticsActiveM, 11);
+  assert.equal(plain.hasLegacyUltrasound, false);
+  assert.equal(plain.doctors.d1, 'Кардиология и Функциональная диагностика · Кардиология');
+  assert.equal(plain.doctors.d2, 'Кардиология и Функциональная диагностика · Функциональная диагностика');
+  assert.equal(plain.doctors.d3, 'Кардиология и Функциональная диагностика · Кардиология');
+  assert.equal(plain.headName, 'Пан Константин Александрович');
 });
 
 test("department profile is used when specializations are disabled", () => {
