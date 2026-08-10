@@ -3053,6 +3053,10 @@ function renderDoctor() {
   const refWorkTotal = r.cross.refByType
     ? Object.values(r.cross.refByType).reduce((sum, item) => sum + (item && item.s ? item.s : 0), 0)
     : null;
+  const completedReferralGrouping = nazCur != null && r.cross.refGroupsByNaz
+    ? r.cross.refGroupsByNaz[nazCur]
+    : null;
+  const hasCompletedReferralGrouping = Boolean(completedReferralGrouping && completedReferralGrouping.groups.length);
   const completedReferralTarget = docProfile.scoring && docProfile.scoring.benchmarks
     ? docProfile.scoring.benchmarks.crossShare
     : null;
@@ -3193,20 +3197,65 @@ function renderDoctor() {
     <div class="grid cols-2" style="margin-top:12px"><div>
       <details ${collapsibleListAttrs("completedReferralDetails", false)}><summary class="collapsible-list-summary"><span>ВЫПОЛНЕНИЕ НАПРАВЛЕНИЙ <span class="section-detail">· источник: «Выработка» · итог ${fmtMoney(refWorkTotal)}</span></span><span class="collapse-hint"></span></summary>
       <div class="collapsible-list-body"><div class="toolbar no-print">${copyBtn("copyTable", "tblRef")}</div>
-      <table class="data" id="tblRef"><tr><th>Тип</th><th class="num">Штук</th><th class="num">Сумма по отчёту «Выработка»</th></tr>`;
+      ${hasCompletedReferralGrouping && completedReferralGrouping.unmatchedItems ? `<div class="notice warn"><b>Не сопоставлено с группами 1С:</b> ${fmtNum(completedReferralGrouping.unmatchedItems)} поз. Они показаны отдельной группой; остальные услуги объединены по структуре отчёта «Назначения».</div>` : ""}
+      <table class="data" id="tblRef"><tr><th>${hasCompletedReferralGrouping ? "Тип / группа 1С / номенклатура" : "Тип"}</th><th class="num">Штук</th><th class="num">Сумма по отчёту «Выработка»</th></tr>`;
     let rtIdx = 0;
-    for (const t of REF_TYPES) {
-      const b = r.cross.refByType[t];
-      if (!b) continue;
-      const itEntries = Object.entries(b.items || {}).sort((a, bb) => bb[1].s - a[1].s);
-      const gKey = "rt" + rtIdx++;
-      const open = !!UI.openGroups[gKey];
-      html += `<tr class="grp-head" data-g="${gKey}" ${itEntries.length ? `onclick="toggleGroup('${gKey}')" style="cursor:pointer"` : ""}>
-        <td><span id="tri_${gKey}" class="muted">${itEntries.length ? (open ? "▾" : "▸") : "·"}</span> <b>${esc(t)}</b></td>
-        <td class="num"><b>${fmtNum(b.q)}</b></td><td class="num"><b>${fmtMoney(b.s)}</b></td></tr>`;
-      for (const [n, v] of itEntries.slice(0, 40)) {
-        html += `<tr class="grp-sub ${gKey}" ${open ? "" : 'style="display:none"'}><td class="small muted" style="padding-left:26px">${esc(n.length > 60 ? n.slice(0, 60) + "…" : n)}</td>
-          <td class="num small muted">${fmtNum(v.q)}</td><td class="num small muted">${fmtMoney(v.s)}</td></tr>`;
+    if (hasCompletedReferralGrouping) {
+      const sourceTree = new Map();
+      for (const group of completedReferralGrouping.groups) {
+        let siblings = sourceTree;
+        let target = null;
+        for (const part of [group.type, ...(group.path || [])]) {
+          if (!siblings.has(part)) siblings.set(part, { name: part, children: new Map(), items: {}, q: 0, s: 0 });
+          target = siblings.get(part);
+          target.q += group.q || 0;
+          target.s += group.s || 0;
+          siblings = target.children;
+        }
+        if (target) {
+          for (const [name, values] of Object.entries(group.items || {})) {
+            if (!target.items[name]) target.items[name] = { q: 0, s: 0 };
+            target.items[name].q += values.q || 0;
+            target.items[name].s += values.s || 0;
+          }
+        }
+      }
+      const renderCompletedReferralNodes = (nodes, depth = 0, ancestorKeys = []) => {
+        for (const node of nodes.values()) {
+          const itemEntries = Object.entries(node.items || {}).sort((a, b) => b[1].s - a[1].s);
+          const groupKey = "rt" + rtIdx++;
+          const open = !!UI.openGroups[groupKey];
+          const hasChildren = node.children.size > 0;
+          const expandable = hasChildren || itemEntries.length > 0;
+          const ancestors = [...ancestorKeys, groupKey];
+          const ancestorAttr = ancestorKeys.length ? ` data-group-ancestors="${ancestorKeys.join(" ")}"` : "";
+          const visible = ancestorKeys.every(key => Boolean(UI.openGroups[key]));
+          html += `<tr class="grp-head source-group-head source-group-depth-${Math.min(depth, 3)}" data-g="${groupKey}"${ancestorAttr}${expandable ? ` onclick="toggleGroup('${groupKey}')"` : ""}${visible ? (expandable ? ' style="cursor:pointer"' : "") : ' style="display:none"'}>
+            <td style="padding-left:${10 + depth * 22}px"><span id="tri_${groupKey}" class="muted">${expandable ? (open ? "▾" : "▸") : "·"}</span> <b>${esc(node.name)}</b></td>
+            <td class="num"><b>${fmtNum(node.q)}</b></td><td class="num"><b>${fmtMoney(node.s)}</b></td></tr>`;
+          if (hasChildren) renderCompletedReferralNodes(node.children, depth + 1, ancestors);
+          for (const [name, values] of itemEntries) {
+            const itemVisible = ancestors.every(key => Boolean(UI.openGroups[key]));
+            html += `<tr class="grp-sub ${groupKey}" data-group-ancestors="${ancestors.join(" ")}" ${itemVisible ? "" : 'style="display:none"'}><td class="small muted source-nomenclature" style="padding-left:${10 + (depth + 1) * 22}px">${esc(name)}</td>
+              <td class="num small muted">${fmtNum(values.q)}</td><td class="num small muted">${fmtMoney(values.s)}</td></tr>`;
+          }
+        }
+      };
+      renderCompletedReferralNodes(sourceTree);
+    } else {
+      for (const t of REF_TYPES) {
+        const b = r.cross.refByType[t];
+        if (!b) continue;
+        const itEntries = Object.entries(b.items || {}).sort((a, bb) => bb[1].s - a[1].s);
+        const gKey = "rt" + rtIdx++;
+        const open = !!UI.openGroups[gKey];
+        html += `<tr class="grp-head" data-g="${gKey}" ${itEntries.length ? `onclick="toggleGroup('${gKey}')" style="cursor:pointer"` : ""}>
+          <td><span id="tri_${gKey}" class="muted">${itEntries.length ? (open ? "▾" : "▸") : "·"}</span> <b>${esc(t)}</b></td>
+          <td class="num"><b>${fmtNum(b.q)}</b></td><td class="num"><b>${fmtMoney(b.s)}</b></td></tr>`;
+        for (const [n, v] of itEntries.slice(0, 40)) {
+          html += `<tr class="grp-sub ${gKey}" ${open ? "" : 'style="display:none"'}><td class="small muted" style="padding-left:26px">${esc(n.length > 60 ? n.slice(0, 60) + "…" : n)}</td>
+            <td class="num small muted">${fmtNum(v.q)}</td><td class="num small muted">${fmtMoney(v.s)}</td></tr>`;
+        }
       }
     }
     html += `<tr><td><b>Итого</b></td><td class="num"></td><td class="num"><b>${fmtMoney(refWorkTotal)}</b></td></tr></table></div></details></div>

@@ -388,6 +388,54 @@ function naznachSummary(docId, monthKey, slice) {
   return out;
 }
 
+function completedReferralSourceGrouping(refByType, nazSummary) {
+  if (!refByType || !nazSummary || !Array.isArray(nazSummary.sourceGroups) || !nazSummary.sourceGroups.length) return null;
+  const pathByNomenclature = new Map();
+  const rememberPath = (key, path) => {
+    if (!pathByNomenclature.has(key)) {
+      pathByNomenclature.set(key, path);
+      return;
+    }
+    const existing = pathByNomenclature.get(key);
+    if (existing && JSON.stringify(existing) !== JSON.stringify(path)) pathByNomenclature.set(key, null);
+  };
+  for (const group of nazSummary.sourceGroups) {
+    const path = Array.isArray(group.path) ? group.path.map(cellStr).filter(Boolean) : [];
+    if (!path.length) continue;
+    for (const name of Object.keys(group.items || {})) {
+      for (const key of nomenclatureMatchKeys(name)) rememberPath(key, path);
+    }
+  }
+  const grouped = new Map();
+  let matchedItems = 0;
+  let unmatchedItems = 0;
+  for (const type of REF_TYPES) {
+    const sourceType = refByType[type];
+    if (!sourceType) continue;
+    for (const [name, values] of Object.entries(sourceType.items || {})) {
+      let path = null;
+      for (const key of nomenclatureMatchKeys(name)) {
+        const candidate = pathByNomenclature.get(key);
+        if (candidate) { path = candidate; break; }
+      }
+      if (path) matchedItems++;
+      else {
+        unmatchedItems++;
+        path = ["Не сопоставлено с группами 1С"];
+      }
+      const groupKey = `${type}\u0000${JSON.stringify(path)}`;
+      if (!grouped.has(groupKey)) grouped.set(groupKey, { type, path: [...path], q: 0, s: 0, items: {} });
+      const target = grouped.get(groupKey);
+      target.q += values.q || 0;
+      target.s += values.s || 0;
+      if (!target.items[name]) target.items[name] = { q: 0, s: 0 };
+      target.items[name].q += values.q || 0;
+      target.items[name].s += values.s || 0;
+    }
+  }
+  return { groups: [...grouped.values()], matchedItems, unmatchedItems };
+}
+
 /* ---------- клиентская база: окно + сегментация «визиты × давность» ---------- */
 function kbWindow(docId, monthKey, win) {
   const m = DB.months[monthKey];
@@ -698,6 +746,10 @@ function computeMetricsRaw(docId, monthKey) {
     naz: { 1: naz1, 3: naz3 },
     nazSlices: [naz1 ? 1 : null, naz3 ? 3 : null].filter(Boolean),
     refByType: vy ? vy.refByType : null,
+    refGroupsByNaz: vy ? {
+      1: completedReferralSourceGrouping(vy.refByType, naz1),
+      3: completedReferralSourceGrouping(vy.refByType, naz3),
+    } : {},
     refSum: refRevenue,
     crossShare: (revenueWithRef && refRevenue != null) ? refRevenue / revenueWithRef * 100 : null,
   };

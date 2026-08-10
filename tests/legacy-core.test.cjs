@@ -698,6 +698,38 @@ test("interdisciplinary home departments split own and foreign services in assig
   assert.equal(plain.referrals['Другие услуги клиники'].s, 300);
 });
 
+test("completed referrals inherit the 1C group hierarchy from assignments by code and name", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Тестовый Врач', aliases: [], dept: 'По умолчанию' } };
+    DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].naznach.d1 = { '1': { items: [
+      { n: 'Лазерная процедура старое название (СЛ000001)', a: 2, d: 0, sq: 0, ss: 0, groupPath: ['Услуги', 'Косметология', 'Лазерные процедуры'] },
+      { n: 'Массаж лица', a: 1, d: 0, sq: 0, ss: 0, groupPath: ['Услуги', 'Косметология', 'Массажи'] }
+    ] } };
+    DB.months['2026-01'].vyrabotka.d1 = { items: [
+      { sourceForm: 'Направление', cat: 'Процедуры', n: 'Лазерная процедура новое название (СЛ000001)', q: 2, sOwn: 200, sRef: 0, goods: false },
+      { sourceForm: 'Направление', cat: 'Процедуры', n: 'Массаж лица', q: 1, sOwn: 150, sRef: 0, goods: false },
+      { sourceForm: 'Направление', cat: 'Процедуры', n: 'Услуга без назначения (СЛ999999)', q: 1, sOwn: 250, sRef: 0, goods: false }
+    ] };
+    clearMetricsCache();
+    const metrics = computeMetrics('d1', '2026-01');
+    return {
+      grouping: metrics.cross.refGroupsByNaz[1],
+      referralTotal: Object.values(metrics.cross.refByType).reduce((sum, item) => sum + item.s, 0)
+    };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.equal(plain.grouping.matchedItems, 2);
+  assert.equal(plain.grouping.unmatchedItems, 1);
+  const byItem = name => plain.grouping.groups.find(group => Object.prototype.hasOwnProperty.call(group.items, name));
+  assert.deepEqual(byItem('Лазерная процедура новое название (СЛ000001)').path,
+    ['Услуги', 'Косметология', 'Лазерные процедуры']);
+  assert.deepEqual(byItem('Массаж лица').path, ['Услуги', 'Косметология', 'Массажи']);
+  assert.deepEqual(byItem('Услуга без назначения (СЛ999999)').path, ['Не сопоставлено с группами 1С']);
+  assert.equal(plain.grouping.groups.reduce((sum, group) => sum + group.s, 0), plain.referralTotal);
+});
+
 test("exact nomenclature departments split performed referrals without adding services to focuses", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {

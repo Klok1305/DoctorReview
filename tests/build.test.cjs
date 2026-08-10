@@ -430,7 +430,7 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "2.5.4");
+  assert.equal(packageJson.version, "2.5.5");
   assert.equal(packageJson.build.productName, "КлинВект Щербатова — Администратор");
   assert.equal(packageJson.build.artifactName, "KlinVekt-Shcherbatova-Admin-Setup-${version}-${arch}.${ext}");
   assert.equal(packageJson.scripts["dist:portable"], undefined);
@@ -879,6 +879,29 @@ test("Viewer export dialog uses the shared sorted month helper", () => {
   assert.match(handler, /const months = monthKeysSorted\(\);/);
   assert.match(adminUi, /doctorHasDashboardData\(item\.doctorId, monthKey\)/);
   assert.doesNotMatch(handler, /sortedMonths\(\)/);
+});
+
+test("completed referrals reuse 1C assignment groups and Viewer export dialog fills the window", () => {
+  const core = fs.readFileSync(path.join(build, "app-core.js"), "utf8");
+  const metrics = fs.readFileSync(path.join(build, "app-metrics.js"), "utf8");
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const template = fs.readFileSync(path.join(build, "index.template.html"), "utf8");
+  const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
+
+  assert.match(core, /function nomenclatureCodeKey\(name\)/);
+  assert.match(core, /function nomenclatureMatchKeys\(name\)/);
+  assert.match(metrics, /function completedReferralSourceGrouping\(refByType, nazSummary\)/);
+  assert.match(metrics, /refGroupsByNaz:/);
+  assert.match(ui, /Тип \/ группа 1С \/ номенклатура/);
+  assert.match(ui, /Не сопоставлено с группами 1С/);
+  assert.match(ui, /renderCompletedReferralNodes/);
+
+  assert.match(template, /<dialog class="pdf-export-dialog viewer-export-dialog no-print" id="viewerExportDialog"/);
+  assert.match(template, /class="viewer-export-dialog-body"/);
+  assert.match(css, /\.viewer-export-dialog\s*\{[^}]*width:\s*min\(1200px,\s*calc\(100vw - 24px\)\)/s);
+  assert.match(css, /\.viewer-export-dialog\s*\{[^}]*height:\s*min\(900px,\s*calc\(100vh - 24px\)\)/s);
+  assert.match(css, /\.viewer-export-dialog-body\s*\{[^}]*flex:\s*1 1 auto[^}]*overflow-y:\s*auto/s);
+  assert.match(css, /\.viewer-export-dialog \.viewer-doctor-list\s*\{[^}]*flex:\s*1 1 320px[^}]*max-height:\s*none/s);
 });
 
 test("doctor dropdowns are sorted alphabetically in Admin and both Viewer modes", () => {

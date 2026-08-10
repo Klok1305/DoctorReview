@@ -138,25 +138,27 @@
   </div>
 </dialog>
 
-<dialog class="pdf-export-dialog no-print" id="viewerExportDialog" aria-labelledby="viewerExportDialogTitle">
+<dialog class="pdf-export-dialog viewer-export-dialog no-print" id="viewerExportDialog" aria-labelledby="viewerExportDialogTitle">
   <div class="pdf-export-dialog-shell viewer-export-dialog-shell">
     <div class="pdf-export-dialog-head">
       <div><h2 id="viewerExportDialogTitle">Публикация для врачей</h2><p class="small muted">Один HTML можно сразу передать и открыть без установки. ZIP предназначен для импорта в установленный Viewer и общую папку.</p></div>
       <button class="btn mini" type="button" id="viewerExportDialogClose" aria-label="Закрыть окно">✕</button>
     </div>
-    <div class="viewer-export-grid">
-      <section><h3>Периоды</h3><div id="viewerExportPeriods" class="viewer-choice-list"></div></section>
-      <section><h3>Состав отчёта</h3><div id="viewerExportPageTypes" class="viewer-choice-list"></div></section>
+    <div class="viewer-export-dialog-body">
+      <div class="viewer-export-grid">
+        <section><h3>Периоды</h3><div id="viewerExportPeriods" class="viewer-choice-list"></div></section>
+        <section><h3>Состав отчёта</h3><div id="viewerExportPageTypes" class="viewer-choice-list"></div></section>
+      </div>
+      <div class="toolbar">
+        <label>Отделение: <select id="viewerExportDepartmentFilter"></select></label>
+        <label>Специализация: <select id="viewerExportSpecializationFilter"></select></label>
+        <button class="btn mini" type="button" id="viewerExportSelectFiltered">Отметить подходящих</button>
+        <button class="btn mini" type="button" id="viewerExportClearDoctors">Снять всё</button>
+      </div>
+      <div class="viewer-doctor-list" id="viewerExportDoctors"></div>
+      <div class="notice blue"><b>Заведующие:</b> если назначенный заведующий выбран среди получателей, в файл автоматически добавятся отчёты всех врачей его отделения. Остальные врачи увидят только собственные страницы.</div>
+      <div class="notice bad hidden" id="viewerExportError"></div>
     </div>
-    <div class="toolbar">
-      <label>Отделение: <select id="viewerExportDepartmentFilter"></select></label>
-      <label>Специализация: <select id="viewerExportSpecializationFilter"></select></label>
-      <button class="btn mini" type="button" id="viewerExportSelectFiltered">Отметить подходящих</button>
-      <button class="btn mini" type="button" id="viewerExportClearDoctors">Снять всё</button>
-    </div>
-    <div class="viewer-doctor-list" id="viewerExportDoctors"></div>
-    <div class="notice blue"><b>Заведующие:</b> если назначенный заведующий выбран среди получателей, в файл автоматически добавятся отчёты всех врачей его отделения. Остальные врачи увидят только собственные страницы.</div>
-    <div class="notice bad hidden" id="viewerExportError"></div>
     <div class="pdf-export-dialog-actions">
       <span class="small muted" id="viewerExportStatus"></span><span class="spacer"></span>
       <button class="btn" type="button" id="viewerExportDialogCancel">Отмена</button>

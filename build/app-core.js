@@ -539,6 +539,24 @@ function interdisciplinaryServiceKey(name) {
   return String(name || "").trim().toLocaleLowerCase("ru-RU");
 }
 
+function nomenclatureCodeKey(name) {
+  const match = /\(([^()]*)\)\s*$/.exec(String(name || ""));
+  if (!match || !/\d/.test(match[1])) return "";
+  return match[1].replace(/\s+/g, "").toLocaleUpperCase("ru-RU");
+}
+
+function nomenclatureMatchKeys(name) {
+  const source = String(name || "").replace(/\s+/g, " ").trim();
+  const code = nomenclatureCodeKey(source);
+  const exact = source.toLocaleLowerCase("ru-RU");
+  const withoutCode = source.replace(/\s*\([^()]*\)\s*$/, "").trim().toLocaleLowerCase("ru-RU");
+  return [...new Set([
+    code ? `code:${code}` : "",
+    exact ? `exact:${exact}` : "",
+    withoutCode ? `name:${withoutCode}` : "",
+  ].filter(Boolean))];
+}
+
 function interdisciplinaryHomeDepartment(focus) {
   const focusName = focus && typeof focus === "object" ? focus.name : focus;
   const key = interdisciplinaryServiceKey(focusName);

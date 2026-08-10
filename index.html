@@ -1062,12 +1062,30 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
 @media (max-width: 760px) {
   .settings-export-heading { flex-direction: column; gap: 8px; }
 }
-.viewer-export-dialog-shell { width: min(980px, calc(100vw - 40px)); }
+.viewer-export-dialog {
+  width: min(1200px, calc(100vw - 24px));
+  height: min(900px, calc(100vh - 24px));
+  max-height: calc(100vh - 24px);
+}
+.viewer-export-dialog-shell { width: 100%; height: 100%; max-height: none; min-height: 0; }
+.viewer-export-dialog-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  padding: 16px 18px;
+}
+.viewer-export-dialog-body > .toolbar, .viewer-export-dialog-body > .notice { flex: 0 0 auto; margin: 0; }
 .viewer-export-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .viewer-export-grid section { border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
 .viewer-export-grid h3 { margin: 0 0 8px; }
 .viewer-choice-list { display: flex; flex-wrap: wrap; gap: 8px 14px; }
 .viewer-doctor-list { max-height: 360px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.viewer-export-dialog .viewer-doctor-list { flex: 1 1 320px; min-height: 220px; max-height: none; }
+.viewer-export-dialog .pdf-export-dialog-actions { flex: 0 0 auto; flex-wrap: wrap; }
+.viewer-export-dialog #viewerExportStatus { margin-right: auto; }
 .viewer-doctor-row { display: grid; grid-template-columns: 34px minmax(190px, 1fr) minmax(150px, .8fr) minmax(150px, .8fr); gap: 10px; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--line); }
 .viewer-doctor-row:last-child { border-bottom: 0; }
 .viewer-access-table input[type="text"], .viewer-access-table input[type="password"] { min-width: 110px; }
@@ -1076,6 +1094,10 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
   .viewer-export-grid { grid-template-columns: 1fr; }
   .viewer-doctor-row { grid-template-columns: 34px 1fr; }
   .viewer-doctor-row > span { grid-column: 2; }
+}
+@media (max-height: 700px) {
+  .viewer-export-dialog { height: calc(100vh - 12px); max-height: calc(100vh - 12px); }
+  .viewer-export-dialog .viewer-doctor-list { min-height: 150px; }
 }
 
 </style>
@@ -1208,25 +1230,27 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
   </div>
 </dialog>
 
-<dialog class="pdf-export-dialog no-print" id="viewerExportDialog" aria-labelledby="viewerExportDialogTitle">
+<dialog class="pdf-export-dialog viewer-export-dialog no-print" id="viewerExportDialog" aria-labelledby="viewerExportDialogTitle">
   <div class="pdf-export-dialog-shell viewer-export-dialog-shell">
     <div class="pdf-export-dialog-head">
       <div><h2 id="viewerExportDialogTitle">Публикация для врачей</h2><p class="small muted">Один HTML можно сразу передать и открыть без установки. ZIP предназначен для импорта в установленный Viewer и общую папку.</p></div>
       <button class="btn mini" type="button" id="viewerExportDialogClose" aria-label="Закрыть окно">✕</button>
     </div>
-    <div class="viewer-export-grid">
-      <section><h3>Периоды</h3><div id="viewerExportPeriods" class="viewer-choice-list"></div></section>
-      <section><h3>Состав отчёта</h3><div id="viewerExportPageTypes" class="viewer-choice-list"></div></section>
+    <div class="viewer-export-dialog-body">
+      <div class="viewer-export-grid">
+        <section><h3>Периоды</h3><div id="viewerExportPeriods" class="viewer-choice-list"></div></section>
+        <section><h3>Состав отчёта</h3><div id="viewerExportPageTypes" class="viewer-choice-list"></div></section>
+      </div>
+      <div class="toolbar">
+        <label>Отделение: <select id="viewerExportDepartmentFilter"></select></label>
+        <label>Специализация: <select id="viewerExportSpecializationFilter"></select></label>
+        <button class="btn mini" type="button" id="viewerExportSelectFiltered">Отметить подходящих</button>
+        <button class="btn mini" type="button" id="viewerExportClearDoctors">Снять всё</button>
+      </div>
+      <div class="viewer-doctor-list" id="viewerExportDoctors"></div>
+      <div class="notice blue"><b>Заведующие:</b> если назначенный заведующий выбран среди получателей, в файл автоматически добавятся отчёты всех врачей его отделения. Остальные врачи увидят только собственные страницы.</div>
+      <div class="notice bad hidden" id="viewerExportError"></div>
     </div>
-    <div class="toolbar">
-      <label>Отделение: <select id="viewerExportDepartmentFilter"></select></label>
-      <label>Специализация: <select id="viewerExportSpecializationFilter"></select></label>
-      <button class="btn mini" type="button" id="viewerExportSelectFiltered">Отметить подходящих</button>
-      <button class="btn mini" type="button" id="viewerExportClearDoctors">Снять всё</button>
-    </div>
-    <div class="viewer-doctor-list" id="viewerExportDoctors"></div>
-    <div class="notice blue"><b>Заведующие:</b> если назначенный заведующий выбран среди получателей, в файл автоматически добавятся отчёты всех врачей его отделения. Остальные врачи увидят только собственные страницы.</div>
-    <div class="notice bad hidden" id="viewerExportError"></div>
     <div class="pdf-export-dialog-actions">
       <span class="small muted" id="viewerExportStatus"></span><span class="spacer"></span>
       <button class="btn" type="button" id="viewerExportDialogCancel">Отмена</button>
@@ -2292,6 +2316,24 @@ function departmentGroups() {
  * регистр названия не создавал несколько настроек одной и той же услуги. */
 function interdisciplinaryServiceKey(name) {
   return String(name || "").trim().toLocaleLowerCase("ru-RU");
+}
+
+function nomenclatureCodeKey(name) {
+  const match = /\(([^()]*)\)\s*$/.exec(String(name || ""));
+  if (!match || !/\d/.test(match[1])) return "";
+  return match[1].replace(/\s+/g, "").toLocaleUpperCase("ru-RU");
+}
+
+function nomenclatureMatchKeys(name) {
+  const source = String(name || "").replace(/\s+/g, " ").trim();
+  const code = nomenclatureCodeKey(source);
+  const exact = source.toLocaleLowerCase("ru-RU");
+  const withoutCode = source.replace(/\s*\([^()]*\)\s*$/, "").trim().toLocaleLowerCase("ru-RU");
+  return [...new Set([
+    code ? `code:${code}` : "",
+    exact ? `exact:${exact}` : "",
+    withoutCode ? `name:${withoutCode}` : "",
+  ].filter(Boolean))];
 }
 
 function interdisciplinaryHomeDepartment(focus) {
@@ -4895,6 +4937,54 @@ function naznachSummary(docId, monthKey, slice) {
   return out;
 }
 
+function completedReferralSourceGrouping(refByType, nazSummary) {
+  if (!refByType || !nazSummary || !Array.isArray(nazSummary.sourceGroups) || !nazSummary.sourceGroups.length) return null;
+  const pathByNomenclature = new Map();
+  const rememberPath = (key, path) => {
+    if (!pathByNomenclature.has(key)) {
+      pathByNomenclature.set(key, path);
+      return;
+    }
+    const existing = pathByNomenclature.get(key);
+    if (existing && JSON.stringify(existing) !== JSON.stringify(path)) pathByNomenclature.set(key, null);
+  };
+  for (const group of nazSummary.sourceGroups) {
+    const path = Array.isArray(group.path) ? group.path.map(cellStr).filter(Boolean) : [];
+    if (!path.length) continue;
+    for (const name of Object.keys(group.items || {})) {
+      for (const key of nomenclatureMatchKeys(name)) rememberPath(key, path);
+    }
+  }
+  const grouped = new Map();
+  let matchedItems = 0;
+  let unmatchedItems = 0;
+  for (const type of REF_TYPES) {
+    const sourceType = refByType[type];
+    if (!sourceType) continue;
+    for (const [name, values] of Object.entries(sourceType.items || {})) {
+      let path = null;
+      for (const key of nomenclatureMatchKeys(name)) {
+        const candidate = pathByNomenclature.get(key);
+        if (candidate) { path = candidate; break; }
+      }
+      if (path) matchedItems++;
+      else {
+        unmatchedItems++;
+        path = ["Не сопоставлено с группами 1С"];
+      }
+      const groupKey = `${type}\u0000${JSON.stringify(path)}`;
+      if (!grouped.has(groupKey)) grouped.set(groupKey, { type, path: [...path], q: 0, s: 0, items: {} });
+      const target = grouped.get(groupKey);
+      target.q += values.q || 0;
+      target.s += values.s || 0;
+      if (!target.items[name]) target.items[name] = { q: 0, s: 0 };
+      target.items[name].q += values.q || 0;
+      target.items[name].s += values.s || 0;
+    }
+  }
+  return { groups: [...grouped.values()], matchedItems, unmatchedItems };
+}
+
 /* ---------- клиентская база: окно + сегментация «визиты × давность» ---------- */
 function kbWindow(docId, monthKey, win) {
   const m = DB.months[monthKey];
@@ -5205,6 +5295,10 @@ function computeMetricsRaw(docId, monthKey) {
     naz: { 1: naz1, 3: naz3 },
     nazSlices: [naz1 ? 1 : null, naz3 ? 3 : null].filter(Boolean),
     refByType: vy ? vy.refByType : null,
+    refGroupsByNaz: vy ? {
+      1: completedReferralSourceGrouping(vy.refByType, naz1),
+      3: completedReferralSourceGrouping(vy.refByType, naz3),
+    } : {},
     refSum: refRevenue,
     crossShare: (revenueWithRef && refRevenue != null) ? refRevenue / revenueWithRef * 100 : null,
   };
@@ -8739,6 +8833,10 @@ function renderDoctor() {
   const refWorkTotal = r.cross.refByType
     ? Object.values(r.cross.refByType).reduce((sum, item) => sum + (item && item.s ? item.s : 0), 0)
     : null;
+  const completedReferralGrouping = nazCur != null && r.cross.refGroupsByNaz
+    ? r.cross.refGroupsByNaz[nazCur]
+    : null;
+  const hasCompletedReferralGrouping = Boolean(completedReferralGrouping && completedReferralGrouping.groups.length);
   const completedReferralTarget = docProfile.scoring && docProfile.scoring.benchmarks
     ? docProfile.scoring.benchmarks.crossShare
     : null;
@@ -8879,20 +8977,65 @@ function renderDoctor() {
     <div class="grid cols-2" style="margin-top:12px"><div>
       <details ${collapsibleListAttrs("completedReferralDetails", false)}><summary class="collapsible-list-summary"><span>ВЫПОЛНЕНИЕ НАПРАВЛЕНИЙ <span class="section-detail">· источник: «Выработка» · итог ${fmtMoney(refWorkTotal)}</span></span><span class="collapse-hint"></span></summary>
       <div class="collapsible-list-body"><div class="toolbar no-print">${copyBtn("copyTable", "tblRef")}</div>
-      <table class="data" id="tblRef"><tr><th>Тип</th><th class="num">Штук</th><th class="num">Сумма по отчёту «Выработка»</th></tr>`;
+      ${hasCompletedReferralGrouping && completedReferralGrouping.unmatchedItems ? `<div class="notice warn"><b>Не сопоставлено с группами 1С:</b> ${fmtNum(completedReferralGrouping.unmatchedItems)} поз. Они показаны отдельной группой; остальные услуги объединены по структуре отчёта «Назначения».</div>` : ""}
+      <table class="data" id="tblRef"><tr><th>${hasCompletedReferralGrouping ? "Тип / группа 1С / номенклатура" : "Тип"}</th><th class="num">Штук</th><th class="num">Сумма по отчёту «Выработка»</th></tr>`;
     let rtIdx = 0;
-    for (const t of REF_TYPES) {
-      const b = r.cross.refByType[t];
-      if (!b) continue;
-      const itEntries = Object.entries(b.items || {}).sort((a, bb) => bb[1].s - a[1].s);
-      const gKey = "rt" + rtIdx++;
-      const open = !!UI.openGroups[gKey];
-      html += `<tr class="grp-head" data-g="${gKey}" ${itEntries.length ? `onclick="toggleGroup('${gKey}')" style="cursor:pointer"` : ""}>
-        <td><span id="tri_${gKey}" class="muted">${itEntries.length ? (open ? "▾" : "▸") : "·"}</span> <b>${esc(t)}</b></td>
-        <td class="num"><b>${fmtNum(b.q)}</b></td><td class="num"><b>${fmtMoney(b.s)}</b></td></tr>`;
-      for (const [n, v] of itEntries.slice(0, 40)) {
-        html += `<tr class="grp-sub ${gKey}" ${open ? "" : 'style="display:none"'}><td class="small muted" style="padding-left:26px">${esc(n.length > 60 ? n.slice(0, 60) + "…" : n)}</td>
-          <td class="num small muted">${fmtNum(v.q)}</td><td class="num small muted">${fmtMoney(v.s)}</td></tr>`;
+    if (hasCompletedReferralGrouping) {
+      const sourceTree = new Map();
+      for (const group of completedReferralGrouping.groups) {
+        let siblings = sourceTree;
+        let target = null;
+        for (const part of [group.type, ...(group.path || [])]) {
+          if (!siblings.has(part)) siblings.set(part, { name: part, children: new Map(), items: {}, q: 0, s: 0 });
+          target = siblings.get(part);
+          target.q += group.q || 0;
+          target.s += group.s || 0;
+          siblings = target.children;
+        }
+        if (target) {
+          for (const [name, values] of Object.entries(group.items || {})) {
+            if (!target.items[name]) target.items[name] = { q: 0, s: 0 };
+            target.items[name].q += values.q || 0;
+            target.items[name].s += values.s || 0;
+          }
+        }
+      }
+      const renderCompletedReferralNodes = (nodes, depth = 0, ancestorKeys = []) => {
+        for (const node of nodes.values()) {
+          const itemEntries = Object.entries(node.items || {}).sort((a, b) => b[1].s - a[1].s);
+          const groupKey = "rt" + rtIdx++;
+          const open = !!UI.openGroups[groupKey];
+          const hasChildren = node.children.size > 0;
+          const expandable = hasChildren || itemEntries.length > 0;
+          const ancestors = [...ancestorKeys, groupKey];
+          const ancestorAttr = ancestorKeys.length ? ` data-group-ancestors="${ancestorKeys.join(" ")}"` : "";
+          const visible = ancestorKeys.every(key => Boolean(UI.openGroups[key]));
+          html += `<tr class="grp-head source-group-head source-group-depth-${Math.min(depth, 3)}" data-g="${groupKey}"${ancestorAttr}${expandable ? ` onclick="toggleGroup('${groupKey}')"` : ""}${visible ? (expandable ? ' style="cursor:pointer"' : "") : ' style="display:none"'}>
+            <td style="padding-left:${10 + depth * 22}px"><span id="tri_${groupKey}" class="muted">${expandable ? (open ? "▾" : "▸") : "·"}</span> <b>${esc(node.name)}</b></td>
+            <td class="num"><b>${fmtNum(node.q)}</b></td><td class="num"><b>${fmtMoney(node.s)}</b></td></tr>`;
+          if (hasChildren) renderCompletedReferralNodes(node.children, depth + 1, ancestors);
+          for (const [name, values] of itemEntries) {
+            const itemVisible = ancestors.every(key => Boolean(UI.openGroups[key]));
+            html += `<tr class="grp-sub ${groupKey}" data-group-ancestors="${ancestors.join(" ")}" ${itemVisible ? "" : 'style="display:none"'}><td class="small muted source-nomenclature" style="padding-left:${10 + (depth + 1) * 22}px">${esc(name)}</td>
+              <td class="num small muted">${fmtNum(values.q)}</td><td class="num small muted">${fmtMoney(values.s)}</td></tr>`;
+          }
+        }
+      };
+      renderCompletedReferralNodes(sourceTree);
+    } else {
+      for (const t of REF_TYPES) {
+        const b = r.cross.refByType[t];
+        if (!b) continue;
+        const itEntries = Object.entries(b.items || {}).sort((a, bb) => bb[1].s - a[1].s);
+        const gKey = "rt" + rtIdx++;
+        const open = !!UI.openGroups[gKey];
+        html += `<tr class="grp-head" data-g="${gKey}" ${itEntries.length ? `onclick="toggleGroup('${gKey}')" style="cursor:pointer"` : ""}>
+          <td><span id="tri_${gKey}" class="muted">${itEntries.length ? (open ? "▾" : "▸") : "·"}</span> <b>${esc(t)}</b></td>
+          <td class="num"><b>${fmtNum(b.q)}</b></td><td class="num"><b>${fmtMoney(b.s)}</b></td></tr>`;
+        for (const [n, v] of itEntries.slice(0, 40)) {
+          html += `<tr class="grp-sub ${gKey}" ${open ? "" : 'style="display:none"'}><td class="small muted" style="padding-left:26px">${esc(n.length > 60 ? n.slice(0, 60) + "…" : n)}</td>
+            <td class="num small muted">${fmtNum(v.q)}</td><td class="num small muted">${fmtMoney(v.s)}</td></tr>`;
+        }
       }
     }
     html += `<tr><td><b>Итого</b></td><td class="num"></td><td class="num"><b>${fmtMoney(refWorkTotal)}</b></td></tr></table></div></details></div>

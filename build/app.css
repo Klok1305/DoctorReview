@@ -1053,12 +1053,30 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
 @media (max-width: 760px) {
   .settings-export-heading { flex-direction: column; gap: 8px; }
 }
-.viewer-export-dialog-shell { width: min(980px, calc(100vw - 40px)); }
+.viewer-export-dialog {
+  width: min(1200px, calc(100vw - 24px));
+  height: min(900px, calc(100vh - 24px));
+  max-height: calc(100vh - 24px);
+}
+.viewer-export-dialog-shell { width: 100%; height: 100%; max-height: none; min-height: 0; }
+.viewer-export-dialog-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  padding: 16px 18px;
+}
+.viewer-export-dialog-body > .toolbar, .viewer-export-dialog-body > .notice { flex: 0 0 auto; margin: 0; }
 .viewer-export-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .viewer-export-grid section { border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
 .viewer-export-grid h3 { margin: 0 0 8px; }
 .viewer-choice-list { display: flex; flex-wrap: wrap; gap: 8px 14px; }
 .viewer-doctor-list { max-height: 360px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.viewer-export-dialog .viewer-doctor-list { flex: 1 1 320px; min-height: 220px; max-height: none; }
+.viewer-export-dialog .pdf-export-dialog-actions { flex: 0 0 auto; flex-wrap: wrap; }
+.viewer-export-dialog #viewerExportStatus { margin-right: auto; }
 .viewer-doctor-row { display: grid; grid-template-columns: 34px minmax(190px, 1fr) minmax(150px, .8fr) minmax(150px, .8fr); gap: 10px; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--line); }
 .viewer-doctor-row:last-child { border-bottom: 0; }
 .viewer-access-table input[type="text"], .viewer-access-table input[type="password"] { min-width: 110px; }
@@ -1067,4 +1085,8 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
   .viewer-export-grid { grid-template-columns: 1fr; }
   .viewer-doctor-row { grid-template-columns: 34px 1fr; }
   .viewer-doctor-row > span { grid-column: 2; }
+}
+@media (max-height: 700px) {
+  .viewer-export-dialog { height: calc(100vh - 12px); max-height: calc(100vh - 12px); }
+  .viewer-export-dialog .viewer-doctor-list { min-height: 150px; }
 }
