@@ -576,6 +576,40 @@ test("course treatment uses an exact window and own 1C records are a visit perce
   assert.equal(result.ownPer100, 20);
 });
 
+test("doctor missing from an imported 1C records report is counted as zero", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Нет в отчёте', aliases: [], dept: 'По умолчанию' } };
+    DB.months = { '2026-01': emptyMonth() };
+    const month = DB.months['2026-01'];
+    month.kb.d1 = { '1': { clients: [{ name: 'Пациент', s: 100, v: 10, r: 1 }] } };
+    setMonthReportImported(month, 'zapis', true);
+    clearMetricsCache();
+    const imported = computeMetrics('d1', '2026-01');
+    setMonthReportImported(month, 'zapis', false);
+    month.zapis.d2 = { zapis: 4 };
+    clearMetricsCache();
+    const legacyImported = computeMetrics('d1', '2026-01');
+    delete month.zapis.d2;
+    clearMetricsCache();
+    const notImported = computeMetrics('d1', '2026-01');
+    return {
+      importedCount: imported.loyalty.ownRec.count,
+      importedPct: imported.loyalty.ownRec.pct,
+      importedMissing: imported.missing.includes('запись в 1С'),
+      legacyImportedCount: legacyImported.loyalty.ownRec.count,
+      notImportedOwnRec: notImported.loyalty.ownRec,
+      notImportedMissing: notImported.missing.includes('запись в 1С')
+    };
+  })()`, context);
+  assert.equal(result.importedCount, 0);
+  assert.equal(result.importedPct, 0);
+  assert.equal(result.importedMissing, false);
+  assert.equal(result.legacyImportedCount, 0);
+  assert.equal(result.notImportedOwnRec, null);
+  assert.equal(result.notImportedMissing, true);
+});
+
 test("reputation rating uses SberHealth and ignores legacy Yandex Maps values", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {

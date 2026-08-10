@@ -705,7 +705,10 @@ function computeMetricsRaw(docId, monthKey) {
   const naz1 = naznachSummary(docId, monthKey, 1);
   const naz3 = naznachSummary(docId, monthKey, 3);
   const prostoy = m.prostoy[docId];
-  const zapis = m.zapis[docId];
+  const zapisReportImported = monthReportImported(m, "zapis");
+  const zapis = m.zapis[docId] || (zapisReportImported ? {
+    created: 0, zapis: 0, okaz: 0, other: 0, total: 0, inferredZero: true,
+  } : null);
   const man6 = (m.manual6 || {})[docId];
   const slices = Object.keys(m.pervichka).map(Number).sort((a, b) => a - b);
   const pvSlices = {};
@@ -967,7 +970,7 @@ function computeMetricsRaw(docId, monthKey) {
   if (!kb36) missing.push("давность 3 года");
   if (!naz1 && !naz3) missing.push("назначения");
   if (!prostoy) missing.push("загрузка расписания");
-  if (!zapis) missing.push("запись в 1С");
+  if (!zapisReportImported) missing.push("запись в 1С");
   if (!pvForScore) missing.push(`первичка ровно ${pvM} мес`);
   if (courseWin == null) missing.push(`давность ровно ${pDept.courseM} мес для курсового`);
 

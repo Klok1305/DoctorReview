@@ -1038,7 +1038,7 @@ function doctorName(id) {
 /* ---------- хранилище ---------- */
 
 function emptyMonth() {
-  return { vyrabotka: {}, kb: {}, naznach: {}, pervichka: {}, prostoy: {}, zapis: {}, manual6: {} };
+  return { vyrabotka: {}, kb: {}, naznach: {}, pervichka: {}, prostoy: {}, zapis: {}, manual6: {}, importedReports: {} };
 }
 function ensureMonth(key) {
   if (!DB.months[key]) DB.months[key] = emptyMonth();
@@ -1046,7 +1046,24 @@ function ensureMonth(key) {
   for (const k of ["vyrabotka", "kb", "naznach", "pervichka", "prostoy", "zapis", "manual6"]) {
     if (!m[k]) m[k] = {};
   }
+  if (!m.importedReports || typeof m.importedReports !== "object" || Array.isArray(m.importedReports)) m.importedReports = {};
   return m;
+}
+
+function monthReportImported(month, reportType) {
+  if (!month || !reportType) return false;
+  if (month.importedReports && month.importedReports[reportType] === true) return true;
+  // Старые базы не содержат отдельного признака импорта, но непустой слот
+  // однозначно означает, что соответствующий отчёт уже загружался.
+  const slot = month[reportType];
+  return Boolean(slot && typeof slot === "object" && Object.keys(slot).length);
+}
+
+function setMonthReportImported(month, reportType, imported) {
+  if (!month || !reportType) return;
+  if (!month.importedReports || typeof month.importedReports !== "object" || Array.isArray(month.importedReports)) month.importedReports = {};
+  if (imported) month.importedReports[reportType] = true;
+  else delete month.importedReports[reportType];
 }
 
 /* Миграция базы: старые снимки обновляются без изменения исходных отчётов. */

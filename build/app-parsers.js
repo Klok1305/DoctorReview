@@ -775,12 +775,13 @@ async function processFile(file, options = {}) {
     } else if (type === "zapis") {
       const res = parseZapis(rows);
       const m = ensureMonth(monthKey);
-      if (Object.keys(m.zapis).length && !acceptSlotReplacement(`Собственная запись в 1С · ${monthKey}`, m.zapis, res.perDoc, log)) return finalizeFileLog(log);
+      if (monthReportImported(m, "zapis") && !acceptSlotReplacement(`Собственная запись в 1С · ${monthKey}`, m.zapis, res.perDoc, log)) return finalizeFileLog(log);
       m.zapis = {};
       for (const d of res.perDoc) {
         const id = resolveDoctor(d.raw);
         m.zapis[id] = { created: d.created, zapis: d.zapis, okaz: d.okaz, other: d.other, total: d.total };
       }
+      setMonthReportImported(m, "zapis", true);
       log.slot = { t: "zapis", mk: monthKey };
       log.status = "загружено";
       log.doctor = "все (" + res.perDoc.length + ")";

@@ -449,13 +449,14 @@ function renderData() {
       const nazSlices = new Set();
       Object.values(m.naznach || {}).forEach(w => Object.keys(w).forEach(x => nazSlices.add(x)));
       const pv = Object.keys(m.pervichka).sort((a, b) => a - b).join(", ");
+      const zapisCount = Object.keys(m.zapis).length;
       html += `<tr><td><b>${monthLabel(k)}</b></td>
         <td class="num">${Object.keys(m.vyrabotka).length ? Object.keys(m.vyrabotka).length + " вр." : '<span class="muted">—</span>'}</td>
         <td class="num">${kbWins.size ? [...kbWins].sort((a, b) => a - b).join(", ") : '<span class="muted">—</span>'}</td>
         <td class="num">${nazSlices.size ? [...nazSlices].sort().join(", ") : '<span class="muted">—</span>'}</td>
         <td class="num">${pv || '<span class="muted">—</span>'}</td>
         <td class="num">${Object.keys(m.prostoy).length || '<span class="muted">—</span>'}</td>
-        <td class="num">${Object.keys(m.zapis).length || '<span class="muted">—</span>'}</td></tr>`;
+        <td class="num">${monthReportImported(m, "zapis") ? zapisCount : '<span class="muted">—</span>'}</td></tr>`;
     }
     html += "</table>";
     el.innerHTML = html;
@@ -492,7 +493,7 @@ function removeFileData(i) {
   else if (s.t === "kb" && m.kb[s.doc]) { delete m.kb[s.doc][s.sl]; if (!Object.keys(m.kb[s.doc]).length) delete m.kb[s.doc]; }
   else if (s.t === "pervichka") delete m.pervichka[s.sl];
   else if (s.t === "prostoy") m.prostoy = {};
-  else if (s.t === "zapis") m.zapis = {};
+  else if (s.t === "zapis") { m.zapis = {}; setMonthReportImported(m, "zapis", false); }
   if (!Object.values(m).some(o => o && Object.keys(o).length)) delete DB.months[s.mk]; // месяц опустел
   l.status = "удалено";
   delete l.slot;
@@ -525,7 +526,7 @@ function renderCompleteness() {
   </div>
   <p class="small muted" style="margin-top:0">Общие отчёты за ${monthLabel(mk)}:
     загрузка расписания ${mark(Object.keys(m.prostoy).length)} ·
-    запись в 1С ${mark(Object.keys(m.zapis).length)} ·
+    запись в 1С ${mark(monthReportImported(m, "zapis"))} ·
     первичка ${slices.length ? "срезы: " + slices.join(", ") + " мес." : mark(false)}
   </p>`;
   if (!ids.length) {

@@ -430,7 +430,7 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "2.5.6");
+  assert.equal(packageJson.version, "2.5.7");
   assert.equal(packageJson.build.productName, "КлинВект Щербатова — Администратор");
   assert.equal(packageJson.build.artifactName, "KlinVekt-Shcherbatova-Admin-Setup-${version}-${arch}.${ext}");
   assert.equal(packageJson.scripts["dist:portable"], undefined);
