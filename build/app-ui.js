@@ -35,6 +35,20 @@ const UI = {
 };
 
 let VIEWER_ACCESS = { adminPinConfigured: false, adminPinVersion: 0, departmentHeads: {}, doctors: [] };
+
+function compareDoctorIdsAlphabetically(firstId, secondId) {
+  return doctorName(firstId).localeCompare(doctorName(secondId), "ru", { sensitivity: "base" })
+    || String(firstId).localeCompare(String(secondId), "ru");
+}
+
+function sortDoctorIdsAlphabetically(doctorIds) {
+  return [...(doctorIds || [])].sort(compareDoctorIdsAlphabetically);
+}
+
+function compareViewerDoctorsAlphabetically(first, second) {
+  return String(first && first.displayName || "").localeCompare(String(second && second.displayName || ""), "ru", { sensitivity: "base" })
+    || String(first && first.doctorId || "").localeCompare(String(second && second.doctorId || ""), "ru");
+}
 let reportRenderRevision = 0;
 let settingsFilterTimer = null;
 
@@ -501,7 +515,7 @@ function renderCompleteness() {
     Object.keys(mm.kb).forEach(id => tracked.add(id));
     Object.keys(mm.naznach || {}).forEach(id => tracked.add(id));
   }
-  const ids = [...tracked].filter(id => DB.doctors[id]).sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru"));
+  const ids = sortDoctorIdsAlphabetically([...tracked].filter(id => DB.doctors[id]));
   const slices = Object.keys(m.pervichka).map(Number).sort((a, b) => a - b);
   const mark = ok => ok ? '<span style="color:var(--good)">✓</span>' : '<span style="color:var(--bad)">✗</span>';
   let html = `<div class="toolbar" style="margin-bottom:8px">
@@ -2905,7 +2919,7 @@ function renderDoctor() {
   const mk = UI.docMonth;
   const ids = doctorsInMonth(mk);
   const core = coreDoctorsInMonth(mk);
-  const list = core.length ? core : ids;
+  const list = sortDoctorIdsAlphabetically(core.length ? core : ids);
   setControlsDisabled(["docSelect"], !list.length);
   if (!UI.docId || !list.includes(UI.docId)) UI.docId = list[0] || null;
 
@@ -3763,7 +3777,7 @@ function renderReport() {
   if (!UI.repMonth || !DB.months[UI.repMonth]) UI.repMonth = months[months.length - 1];
   const mk = UI.repMonth;
   mSel.innerHTML = months.map(k => `<option value="${k}" ${k === mk ? "selected" : ""}>${monthLabel(k)}</option>`).join("");
-  const core = coreDoctorsInMonth(mk).length ? coreDoctorsInMonth(mk) : doctorsInMonth(mk);
+  const core = sortDoctorIdsAlphabetically(coreDoctorsInMonth(mk).length ? coreDoctorsInMonth(mk) : doctorsInMonth(mk));
   const departments = [...new Set(core.map(resolvedDepartmentName).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ru"));
   const specializations = [...new Set(core.map(resolvedSpecializationName).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ru"));
   const validScopes = new Set([
@@ -4035,11 +4049,13 @@ function closeViewerExportDialog() {
 
 function viewerExportDoctorRows() {
   const months = monthKeysSorted();
-  return (VIEWER_ACCESS.doctors || []).filter(item =>
-    item.active
-    && DB.doctors[item.doctorId]
-    && months.some(monthKey => doctorHasDashboardData(item.doctorId, monthKey))
-  );
+  return (VIEWER_ACCESS.doctors || [])
+    .filter(item =>
+      item.active
+      && DB.doctors[item.doctorId]
+      && months.some(monthKey => doctorHasDashboardData(item.doctorId, monthKey))
+    )
+    .sort(compareViewerDoctorsAlphabetically);
 }
 
 function updateViewerExportStatus() {
@@ -4666,15 +4682,14 @@ function scoringBenchmarkDefs(profile) {
 function viewerAccessSettingsHtml() {
   const items = (VIEWER_ACCESS.doctors || [])
     .filter(item => DB.doctors[item.doctorId])
-    .sort((a, b) => String(a.displayName || "").localeCompare(String(b.displayName || ""), "ru"));
+    .sort(compareViewerDoctorsAlphabetically);
   const active = items.filter(item => item.active).length;
   const departmentHeads = VIEWER_ACCESS.departmentHeads || {};
   const departmentNames = Object.keys(departmentGroups()).sort((a, b) => a.localeCompare(b, "ru"));
   const headDoctorIds = new Set(Object.values(departmentHeads).map(String));
   const headRows = departmentNames.map(department => {
-    const doctorIds = Object.keys(DB.doctors)
-      .filter(doctorId => resolvedDepartmentName(doctorId) === department)
-      .sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru"));
+    const doctorIds = sortDoctorIdsAlphabetically(Object.keys(DB.doctors)
+      .filter(doctorId => resolvedDepartmentName(doctorId) === department));
     const selected = String(departmentHeads[department] || "");
     const options = ['<option value="">Не назначен</option>'].concat(doctorIds.map(doctorId =>
       `<option value="${esc(doctorId)}" ${doctorId === selected ? "selected" : ""}>${esc(doctorName(doctorId))}</option>`
@@ -4714,7 +4729,7 @@ function viewerAccessSettingsHtml() {
 async function exportViewerPinsTable() {
   const items = (VIEWER_ACCESS.doctors || [])
     .filter(item => DB.doctors[item.doctorId])
-    .sort((a, b) => String(a.displayName || "").localeCompare(String(b.displayName || ""), "ru"));
+    .sort(compareViewerDoctorsAlphabetically);
   if (!items.length) { toast("Нет врачей для выгрузки PIN", true); return; }
   loadBundledLibrary("lib-xlsx", "XLSX");
   const rows = [["Врач", "PIN"], ...items.map(item => [String(item.displayName || doctorName(item.doctorId)), String(item.pin || "").padStart(4, "0")])];
@@ -4835,7 +4850,7 @@ function renderSettings() {
     ? `специализация «${specializationName}» внутри отделения «${departmentName}»`
     : `отделение «${departmentName}»`;
   const departmentNames = Object.keys(departmentGroups());
-  const allDoctorIds = Object.keys(DB.doctors).sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru"));
+  const allDoctorIds = sortDoctorIdsAlphabetically(Object.keys(DB.doctors));
   if (!UI.setDoctor || !DB.doctors[UI.setDoctor]) UI.setDoctor = allDoctorIds[0] || null;
   const movableSpecializations = Object.keys(s.depts).filter(name => name !== "По умолчанию" && !specializationNames.includes(name));
   let structureTree = departmentNames.map(depName => {

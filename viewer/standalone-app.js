@@ -27,6 +27,12 @@ function monthLabel(value) {
     .toLocaleDateString("ru-RU", { month: "long", year: "numeric" });
 }
 
+function sortDoctorsAlphabetically(doctors) {
+  return [...(doctors || [])].sort((first, second) =>
+    String(first && first.displayName || "").localeCompare(String(second && second.displayName || ""), "ru", { sensitivity: "base" })
+    || String(first && first.doctorId || "").localeCompare(String(second && second.doctorId || ""), "ru"));
+}
+
 function base64Bytes(value) {
   const binary = atob(String(value || ""));
   const bytes = new Uint8Array(binary.length);
@@ -113,7 +119,7 @@ async function loginDoctor() {
     state.failures.delete(doctorId);
     state.lockedUntil.delete(doctorId);
     state.doctor = doctor;
-    state.subjects = payload.subjects;
+    state.subjects = sortDoctorsAlphabetically(payload.subjects);
     state.reports = payload.reports;
     const ownSubject = state.subjects.find(subject => String(subject.doctorId) === String(doctor.doctorId)) || state.subjects[0];
     state.subjectDoctorId = ownSubject ? ownSubject.doctorId : null;
@@ -226,7 +232,7 @@ function initialize() {
   document.getElementById("viewerAppVersion").textContent = BUNDLE.appVersion
     ? `Версия отчётов ${BUNDLE.appVersion} · автономный файл`
     : "Автономный файл";
-  document.getElementById("viewerDoctorSelect").innerHTML = BUNDLE.doctors.map(doctor =>
+  document.getElementById("viewerDoctorSelect").innerHTML = sortDoctorsAlphabetically(BUNDLE.doctors).map(doctor =>
     `<option value="${esc(doctor.doctorId)}">${esc(doctor.displayName)}${doctor.department ? ` · ${esc(doctor.department)}` : ""}</option>`
   ).join("");
   document.getElementById("btnDoctorLogin").disabled = !BUNDLE.doctors.length;

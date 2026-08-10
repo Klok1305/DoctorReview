@@ -430,7 +430,7 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "2.5.3");
+  assert.equal(packageJson.version, "2.5.4");
   assert.equal(packageJson.build.productName, "КлинВект Щербатова — Администратор");
   assert.equal(packageJson.build.artifactName, "KlinVekt-Shcherbatova-Admin-Setup-${version}-${arch}.${ext}");
   assert.equal(packageJson.scripts["dist:portable"], undefined);
@@ -879,6 +879,27 @@ test("Viewer export dialog uses the shared sorted month helper", () => {
   assert.match(handler, /const months = monthKeysSorted\(\);/);
   assert.match(adminUi, /doctorHasDashboardData\(item\.doctorId, monthKey\)/);
   assert.doesNotMatch(handler, /sortedMonths\(\)/);
+});
+
+test("doctor dropdowns are sorted alphabetically in Admin and both Viewer modes", () => {
+  const adminUi = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const viewerApp = fs.readFileSync(path.join(root, "viewer", "app.js"), "utf8");
+  const standaloneApp = fs.readFileSync(path.join(root, "viewer", "standalone-app.js"), "utf8");
+
+  assert.match(adminUi, /function sortDoctorIdsAlphabetically\(doctorIds\)/);
+  assert.match(adminUi, /const list = sortDoctorIdsAlphabetically\(core\.length \? core : ids\)/);
+  assert.match(adminUi, /const core = sortDoctorIdsAlphabetically\(coreDoctorsInMonth/);
+  assert.match(adminUi, /const allDoctorIds = sortDoctorIdsAlphabetically\(Object\.keys\(DB\.doctors\)\)/);
+  assert.match(adminUi, /const doctorIds = sortDoctorIdsAlphabetically\(Object\.keys\(DB\.doctors\)/);
+
+  for (const source of [viewerApp, standaloneApp]) {
+    assert.match(source, /function sortDoctorsAlphabetically\(doctors\)/);
+    assert.match(source, /localeCompare\([^\n]+"ru", \{ sensitivity: "base" \}\)/);
+  }
+  assert.match(viewerApp, /sortDoctorsAlphabetically\(state\.status\.catalog\.doctors\)/);
+  assert.match(viewerApp, /state\.subjects = sortDoctorsAlphabetically/);
+  assert.match(standaloneApp, /sortDoctorsAlphabetically\(BUNDLE\.doctors\)/);
+  assert.match(standaloneApp, /state\.subjects = sortDoctorsAlphabetically/);
 });
 
 test("dashboard participation requires an individual work report", () => {

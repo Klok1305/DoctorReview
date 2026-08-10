@@ -25,6 +25,12 @@ function monthLabel(value) {
   return new Date(Number(match[1]), Number(match[2]) - 1, 1).toLocaleDateString("ru-RU", { month: "long", year: "numeric" });
 }
 
+function sortDoctorsAlphabetically(doctors) {
+  return [...(doctors || [])].sort((first, second) =>
+    String(first && first.displayName || "").localeCompare(String(second && second.displayName || ""), "ru", { sensitivity: "base" })
+    || String(first && first.doctorId || "").localeCompare(String(second && second.doctorId || ""), "ru"));
+}
+
 function showError(id, message) {
   const box = document.getElementById(id);
   box.textContent = String(message || "");
@@ -47,7 +53,7 @@ async function refreshStatus() {
   showError("viewerSetupError", "");
   document.getElementById("viewerStorageCaption").textContent = state.status.storageRoot;
   const select = document.getElementById("viewerDoctorSelect");
-  const doctors = state.status.catalog.doctors || [];
+  const doctors = sortDoctorsAlphabetically(state.status.catalog.doctors);
   select.innerHTML = doctors.length
     ? doctors.map(doctor => `<option value="${esc(doctor.doctorId)}">${esc(doctor.displayName)}${doctor.department ? ` · ${esc(doctor.department)}` : ""}</option>`).join("")
     : '<option value="">Отчёты ещё не импортированы</option>';
@@ -112,7 +118,7 @@ function renderPackagePreview(preview) {
   document.getElementById("viewerImportPeriods").innerHTML = preview.periods.slice().reverse().map(periodKey =>
     `<label><input type="checkbox" data-import-period value="${esc(periodKey)}" checked> ${esc(monthLabel(periodKey))}</label>`
   ).join("");
-  document.getElementById("viewerImportDoctors").innerHTML = preview.doctors.map(doctor =>
+  document.getElementById("viewerImportDoctors").innerHTML = sortDoctorsAlphabetically(preview.doctors).map(doctor =>
     `<label><input type="checkbox" data-import-doctor value="${esc(doctor.doctorId)}" checked> <b>${esc(doctor.displayName)}</b>
       <span class="small muted">${esc([doctor.department, doctor.specialization].filter(Boolean).join(" · "))}</span></label>`
   ).join("");
@@ -180,7 +186,7 @@ async function loginDoctor() {
   try {
     const result = await API.doctorLogin({ doctorId, pin });
     state.doctor = result.doctor;
-    state.subjects = Array.isArray(result.subjects) ? result.subjects : [];
+    state.subjects = sortDoctorsAlphabetically(Array.isArray(result.subjects) ? result.subjects : []);
     const ownSubject = state.subjects.find(subject => String(subject.doctorId) === String(state.doctor.doctorId)) || state.subjects[0];
     state.subjectDoctorId = ownSubject ? ownSubject.doctorId : null;
     state.periods = ownSubject ? ownSubject.periods || [] : [];
