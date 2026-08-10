@@ -3053,6 +3053,8 @@ function renderDoctor() {
   const refWorkTotal = r.cross.refByType
     ? Object.values(r.cross.refByType).reduce((sum, item) => sum + (item && item.s ? item.s : 0), 0)
     : null;
+  const refCreditedTotal = r.cross.refSum == null ? refWorkTotal : r.cross.refSum;
+  const hasReferralRevenueFiltering = refWorkTotal != null && refCreditedTotal != null && Math.abs(refWorkTotal - refCreditedTotal) >= 0.5;
   const completedReferralGrouping = nazCur != null && r.cross.refGroupsByNaz
     ? r.cross.refGroupsByNaz[nazCur]
     : null;
@@ -3125,7 +3127,7 @@ function renderDoctor() {
           const open = !!UI.openGroups[gKey];
           const hasChildren = node.children.size > 0;
           const expandable = itEntries.length > 0 || hasChildren;
-          const valid = node.assigned >= 0 && node.done >= 0 && node.soldQ >= 0 && node.resultQ <= node.assigned;
+          const valid = validNaznachCounts(node);
           const conv = valid && node.assigned > 0 ? node.resultQ / node.assigned * 100 : null;
           const marker = expandable ? (open ? "▾" : "▸") : "·";
           const ancestorAttr = ancestorKeys.length ? ` data-group-ancestors="${ancestorKeys.join(" ")}"` : "";
@@ -3191,14 +3193,15 @@ function renderDoctor() {
     }
     html += `<div class="tracked-metric ${completedReferralState}" id="completedReferralShare" style="margin:12px 0">
       <div><div class="tracked-title">Доля выручки от выполненных направлений</div>
-      <div class="tracked-note">${fmtMoney(r.cross.refSum)} из ${fmtMoney(r.econ.revenueWithRef)} · источник: отчёт «Выработка»</div></div>
+      <div class="tracked-note">Учтено ${fmtMoney(refCreditedTotal)} из ${fmtMoney(refWorkTotal)} выполненных · выручка с перенаправлениями ${fmtMoney(r.econ.revenueWithRef)} · источник: отчёт «Выработка»</div></div>
       <div class="tracked-side"><div class="tracked-value">${fmtPct(r.cross.crossShare)}</div><div class="tracked-goal">${hasCompletedReferralTarget ? `цель ≥ ${fmtPct(Number(completedReferralTarget))}` : "цель не установлена"}</div></div>
     </div>
     <div class="grid cols-2" style="margin-top:12px"><div>
-      <details ${collapsibleListAttrs("completedReferralDetails", false)}><summary class="collapsible-list-summary"><span>ВЫПОЛНЕНИЕ НАПРАВЛЕНИЙ <span class="section-detail">· источник: «Выработка» · итог ${fmtMoney(refWorkTotal)}</span></span><span class="collapse-hint"></span></summary>
+      <details ${collapsibleListAttrs("completedReferralDetails", false)}><summary class="collapsible-list-summary"><span>ВЫПОЛНЕНИЕ НАПРАВЛЕНИЙ <span class="section-detail">· всего ${fmtMoney(refWorkTotal)} · учтено ${fmtMoney(refCreditedTotal)}</span></span><span class="collapse-hint"></span></summary>
       <div class="collapsible-list-body"><div class="toolbar no-print">${copyBtn("copyTable", "tblRef")}</div>
+      ${hasReferralRevenueFiltering ? `<div class="notice blue"><b>Правило учёта выручки:</b> все выполненные позиции показаны ниже, но ${fmtMoney(refWorkTotal - refCreditedTotal)} не входят в выручку от перенаправлений согласно настройкам профиля.</div>` : ""}
       ${hasCompletedReferralGrouping && completedReferralGrouping.unmatchedItems ? `<div class="notice warn"><b>Не сопоставлено с группами 1С:</b> ${fmtNum(completedReferralGrouping.unmatchedItems)} поз. Они показаны отдельной группой; остальные услуги объединены по структуре отчёта «Назначения».</div>` : ""}
-      <table class="data" id="tblRef"><tr><th>${hasCompletedReferralGrouping ? "Тип / группа 1С / номенклатура" : "Тип"}</th><th class="num">Штук</th><th class="num">Сумма по отчёту «Выработка»</th></tr>`;
+      <table class="data" id="tblRef"><tr><th>${hasCompletedReferralGrouping ? "Тип / группа 1С / номенклатура" : "Тип"}</th><th class="num">Штук</th><th class="num">Выполнено</th><th class="num">Учтено в перенаправлениях</th></tr>`;
     let rtIdx = 0;
     if (hasCompletedReferralGrouping) {
       const sourceTree = new Map();
@@ -3206,17 +3209,20 @@ function renderDoctor() {
         let siblings = sourceTree;
         let target = null;
         for (const part of [group.type, ...(group.path || [])]) {
-          if (!siblings.has(part)) siblings.set(part, { name: part, children: new Map(), items: {}, q: 0, s: 0 });
+          if (!siblings.has(part)) siblings.set(part, { name: part, children: new Map(), items: {}, q: 0, s: 0, includedS: 0 });
           target = siblings.get(part);
           target.q += group.q || 0;
           target.s += group.s || 0;
+          target.includedS += group.includedS || 0;
           siblings = target.children;
         }
         if (target) {
           for (const [name, values] of Object.entries(group.items || {})) {
-            if (!target.items[name]) target.items[name] = { q: 0, s: 0 };
+            if (!target.items[name]) target.items[name] = { q: 0, s: 0, includedS: 0, excludedS: 0, inclusionReason: values.inclusionReason || "" };
             target.items[name].q += values.q || 0;
             target.items[name].s += values.s || 0;
+            target.items[name].includedS += values.includedS || 0;
+            target.items[name].excludedS += values.excludedS || 0;
           }
         }
       }
@@ -3232,12 +3238,13 @@ function renderDoctor() {
           const visible = ancestorKeys.every(key => Boolean(UI.openGroups[key]));
           html += `<tr class="grp-head source-group-head source-group-depth-${Math.min(depth, 3)}" data-g="${groupKey}"${ancestorAttr}${expandable ? ` onclick="toggleGroup('${groupKey}')"` : ""}${visible ? (expandable ? ' style="cursor:pointer"' : "") : ' style="display:none"'}>
             <td style="padding-left:${10 + depth * 22}px"><span id="tri_${groupKey}" class="muted">${expandable ? (open ? "▾" : "▸") : "·"}</span> <b>${esc(node.name)}</b></td>
-            <td class="num"><b>${fmtNum(node.q)}</b></td><td class="num"><b>${fmtMoney(node.s)}</b></td></tr>`;
+            <td class="num"><b>${fmtNum(node.q)}</b></td><td class="num"><b>${fmtMoney(node.s)}</b></td><td class="num"><b>${fmtMoney(node.includedS)}</b></td></tr>`;
           if (hasChildren) renderCompletedReferralNodes(node.children, depth + 1, ancestors);
           for (const [name, values] of itemEntries) {
             const itemVisible = ancestors.every(key => Boolean(UI.openGroups[key]));
-            html += `<tr class="grp-sub ${groupKey}" data-group-ancestors="${ancestors.join(" ")}" ${itemVisible ? "" : 'style="display:none"'}><td class="small muted source-nomenclature" style="padding-left:${10 + (depth + 1) * 22}px">${esc(name)}</td>
-              <td class="num small muted">${fmtNum(values.q)}</td><td class="num small muted">${fmtMoney(values.s)}</td></tr>`;
+            const exclusionBadge = values.excludedS > 0 ? ` <span class="badge warn" title="${esc(values.inclusionReason || "Не учитывается по настройке")}">не учитывается</span>` : "";
+            html += `<tr class="grp-sub ${groupKey}" data-group-ancestors="${ancestors.join(" ")}" ${itemVisible ? "" : 'style="display:none"'}><td class="small muted source-nomenclature" style="padding-left:${10 + (depth + 1) * 22}px">${esc(name)}${exclusionBadge}</td>
+              <td class="num small muted">${fmtNum(values.q)}</td><td class="num small muted">${fmtMoney(values.s)}</td><td class="num small muted">${fmtMoney(values.includedS)}</td></tr>`;
           }
         }
       };
@@ -3251,15 +3258,17 @@ function renderDoctor() {
         const open = !!UI.openGroups[gKey];
         html += `<tr class="grp-head" data-g="${gKey}" ${itEntries.length ? `onclick="toggleGroup('${gKey}')" style="cursor:pointer"` : ""}>
           <td><span id="tri_${gKey}" class="muted">${itEntries.length ? (open ? "▾" : "▸") : "·"}</span> <b>${esc(t)}</b></td>
-          <td class="num"><b>${fmtNum(b.q)}</b></td><td class="num"><b>${fmtMoney(b.s)}</b></td></tr>`;
+          <td class="num"><b>${fmtNum(b.q)}</b></td><td class="num"><b>${fmtMoney(b.s)}</b></td><td class="num"><b>${fmtMoney(b.includedS)}</b></td></tr>`;
         for (const [n, v] of itEntries.slice(0, 40)) {
-          html += `<tr class="grp-sub ${gKey}" ${open ? "" : 'style="display:none"'}><td class="small muted" style="padding-left:26px">${esc(n.length > 60 ? n.slice(0, 60) + "…" : n)}</td>
-            <td class="num small muted">${fmtNum(v.q)}</td><td class="num small muted">${fmtMoney(v.s)}</td></tr>`;
+          const exclusionBadge = v.excludedS > 0 ? ` <span class="badge warn" title="${esc(v.inclusionReason || "Не учитывается по настройке")}">не учитывается</span>` : "";
+          html += `<tr class="grp-sub ${gKey}" ${open ? "" : 'style="display:none"'}><td class="small muted" style="padding-left:26px">${esc(n.length > 60 ? n.slice(0, 60) + "…" : n)}${exclusionBadge}</td>
+            <td class="num small muted">${fmtNum(v.q)}</td><td class="num small muted">${fmtMoney(v.s)}</td><td class="num small muted">${fmtMoney(v.includedS)}</td></tr>`;
         }
       }
     }
-    html += `<tr><td><b>Итого</b></td><td class="num"></td><td class="num"><b>${fmtMoney(refWorkTotal)}</b></td></tr></table></div></details></div>
-      <div><h3 class="section-title" style="margin:0 0 6px">СТРУКТУРА НАПРАВЛЕНИЙ ПО ДЕНЬГАМ ${copyBtn("copyChart", "chNazStruct", "PNG")}</h3>
+    html += `<tr><td><b>Всего выполнено</b></td><td class="num"></td><td class="num"><b>${fmtMoney(refWorkTotal)}</b></td><td class="num"></td></tr>
+      <tr><td><b>Учтено в выручке от перенаправлений</b></td><td class="num"></td><td class="num"></td><td class="num"><b>${fmtMoney(refCreditedTotal)}</b></td></tr></table></div></details></div>
+      <div><h3 class="section-title" style="margin:0 0 6px">СТРУКТУРА ВСЕХ НАПРАВЛЕНИЙ ПО ДЕНЬГАМ ${copyBtn("copyChart", "chNazStruct", "PNG")}</h3>
       <div class="chart-box"><canvas id="chNazStruct"></canvas></div></div></div>`;
   }
   html += "</div>";
@@ -3582,7 +3591,7 @@ function renderDoctor() {
   for (const g of docGroups) dsMap[g] = [];
   for (const k of keys) {
     const vv = vyrabotkaSummary(UI.docId, k);
-    refRevenueByMonth.push(vv && vv.refSum ? vv.refSum : 0);
+    refRevenueByMonth.push(vv && vv.refIncludedSum ? vv.refIncludedSum : 0);
     for (const g of docGroups) {
       dsMap[g].push(vv && vv.byGroup[g] ? vv.byGroup[g].s : 0);
     }
@@ -5049,6 +5058,22 @@ function renderSettings() {
       ${crossFocusDepartments.map(name => `<option value="${esc(name)}" ${selectedDepartment === name ? "selected" : ""}>${esc(name)}</option>`).join("")}
     </select></td></tr>`;
   }).join("");
+  const sourceGroupPaths = collectInterdisciplinaryGroupPaths(departmentName, specializationName);
+  window._interdisciplinaryGroupPaths = sourceGroupPaths;
+  const configuredGroupDepartments = DB.settings.interdisciplinaryGroupDepartments || {};
+  const sourceGroupDepartmentRows = sourceGroupPaths.slice(0, 250).map((group, index) => {
+    const selectedDepartment = configuredGroupDepartments[group.key] || "";
+    return `<tr><td class="small"><b>${esc(group.path.join(" → "))}</b><div class="muted">уровень ${group.path.length} · позиций ${fmtNum(group.positions)}</div></td><td><select data-group-path-index="${index}" onchange="setInterdisciplinaryGroupDepartment(this)">
+      <option value="">— подразделение не задано —</option>
+      ${crossFocusDepartments.map(name => `<option value="${esc(name)}" ${selectedDepartment === name ? "selected" : ""}>${esc(name)}</option>`).join("")}
+    </select></td></tr>`;
+  }).join("");
+  const inheritsReferralRevenuePolicy = Boolean(specializationName && p.inheritReferralRevenuePolicy === true);
+  const effectiveReferralRevenuePolicy = normalizeReferralRevenuePolicy(inheritsReferralRevenuePolicy
+    ? departmentProfile(departmentName).referralRevenuePolicy
+    : p.referralRevenuePolicy);
+  const referralPolicyControlsDisabled = inheritsReferralRevenuePolicy || effectiveReferralRevenuePolicy.mode === "all";
+  const excludedReferralDepartments = new Set(effectiveReferralRevenuePolicy.excludedServiceDepartments);
   html += `<details class="card" style="display:block" ${det("crossFocus")}><summary style="cursor:pointer"><b>🤝 Фокусы междисциплинарного подхода (Вектор 3) — «${esc(dn)}»</b></summary>
     <p class="small muted" style="margin-top:8px">Настройте назначения, которые считаются фокусами этого профиля. Они ищутся непосредственно в названиях позиций отчёта «Назначения» и не зависят от категорий выручки.</p>
     <div class="toolbar"><label>Название блока: <input type="text" id="cf_title" value="${esc(crossFocus.title || "")}" style="min-width:280px"></label></div>
@@ -5058,6 +5083,30 @@ function renderSettings() {
     <h3 style="margin:14px 0 6px">Резервная привязка фокусов к подразделению</h3>
     <p class="small muted">Эта общая настройка применяется ко всем услугам, совпавшим с фокусом. Точную привязку конкретной услуги задайте ниже в «Номенклатуре» — она имеет приоритет. Для врача домашняя услуга попадёт в «Приёмы» или «Профильные услуги», а услуга другого подразделения — в «Другие услуги клиники».</p>
     ${crossFocusHomeRows ? `<div class="scroll-y"><table class="data"><tr><th>Услуга / фокус</th><th>Домашнее подразделение</th></tr>${crossFocusHomeRows}</table></div>` : `<div class="notice blue">Сначала добавьте и сохраните фокусы — после этого для них можно выбрать домашнее подразделение.</div>`}
+    <h3 style="margin:18px 0 6px">Привязка групп 1С к подразделениям</h3>
+    <p class="small muted">Назначьте подразделение сразу целой группе отчёта «Назначения». Для вложенной номенклатуры применяется самая глубокая настроенная группа; точная привязка конкретной услуги ниже по-прежнему имеет приоритет.</p>
+    ${sourceGroupDepartmentRows ? `<div class="scroll-y" style="max-height:360px"><table class="data"><tr><th>Группа 1С</th><th>Подразделение услуги</th></tr>${sourceGroupDepartmentRows}</table></div>${sourceGroupPaths.length > 250 ? '<p class="small muted">Показаны первые 250 групп.</p>' : ""}` : `<div class="notice blue">Группы появятся после импорта отчёта «Назначения» с иерархией 1С.</div>`}
+    <h3 style="margin:18px 0 6px">Правила учёта выручки от перенаправлений</h3>
+    <p class="small muted">Группировка всегда показывает все выполненные позиции. Эта настройка определяет только сумму, которая входит в итоговую выручку, долю перенаправлений, средний чек и балл Вектора 3.</p>
+    ${specializationName ? `<label class="toolbar"><input type="checkbox" id="rrp_inherit" ${inheritsReferralRevenuePolicy ? "checked" : ""} onchange="refreshReferralRevenuePolicyControls()"> наследовать правило отделения «${esc(departmentName)}»</label>` : ""}
+    <div class="toolbar"><label>Режим: <select id="rrp_mode" ${inheritsReferralRevenuePolicy ? "disabled" : ""} data-default-department="${esc(departmentName)}" onchange="prepareReferralRevenuePolicyMode(this.value)">
+      <option value="all" ${effectiveReferralRevenuePolicy.mode === "all" ? "selected" : ""}>учитывать все выполненные направления</option>
+      <option value="external" ${effectiveReferralRevenuePolicy.mode === "external" ? "selected" : ""}>учитывать только внешние услуги</option>
+      <option value="custom" ${effectiveReferralRevenuePolicy.mode === "custom" ? "selected" : ""}>настроить вручную</option>
+    </select></label></div>
+    <fieldset id="rrp_controls" class="referral-policy-controls" ${referralPolicyControlsDisabled ? "disabled" : ""}>
+      <div class="grid cols-2">
+        <div><h4 style="margin:0 0 6px">Отдельные категории</h4>
+          ${REFERRAL_REVENUE_FIXED_TYPES.map(type => `<label class="check-row"><input type="checkbox" data-rrp-type="${esc(type)}" ${effectiveReferralRevenuePolicy.includeTypes[type] ? "checked" : ""}> учитывать «${esc(type)}»</label>`).join("")}
+          <label class="check-row"><input type="checkbox" id="rrp_include_services" ${effectiveReferralRevenuePolicy.includeExternalServices ? "checked" : ""}> учитывать услуги разрешённых подразделений</label>
+          <label class="check-row"><input type="checkbox" id="rrp_include_unassigned" ${effectiveReferralRevenuePolicy.includeUnassignedServices ? "checked" : ""}> учитывать услуги без определённого подразделения</label>
+        </div>
+        <div><h4 style="margin:0 0 6px">Не учитывать услуги подразделений</h4>
+          <div class="viewer-choice-list">${crossFocusDepartments.map(name => `<label><input type="checkbox" data-rrp-excluded-department value="${esc(name)}" ${excludedReferralDepartments.has(name) ? "checked" : ""}> ${esc(name)}</label>`).join("")}</div>
+        </div>
+      </div>
+    </fieldset>
+    <div class="toolbar"><button class="btn primary" type="button" onclick="saveReferralRevenuePolicy()">💾 Сохранить правило учёта выручки</button></div>
     <p class="small muted">В балл Вектора 3 добавляются широта фокусов и доля их выручки. Цель по доле выручки задаётся ниже в блоке «Баллы и веса».</p>
     <div class="toolbar"><button class="btn primary" onclick="saveCrossFocusSettings()">💾 Сохранить фокусы Вектора 3</button></div>
   </details>`;
@@ -5322,6 +5371,7 @@ function addSpecializationV4() {
   if (DB.settings.depts[name] || (departmentGroups()[name] && name !== departmentName)) { toast("Такое название уже используется", true); return; }
   DB.settings.depts[name] = JSON.parse(JSON.stringify(departmentProfile(departmentName)));
   DB.settings.depts[name].inheritGoals = true;
+  DB.settings.depts[name].inheritReferralRevenuePolicy = true;
   if (!Array.isArray(DB.settings.departments[departmentName])) DB.settings.departments[departmentName] = [];
   DB.settings.departments[departmentName].push(name);
   DB.settings.departmentUsesSpecializations[departmentName] = true;
@@ -5436,22 +5486,84 @@ function saveCrossFocusSettings() {
   toast("Фокусы Вектора 3 сохранены: " + items.length + " позиций");
   renderAll();
 }
+function refreshReferralRevenuePolicyControls() {
+  const inherit = document.getElementById("rrp_inherit");
+  const mode = document.getElementById("rrp_mode");
+  const controls = document.getElementById("rrp_controls");
+  const inherited = Boolean(inherit && inherit.checked);
+  if (mode) mode.disabled = inherited;
+  if (controls) controls.disabled = inherited || !mode || mode.value === "all";
+}
+function prepareReferralRevenuePolicyMode(mode) {
+  if (mode === "external") {
+    document.querySelectorAll("[data-rrp-type]").forEach(input => { input.checked = true; });
+    const services = document.getElementById("rrp_include_services");
+    const unassigned = document.getElementById("rrp_include_unassigned");
+    if (services) services.checked = true;
+    if (unassigned) unassigned.checked = false;
+    const excluded = [...document.querySelectorAll("[data-rrp-excluded-department]")];
+    if (!excluded.some(input => input.checked)) {
+      const modeSelect = document.getElementById("rrp_mode");
+      const ownDepartment = modeSelect && modeSelect.dataset ? modeSelect.dataset.defaultDepartment : "";
+      const ownInput = excluded.find(input => input.value === ownDepartment);
+      if (ownInput) ownInput.checked = true;
+    }
+  }
+  refreshReferralRevenuePolicyControls();
+}
+function saveReferralRevenuePolicy() {
+  const profile = curSetProfile();
+  const inherit = document.getElementById("rrp_inherit");
+  if (curSetSpecialization()) profile.inheritReferralRevenuePolicy = Boolean(inherit && inherit.checked);
+  if (!profile.inheritReferralRevenuePolicy) {
+    const includeTypes = {};
+    for (const input of document.querySelectorAll("[data-rrp-type]")) includeTypes[input.dataset.rrpType] = input.checked;
+    profile.referralRevenuePolicy = normalizeReferralRevenuePolicy({
+      mode: document.getElementById("rrp_mode").value,
+      includeTypes,
+      includeExternalServices: document.getElementById("rrp_include_services").checked,
+      includeUnassignedServices: document.getElementById("rrp_include_unassigned").checked,
+      excludedServiceDepartments: [...document.querySelectorAll("[data-rrp-excluded-department]:checked")].map(input => input.value),
+    });
+  }
+  clearMetricsCache();
+  saveLocal();
+  toast(profile.inheritReferralRevenuePolicy ? "Правило отделения подключено" : "Правило учёта выручки сохранено");
+  renderAll();
+}
 function setInterdisciplinaryHomeDepartment(select) {
   const serviceName = select && select.dataset
     ? (select.dataset.serviceName || select.dataset.focusName || "") : "";
-  const key = interdisciplinaryServiceKey(serviceName);
+  const key = interdisciplinaryServiceStorageKey(serviceName);
   if (!key) return;
   if (!DB.settings.interdisciplinaryHomeDepartments || typeof DB.settings.interdisciplinaryHomeDepartments !== "object") {
     DB.settings.interdisciplinaryHomeDepartments = {};
   }
+  for (const candidate of interdisciplinaryServiceConfigKeys(serviceName)) delete DB.settings.interdisciplinaryHomeDepartments[candidate];
   const departmentName = String(select.value || "").trim();
   if (departmentName) DB.settings.interdisciplinaryHomeDepartments[key] = departmentName;
-  else delete DB.settings.interdisciplinaryHomeDepartments[key];
   clearMetricsCache();
   saveLocal();
   toast(departmentName
     ? `Домашнее подразделение «${serviceName}»: ${departmentName}`
     : `Домашнее подразделение «${serviceName}» сброшено`);
+  renderAll();
+}
+function setInterdisciplinaryGroupDepartment(select) {
+  const group = window._interdisciplinaryGroupPaths
+    && window._interdisciplinaryGroupPaths[Number(select && select.dataset ? select.dataset.groupPathIndex : -1)];
+  if (!group || !group.key) return;
+  if (!DB.settings.interdisciplinaryGroupDepartments || typeof DB.settings.interdisciplinaryGroupDepartments !== "object") {
+    DB.settings.interdisciplinaryGroupDepartments = {};
+  }
+  const departmentName = String(select.value || "").trim();
+  if (departmentName) DB.settings.interdisciplinaryGroupDepartments[group.key] = departmentName;
+  else delete DB.settings.interdisciplinaryGroupDepartments[group.key];
+  clearMetricsCache();
+  saveLocal();
+  toast(departmentName
+    ? `Группа «${group.path.join(" → ")}»: ${departmentName}`
+    : `Привязка группы «${group.path.join(" → ")}» сброшена`);
   renderAll();
 }
 function bindCandidate(i, val) {

@@ -61,6 +61,45 @@ function defaultScoring() {
   };
 }
 
+const REFERRAL_REVENUE_FIXED_TYPES = ["Товары", "Приемы", "Анализы"];
+
+function defaultReferralRevenuePolicy() {
+  return {
+    mode: "all",
+    includeTypes: { "Товары": true, "Приемы": true, "Анализы": true },
+    includeExternalServices: true,
+    includeUnassignedServices: false,
+    excludedServiceDepartments: [],
+  };
+}
+
+function externalReferralRevenuePolicy(excludedServiceDepartments = []) {
+  return Object.assign(defaultReferralRevenuePolicy(), {
+    mode: "external",
+    excludedServiceDepartments: [...new Set(excludedServiceDepartments.map(value => String(value || "").trim()).filter(Boolean))],
+  });
+}
+
+function normalizeReferralRevenuePolicy(raw) {
+  const def = defaultReferralRevenuePolicy();
+  const source = raw && typeof raw === "object" ? raw : {};
+  const mode = ["all", "external", "custom"].includes(source.mode) ? source.mode : def.mode;
+  const includeTypes = {};
+  for (const type of REFERRAL_REVENUE_FIXED_TYPES) {
+    includeTypes[type] = source.includeTypes && Object.prototype.hasOwnProperty.call(source.includeTypes, type)
+      ? source.includeTypes[type] === true
+      : def.includeTypes[type];
+  }
+  return {
+    mode,
+    includeTypes,
+    includeExternalServices: source.includeExternalServices !== false,
+    includeUnassignedServices: source.includeUnassignedServices === true,
+    excludedServiceDepartments: [...new Set((Array.isArray(source.excludedServiceDepartments)
+      ? source.excludedServiceDepartments : []).map(value => String(value || "").trim()).filter(Boolean))],
+  };
+}
+
 /* Базовый (наследуемый) профиль отделения */
 function defaultProfile() {
   return {
@@ -89,6 +128,9 @@ function defaultProfile() {
       items: [],            // [{name, syn:[...], core:true}]
       rules: [],            // ручные привязки: [подстрока назначения, имя фокуса]
     },
+    // Какие выполненные направления входят в денежные показатели Вектора 3.
+    // Группировка при этом всегда показывает полный состав «Выработки».
+    referralRevenuePolicy: defaultReferralRevenuePolicy(),
     // таксономия категорий выручки: группа -> подгруппы
     groups: {
       "Приемы": [],
@@ -350,6 +392,7 @@ function profilePhysiotherapy() {
     ["косметика", "Товары", "Косметика", ""],
     ["бад", "Товары", "БАДы", "товар"],
   ];
+  p.referralRevenuePolicy = externalReferralRevenuePolicy(["Физиотерапия", "Косметология"]);
   return p;
 }
 
@@ -436,6 +479,9 @@ function cloneProfile(profile, matchers) {
 }
 
 function clinicSpecializationProfiles() {
+  const esthetists = cloneProfile(profileCosmetology(), ["эстетист"]);
+  esthetists.referralRevenuePolicy = externalReferralRevenuePolicy(["Физиотерапия", "Косметология"]);
+  esthetists.inheritReferralRevenuePolicy = false;
   const profiles = {
     "По умолчанию": defaultProfile(),
     "Маммология": cloneProfile(profileSurgery(), ["маммолог", "онкодермат", "дермотоонко"]),
@@ -446,14 +492,17 @@ function clinicSpecializationProfiles() {
     "Неврология": cloneProfile(profileTherapy(), ["невролог"]),
     "Психотерапия": cloneProfile(profileTherapy(), ["психотерап", "психиат"]),
     "Косметология": cloneProfile(profileCosmetology(), ["косметолог", "дермат"]),
-    "Эстетисты": cloneProfile(profileCosmetology(), ["эстетист"]),
+    "Эстетисты": esthetists,
     "Специалисты по телу": cloneProfile(profilePhysiotherapy(), ["массаж", "реабилит", "специалист по телу", "физио"]),
     "Остеопатия": cloneProfile(profilePhysiotherapy(), ["остеопат", "мануальн"]),
     "Гинекология": cloneProfile(profileGynecology(), ["гинеколог", "акушер"]),
     "Урология": cloneProfile(profileTherapy(), ["уролог"]),
   };
   for (const [name, profile] of Object.entries(profiles)) {
-    if (name !== "По умолчанию") profile.inheritGoals = true;
+    if (name !== "По умолчанию") {
+      profile.inheritGoals = true;
+      if (profile.inheritReferralRevenuePolicy == null) profile.inheritReferralRevenuePolicy = true;
+    }
   }
   return profiles;
 }
@@ -497,6 +546,8 @@ function defaultSettings() {
     },
     departmentHeadDoctorIds: clinicDepartmentHeadDoctorIds(defaultDoctors()),
     interdisciplinaryHomeDepartments: {},
+    interdisciplinaryGroupDepartments: {},
+    referralRevenuePolicyV: 1,
     depts: clinicSpecializationProfiles(),
   };
 }
@@ -557,12 +608,49 @@ function nomenclatureMatchKeys(name) {
   ].filter(Boolean))];
 }
 
+function interdisciplinaryServiceConfigKeys(name) {
+  return [...new Set([
+    ...nomenclatureMatchKeys(name).map(interdisciplinaryServiceKey),
+    interdisciplinaryServiceKey(name),
+  ].filter(Boolean))];
+}
+
+function interdisciplinaryServiceStorageKey(name) {
+  return interdisciplinaryServiceConfigKeys(name)[0] || "";
+}
+
 function interdisciplinaryHomeDepartment(focus) {
   const focusName = focus && typeof focus === "object" ? focus.name : focus;
-  const key = interdisciplinaryServiceKey(focusName);
   const configured = (DB.settings && DB.settings.interdisciplinaryHomeDepartments) || {};
-  const value = String(configured[key] || (focus && focus.homeDepartment) || "").trim();
+  let configuredValue = "";
+  for (const key of interdisciplinaryServiceConfigKeys(focusName)) {
+    if (configured[key]) { configuredValue = configured[key]; break; }
+  }
+  const value = String(configuredValue || (focus && focus.homeDepartment) || "").trim();
   return value && Object.prototype.hasOwnProperty.call(departmentGroups(), value) ? value : "";
+}
+
+function interdisciplinaryGroupKey(path) {
+  return (Array.isArray(path) ? path : [])
+    .map(value => String(value || "").replace(/\s+/g, " ").trim().toLocaleLowerCase("ru-RU"))
+    .filter(Boolean)
+    .join("\u001f");
+}
+
+function interdisciplinaryGroupDepartment(path) {
+  const parts = (Array.isArray(path) ? path : []).map(value => String(value || "").trim()).filter(Boolean);
+  const configured = (DB.settings && DB.settings.interdisciplinaryGroupDepartments) || {};
+  for (let length = parts.length; length > 0; length--) {
+    const departmentName = String(configured[interdisciplinaryGroupKey(parts.slice(0, length))] || "").trim();
+    if (departmentName && Object.prototype.hasOwnProperty.call(departmentGroups(), departmentName)) return departmentName;
+  }
+  return "";
+}
+
+function resolvedInterdisciplinaryHomeDepartment(nomenclatureName, focus, groupPath) {
+  return interdisciplinaryHomeDepartment(nomenclatureName)
+    || interdisciplinaryGroupDepartment(groupPath)
+    || interdisciplinaryHomeDepartment(focus);
 }
 
 function departmentUsesSpecializations(name) {
@@ -592,6 +680,7 @@ function mergeMetricProfile(base, own) {
   const merged = Object.assign({}, base, own);
   merged.expertise = Object.assign({}, base.expertise, own.expertise || {});
   merged.crossFocus = Object.assign({}, base.crossFocus, own.crossFocus || {});
+  merged.referralRevenuePolicy = normalizeReferralRevenuePolicy(own.referralRevenuePolicy || base.referralRevenuePolicy);
   merged.scoring = {
     weights: Object.assign({}, base.scoring.weights, (own.scoring || {}).weights || {}),
     enabled: Object.assign({}, base.scoring.enabled, (own.scoring || {}).enabled || {}),
@@ -604,6 +693,9 @@ function specializationProfile(parentName, specializationName) {
   const base = departmentProfile(parentName);
   const own = specializationName && DB.settings.depts ? DB.settings.depts[specializationName] : null;
   const merged = mergeMetricProfile(base, own || base);
+  if (own && own.inheritReferralRevenuePolicy === true) {
+    merged.referralRevenuePolicy = normalizeReferralRevenuePolicy(base.referralRevenuePolicy);
+  }
   if (!own || own.inheritGoals !== true) return merged;
   merged.scoring.benchmarks = Object.assign({}, base.scoring.benchmarks);
   return merged;
@@ -1047,6 +1139,8 @@ function normalizeProfileRecord(raw, inherited) {
   p.crossFocus = Object.assign({}, def.crossFocus, source.crossFocus || {});
   if (!Array.isArray(p.crossFocus.items)) p.crossFocus.items = [];
   if (!Array.isArray(p.crossFocus.rules)) p.crossFocus.rules = [];
+  p.referralRevenuePolicy = normalizeReferralRevenuePolicy(source.referralRevenuePolicy || def.referralRevenuePolicy);
+  if (source.inheritReferralRevenuePolicy != null) p.inheritReferralRevenuePolicy = source.inheritReferralRevenuePolicy === true;
   if (!p.groups || !Object.keys(p.groups).length) p.groups = JSON.parse(JSON.stringify(def.groups));
   if (!Array.isArray(p.rules)) p.rules = (def.rules || []).slice();
   if (!p.overrides) p.overrides = {};
@@ -1214,6 +1308,7 @@ function normalizeProfiles() {
   const sourceStructureVersion = Number(DB.settings.structureV || 0);
   const structureUpgraded = upgradeClinicStructure(defaults);
   let metricScopeUpgraded = false;
+  const referralRevenuePolicyUpgrade = Number(DB.settings.referralRevenuePolicyV || 0) < 1;
   if (!DB.settings.depts || typeof DB.settings.depts !== "object") DB.settings.depts = defaults.depts;
   for (const dn of Object.keys(DB.settings.depts)) {
     DB.settings.depts[dn] = normalizeProfileRecord(DB.settings.depts[dn], defaultProfile());
@@ -1257,6 +1352,20 @@ function normalizeProfiles() {
   if (JSON.stringify(sourceHomeDepartments) !== JSON.stringify(normalizedHomeDepartments)) metricScopeUpgraded = true;
   DB.settings.interdisciplinaryHomeDepartments = normalizedHomeDepartments;
 
+  const sourceGroupDepartments = (DB.settings.interdisciplinaryGroupDepartments
+    && typeof DB.settings.interdisciplinaryGroupDepartments === "object"
+    && !Array.isArray(DB.settings.interdisciplinaryGroupDepartments))
+    ? DB.settings.interdisciplinaryGroupDepartments : {};
+  const normalizedGroupDepartments = {};
+  for (const [rawGroupKey, rawDepartmentName] of Object.entries(sourceGroupDepartments)) {
+    const groupKey = String(rawGroupKey || "").trim().toLocaleLowerCase("ru-RU");
+    const departmentName = String(rawDepartmentName || "").trim();
+    if (!groupKey || !normalizedDepartments[departmentName]) continue;
+    normalizedGroupDepartments[groupKey] = departmentName;
+  }
+  if (JSON.stringify(sourceGroupDepartments) !== JSON.stringify(normalizedGroupDepartments)) metricScopeUpgraded = true;
+  DB.settings.interdisciplinaryGroupDepartments = normalizedGroupDepartments;
+
   const normalizedDepartmentProfiles = {};
   for (const [name, specs] of Object.entries(normalizedDepartments)) {
     const legacySingle = specs.length === 1 ? DB.settings.depts[specs[0]] : null;
@@ -1264,6 +1373,24 @@ function normalizeProfiles() {
     normalizedDepartmentProfiles[name] = normalizeProfileRecord(seed, DB.settings.depts["По умолчанию"] || defaultProfile());
   }
   DB.settings.departmentProfiles = normalizedDepartmentProfiles;
+
+  if (referralRevenuePolicyUpgrade) {
+    if (normalizedDepartmentProfiles["Физиотерапия"]) {
+      normalizedDepartmentProfiles["Физиотерапия"].referralRevenuePolicy = externalReferralRevenuePolicy(["Физиотерапия", "Косметология"]);
+    }
+    for (const specs of Object.values(normalizedDepartments)) {
+      for (const specName of specs) {
+        const profile = DB.settings.depts[specName];
+        if (profile && profile.inheritReferralRevenuePolicy == null) profile.inheritReferralRevenuePolicy = true;
+      }
+    }
+    if (DB.settings.depts["Эстетисты"]) {
+      DB.settings.depts["Эстетисты"].inheritReferralRevenuePolicy = false;
+      DB.settings.depts["Эстетисты"].referralRevenuePolicy = externalReferralRevenuePolicy(["Физиотерапия", "Косметология"]);
+    }
+    DB.settings.referralRevenuePolicyV = 1;
+    metricScopeUpgraded = true;
+  }
 
   // Переход от общей настройки профиля к явным уровням:
   // нормативы/веса принадлежат специализации, а цели могут наследоваться от отделения.

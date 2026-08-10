@@ -393,6 +393,9 @@ table.data .source-group-depth-1 td { background: #f8fafc; }
 table.data .source-group-depth-2 td,
 table.data .source-group-depth-3 td { background: var(--card); }
 .source-group-depth-0 .source-group-path { font-size: 13px; }
+.referral-policy-controls { margin: 10px 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; }
+.referral-policy-controls:disabled { opacity: .62; }
+.check-row { display: flex; align-items: flex-start; gap: 7px; margin: 7px 0; }
 .source-group-path {
   display: inline-flex;
   flex-wrap: wrap;

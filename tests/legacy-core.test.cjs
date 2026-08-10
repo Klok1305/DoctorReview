@@ -828,6 +828,93 @@ test("home departments split ordinary services but keep goods appointments and a
   assert.equal(plain.referrals['Анализы'].s, 400);
 });
 
+test("configurable referral revenue policy counts fixed categories and only services outside selected departments", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: {
+      name: 'Тестовый Эстетист', aliases: [], department: 'Косметология', specialization: 'Эстетисты', structureManual: true
+    } };
+    DB.settings.interdisciplinaryGroupDepartments = {
+      [interdisciplinaryGroupKey(['Услуги', 'Косметология'])]: 'Косметология',
+      [interdisciplinaryGroupKey(['Услуги', 'Физиотерапия'])]: 'Физиотерапия',
+      [interdisciplinaryGroupKey(['Услуги', 'Терапия'])]: 'Терапия'
+    };
+    const esthetistPolicy = specializationProfile('Косметология', 'Эстетисты').referralRevenuePolicy;
+    const physiotherapyPolicy = departmentProfile('Физиотерапия').referralRevenuePolicy;
+    DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].naznach.d1 = { '1': { items: [
+      { n: 'Прием врача', a: 1, d: 0, sq: 0, ss: 0, groupPath: ['Приемы'] },
+      { n: 'Анализ крови', a: 1, d: 0, sq: 0, ss: 0, groupPath: ['Анализы'] },
+      { n: 'Крем товар', a: 1, d: 0, sq: 0, ss: 0, goods: true, groupPath: ['Товары'] },
+      { n: 'Косметологическая процедура', a: 1, d: 0, sq: 0, ss: 0, groupPath: ['Услуги', 'Косметология'] },
+      { n: 'Физиотерапевтическая процедура', a: 1, d: 0, sq: 0, ss: 0, groupPath: ['Услуги', 'Физиотерапия'] },
+      { n: 'Терапевтическая процедура', a: 1, d: 0, sq: 0, ss: 0, groupPath: ['Услуги', 'Терапия'] }
+    ] } };
+    DB.months['2026-01'].vyrabotka.d1 = { items: [
+      { sourceForm: 'Направление', cat: '', n: 'Прием врача', q: 1, sOwn: 100, sRef: 0, goods: false },
+      { sourceForm: 'Направление', cat: '', n: 'Анализ крови', q: 1, sOwn: 100, sRef: 0, goods: false },
+      { sourceForm: 'Направление', cat: '', n: 'Крем товар', q: 1, sOwn: 100, sRef: 0, goods: true },
+      { sourceForm: 'Направление', cat: '', n: 'Косметологическая процедура', q: 1, sOwn: 100, sRef: 0, goods: false },
+      { sourceForm: 'Направление', cat: '', n: 'Физиотерапевтическая процедура', q: 1, sOwn: 100, sRef: 0, goods: false },
+      { sourceForm: 'Направление', cat: '', n: 'Терапевтическая процедура', q: 1, sOwn: 100, sRef: 0, goods: false },
+      { sourceForm: 'Направление', cat: '', n: 'Услуга без подразделения', q: 1, sOwn: 100, sRef: 0, goods: false }
+    ] };
+    clearMetricsCache();
+    const summary = vyrabotkaSummary('d1', '2026-01');
+    const metrics = computeMetrics('d1', '2026-01');
+    return {
+      esthetistPolicy,
+      physiotherapyPolicy,
+      raw: summary.refSum,
+      included: summary.refIncludedSum,
+      excluded: summary.refExcludedSum,
+      econIncluded: metrics.econ.refRevenue,
+      crossRaw: metrics.cross.refSumAll,
+      crossExcluded: metrics.cross.refExcludedSum,
+      therapyItem: summary.refByType['Другие услуги клиники'].items['Терапевтическая процедура'],
+      ownItem: summary.refByType['Профильные услуги'].items['Косметологическая процедура']
+    };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.equal(plain.esthetistPolicy.mode, 'external');
+  assert.deepEqual(plain.esthetistPolicy.excludedServiceDepartments, ['Физиотерапия', 'Косметология']);
+  assert.equal(plain.physiotherapyPolicy.mode, 'external');
+  assert.equal(plain.raw, 700);
+  assert.equal(plain.included, 400);
+  assert.equal(plain.excluded, 300);
+  assert.equal(plain.econIncluded, 400);
+  assert.equal(plain.crossRaw, 700);
+  assert.equal(plain.crossExcluded, 300);
+  assert.equal(plain.therapyItem.homeDepartment, 'Терапия');
+  assert.equal(plain.therapyItem.includedS, 100);
+  assert.equal(plain.ownItem.homeDepartment, 'Косметология');
+  assert.equal(plain.ownItem.excludedS, 100);
+});
+
+test("referral revenue policy migration seeds clinic presets once and keeps later changes", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.settings.referralRevenuePolicyV = 0;
+    DB.settings.departmentProfiles['Физиотерапия'].referralRevenuePolicy = defaultReferralRevenuePolicy();
+    DB.settings.depts['Эстетисты'].referralRevenuePolicy = defaultReferralRevenuePolicy();
+    delete DB.settings.depts['Эстетисты'].inheritReferralRevenuePolicy;
+    normalizeProfiles();
+    const migrated = {
+      physio: departmentProfile('Физиотерапия').referralRevenuePolicy,
+      esthetists: specializationProfile('Косметология', 'Эстетисты').referralRevenuePolicy,
+      version: DB.settings.referralRevenuePolicyV
+    };
+    DB.settings.depts['Эстетисты'].referralRevenuePolicy = Object.assign(defaultReferralRevenuePolicy(), { mode: 'custom' });
+    normalizeProfiles();
+    return { migrated, afterSecondNormalize: DB.settings.depts['Эстетисты'].referralRevenuePolicy.mode };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.equal(plain.migrated.version, 1);
+  assert.equal(plain.migrated.physio.mode, 'external');
+  assert.equal(plain.migrated.esthetists.mode, 'external');
+  assert.equal(plain.afterSecondNormalize, 'custom');
+});
+
 test("appointment conversion ignores completed count for goods but keeps it for services", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
@@ -860,6 +947,33 @@ test("appointment conversion ignores completed count for goods but keeps it for 
   assert.equal(plain.focus.resultQ, 4);
   assert.equal(plain.focus.assigned, 8);
   assert.equal(plain.focus.used, 2);
+});
+
+test("appointment conversion above 100 percent remains valid and earns the full interdisciplinary score", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Conversion Doctor', aliases: [], dept: 'По умолчанию' } };
+    const profile = DB.settings.depts['По умолчанию'];
+    profile.scoring.benchmarks.nazConv = 100;
+    DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].naznach.d1 = { '1': { items: [
+      { n: 'Service', a: 2, d: 2, sq: 1, ss: 100, goods: false, groupPath: ['Services'] }
+    ] } };
+    clearMetricsCache();
+    const metrics = computeMetrics('d1', '2026-01');
+    return {
+      totals: metrics.cross.naz[1].totals,
+      sourceGroup: metrics.cross.naz[1].sourceGroups[0],
+      score: metrics.scores.v3ByNaz[1]
+    };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+
+  assert.equal(plain.totals.valid, true);
+  assert.equal(plain.totals.conv, 150);
+  assert.equal(plain.sourceGroup.valid, true);
+  assert.equal(plain.sourceGroup.conv, 150);
+  assert.equal(plain.score, 100);
 });
 
 test("department ratios are weighted and patients are deduplicated by stable identity", () => {

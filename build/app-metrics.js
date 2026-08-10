@@ -161,17 +161,65 @@ function crossFocusMatch(profile, name) {
 /* Точная привязка строки номенклатуры имеет приоритет над привязкой фокуса.
  * Приём остаётся приёмом, остальные домашние услуги становятся профильными;
  * услуги другого отделения уходят в общий междисциплинарный блок. */
-function interdisciplinaryRefType(cls, focus, docId, nomenclatureName) {
+function interdisciplinaryRefType(cls, focus, docId, nomenclatureName, groupPath = []) {
   const legacyType = refTypeOf(cls);
   // Домашнее подразделение распределяет только услуги, для которых нет
   // самостоятельной категории. Товары, приёмы и анализы не должны
   // превращаться в «Другие услуги клиники» из-за чужого подразделения.
   if (["Товары", "Приемы", "Анализы"].includes(legacyType)) return legacyType;
-  const homeDepartment = interdisciplinaryHomeDepartment(nomenclatureName)
-    || interdisciplinaryHomeDepartment(focus);
+  const homeDepartment = resolvedInterdisciplinaryHomeDepartment(nomenclatureName, focus, groupPath);
   if (!homeDepartment) return legacyType;
   if (homeDepartment !== resolvedDepartmentName(docId)) return "Другие услуги клиники";
   return "Профильные услуги";
+}
+
+function referralRevenueDecision(profile, referralType, homeDepartment) {
+  const policy = normalizeReferralRevenuePolicy(profile && profile.referralRevenuePolicy);
+  if (policy.mode === "all") return { included: true, reason: "учитывается: все направления" };
+  if (REFERRAL_REVENUE_FIXED_TYPES.includes(referralType)) {
+    const included = policy.includeTypes[referralType] === true;
+    return { included, reason: included ? `учитывается: ${referralType.toLocaleLowerCase("ru-RU")}` : `не учитывается: ${referralType.toLocaleLowerCase("ru-RU")}` };
+  }
+  if (!policy.includeExternalServices) return { included: false, reason: "не учитывается: услуги отключены настройкой" };
+  if (!homeDepartment) {
+    return {
+      included: policy.includeUnassignedServices,
+      reason: policy.includeUnassignedServices ? "учитывается: подразделение услуги не определено" : "не учитывается: подразделение услуги не определено",
+    };
+  }
+  const excluded = policy.excludedServiceDepartments.includes(homeDepartment);
+  return {
+    included: !excluded,
+    reason: excluded ? `не учитывается: услуга подразделения «${homeDepartment}»` : `учитывается: услуга подразделения «${homeDepartment}»`,
+  };
+}
+
+function assignmentGroupPathIndex(docId, monthKey) {
+  const month = DB.months[monthKey];
+  const reports = month && month.naznach && month.naznach[docId];
+  const index = new Map();
+  if (!reports || typeof reports !== "object") return index;
+  const remember = (key, path) => {
+    if (!index.has(key)) { index.set(key, path); return; }
+    const existing = index.get(key);
+    if (existing && JSON.stringify(existing) !== JSON.stringify(path)) index.set(key, null);
+  };
+  for (const report of Object.values(reports)) {
+    for (const item of (report && Array.isArray(report.items) ? report.items : [])) {
+      const path = Array.isArray(item.groupPath) ? item.groupPath.map(cellStr).filter(Boolean) : [];
+      if (!path.length) continue;
+      for (const key of nomenclatureMatchKeys(item.n)) remember(key, path);
+    }
+  }
+  return index;
+}
+
+function matchedAssignmentGroupPath(index, nomenclatureName) {
+  for (const key of nomenclatureMatchKeys(nomenclatureName)) {
+    const path = index.get(key);
+    if (path) return [...path];
+  }
+  return [];
 }
 
 /* ---------- сводка по выработке (по профилю отделения врача) ---------- */
@@ -180,9 +228,12 @@ function vyrabotkaSummary(docId, monthKey) {
   const v = m && m.vyrabotka[docId];
   if (!v) return null;
   const profile = profileForDoctor(docId);
+  const referralGroupPaths = assignmentGroupPathIndex(docId, monthKey);
   const out = {
     profile,
     ownSum: 0, ownQty: 0, assistSum: 0, assistQty: 0, refSum: 0, refQty: 0,
+    refIncludedSum: 0, refIncludedQty: 0, refExcludedSum: 0, refExcludedQty: 0,
+    referralRevenuePolicy: normalizeReferralRevenuePolicy(profile.referralRevenuePolicy),
     byGroup: {},        // собственная выручка: группа -> {s, q, subs}
     expert: { items: {}, sum: 0 },  // экспертные позиции: имя -> {q, s}
     devCandidates: {},  // «похоже на экспертное, но не привязано»
@@ -275,15 +326,32 @@ function vyrabotkaSummary(docId, monthKey) {
       }
     }
     if (ref > 0) {
+      const groupPath = matchedAssignmentGroupPath(referralGroupPaths, it.n);
       const focus = crossFocusMatch(profile, it.n);
-      const t = interdisciplinaryRefType(cls, focus, docId, it.n);
-      if (!out.refByType[t]) out.refByType[t] = { s: 0, q: 0, items: {} };
+      const homeDepartment = resolvedInterdisciplinaryHomeDepartment(it.n, focus, groupPath);
+      const t = interdisciplinaryRefType(cls, focus, docId, it.n, groupPath);
+      const decision = referralRevenueDecision(profile, t, homeDepartment);
+      if (decision.included) {
+        out.refIncludedSum += ref;
+        out.refIncludedQty += qRef;
+      } else {
+        out.refExcludedSum += ref;
+        out.refExcludedQty += qRef;
+      }
+      if (!out.refByType[t]) out.refByType[t] = { s: 0, q: 0, includedS: 0, includedQ: 0, excludedS: 0, excludedQ: 0, items: {} };
       const bt = out.refByType[t];
       bt.s += ref;
       bt.q += qRef;
-      if (!bt.items[it.n]) bt.items[it.n] = { s: 0, q: 0 };
+      bt[decision.included ? "includedS" : "excludedS"] += ref;
+      bt[decision.included ? "includedQ" : "excludedQ"] += qRef;
+      if (!bt.items[it.n]) bt.items[it.n] = {
+        s: 0, q: 0, includedS: 0, includedQ: 0, excludedS: 0, excludedQ: 0,
+        homeDepartment, groupPath, inclusionReason: decision.reason,
+      };
       bt.items[it.n].s += ref;
       bt.items[it.n].q += qRef;
+      bt.items[it.n][decision.included ? "includedS" : "excludedS"] += ref;
+      bt.items[it.n][decision.included ? "includedQ" : "excludedQ"] += qRef;
     }
   }
   // доля «экспертной» выручки = сумма фокусных позиций (широта × деньги),
@@ -293,6 +361,11 @@ function vyrabotkaSummary(docId, monthKey) {
 }
 
 /* ---------- сводка по назначениям (Вектор 3) ---------- */
+function validNaznachCounts(summary) {
+  return Boolean(summary) && ["assigned", "done", "soldQ", "resultQ"]
+    .every(key => Number.isFinite(summary[key]) && summary[key] >= 0);
+}
+
 function naznachSummary(docId, monthKey, slice) {
   const m = DB.months[monthKey];
   const nz = m && m.naznach && m.naznach[docId] && m.naznach[docId][String(slice)];
@@ -324,7 +397,7 @@ function naznachSummary(docId, monthKey, slice) {
     const soldQ = it.sq || 0;
     const resultQ = done + soldQ;
     const focus = crossFocusMatch(profile, it.n);
-    const t = interdisciplinaryRefType(cls, focus, docId, it.n);
+    const t = interdisciplinaryRefType(cls, focus, docId, it.n, it.groupPath || []);
     const b = out.byType[t];
     b.assigned += it.a; b.done += done; b.soldQ += soldQ; b.soldSum += it.ss; b.resultQ += resultQ;
     if (!b.items[it.n]) b.items[it.n] = { assigned: 0, done: 0, soldQ: 0, soldSum: 0, resultQ: 0, goods };
@@ -369,17 +442,17 @@ function naznachSummary(docId, monthKey, slice) {
   }
   for (const t of REF_TYPES) {
     const b = out.byType[t];
-    b.valid = b.assigned >= 0 && b.done >= 0 && b.soldQ >= 0 && b.resultQ <= b.assigned;
-    b.issue = b.valid ? null : "выполнено + продано больше назначенного";
+    b.valid = validNaznachCounts(b);
+    b.issue = b.valid ? null : "в исходных данных есть отрицательные или некорректные количества";
     b.conv = b.valid && b.assigned > 0 ? b.resultQ / b.assigned * 100 : null;
   }
   out.sourceGroups = hasExplicitSourceGroups ? [...sourceGroupMap.values()] : [];
   for (const group of out.sourceGroups) {
-    group.valid = group.assigned >= 0 && group.done >= 0 && group.soldQ >= 0 && group.resultQ <= group.assigned;
+    group.valid = validNaznachCounts(group);
     group.conv = group.valid && group.assigned > 0 ? group.resultQ / group.assigned * 100 : null;
   }
-  out.totals.valid = out.totals.assigned >= 0 && out.totals.done >= 0 && out.totals.soldQ >= 0 && out.totals.resultQ <= out.totals.assigned;
-  out.totals.issue = out.totals.valid ? null : "выполнено + продано больше назначенного";
+  out.totals.valid = validNaznachCounts(out.totals);
+  out.totals.issue = out.totals.valid ? null : "в исходных данных есть отрицательные или некорректные количества";
   out.totals.conv = out.totals.valid && out.totals.assigned > 0 ? out.totals.resultQ / out.totals.assigned * 100 : null;
   if (out.focus) {
     out.focus.usedNames = coreFocusNames.filter(name => out.focus.items[name] && out.focus.items[name].resultQ > 0);
@@ -413,10 +486,12 @@ function completedReferralSourceGrouping(refByType, nazSummary) {
     const sourceType = refByType[type];
     if (!sourceType) continue;
     for (const [name, values] of Object.entries(sourceType.items || {})) {
-      let path = null;
-      for (const key of nomenclatureMatchKeys(name)) {
-        const candidate = pathByNomenclature.get(key);
-        if (candidate) { path = candidate; break; }
+      let path = Array.isArray(values.groupPath) && values.groupPath.length ? [...values.groupPath] : null;
+      if (!path) {
+        for (const key of nomenclatureMatchKeys(name)) {
+          const candidate = pathByNomenclature.get(key);
+          if (candidate) { path = candidate; break; }
+        }
       }
       if (path) matchedItems++;
       else {
@@ -424,13 +499,26 @@ function completedReferralSourceGrouping(refByType, nazSummary) {
         path = ["Не сопоставлено с группами 1С"];
       }
       const groupKey = `${type}\u0000${JSON.stringify(path)}`;
-      if (!grouped.has(groupKey)) grouped.set(groupKey, { type, path: [...path], q: 0, s: 0, items: {} });
+      if (!grouped.has(groupKey)) grouped.set(groupKey, {
+        type, path: [...path], q: 0, s: 0, includedQ: 0, includedS: 0, excludedQ: 0, excludedS: 0, items: {},
+      });
       const target = grouped.get(groupKey);
       target.q += values.q || 0;
       target.s += values.s || 0;
-      if (!target.items[name]) target.items[name] = { q: 0, s: 0 };
+      target.includedQ += values.includedQ || 0;
+      target.includedS += values.includedS || 0;
+      target.excludedQ += values.excludedQ || 0;
+      target.excludedS += values.excludedS || 0;
+      if (!target.items[name]) target.items[name] = {
+        q: 0, s: 0, includedQ: 0, includedS: 0, excludedQ: 0, excludedS: 0,
+        homeDepartment: values.homeDepartment || "", inclusionReason: values.inclusionReason || "",
+      };
       target.items[name].q += values.q || 0;
       target.items[name].s += values.s || 0;
+      target.items[name].includedQ += values.includedQ || 0;
+      target.items[name].includedS += values.includedS || 0;
+      target.items[name].excludedQ += values.excludedQ || 0;
+      target.items[name].excludedS += values.excludedS || 0;
     }
   }
   return { groups: [...grouped.values()], matchedItems, unmatchedItems };
@@ -649,7 +737,8 @@ function computeMetricsRaw(docId, monthKey) {
   const sales = vy ? vy.ownSum : null;
   // Выручка от выполненных направлений берётся только из «Выработки».
   // «Назначения» остаются источником количества и конверсии, но не денег KPI.
-  const refRevenue = vy ? vy.refSum : null;
+  const refRevenueAll = vy ? vy.refSum : null;
+  const refRevenue = vy ? vy.refIncludedSum : null;
   const revenueWithRef = sales != null ? sales + (refRevenue || 0) : null;
   const avgClient = (sales != null && traffic.patients) ? sales / traffic.patients : null;
   const avgVisit = (sales != null && traffic.visits) ? sales / traffic.visits : null;
@@ -677,7 +766,7 @@ function computeMetricsRaw(docId, monthKey) {
 
   const econ = {
     sales, assistSum: vy ? vy.assistSum : null,
-    refRevenue, revenueWithRef,
+    refRevenue, refRevenueAll, revenueWithRef,
     avgClient, avgVisit, avgClientRef,
     dynPrev: deltaPct(avgClient, prev1), dynQ: deltaPct(avgClient, prevQ), dynY: deltaPct(avgClient, prevY),
     prev1, prevQ, prevY,
@@ -751,6 +840,9 @@ function computeMetricsRaw(docId, monthKey) {
       3: completedReferralSourceGrouping(vy.refByType, naz3),
     } : {},
     refSum: refRevenue,
+    refSumAll: refRevenueAll,
+    refExcludedSum: vy ? vy.refExcludedSum : null,
+    referralRevenuePolicy: vy ? vy.referralRevenuePolicy : null,
     crossShare: (revenueWithRef && refRevenue != null) ? refRevenue / revenueWithRef * 100 : null,
   };
 
@@ -938,6 +1030,33 @@ function collectDeptItems(deptName) {
     e.override = profile.overrides ? profile.overrides[e.n.toLowerCase()] : null;
   }
   return out.sort((a, b) => b.s - a.s);
+}
+
+function collectInterdisciplinaryGroupPaths(departmentName, specializationName = "") {
+  const map = new Map();
+  const inScope = docId => specializationName
+    ? resolvedSpecializationName(docId) === specializationName
+    : resolvedDepartmentName(docId) === departmentName;
+  for (const month of Object.values(DB.months)) {
+    for (const [docId, reports] of Object.entries(month.naznach || {})) {
+      if (!inScope(docId)) continue;
+      for (const report of Object.values(reports || {})) {
+        for (const item of (report && Array.isArray(report.items) ? report.items : [])) {
+          const path = Array.isArray(item.groupPath) ? item.groupPath.map(cellStr).filter(Boolean) : [];
+          for (let length = 1; length <= path.length; length++) {
+            const prefix = path.slice(0, length);
+            const key = interdisciplinaryGroupKey(prefix);
+            if (!key) continue;
+            if (!map.has(key)) map.set(key, { key, path: prefix, positions: 0, assigned: 0 });
+            const entry = map.get(key);
+            entry.positions++;
+            entry.assigned += item.a || 0;
+          }
+        }
+      }
+    }
+  }
+  return [...map.values()].sort((a, b) => a.path.join(" / ").localeCompare(b.path.join(" / "), "ru"));
 }
 function collectDeviceCandidates(deptName) {
   return collectDeptItems(deptName).filter(e => e.cls.devCandidate);
