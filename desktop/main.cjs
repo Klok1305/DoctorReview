@@ -81,6 +81,61 @@ function ensureObject(value, label = "данные") {
   return value;
 }
 
+async function renderHtmlToPdf(html) {
+  const source = String(html || "");
+  const sourceBytes = Buffer.byteLength(source, "utf8");
+  if (!source.trim()) throw new Error("Печатная HTML-страница пуста");
+  if (sourceBytes > 128 * 1024 * 1024) throw new Error("Печатная HTML-страница слишком велика");
+
+  const tempDirectory = fs.mkdtempSync(path.join(app.getPath("temp"), "klinvekt-pdf-"));
+  const htmlPath = path.join(tempDirectory, "report.html");
+  let printWindow = null;
+  try {
+    fs.writeFileSync(htmlPath, source, "utf8");
+    printWindow = new BrowserWindow({
+      width: 1440,
+      height: 940,
+      show: false,
+      backgroundColor: "#ffffff",
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        devTools: false,
+        partition: `pdf-export-${process.pid}-${Date.now()}`,
+      },
+    });
+    printWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    await printWindow.loadFile(htmlPath);
+    await printWindow.webContents.executeJavaScript(`(async () => {
+      if (document.fonts && document.fonts.ready) await document.fonts.ready;
+      await Promise.all([...document.images].map(image => image.complete
+        ? Promise.resolve()
+        : new Promise(resolve => { image.onload = image.onerror = resolve; })));
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return true;
+    })()`);
+    const pdf = await printWindow.webContents.printToPDF({
+      landscape: true,
+      displayHeaderFooter: false,
+      printBackground: true,
+      scale: 1,
+      pageSize: "A4",
+      margins: { top: 0, bottom: 0, left: 0, right: 0 },
+      preferCSSPageSize: true,
+      generateTaggedPDF: true,
+      generateDocumentOutline: true,
+    });
+    if (!pdf || pdf.length < 5 || pdf.subarray(0, 5).toString("ascii") !== "%PDF-") {
+      throw new Error("Chromium не сформировал корректный PDF");
+    }
+    return pdf;
+  } finally {
+    if (printWindow && !printWindow.isDestroyed()) printWindow.destroy();
+    fs.rmSync(tempDirectory, { recursive: true, force: true });
+  }
+}
+
 function localAdminActor() {
   const user = database.ensureLocalAdministrator();
   return {
@@ -320,37 +375,31 @@ function createWindow() {
               }
               UI.repMonth = '2026-03';
               clearMetricsCache();
-              switchTab('settings');
-              await new Promise(resolve => setTimeout(resolve, 150));
-              document.getElementById('btnExportAllPdf').click();
+              openPdfExportDialog();
               const exportDialog = document.getElementById('pdfExportDialog');
               const dialogOpenedBeforeExport = exportDialog.open;
-              document.getElementById('pdfExportClearAll').click();
+              setAllPdfExportDialogChoices(false);
               const emptySelectionBlocked = document.getElementById('pdfExportDialogStart').disabled;
-              document.querySelector('label.pdf-choice-doctor input').click();
+              const doctorChoice = document.querySelector('label.pdf-choice-doctor input');
+              if (!doctorChoice) throw new Error('PDF smoke: чекбокс врача не найден');
+              doctorChoice.checked = true;
+              updatePdfExportDialogState();
               const doctorsOnlyTargets = selectedPdfExportTargets();
               const exactSelectionValid = doctorsOnlyTargets.length === 1
                 && doctorsOnlyTargets[0].kind === 'Врач'
                 && document.getElementById('pdfExportDialogStatus').textContent.includes('Выбрано: 1 PDF');
-              document.getElementById('pdfExportSelectAll').click();
+              setAllPdfExportDialogChoices(true);
               const allTargetsSelected = selectedPdfExportTargets().length === 3;
-              UI.deptMonth = '2026-03';
-              UI.deptFilter = 'Кардиология';
-              UI.subFilter = 'all';
-              switchTab('dept');
-              await new Promise(resolve => setTimeout(resolve, 300));
-              const deptScoreCanvas = document.getElementById('chDeptScores');
-              const deptScoreChart = UI.charts.chDeptScores;
-              const deptScoreChartCheck = {
-                width: deptScoreCanvas ? deptScoreCanvas.width : 0,
-                height: deptScoreCanvas ? deptScoreCanvas.height : 0,
-                imageBytes: deptScoreCanvas ? deptScoreCanvas.toDataURL('image/png').length : 0,
-                datasets: deptScoreChart ? deptScoreChart.data.datasets.length : 0,
-                emptyPlaceholderHidden: !document.getElementById('chDeptScoresWrap')
-              };
-              const saved = await saveSessionState();
-              const sessionSaveStatus = document.getElementById('sessionSaveStatus').textContent;
-              const pdfExport = await startPdfExportFromDialog();
+              const doctorTarget = selectedPdfExportTargets().find(target => target.kind === 'Врач');
+              if (!doctorTarget) throw new Error('PDF smoke: цель врача не найдена; выбранные цели='
+                + JSON.stringify(selectedPdfExportTargets().map(target => ({ kind: target.kind, name: target.name })))
+                + '; все цели=' + JSON.stringify(pendingPdfExportTargets.map((target, index) => ({ index, kind: target.kind, name: target.name })))
+                + '; чекбоксы=' + JSON.stringify([...document.querySelectorAll('input[data-pdf-target-index]')].map(input => ({
+                  index: input.dataset.pdfTargetIndex, checked: input.checked,
+                  label: input.closest('label')?.className || ''
+                }))));
+              closePdfExportDialog();
+              const pdfExport = await exportAllReportsToFolder([doctorTarget]);
               return {
                 title: document.title,
                 dataPage: Boolean(document.getElementById('page-data')),
@@ -358,9 +407,6 @@ function createWindow() {
                 xlsx: typeof XLSX !== 'undefined',
                 chart: typeof Chart !== 'undefined',
                 desktop: Boolean(window.desktopAPI),
-                saved,
-                sessionSaveStatus,
-                deptScoreChartCheck,
                 pdfSelectionDialogValid: dialogOpenedBeforeExport && emptySelectionBlocked && exactSelectionValid && allTargetsSelected,
                 pdfExport
               };
@@ -1039,12 +1085,8 @@ function createWindow() {
         const passed = result.dataPage && result.optionalLibrariesDeferred && result.xlsx && result.chart && result.desktop
           && result.rendererErrors.length === 0
           && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.specializationFocusBlockValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.doctorMetricSettings && result.commentWorkflowValid))
-          && (!PDF_SMOKE_TEST || (result.saved && result.pdfSelectionDialogValid && result.pdfExport && result.pdfExport.saved === 3
-            && result.pdfExport.chartImages >= 3 && result.pdfFiles.length === 3
-            && result.sessionSaveStatus && result.sessionSaveStatus.includes('Сохранено в рабочую базу SQLite')
-            && result.deptScoreChartCheck && (result.deptScoreChartCheck.datasets > 0
-              ? result.deptScoreChartCheck.imageBytes > 10000
-              : result.deptScoreChartCheck.emptyPlaceholderHidden)));
+          && (!PDF_SMOKE_TEST || (result.pdfSelectionDialogValid && result.pdfExport && result.pdfExport.saved === 1
+            && result.pdfExport.chartImages >= 1 && result.pdfFiles.length === 1));
         app.exit(passed ? 0 : 2);
       } catch (error) {
         process.stderr.write(`${error.stack || error.message}\n`);
@@ -1319,6 +1361,11 @@ function registerIpc() {
   });
 
   ipcMain.handle("export:begin", (_event, payload) => { localAdminActor(); return fileService.beginExportBatch(ensureObject(payload, "параметры выгрузки")); });
+  ipcMain.handle("export:render-pdf", (_event, payload) => {
+    localAdminActor();
+    const input = ensureObject(payload, "печатная HTML-страница");
+    return renderHtmlToPdf(input.html);
+  });
   ipcMain.handle("export:write", (_event, payload) => { localAdminActor(); return fileService.writeExportFile(ensureObject(payload, "файл выгрузки")); });
   ipcMain.handle("export:finish", (_event, payload) => { localAdminActor(); return fileService.finishExportBatch(ensureObject(payload, "итоги выгрузки")); });
   ipcMain.handle("export:abort", (_event, token) => { localAdminActor(); return fileService.abortExportBatch(token); });

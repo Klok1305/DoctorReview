@@ -52,8 +52,10 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /function composeViewerDashboardHtml/);
   assert.match(actual, /function splitDynamicPdfSection/);
   assert.match(actual, /function splitOversizedPdfSection/);
-  assert.match(actual, /el\.querySelector\("\.pdf-chart-image"\)/);
-  assert.match(actual, /fitScale = maxImgH \/ scaledHeight/);
+  assert.match(actual, /function readableCanvasSliceEnd/);
+  assert.match(actual, /function printablePdfDocument/);
+  assert.match(actual, /DESKTOP_API\.renderPdf\(\{ html: printHtml \}\)/);
+  assert.doesNotMatch(actual, /fitScale = maxImgH \/ scaledHeight/);
   assert.match(actual, /image\.style\.aspectRatio/);
   assert.match(actual, /async function saveSessionState/);
   assert.match(actual, /Все изменения текущей сессии сохранены/);
@@ -220,6 +222,21 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /\.logo-work\s*\{\s*color:\s*#1d4ed8;/);
   assert.match(actual, /\.logo-doctors\s*\{\s*color:\s*#0f766e;/);
   assert.doesNotMatch(actual, /Трафик: визиты за месяц/);
+});
+
+test("desktop PDF export prints prepared HTML through Chromium and keeps a readable browser fallback", () => {
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const preload = fs.readFileSync(path.join(root, "desktop", "preload.cjs"), "utf8");
+  const main = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
+
+  assert.match(preload, /renderPdf: payload => invoke\("export:render-pdf", payload\)/);
+  assert.match(main, /async function renderHtmlToPdf\(html\)/);
+  assert.match(main, /printWindow\.webContents\.printToPDF\(/);
+  assert.match(main, /ipcMain\.handle\("export:render-pdf"/);
+  assert.match(ui, /const useChromiumPdf = Boolean\(useDesktopExport && typeof DESKTOP_API\.renderPdf === "function"\)/);
+  assert.match(ui, /printablePdfDocument\(stage, target, mk\)/);
+  assert.match(ui, /function readableCanvasSliceEnd\(canvas, startY, idealEnd\)/);
+  assert.doesNotMatch(ui, /fitScale = maxImgH \/ scaledHeight/);
 });
 
 test("all rendered controls resolve their inline handlers and listener targets", () => {
@@ -430,7 +447,7 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "2.5.7");
+  assert.equal(packageJson.version, "2.5.8");
   assert.equal(packageJson.build.productName, "КлинВект Щербатова — Администратор");
   assert.equal(packageJson.build.artifactName, "KlinVekt-Shcherbatova-Admin-Setup-${version}-${arch}.${ext}");
   assert.equal(packageJson.scripts["dist:portable"], undefined);
@@ -854,6 +871,8 @@ test("Viewer access is name plus PIN with encrypted pages and no Windows or NTFS
   assert.match(adminUi, /exportViewerPackage\("html"\)/);
   assert.match(adminUi, /exportViewerPackage\("zip"\)/);
   assert.match(standaloneIndex, /standaloneViewerData/);
+  assert.match(fs.readFileSync(path.join(root, "viewer", "viewer.css"), "utf8"),
+    /\.viewer-center-card \.fld select \{[^}]*width: 100%;[^}]*min-width: 0;[^}]*max-width: 100%;/);
   assert.match(standaloneApp, /crypto\.subtle\.deriveKey/);
   assert.match(standaloneApp, /DecompressionStream\("gzip"\)/);
   assert.match(adminUi, /saveViewerDepartmentHead/);

@@ -140,7 +140,7 @@ main { padding: 20px 24px 60px; max-width: 1500px; margin: 0 auto; }
 .pdf-export-stage .pdf-chart-image {
   display: block;
   width: 100%;
-  height: 100%;
+  height: auto;
   object-fit: contain;
 }
 .pdf-export-stage .pdf-export-title h1 { margin: 0 0 5px; font-size: 24px; }
@@ -7624,8 +7624,28 @@ function blockBtn(id) {
 }
 
 /* PDF из последовательных блоков полного дашборда. Короткие блоки упаковываются
-   на одну страницу. Если смысловой фрагмент с графиком всё же выше A4, он
-   уменьшается целиком с сохранением пропорций, а не режется посередине графика. */
+   на одну страницу. Высокие блоки режутся в светлых горизонтальных зазорах и
+   сохраняют полную ширину — текст не превращается в узкую полосу. */
+function readableCanvasSliceEnd(canvas, startY, idealEnd) {
+  if (idealEnd >= canvas.height) return canvas.height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return idealEnd;
+  const minimumEnd = Math.max(startY + 40, idealEnd - Math.floor((idealEnd - startY) * 0.32));
+  const sampleStep = Math.max(2, Math.floor(canvas.width / 360));
+  for (let y = idealEnd; y >= minimumEnd; y -= 2) {
+    const pixels = context.getImageData(0, y, canvas.width, 1).data;
+    let light = 0;
+    let samples = 0;
+    for (let x = 0; x < canvas.width; x += sampleStep) {
+      const offset = x * 4;
+      if (pixels[offset + 3] < 16 || (pixels[offset] > 247 && pixels[offset + 1] > 247 && pixels[offset + 2] > 247)) light++;
+      samples++;
+    }
+    if (samples && light / samples >= 0.985) return y;
+  }
+  return idealEnd;
+}
+
 async function buildPdfFromSlides(slides, onProgress) {
   if (!slides.length) throw new Error("в отчёте нет блоков");
   loadBundledLibrary("lib-html2canvas", "html2canvas");
@@ -7664,18 +7684,11 @@ async function buildPdfFromSlides(slides, onProgress) {
       canvas.width = canvas.height = 0;
       continue;
     }
-    if (el.querySelector(".pdf-chart-image")) {
-      const fitScale = maxImgH / scaledHeight;
-      const fitW = imgW * fitScale;
-      startPage();
-      pdf.addImage(canvas.toDataURL("image/jpeg", 0.94), "JPEG", margin + (imgW - fitW) / 2, margin, fitW, maxImgH);
-      cursorY = pageH - margin + gap;
-      canvas.width = canvas.height = 0;
-      continue;
-    }
     const slicePx = Math.floor(maxImgH * canvas.width / imgW);
-    for (let y = 0; y < canvas.height; y += slicePx) {
-      const hPx = Math.min(slicePx, canvas.height - y);
+    for (let y = 0; y < canvas.height;) {
+      const idealEnd = Math.min(canvas.height, y + slicePx);
+      const sliceEnd = readableCanvasSliceEnd(canvas, y, idealEnd);
+      const hPx = sliceEnd - y;
       if (hPx < 20) break;
       const part = document.createElement("canvas");
       part.width = canvas.width;
@@ -7685,11 +7698,45 @@ async function buildPdfFromSlides(slides, onProgress) {
       pdf.addImage(part.toDataURL("image/jpeg", 0.92), "JPEG", margin, margin, imgW, hPx * imgW / canvas.width);
       cursorY = margin + hPx * imgW / canvas.width + gap;
       part.width = part.height = 0;
+      y = sliceEnd;
     }
     canvas.width = canvas.height = 0;
   }
   if (!pageStarted) throw new Error("не удалось отрисовать страницы отчёта");
   return pdf;
+}
+
+function printablePdfDocument(stage, target, monthKey) {
+  const styles = [...document.querySelectorAll("style")].map(style => style.textContent || "").join("\n");
+  const title = `${target.kind}: ${target.name} — ${monthLabel(monthKey)}`;
+  return `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:">
+  <title>${esc(title)}</title>
+  <style>${styles}
+    @page { size: A4 landscape; margin: 8mm; }
+    html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; }
+    body { min-width: 0 !important; color: var(--ink); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .pdf-print-document { width: auto; max-width: none; margin: 0; padding: 0; background: #fff; }
+    .pdf-print-document > .pdf-export-title { break-after: avoid-page; page-break-after: avoid; }
+    .pdf-print-document > .pdf-export-section { break-inside: auto; page-break-inside: auto; margin-bottom: 4mm; }
+    .pdf-print-document h1, .pdf-print-document h2, .pdf-print-document h3,
+    .pdf-print-document .doctor-semantic-summary { break-after: avoid-page; page-break-after: avoid; }
+    .pdf-print-document .card { padding: 12px 14px !important; margin-bottom: 10px !important; border: 1px solid var(--line) !important; border-radius: 10px; overflow: visible !important; box-shadow: none !important; }
+    .pdf-print-document .pdf-chart-image { display: block; width: 100%; height: auto !important; max-height: none; object-fit: contain; }
+    .pdf-print-document .chart-box, .pdf-print-document .grid, .pdf-print-document table, .pdf-print-document tr,
+    .pdf-print-document .kpi, .pdf-print-document .doctor-score-leader,
+    .pdf-print-document .dynamic-report-outcome, .pdf-print-document .analytic-comment-rail {
+      break-inside: avoid-page; page-break-inside: avoid;
+    }
+    .pdf-print-document .no-print, .pdf-print-document .seg,
+    .pdf-print-document input[type="checkbox"], .pdf-print-document button { display: none !important; }
+  </style>
+</head>
+<body><main class="pdf-print-document">${stage.innerHTML}</main></body>
+</html>`;
 }
 
 function safePdfNamePart(value) {
@@ -7836,6 +7883,7 @@ async function cloneDashboardSnapshot(source, { chartMimeType = "image/png", cha
     element.removeAttribute("onchange");
     element.removeAttribute("ontoggle");
   });
+  clone.querySelectorAll("script, iframe, object, embed").forEach(element => element.remove());
   for (const details of clone.querySelectorAll("details:not(.no-print)")) details.open = true;
   await Promise.all([...clone.querySelectorAll("img")].map(image => image.complete ? Promise.resolve() : new Promise(resolve => {
     image.onload = image.onerror = resolve;
@@ -7939,7 +7987,7 @@ function splitOversizedPdfSection(section) {
   return fragments;
 }
 
-async function preparePdfDashboard(stage, target, monthKey) {
+async function preparePdfDashboard(stage, target, monthKey, { splitForCanvas = true } = {}) {
   const source = pdfTargetSource(target, monthKey);
   if (!source) throw new Error("не найден экран отчёта");
   const { clone, chartImages } = await cloneDashboardForPdf(source);
@@ -7953,7 +8001,7 @@ async function preparePdfDashboard(stage, target, monthKey) {
   }
   void stage.offsetHeight;
   const initialSections = [...stage.children].filter(element => !element.classList.contains("no-print"));
-  const sections = initialSections.flatMap(splitOversizedPdfSection);
+  const sections = splitForCanvas ? initialSections.flatMap(splitOversizedPdfSection) : initialSections;
   return { sections, chartImages };
 }
 
@@ -7970,6 +8018,7 @@ async function exportAllReportsToFolder(targets) {
     return;
   }
   const useDesktopExport = Boolean(DESKTOP_API);
+  const useChromiumPdf = Boolean(useDesktopExport && typeof DESKTOP_API.renderPdf === "function");
   if (!useDesktopExport && typeof window.showDirectoryPicker !== "function") {
     toast("Выбор папки поддерживается в Chrome и Edge. Откройте приложение в одном из этих браузеров.", true);
     return;
@@ -8028,19 +8077,25 @@ async function exportAllReportsToFolder(targets) {
       button.textContent = `⏳ ${i + 1} из ${targets.length}`;
       toast(`PDF ${i + 1} из ${targets.length}: ${target.kind.toLowerCase()} «${target.name}»`);
       try {
-        const prepared = await preparePdfDashboard(stage, target, mk);
+        const prepared = await preparePdfDashboard(stage, target, mk, { splitForCanvas: !useChromiumPdf });
         chartImages += prepared.chartImages;
         void stage.offsetHeight;
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-        const pdf = await buildPdfFromSlides(prepared.sections, (page, total) => {
-          toast(`PDF ${i + 1} из ${targets.length}: страница ${page} из ${total}`);
-        });
         const fileName = uniquePdfFileName(target.fileBase, usedNames, target.relativePath);
-        if (useDesktopExport) {
-          const bytes = new Uint8Array(pdf.output("arraybuffer"));
+        if (useChromiumPdf) {
+          const printHtml = printablePdfDocument(stage, target, mk);
+          const bytes = new Uint8Array(await DESKTOP_API.renderPdf({ html: printHtml }));
           await DESKTOP_API.writeExportFile({ token: exportBatch.token, relativePath: target.relativePath, fileName, bytes });
         } else {
-          await writePdfToDirectory(directory, [mk, ...target.relativePath], fileName, pdf);
+          const pdf = await buildPdfFromSlides(prepared.sections, (page, total) => {
+            toast(`PDF ${i + 1} из ${targets.length}: страница ${page} из ${total}`);
+          });
+          if (useDesktopExport) {
+            const bytes = new Uint8Array(pdf.output("arraybuffer"));
+            await DESKTOP_API.writeExportFile({ token: exportBatch.token, relativePath: target.relativePath, fileName, bytes });
+          } else {
+            await writePdfToDirectory(directory, [mk, ...target.relativePath], fileName, pdf);
+          }
         }
       } catch (e) {
         failed.push(`${target.kind} «${target.name}»: ${e.message}`);

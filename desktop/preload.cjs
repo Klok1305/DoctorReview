@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   finishImport: payload => invoke("import:finish", payload),
 
   beginExport: payload => invoke("export:begin", payload),
+  renderPdf: payload => invoke("export:render-pdf", payload),
   writeExportFile: payload => invoke("export:write", payload),
   finishExport: payload => invoke("export:finish", payload),
   abortExport: token => invoke("export:abort", token),
