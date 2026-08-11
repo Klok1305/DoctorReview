@@ -216,6 +216,38 @@ function updatePeriodButtons() {
   document.getElementById("btnNextPeriod").disabled = index <= 0;
 }
 
+function initializePatientRegisters(root) {
+  for (const register of root.querySelectorAll("[data-viewer-patient-register]")) {
+    if (register.dataset.viewerPatientReady === "true") continue;
+    register.dataset.viewerPatientReady = "true";
+    const search = register.querySelector("[data-viewer-patient-search]");
+    const segment = register.querySelector("[data-viewer-patient-segment]");
+    const status = register.querySelector("[data-viewer-patient-status]");
+    const rows = [...register.querySelectorAll("[data-viewer-patient-row]")];
+    if (!search || !segment || !status || !rows.length) continue;
+    const update = () => {
+      const needle = String(search.value || "").toLocaleLowerCase("ru-RU").trim();
+      const selected = String(segment.value || "all");
+      let visible = 0;
+      for (const row of rows) {
+        const haystack = String(row.dataset.patientSearch || "").toLocaleLowerCase("ru-RU");
+        const groups = new Set(String(row.dataset.patientGroups || "").split(/\s+/).filter(Boolean));
+        const matchesSegment = selected === "all"
+          || (selected === "work" && ["newRisk", "loyalSleep", "lost"].some(group => groups.has(group)))
+          || (selected === "ungrouped" && groups.size === 0)
+          || groups.has(selected);
+        const matches = matchesSegment && (!needle || haystack.includes(needle));
+        row.hidden = !matches;
+        if (matches) visible++;
+      }
+      status.textContent = `Показано: ${visible.toLocaleString("ru-RU")} из ${rows.length.toLocaleString("ru-RU")}`;
+    };
+    search.addEventListener("input", update);
+    segment.addEventListener("change", update);
+    update();
+  }
+}
+
 async function loadReport() {
   const period = state.periods.find(item => item.periodKey === state.periodKey);
   if (!period) return;
@@ -229,9 +261,11 @@ async function loadReport() {
     await loadReport();
   }));
   const report = await API.report({ subjectDoctorId: state.subjectDoctorId, periodKey: state.periodKey, pageType: state.pageType });
-  document.getElementById("viewerReportBody").innerHTML = report && report.html
+  const reportBody = document.getElementById("viewerReportBody");
+  reportBody.innerHTML = report && report.html
     ? report.html
     : '<div class="card"><p class="muted">Для этого периода страница не опубликована.</p></div>';
+  initializePatientRegisters(reportBody);
   document.getElementById("viewerPeriod").value = state.periodKey;
   updatePeriodButtons();
   window.scrollTo({ top: 0, behavior: "smooth" });

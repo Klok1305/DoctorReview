@@ -833,6 +833,22 @@ function createWindow() {
                 && interdisciplinaryFocusDetails.used === 1
                 && interdisciplinaryFocusDetails.park === 2
                 && interdisciplinaryFocusDetails.score === 100;
+              const viewerDoctorHtml = await composeViewerDashboardHtml(
+                { tab: 'doctor', doctorId: 'd1', departmentName: 'Косметология', specializationName: 'Косметология' },
+                '2026-02',
+                { scopeType: 'doctor', scopeId: 'd1', periodKey: '2026-02', pageType: 'doctor' },
+                []
+              );
+              const viewerDoctorRoot = document.createElement('div');
+              viewerDoctorRoot.innerHTML = viewerDoctorHtml;
+              const viewerPatientRegister = viewerDoctorRoot.querySelector('[data-viewer-patient-register]');
+              const viewerPatientRows = [...viewerDoctorRoot.querySelectorAll('[data-viewer-patient-row]')];
+              const viewerPatientRegisterValid = Boolean(viewerPatientRegister)
+                && viewerPatientRows.length === 4
+                && viewerPatientRows.some(row => row.textContent.includes('Потерянный Пациент') && row.textContent.includes('3'))
+                && Boolean(viewerPatientRegister.querySelector('[data-viewer-patient-search]'))
+                && Boolean(viewerPatientRegister.querySelector('[data-viewer-patient-segment]'))
+                && !viewerDoctorRoot.querySelector('#tblClientSegment');
               UI.setDoctor = 'd1';
               switchTab('settings');
               enableDoctorMetricSettings();
@@ -891,6 +907,7 @@ function createWindow() {
                 mirrorRevenueDetails,
                 interdisciplinaryFocus,
                 interdisciplinaryFocusDetails,
+                viewerPatientRegisterValid,
                 doctorMetricSettings,
                 xlsx: typeof XLSX !== 'undefined',
                 chart: typeof Chart !== 'undefined',
@@ -1045,6 +1062,29 @@ function createWindow() {
           if (!doctorDynamicsTableScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок таблицы динамики врача');
           fs.writeFileSync(doctorDynamicsTableScreenshotPath, Buffer.from(doctorDynamicsTableScreenshot.slice('data:image/png;base64,'.length), 'base64'));
           result.doctorDynamicsTableScreenshot = doctorDynamicsTableScreenshotPath;
+          const viewerPatientScreenshotPath = path.join(artifactRoot, "viewer-patient-register-smoke.png");
+          const viewerPatientScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            UI.docId = 'd1'; UI.docMonth = '2026-02'; UI.kbWinByDoctor.d1 = 36; switchTab('doctor');
+            await new Promise(resolve => setTimeout(resolve, 150));
+            const html = await composeViewerDashboardHtml(
+              { tab: 'doctor', doctorId: 'd1', departmentName: 'Косметология', specializationName: 'Косметология' },
+              '2026-02',
+              { scopeType: 'doctor', scopeId: 'd1', periodKey: '2026-02', pageType: 'doctor' },
+              []
+            );
+            const stage = document.createElement('div');
+            stage.style.cssText = 'position:fixed;inset:0;z-index:10000;overflow:auto;background:#f4f6fa;padding:24px';
+            stage.innerHTML = html;
+            document.body.appendChild(stage);
+            const element = stage.querySelector('[data-viewer-patient-register]');
+            if (!element) { stage.remove(); return ''; }
+            const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.25, logging: false, windowWidth: 1400 });
+            stage.remove();
+            return canvas.toDataURL('image/png');
+          })()`);
+          if (!viewerPatientScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок реестра пациентов Viewer');
+          fs.writeFileSync(viewerPatientScreenshotPath, Buffer.from(viewerPatientScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.viewerPatientScreenshot = viewerPatientScreenshotPath;
           await mainWindow.webContents.executeJavaScript(`(() => {
             UI.docId = 'd1'; UI.docMonth = '2026-02'; switchTab('doctor');
             document.getElementById('blkHead')?.scrollIntoView({ block: 'start' });
@@ -1084,7 +1124,7 @@ function createWindow() {
         process.stdout.write(`${JSON.stringify(result)}\n`);
         const passed = result.dataPage && result.optionalLibrariesDeferred && result.xlsx && result.chart && result.desktop
           && result.rendererErrors.length === 0
-          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.specializationFocusBlockValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.doctorMetricSettings && result.commentWorkflowValid))
+          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.specializationFocusBlockValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.viewerPatientRegisterValid && result.doctorMetricSettings && result.commentWorkflowValid))
           && (!PDF_SMOKE_TEST || (result.pdfSelectionDialogValid && result.pdfExport && result.pdfExport.saved === 1
             && result.pdfExport.chartImages >= 1 && result.pdfFiles.length === 1));
         app.exit(passed ? 0 : 2);

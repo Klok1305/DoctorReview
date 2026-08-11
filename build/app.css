@@ -538,7 +538,7 @@ table.data tr:hover td.unused-items { background: var(--bad-soft); }
   .pdf-export-dialog-tools { align-items: flex-start; flex-wrap: wrap; }
   .pdf-export-dialog-tools #pdfExportDialogStatus { width: 100%; margin-left: 0; }
 }
-select, input[type="text"], input[type="number"] {
+select, input[type="text"], input[type="number"], input[type="search"] {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 7px 10px;
@@ -744,6 +744,19 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .client-base-threshold-scope { margin-top: 6px; }
 .client-base-description-list { margin: 4px 0 0; padding-left: 20px; }
 .client-base-description-list li + li { margin-top: 3px; }
+.viewer-patient-register-card { border-top: 4px solid #0f766e; }
+.viewer-patient-register-card h2 { margin: 0; }
+.viewer-patient-privacy { margin: 12px 0; }
+.viewer-patient-controls { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(220px, .5fr); gap: 12px; align-items: end; }
+.viewer-patient-controls .fld { margin: 0; }
+.viewer-patient-controls input, .viewer-patient-controls select { display: block; width: 100%; min-width: 0; max-width: 100%; }
+.viewer-patient-status { margin: 10px 0 6px; }
+.viewer-patient-table-wrap { max-height: 68vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.viewer-patient-table { margin: 0; min-width: 900px; }
+.viewer-patient-table thead { position: sticky; top: 0; z-index: 2; background: #fff; }
+.viewer-patient-table tr[hidden] { display: none; }
+@media (max-width: 720px) { .viewer-patient-controls { grid-template-columns: 1fr; } }
+@media print { .viewer-patient-table-wrap { max-height: none; overflow: visible; border: 0; } .viewer-patient-table { min-width: 0; } }
 .dyn-target-badges { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-left: 4px; vertical-align: middle; }
 .dyn-target-value { font-weight: 700; }
 .dynamics-table th[title^="Изменение к"] { white-space: normal; line-height: 1.25; }

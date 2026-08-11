@@ -199,7 +199,7 @@ test("standalone HTML contains the encrypted Viewer and opens with the doctor PI
       pageType: "doctor",
       scopeId: access.doctorId,
       title: "Январский отчёт",
-      html: '<div class="card"><h1>Секретный отчёт</h1><script>bad()</script><p>Комментарий врача</p></div>',
+      html: '<div class="card"><h1>Секретный отчёт</h1><script>bad()</script><p>Комментарий врача</p><section data-viewer-patient-register><input type="search" data-viewer-patient-search><select data-viewer-patient-segment><option value="all">Все</option></select><table><tr data-viewer-patient-row><td>Секретный Пациент</td><td>P-42</td></tr></table></section></div>',
     }],
     credentials,
   });
@@ -212,7 +212,7 @@ test("standalone HTML contains the encrypted Viewer and opens with the doctor PI
   assert.equal(created.manifest.format, STANDALONE_FORMAT);
   assert.match(html, /Автономный файл/);
   assert.match(html, /DecompressionStream/);
-  assert.doesNotMatch(html, /Секретный отчёт|Комментарий врача|<script>bad/);
+  assert.doesNotMatch(html, /Секретный отчёт|Комментарий врача|Секретный Пациент|P-42|<script>bad/);
   assert.doesNotMatch(html, /<script[^>]+src=|<link[^>]+href=["'](?!data:image\/png)/i);
 
   const embedded = html.match(/<script id="standaloneViewerData" type="application\/json">([\s\S]*?)<\/script>/);
@@ -229,6 +229,8 @@ test("standalone HTML contains the encrypted Viewer and opens with the doctor PI
   const payload = JSON.parse(zlib.gunzipSync(compressed).toString("utf8"));
   assert.equal(payload.doctorId, access.doctorId);
   assert.match(payload.reports[0].html, /Секретный отчёт|Комментарий врача/);
+  assert.match(payload.reports[0].html, /Секретный Пациент|P-42/);
+  assert.match(payload.reports[0].html, /data-viewer-patient-search|data-viewer-patient-segment/);
   assert.doesNotMatch(payload.reports[0].html, /<script/i);
 });
 

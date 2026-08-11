@@ -1383,6 +1383,60 @@ function clientSegmentLimitMarkup(clients) {
   return clients.length > 250 ? `Показаны первые 250 из ${fmtNum(clients.length)} пациентов.` : "";
 }
 
+function viewerPatientRegisterHtml(target, periodKey) {
+  if (!target || target.tab !== "doctor" || !target.doctorId) return "";
+  const doctorId = String(target.doctorId);
+  const result = computeMetrics(doctorId, periodKey);
+  const kb = selectedClientBaseForReport(result, doctorId);
+  if (!kb) {
+    return `<section class="card viewer-patient-register-card" data-viewer-patient-register>
+      <h2>Пациенты для работы</h2>
+      <p class="muted">Нет выгрузки «Давность посещений» за выбранный период клиентской базы.</p>
+    </section>`;
+  }
+
+  const groups = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+  const rows = [...(kb.clientRows || [])].sort((a, b) =>
+    Number(b.s || 0) - Number(a.s || 0)
+    || String(a.name || "").localeCompare(String(b.name || ""), "ru", { sensitivity: "base" }));
+  const workGroups = new Set(["newRisk", "loyalSleep", "lost"]);
+  const workCount = rows.filter(patient => (patient.groups || []).some(group => workGroups.has(group))).length;
+  const ungroupedCount = rows.filter(patient => !(patient.groups || []).length).length;
+  const options = [
+    `<option value="all">Все пациенты · ${fmtNum(rows.length)}</option>`,
+    `<option value="work">Для работы · ${fmtNum(workCount)}</option>`,
+    ...groups.filter(group => kb.groupAvailable && kb.groupAvailable[group]).map(group =>
+      `<option value="${group}">${esc(clientBaseGroupLabel(group))} · ${fmtNum(rows.filter(patient => (patient.groups || []).includes(group)).length)}</option>`),
+    `<option value="ungrouped">Без сегмента · ${fmtNum(ungroupedCount)}</option>`,
+  ];
+  const body = rows.length ? rows.map(patient => {
+    const patientGroups = (patient.groups || []).filter(group => groups.includes(group));
+    const badges = patientGroups.length
+      ? patientGroups.map(group => `<span class="badge ${group === "active" || group === "loyal" ? "ok" : group === "lost" ? "bad" : "warn"}">${esc(clientBaseGroupLabel(group))}</span>`).join(" ")
+      : '<span class="muted">Без сегмента</span>';
+    const searchText = `${patient.name || ""} ${patient.patientId || ""}`.trim();
+    return `<tr data-viewer-patient-row data-patient-search="${esc(searchText)}" data-patient-groups="${esc(patientGroups.join(" "))}">
+      <td><b>${esc(patient.name || "Пациент")}</b></td>
+      <td>${patient.patientId ? esc(patient.patientId) : '<span class="muted">—</span>'}</td>
+      <td>${badges}</td>
+      <td class="num">${fmtNum(patient.v)}</td>
+      <td class="num">${patient.r != null ? fmtNum(patient.r) : "—"}</td>
+      <td class="num">${fmtMoney(patient.s)}</td>
+    </tr>`;
+  }).join("") : '<tr><td colspan="6" class="muted">В выбранной выгрузке пациентов нет.</td></tr>';
+
+  return `<section class="card viewer-patient-register-card" data-viewer-patient-register>
+    <div class="vhead"><div><h2>Пациенты для работы</h2><p class="small muted">${esc(doctorName(doctorId))} · клиентская база за ${fmtNum(kb.window)} мес.</p></div><span class="badge mut">${fmtNum(rows.length)} чел.</span></div>
+    <div class="notice blue viewer-patient-privacy"><b>Персональные данные.</b> Этот раздел находится внутри PIN-зашифрованной части публикации. Храните HTML только в защищённой папке.</div>
+    <div class="viewer-patient-controls no-print">
+      <label class="fld"><span>Поиск по ФИО или ID</span><input type="search" data-viewer-patient-search placeholder="Начните вводить ФИО или ID" autocomplete="off"></label>
+      <label class="fld"><span>Сегмент</span><select data-viewer-patient-segment>${options.join("")}</select></label>
+    </div>
+    <p class="small muted viewer-patient-status" data-viewer-patient-status>Показано: ${fmtNum(rows.length)} из ${fmtNum(rows.length)}</p>
+    <div class="viewer-patient-table-wrap"><table class="data viewer-patient-table"><thead><tr><th>Пациент</th><th>ID</th><th>Сегменты</th><th class="num">Визитов</th><th class="num">Дней с визита</th><th class="num">Историческая выручка</th></tr></thead><tbody>${body}</tbody></table></div>
+  </section>`;
+}
+
 function setClientSegment(v) {
   const segment = String(v);
   const allowed = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
@@ -3344,7 +3398,7 @@ function renderDoctor() {
       title: `Анализ клиентской базы за ${win === 36 ? "3 года" : win + " месяцев"}. Группы с порогом больше окна не показываются.`,
     };
   });
-  html += `<div class="card vector-card" id="blkV4" style="border-top-color:${VECTOR_META.v4.color}">
+  html += `<div class="card vector-card" id="blkV4" data-vector-key="v4" style="border-top-color:${VECTOR_META.v4.color}">
     <div class="vhead"><h3 class="mt0">Вектор 4. Работа с клиентской базой <span class="badge ${VECTOR_META.v4.cls}">${VECTOR_META.v4.tag}</span></h3>
     <span>${vecBadge("v4", r, docProfile)} ${blockBtn("blkV4")} ${segToggle("kbWinSeg", kbWindowOptions, kbWinCur, "setKbWin")}</span></div>`;
   if (!kb) {
@@ -4152,8 +4206,15 @@ async function composeViewerDashboardHtml(target, periodKey, context, comments) 
   const source = pdfTargetSource(target, periodKey);
   if (!source) throw new Error("не найден дашборд для Viewer");
   const { clone } = await cloneDashboardForViewer(source);
-  const html = composeViewerReportHtml(clone.innerHTML, context, comments);
-  return `<div class="viewer-dashboard-snapshot" data-source-tab="${esc(target.tab)}">${html}</div>`;
+  const root = document.createElement("div");
+  root.innerHTML = composeViewerReportHtml(clone.innerHTML, context, comments);
+  const patientRegister = viewerPatientRegisterHtml(target, periodKey);
+  if (patientRegister) {
+    const clientBaseBlock = root.querySelector('[data-vector-key="v4"]');
+    if (clientBaseBlock) clientBaseBlock.insertAdjacentHTML("afterend", patientRegister);
+    else root.insertAdjacentHTML("beforeend", patientRegister);
+  }
+  return `<div class="viewer-dashboard-snapshot" data-source-tab="${esc(target.tab)}">${root.innerHTML}</div>`;
 }
 
 function closeViewerExportDialog() {

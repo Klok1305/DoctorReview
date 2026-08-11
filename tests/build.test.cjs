@@ -447,7 +447,7 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "2.5.8");
+  assert.equal(packageJson.version, "2.5.9");
   assert.equal(packageJson.build.productName, "КлинВект Щербатова — Администратор");
   assert.equal(packageJson.build.artifactName, "KlinVekt-Shcherbatova-Admin-Setup-${version}-${arch}.${ext}");
   assert.equal(packageJson.scripts["dist:portable"], undefined);
@@ -898,6 +898,28 @@ test("Viewer export dialog uses the shared sorted month helper", () => {
   assert.match(handler, /const months = monthKeysSorted\(\);/);
   assert.match(adminUi, /doctorHasDashboardData\(item\.doctorId, monthKey\)/);
   assert.doesNotMatch(handler, /sortedMonths\(\)/);
+});
+
+test("Viewer doctor HTML includes a PIN-encrypted searchable patient register", () => {
+  const adminUi = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const appCss = fs.readFileSync(path.join(build, "app.css"), "utf8");
+  const viewerApp = fs.readFileSync(path.join(root, "viewer", "app.js"), "utf8");
+  const standaloneApp = fs.readFileSync(path.join(root, "viewer", "standalone-app.js"), "utf8");
+
+  assert.match(adminUi, /function viewerPatientRegisterHtml\(target, periodKey\)/);
+  assert.match(adminUi, /target\.tab !== "doctor"/);
+  assert.match(adminUi, /selectedClientBaseForReport\(result, doctorId\)/);
+  assert.match(adminUi, /data-viewer-patient-row/);
+  assert.match(adminUi, /data-viewer-patient-search/);
+  assert.match(adminUi, /data-viewer-patient-segment/);
+  assert.match(adminUi, /clientBaseBlock\.insertAdjacentHTML\("afterend", patientRegister\)/);
+  for (const source of [viewerApp, standaloneApp]) {
+    assert.match(source, /function initializePatientRegisters\(root\)/);
+    assert.match(source, /\["newRisk", "loyalSleep", "lost"\]/);
+    assert.match(source, /initializePatientRegisters\(reportBody\)/);
+  }
+  assert.match(appCss, /\.viewer-patient-table-wrap\s*\{[^}]*max-height:\s*68vh/s);
+  assert.match(appCss, /\.viewer-patient-controls input[^}]*width:\s*100%/s);
 });
 
 test("completed referrals reuse 1C assignment groups and Viewer export dialog fills the window", () => {
