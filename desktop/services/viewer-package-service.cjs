@@ -12,7 +12,8 @@ const LEGACY_FORMAT_VERSION = 2;
 const ENCRYPTED_PAGE_FORMAT = "pulse-clinic-viewer-encrypted-page";
 const ENCRYPTED_PAGE_VERSION = 1;
 const STANDALONE_FORMAT = "pulse-clinic-standalone-viewer";
-const STANDALONE_FORMAT_VERSION = 2;
+const STANDALONE_FORMAT_VERSION = 3;
+const LEGACY_STANDALONE_FORMAT_VERSION = 2;
 const CONTENT_KDF_PARAMS = Object.freeze({ N: 32768, r: 8, p: 1, keylen: 32 });
 const STANDALONE_KDF_PARAMS = Object.freeze({ iterations: 600000, hash: "sha256", keylen: 32 });
 const MAX_PACKAGE_BYTES = 300 * 1024 * 1024;
@@ -270,8 +271,13 @@ async function createViewerPackage(input) {
   return { buffer, manifest, sha256: sha256(buffer) };
 }
 
-function encryptStandaloneDoctorPayload(payload, pin) {
-  if (!/^\d{4}$/.test(String(pin || ""))) throw new Error("Для автономного Viewer не настроен PIN врача");
+function encryptStandalonePayload(payload, pin, role = "doctor") {
+  const pinPattern = role === "admin" ? /^\d{6,12}$/ : /^\d{4}$/;
+  if (!pinPattern.test(String(pin || ""))) {
+    throw new Error(role === "admin"
+      ? "Для автономного Viewer не подтверждён администраторский PIN"
+      : "Для автономного Viewer не настроен PIN врача");
+  }
   const salt = crypto.randomBytes(24);
   const iv = crypto.randomBytes(12);
   const key = crypto.pbkdf2Sync(String(pin), salt, STANDALONE_KDF_PARAMS.iterations,
@@ -308,8 +314,11 @@ function jsonForInlineScript(value) {
 }
 
 async function createStandaloneViewerHtml(input) {
-  const { appVersion } = input;
+  const { appVersion, credentials } = input;
   const { normalizedPeriods, normalizedPages, doctorMap, subjectMap } = prepareViewerPublication(input);
+  if (!credentials.admin || !credentials.admin.pinCode) {
+    throw new Error("Для автономного HTML подтвердите администраторский PIN Viewer");
+  }
   const packageId = crypto.randomUUID();
   const createdAt = new Date().toISOString();
   const encryptedDoctors = [];
@@ -326,10 +335,11 @@ async function createStandaloneViewerHtml(input) {
         html: page.html,
       }));
     if (!reports.length) throw new Error(`Для врача ${doctor.displayName} нет выбранных страниц`);
-    const encrypted = encryptStandaloneDoctorPayload({
+    const encrypted = encryptStandalonePayload({
       format: STANDALONE_FORMAT,
       formatVersion: STANDALONE_FORMAT_VERSION,
       packageId,
+      accessRole: "doctor",
       doctorId: doctor.doctorId,
       subjects: doctor.visibleDoctorIds.map(doctorId => subjectMap.get(doctorId)),
       reports,
@@ -348,6 +358,29 @@ async function createStandaloneViewerHtml(input) {
     });
   }
 
+  const adminReports = normalizedPages.map(page => ({
+    doctorId: page.doctorId,
+    periodKey: page.periodKey,
+    pageType: page.pageType,
+    scopeId: page.scopeId,
+    title: page.title,
+    html: page.html,
+  }));
+  const encryptedAdminAccess = {
+    displayName: "Администратор",
+    pinVersion: Number(credentials.admin.pinVersion),
+    periods: [...new Set(adminReports.map(report => report.periodKey))].sort().reverse(),
+    pageTypes: [...new Set(adminReports.map(report => report.pageType))].sort(),
+    ...encryptStandalonePayload({
+      format: STANDALONE_FORMAT,
+      formatVersion: STANDALONE_FORMAT_VERSION,
+      packageId,
+      accessRole: "admin",
+      subjects: [...subjectMap.values()],
+      reports: adminReports,
+    }, credentials.admin.pinCode, "admin"),
+  };
+
   const manifest = {
     format: STANDALONE_FORMAT,
     formatVersion: STANDALONE_FORMAT_VERSION,
@@ -358,8 +391,14 @@ async function createStandaloneViewerHtml(input) {
     pageTypes: [...new Set(normalizedPages.map(page => page.pageType))].sort(),
     subjects: [...subjectMap.values()],
     doctors: encryptedDoctors.map(({ encryption, ciphertext, ...doctor }) => doctor),
+    adminAccess: {
+      enabled: true,
+      pinVersion: encryptedAdminAccess.pinVersion,
+      periods: encryptedAdminAccess.periods,
+      pageTypes: encryptedAdminAccess.pageTypes,
+    },
   };
-  const bundle = { ...manifest, doctors: encryptedDoctors };
+  const bundle = { ...manifest, doctors: encryptedDoctors, adminAccess: encryptedAdminAccess };
   const template = standaloneAsset("viewer/standalone.html");
   const html = template
     .replaceAll("/*__FAVICON__*/", standaloneAssetBase64("resources/app-icon.png"))
@@ -434,6 +473,7 @@ module.exports = {
   ENCRYPTED_PAGE_FORMAT,
   STANDALONE_FORMAT,
   STANDALONE_FORMAT_VERSION,
+  LEGACY_STANDALONE_FORMAT_VERSION,
   MAX_PACKAGE_BYTES,
   createStandaloneViewerHtml,
   createViewerPackage,

@@ -1104,6 +1104,10 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
 .viewer-export-dialog .viewer-doctor-list { flex: 1 1 320px; min-height: 220px; max-height: none; }
 .viewer-export-dialog .pdf-export-dialog-actions { flex: 0 0 auto; flex-wrap: wrap; }
 .viewer-export-dialog #viewerExportStatus { margin-right: auto; }
+.viewer-export-admin-access { display: flex; align-items: end; gap: 14px; flex-wrap: wrap; }
+.viewer-export-admin-access > b { align-self: center; }
+.viewer-export-admin-access .fld { margin: 0 0 0 auto; min-width: min(280px, 100%); }
+.viewer-export-admin-access input { width: 100%; }
 .viewer-doctor-row { display: grid; grid-template-columns: 34px minmax(190px, 1fr) minmax(150px, .8fr) minmax(150px, .8fr); gap: 10px; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--line); }
 .viewer-doctor-row:last-child { border-bottom: 0; }
 .viewer-access-table input[type="text"], .viewer-access-table input[type="password"] { min-width: 110px; }

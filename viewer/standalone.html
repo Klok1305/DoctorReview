@@ -11,6 +11,8 @@
 /*__VIEWER_CSS__*/
     .standalone-caption { margin: 4px 0 0; }
     .standalone-file-note { margin-top: 18px; }
+    .standalone-admin-login { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+    .standalone-admin-login h2 { margin: 0 0 8px; font-size: 17px; }
     @media (max-width: 760px) {
       .viewer-main { padding: 12px; }
       .viewer-header { padding: 11px 14px; }
@@ -34,8 +36,14 @@
         <label class="fld"><span>Врач</span><select id="viewerDoctorSelect"></select></label>
         <label class="fld"><span>Постоянный PIN</span><input id="viewerDoctorPin" class="viewer-pin-input" type="password" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="••••"></label>
         <button class="btn primary viewer-open-button" id="btnDoctorLogin">Открыть отчёты</button>
+        <div class="standalone-admin-login" id="viewerAdminLogin">
+          <h2>Вход администратора</h2>
+          <p class="small muted">Полный доступ ко всем врачам, отделениям, специализациям и периодам внутри этого файла.</p>
+          <label class="fld"><span>Администраторский PIN Viewer</span><input id="viewerAdminPin" class="viewer-pin-input" type="password" inputmode="numeric" minlength="6" maxlength="12" autocomplete="off" placeholder="6–12 цифр"></label>
+          <button class="btn viewer-open-button" id="btnAdminLogin">Открыть все отчёты</button>
+        </div>
         <div class="notice bad hidden" id="viewerLoginError"></div>
-        <div class="notice blue standalone-file-note"><b>Интернет не требуется.</b> Отчёты зашифрованы внутри этого HTML и открываются только после ввода PIN врача.</div>
+        <div class="notice blue standalone-file-note"><b>Интернет не требуется.</b> Отчёты зашифрованы внутри этого HTML и открываются только после ввода PIN врача или администратора.</div>
       </div>
     </section>
 
@@ -43,12 +51,12 @@
       <div class="viewer-report-toolbar no-print">
         <div><b id="viewerDoctorName"></b><div class="small muted" id="viewerDoctorStructure"></div></div>
         <span class="spacer"></span>
-        <label class="viewer-subject-control hidden" id="viewerSubjectControl">Врач отделения: <select id="viewerSubject"></select></label>
+        <label class="viewer-subject-control hidden" id="viewerSubjectControl"><span id="viewerSubjectLabel">Врач отделения:</span> <select id="viewerSubject"></select></label>
         <button class="btn mini" id="btnPreviousPeriod" title="Предыдущий период">←</button>
         <label>Период: <select id="viewerPeriod"></select></label>
         <button class="btn mini" id="btnNextPeriod" title="Следующий период">→</button>
         <button class="btn" id="btnPrintReport">Печать</button>
-        <button class="btn" id="btnDoctorLogout">Сменить врача</button>
+        <button class="btn" id="btnDoctorLogout">Выйти</button>
       </div>
       <nav class="viewer-tabs no-print" id="viewerTabs" aria-label="Выбор отчёта"></nav>
       <article class="viewer-report-body" id="viewerReportBody"></article>

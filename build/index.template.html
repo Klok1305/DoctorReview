@@ -157,6 +157,9 @@
       </div>
       <div class="viewer-doctor-list" id="viewerExportDoctors"></div>
       <div class="notice blue"><b>Заведующие:</b> если назначенный заведующий выбран среди получателей, в файл автоматически добавятся отчёты всех врачей его отделения. Остальные врачи увидят только собственные страницы.</div>
+      <div class="notice blue viewer-export-admin-access"><b>Вход администратора в HTML:</b> подтвердите действующий администраторский PIN Viewer. Он зашифрует отдельный полный каталог всех отчётов, включённых в файл, и не будет сохранён открытым текстом.
+        <label class="fld"><span>Администраторский PIN Viewer</span><input id="viewerExportAdminPin" type="password" inputmode="numeric" minlength="6" maxlength="12" autocomplete="off" placeholder="6–12 цифр"></label>
+      </div>
       <div class="notice bad hidden" id="viewerExportError"></div>
     </div>
     <div class="pdf-export-dialog-actions">

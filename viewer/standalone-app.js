@@ -3,6 +3,7 @@
 const BUNDLE = JSON.parse(document.getElementById("standaloneViewerData").textContent);
 const LOCK_MS = 15 * 60 * 1000;
 const state = {
+  role: "doctor",
   doctor: null,
   subjects: [],
   subjectDoctorId: null,
@@ -39,11 +40,12 @@ function reportScopeKey(pageType, department = "", specialization = "", doctorId
 }
 
 function isDepartmentHead() {
-  return Boolean(state.doctor && ((Array.isArray(state.doctor.managedDepartments) && state.doctor.managedDepartments.length)
+  return state.role === "admin" || Boolean(state.doctor && ((Array.isArray(state.doctor.managedDepartments) && state.doctor.managedDepartments.length)
     || state.subjects.length > 1));
 }
 
 function managedSubjects() {
+  if (state.role === "admin") return state.subjects;
   const departments = new Set((state.doctor && Array.isArray(state.doctor.managedDepartments)
     ? state.doctor.managedDepartments : []).map(String).filter(Boolean));
   return departments.size
@@ -163,11 +165,11 @@ async function gunzip(bytes) {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-async function decryptDoctor(doctor, pin) {
+async function decryptStandaloneAccess(access, pin, { role = "doctor", doctorId = access && access.doctorId } = {}) {
   if (!window.crypto || !window.crypto.subtle) {
     throw new Error("Браузер не поддерживает локальное расшифрование. Откройте файл в актуальной версии Chrome, Edge, Firefox или Safari.");
   }
-  const encryption = doctor.encryption || {};
+  const encryption = access.encryption || {};
   if (encryption.algorithm !== "aes-256-gcm" || encryption.kdf !== "pbkdf2" || encryption.hash !== "sha-256") {
     throw new Error("Формат шифрования этого файла не поддерживается.");
   }
@@ -180,18 +182,30 @@ async function decryptDoctor(doctor, pin) {
     iterations: Number(encryption.iterations),
     hash: "SHA-256",
   }, keyMaterial, { name: "AES-GCM", length: Number(encryption.keyLength) }, false, ["decrypt"]);
-  const encrypted = joinBytes(base64Bytes(doctor.ciphertext), base64Bytes(encryption.tag));
+  const encrypted = joinBytes(base64Bytes(access.ciphertext), base64Bytes(encryption.tag));
   const decrypted = new Uint8Array(await crypto.subtle.decrypt({
     name: "AES-GCM", iv: base64Bytes(encryption.iv), tagLength: 128,
   }, key, encrypted));
   const plainBytes = encryption.compression === "gzip" ? await gunzip(decrypted) : decrypted;
   const payload = JSON.parse(new TextDecoder().decode(plainBytes));
-  if (payload.format !== "pulse-clinic-standalone-viewer" || Number(payload.formatVersion) !== 2
-    || payload.packageId !== BUNDLE.packageId || String(payload.doctorId) !== String(doctor.doctorId)
+  const formatVersion = Number(payload.formatVersion);
+  const roleMatches = role === "admin"
+    ? formatVersion >= 3 && payload.accessRole === "admin"
+    : (!payload.accessRole || payload.accessRole === "doctor") && String(payload.doctorId) === String(doctorId);
+  if (payload.format !== "pulse-clinic-standalone-viewer" || ![2, 3].includes(formatVersion)
+    || payload.packageId !== BUNDLE.packageId || !roleMatches
     || !Array.isArray(payload.subjects) || !Array.isArray(payload.reports)) {
     throw new Error("Нарушена целостность автономной публикации.");
   }
   return payload;
+}
+
+function decryptDoctor(doctor, pin) {
+  return decryptStandaloneAccess(doctor, pin, { role: "doctor", doctorId: doctor.doctorId });
+}
+
+function decryptAdmin(pin) {
+  return decryptStandaloneAccess(BUNDLE.adminAccess, pin, { role: "admin" });
 }
 
 function showLoginError(message) {
@@ -210,6 +224,53 @@ function periodsFromReports(reports, subjectDoctorId) {
   return [...periods.values()].sort((a, b) => b.periodKey.localeCompare(a.periodKey));
 }
 
+function openReportSession(actor, payload, role = "doctor") {
+  state.role = role;
+  state.doctor = actor;
+  state.reports = payload.reports;
+  state.subjects = sortDoctorsAlphabetically(payload.subjects).map(subject => ({
+    ...subject,
+    periods: periodsFromReports(state.reports, subject.doctorId),
+  }));
+  const ownSubject = role === "admin"
+    ? state.subjects[0]
+    : state.subjects.find(subject => String(subject.doctorId) === String(actor.doctorId)) || state.subjects[0];
+  state.subjectDoctorId = ownSubject ? ownSubject.doctorId : null;
+  state.reportKey = reportScopeKey("doctor", "", "", state.subjectDoctorId);
+  state.pageType = "doctor";
+  refreshAvailablePeriods(null);
+  document.getElementById("viewerDoctorName").textContent = actor.displayName;
+  document.getElementById("viewerDoctorStructure").textContent = role === "admin"
+    ? `Полный доступ · врачей: ${state.subjects.length} · отчётов: ${state.reports.length}`
+    : [state.subjects.length > 1 ? "Заведующий отделением" : "", actor.department, actor.specialization].filter(Boolean).join(" · ");
+  const subjectControl = document.getElementById("viewerSubjectControl");
+  subjectControl.classList.toggle("hidden", role !== "admin" && state.subjects.length <= 1);
+  document.getElementById("viewerSubjectLabel").textContent = role === "admin" ? "Врач:" : "Врач отделения:";
+  document.getElementById("viewerSubject").innerHTML = state.subjects.map(subject =>
+    `<option value="${esc(subject.doctorId)}">${esc(subject.displayName)}${subject.department ? ` · ${esc(subject.department)}` : ""}${subject.specialization ? ` · ${esc(subject.specialization)}` : ""}</option>`
+  ).join("");
+  document.getElementById("viewerSubject").value = state.subjectDoctorId || "";
+  document.getElementById("viewerLogin").classList.add("hidden");
+  document.getElementById("viewerReport").classList.remove("hidden");
+  showLoginError("");
+  loadReport();
+}
+
+function registerLoginFailure(key, role, error) {
+  const label = role === "admin" ? "администратора" : "врача";
+  const failures = Number(state.failures.get(key) || 0) + 1;
+  if (failures >= 5) {
+    state.failures.delete(key);
+    state.lockedUntil.set(key, Date.now() + LOCK_MS);
+    showLoginError(`Вход ${label} заблокирован на 15 минут после пяти неверных PIN.`);
+  } else if (/слишком старый|не поддерживает|Формат шифрования|целостность/.test(String(error.message || ""))) {
+    showLoginError(error.message);
+  } else {
+    state.failures.set(key, failures);
+    showLoginError(`Неверный PIN ${label}. Осталось попыток: ${5 - failures}.`);
+  }
+}
+
 async function loginDoctor() {
   const doctorId = document.getElementById("viewerDoctorSelect").value;
   const pin = document.getElementById("viewerDoctorPin").value;
@@ -226,45 +287,38 @@ async function loginDoctor() {
     const payload = await decryptDoctor(doctor, pin);
     state.failures.delete(doctorId);
     state.lockedUntil.delete(doctorId);
-    state.doctor = doctor;
-    state.reports = payload.reports;
-    state.subjects = sortDoctorsAlphabetically(payload.subjects).map(subject => ({
-      ...subject,
-      periods: periodsFromReports(state.reports, subject.doctorId),
-    }));
-    const ownSubject = state.subjects.find(subject => String(subject.doctorId) === String(doctor.doctorId)) || state.subjects[0];
-    state.subjectDoctorId = ownSubject ? ownSubject.doctorId : null;
-    state.reportKey = reportScopeKey("doctor", "", "", state.subjectDoctorId);
-    refreshAvailablePeriods(null);
-    state.pageType = "doctor";
     document.getElementById("viewerDoctorPin").value = "";
-    document.getElementById("viewerDoctorName").textContent = doctor.displayName;
-    document.getElementById("viewerDoctorStructure").textContent = [state.subjects.length > 1 ? "Заведующий отделением" : "", doctor.department, doctor.specialization].filter(Boolean).join(" · ");
-    const subjectControl = document.getElementById("viewerSubjectControl");
-    subjectControl.classList.toggle("hidden", state.subjects.length <= 1);
-    document.getElementById("viewerSubject").innerHTML = state.subjects.map(subject =>
-      `<option value="${esc(subject.doctorId)}">${esc(subject.displayName)}${subject.specialization ? ` · ${esc(subject.specialization)}` : ""}</option>`
-    ).join("");
-    document.getElementById("viewerSubject").value = state.subjectDoctorId || "";
-    document.getElementById("viewerLogin").classList.add("hidden");
-    document.getElementById("viewerReport").classList.remove("hidden");
-    showLoginError("");
-    loadReport();
+    openReportSession(doctor, payload, "doctor");
   } catch (error) {
-    const failures = Number(state.failures.get(doctorId) || 0) + 1;
-    if (failures >= 5) {
-      state.failures.delete(doctorId);
-      state.lockedUntil.set(doctorId, Date.now() + LOCK_MS);
-      showLoginError("Вход врача заблокирован на 15 минут после пяти неверных PIN.");
-    } else if (/слишком старый|не поддерживает|Формат шифрования|целостность/.test(String(error.message || ""))) {
-      showLoginError(error.message);
-    } else {
-      state.failures.set(doctorId, failures);
-      showLoginError(`Неверный PIN врача. Осталось попыток: ${5 - failures}.`);
-    }
+    registerLoginFailure(doctorId, "doctor", error);
   } finally {
     button.disabled = false;
     button.textContent = "Открыть отчёты";
+  }
+}
+
+async function loginAdmin() {
+  const pin = document.getElementById("viewerAdminPin").value;
+  const key = "__admin__";
+  const button = document.getElementById("btnAdminLogin");
+  if (!BUNDLE.adminAccess || !BUNDLE.adminAccess.ciphertext) return showLoginError("В этом HTML нет входа администратора.");
+  if (!/^\d{6,12}$/.test(pin)) return showLoginError("Введите администраторский PIN Viewer из 6–12 цифр.");
+  if (Number(state.lockedUntil.get(key) || 0) > Date.now()) {
+    return showLoginError("Вход администратора временно заблокирован после пяти неверных PIN.");
+  }
+  button.disabled = true;
+  button.textContent = "Открываю полный каталог…";
+  try {
+    const payload = await decryptAdmin(pin);
+    state.failures.delete(key);
+    state.lockedUntil.delete(key);
+    document.getElementById("viewerAdminPin").value = "";
+    openReportSession({ doctorId: key, displayName: "Администратор", managedDepartments: [] }, payload, "admin");
+  } catch (error) {
+    registerLoginFailure(key, "admin", error);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Открыть все отчёты";
   }
 }
 
@@ -382,6 +436,7 @@ function changePeriod(direction) {
 }
 
 function logoutDoctor() {
+  state.role = "doctor";
   state.doctor = null;
   state.subjects = [];
   state.subjectDoctorId = null;
@@ -391,11 +446,12 @@ function logoutDoctor() {
   document.getElementById("viewerReportBody").innerHTML = "";
   document.getElementById("viewerReport").classList.add("hidden");
   document.getElementById("viewerLogin").classList.remove("hidden");
+  document.getElementById("viewerAdminPin").value = "";
   document.getElementById("viewerDoctorPin").focus();
 }
 
 function initialize() {
-  if (BUNDLE.format !== "pulse-clinic-standalone-viewer" || Number(BUNDLE.formatVersion) !== 2 || !Array.isArray(BUNDLE.doctors)) {
+  if (BUNDLE.format !== "pulse-clinic-standalone-viewer" || ![2, 3].includes(Number(BUNDLE.formatVersion)) || !Array.isArray(BUNDLE.doctors)) {
     showLoginError("Формат автономного Viewer не поддерживается.");
     document.getElementById("btnDoctorLogin").disabled = true;
     return;
@@ -407,9 +463,12 @@ function initialize() {
   document.getElementById("viewerDoctorSelect").innerHTML = sortDoctorsAlphabetically(BUNDLE.doctors).map(doctor =>
     `<option value="${esc(doctor.doctorId)}">${esc(doctor.displayName)}${doctor.department ? ` · ${esc(doctor.department)}` : ""}</option>`
   ).join("");
+  document.getElementById("viewerAdminLogin").classList.toggle("hidden", !BUNDLE.adminAccess || !BUNDLE.adminAccess.ciphertext);
   document.getElementById("btnDoctorLogin").disabled = !BUNDLE.doctors.length;
   document.getElementById("btnDoctorLogin").addEventListener("click", loginDoctor);
   document.getElementById("viewerDoctorPin").addEventListener("keydown", event => { if (event.key === "Enter") loginDoctor(); });
+  document.getElementById("btnAdminLogin").addEventListener("click", loginAdmin);
+  document.getElementById("viewerAdminPin").addEventListener("keydown", event => { if (event.key === "Enter") loginAdmin(); });
   document.getElementById("btnDoctorLogout").addEventListener("click", logoutDoctor);
   document.getElementById("viewerPeriod").addEventListener("change", event => { state.periodKey = event.target.value; loadReport(); });
   document.getElementById("viewerSubject").addEventListener("change", event => changeSubject(event.target.value));

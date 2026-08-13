@@ -81,6 +81,24 @@ function viewerPinRecord(pin) {
   };
 }
 
+function verifyViewerPinRecord(pin, access) {
+  try {
+    const params = parseJson(access && access.pinParams, null);
+    if (!params) return false;
+    const salt = Buffer.from(String(access.pinSalt || ""), "base64");
+    const expected = Buffer.from(String(access.pinHash || ""), "base64");
+    const actual = crypto.scryptSync(String(pin || ""), salt, Number(params.keylen), {
+      N: Number(params.N),
+      r: Number(params.r),
+      p: Number(params.p),
+      maxmem: 64 * 1024 * 1024,
+    });
+    return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+  } catch (_) {
+    return false;
+  }
+}
+
 function randomViewerPin(used) {
   for (let attempt = 0; attempt < 20000; attempt++) {
     const pin = String(crypto.randomInt(0, 10000)).padStart(4, "0");
@@ -1060,10 +1078,19 @@ class DatabaseService {
     return this.viewerAccessSnapshot();
   }
 
-  viewerExportCredentials(doctorIds, { requireAdmin = true } = {}) {
+  viewerExportCredentials(doctorIds, { requireAdmin = true, adminPin = null } = {}) {
     const ids = [...new Set((doctorIds || []).map(String))];
     const settings = this.db.prepare("SELECT * FROM viewer_settings WHERE id = 1").get();
     if (requireAdmin && (!settings || !settings.admin_pin_hash)) throw new Error("Сначала задайте администраторский PIN Viewer");
+    const requestedAdminPin = adminPin == null ? null : String(adminPin);
+    if (requestedAdminPin != null) {
+      if (!/^\d{6,12}$/.test(requestedAdminPin)) throw new Error("Администраторский PIN должен содержать от 6 до 12 цифр");
+      if (!settings || !verifyViewerPinRecord(requestedAdminPin, {
+        pinHash: settings.admin_pin_hash,
+        pinSalt: settings.admin_pin_salt,
+        pinParams: settings.admin_pin_params,
+      })) throw new Error("Неверный администраторский PIN Viewer");
+    }
     const headDepartments = new Map();
     for (const row of this.db.prepare("SELECT department, doctor_id FROM viewer_department_heads").all()) {
       const key = String(row.doctor_id);
@@ -1090,6 +1117,7 @@ class DatabaseService {
         pinSalt: settings.admin_pin_salt,
         pinParams: settings.admin_pin_params,
         pinVersion: Number(settings.admin_pin_version),
+        ...(requestedAdminPin == null ? {} : { pinCode: requestedAdminPin }),
       } : null,
       doctors,
     };

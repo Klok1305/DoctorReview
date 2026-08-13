@@ -447,7 +447,7 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "2.5.10");
+  assert.equal(packageJson.version, "2.5.11");
   assert.equal(packageJson.build.productName, "КлинВект Щербатова — Администратор");
   assert.equal(packageJson.build.artifactName, "KlinVekt-Shcherbatova-Admin-Setup-${version}-${arch}.${ext}");
   assert.equal(packageJson.scripts["dist:portable"], undefined);
@@ -871,10 +871,18 @@ test("Viewer access is name plus PIN with encrypted pages and no Windows or NTFS
   assert.match(adminUi, /exportViewerPackage\("html"\)/);
   assert.match(adminUi, /exportViewerPackage\("zip"\)/);
   assert.match(standaloneIndex, /standaloneViewerData/);
+  assert.match(standaloneIndex, /id="viewerAdminPin"/);
+  assert.match(standaloneIndex, /id="btnAdminLogin"[^>]*>Открыть все отчёты/);
   assert.match(fs.readFileSync(path.join(root, "viewer", "viewer.css"), "utf8"),
     /\.viewer-center-card \.fld select \{[^}]*width: 100%;[^}]*min-width: 0;[^}]*max-width: 100%;/);
   assert.match(standaloneApp, /crypto\.subtle\.deriveKey/);
   assert.match(standaloneApp, /DecompressionStream\("gzip"\)/);
+  assert.match(standaloneApp, /function loginAdmin\(\)/);
+  assert.match(standaloneApp, /state\.role === "admin"/);
+  assert.match(packages, /accessRole: "admin"/);
+  assert.match(packages, /adminAccess: encryptedAdminAccess/);
+  assert.match(adminTemplate, /id="viewerExportAdminPin"/);
+  assert.match(adminUi, /\.\.\.\(format === "html" \? \{ adminPin \} : \{\}\)/);
   assert.match(adminUi, /saveViewerDepartmentHead/);
   assert.match(adminUi, /function exportViewerPinsTable\(\)/);
   assert.match(adminUi, /Выгрузить все PIN в Excel/);
@@ -882,6 +890,7 @@ test("Viewer access is name plus PIN with encrypted pages and no Windows or NTFS
   assert.match(adminUi, /padStart\(4, "0"\)/);
   assert.match(adminPreload, /exportViewerPins: payload => invoke\("viewer-publication:export-pins", payload\)/);
   const adminMain = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
+  assert.match(adminMain, /viewerExportCredentials\(doctorIds, \{ requireAdmin: true, adminPin \}\)/);
   assert.match(adminMain, /ipcMain\.handle\("viewer-publication:export-pins"/);
   assert.match(adminMain, /viewer-pins\.exported/);
   assert.match(adminUi, /subjects/);

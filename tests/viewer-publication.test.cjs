@@ -44,6 +44,16 @@ function fixture(t) {
   return { root, database };
 }
 
+function decryptStandaloneRecord(record, pin) {
+  const key = crypto.pbkdf2Sync(pin, Buffer.from(record.encryption.salt, "base64"), record.encryption.iterations,
+    record.encryption.keyLength / 8, "sha256");
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(record.encryption.iv, "base64"));
+  decipher.setAuthTag(Buffer.from(record.encryption.tag, "base64"));
+  return JSON.parse(zlib.gunzipSync(Buffer.concat([
+    decipher.update(Buffer.from(record.ciphertext, "base64")), decipher.final(),
+  ])).toString("utf8"));
+}
+
 test("doctor PINs are unique, persistent and independent from Windows accounts", t => {
   const { database } = fixture(t);
   const first = database.viewerAccessSnapshot();
@@ -184,12 +194,14 @@ test("encrypted ZIP bootstraps Viewer and doctor enters by name and PIN only", a
   assert.throws(() => viewer.doctorLogin({ doctorId: access.doctorId, pin: "1357" }), /временно заблокирован/);
 });
 
-test("standalone HTML contains the encrypted Viewer and opens with the doctor PIN", async t => {
+test("standalone HTML encrypts doctor access and a complete administrator catalog with separate PINs", async t => {
   const { database } = fixture(t);
+  database.setViewerAdminPin("654321");
   const access = database.viewerAccessSnapshot().doctors[0];
   database.updateViewerDoctorAccess({ doctorId: access.doctorId, active: true, pin: "1357" });
-  const credentials = database.viewerExportCredentials([access.doctorId], { requireAdmin: false });
-  assert.equal(credentials.admin, null);
+  assert.throws(() => database.viewerExportCredentials([access.doctorId], { adminPin: "000000" }), /Неверный администраторский PIN/);
+  const credentials = database.viewerExportCredentials([access.doctorId], { adminPin: "654321" });
+  assert.equal(credentials.admin.pinCode, "654321");
   const created = await createStandaloneViewerHtml({
     appVersion: "2.3.0",
     periods: ["2026-01"],
@@ -211,28 +223,32 @@ test("standalone HTML contains the encrypted Viewer and opens with the doctor PI
   assert.match(html, /class="brand-symbol" src="data:image\/png;base64,[A-Za-z0-9+/=]+"/);
   assert.doesNotMatch(html, /\/\*__FAVICON__\*\//);
   assert.equal(created.manifest.format, STANDALONE_FORMAT);
+  assert.equal(created.manifest.formatVersion, 3);
+  assert.equal(created.manifest.adminAccess.enabled, true);
   assert.match(html, /Автономный файл/);
   assert.match(html, /DecompressionStream/);
-  assert.doesNotMatch(html, /Секретный отчёт|Комментарий врача|Секретный Пациент|P-42|<script>bad/);
+  assert.doesNotMatch(html, /Секретный отчёт|Комментарий врача|Секретный Пациент|P-42|<script>bad|654321/);
   assert.doesNotMatch(html, /<script[^>]+src=|<link[^>]+href=["'](?!data:image\/png)/i);
 
   const embedded = html.match(/<script id="standaloneViewerData" type="application\/json">([\s\S]*?)<\/script>/);
   assert.ok(embedded, "standalone data must be embedded into the HTML");
   const bundle = JSON.parse(embedded[1]);
   assert.equal(bundle.doctors.length, 1);
+  assert.ok(bundle.adminAccess.ciphertext);
   assert.equal(JSON.stringify(bundle).includes('"pinCode"'), false);
   const doctor = bundle.doctors[0];
-  const key = crypto.pbkdf2Sync("1357", Buffer.from(doctor.encryption.salt, "base64"),
-    doctor.encryption.iterations, doctor.encryption.keyLength / 8, "sha256");
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(doctor.encryption.iv, "base64"));
-  decipher.setAuthTag(Buffer.from(doctor.encryption.tag, "base64"));
-  const compressed = Buffer.concat([decipher.update(Buffer.from(doctor.ciphertext, "base64")), decipher.final()]);
-  const payload = JSON.parse(zlib.gunzipSync(compressed).toString("utf8"));
+  const payload = decryptStandaloneRecord(doctor, "1357");
   assert.equal(payload.doctorId, access.doctorId);
   assert.match(payload.reports[0].html, /Секретный отчёт|Комментарий врача/);
   assert.match(payload.reports[0].html, /Секретный Пациент|P-42/);
   assert.match(payload.reports[0].html, /data-viewer-patient-search|data-viewer-patient-segment/);
   assert.doesNotMatch(payload.reports[0].html, /<script/i);
+  const adminPayload = decryptStandaloneRecord(bundle.adminAccess, "654321");
+  assert.equal(adminPayload.accessRole, "admin");
+  assert.deepEqual(adminPayload.subjects.map(subject => subject.doctorId), [access.doctorId]);
+  assert.equal(adminPayload.reports.length, 1);
+  assert.match(adminPayload.reports[0].html, /Секретный отчёт|Секретный Пациент/);
+  assert.throws(() => decryptStandaloneRecord(bundle.adminAccess, "000000"));
 });
 
 test("department head report switcher lists the department and every published specialization", () => {
@@ -267,6 +283,40 @@ test("department head report switcher lists the department and every published s
     assert.match(source, /data-report-key/);
     assert.match(source, /managedDepartments/);
   }
+});
+
+test("standalone administrator navigation exposes every published doctor, department and specialization", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "viewer", "standalone-app.js"), "utf8")
+    .replace(/\ninitialize\(\);\s*$/, "");
+  const context = vm.createContext({
+    window: {},
+    document: {
+      getElementById(id) {
+        return id === "standaloneViewerData"
+          ? { textContent: JSON.stringify({ format: STANDALONE_FORMAT, formatVersion: 3, doctors: [], periods: [] }) }
+          : null;
+      },
+    },
+  });
+  vm.runInContext(`${source}\n;globalThis.__adminNavigation = { state, availableReportScopes };`, context);
+  const navigation = context.__adminNavigation;
+  navigation.state.role = "admin";
+  navigation.state.doctor = { doctorId: "__admin__", displayName: "Администратор", managedDepartments: [] };
+  navigation.state.subjectDoctorId = "d1";
+  navigation.state.subjects = [
+    { doctorId: "d1", displayName: "Первый", department: "Терапия", specialization: "Эндокринология",
+      periods: [{ periodKey: "2026-01", pageTypes: ["doctor", "specialization", "department"] }] },
+    { doctorId: "d2", displayName: "Второй", department: "Хирургия", specialization: "Флебология",
+      periods: [{ periodKey: "2026-01", pageTypes: ["doctor", "specialization", "department"] }] },
+  ];
+  const options = JSON.parse(JSON.stringify(navigation.availableReportScopes("2026-01")));
+  assert.equal(options.filter(option => option.pageType === "doctor").length, 1);
+  assert.equal(options.filter(option => option.pageType === "department").length, 2);
+  assert.equal(options.filter(option => option.pageType === "specialization").length, 2);
+  assert.deepEqual(new Set(options.filter(option => option.pageType === "department").map(option => option.label)),
+    new Set(["Отделение: Терапия", "Отделение: Хирургия"]));
+  assert.deepEqual(new Set(options.filter(option => option.pageType === "specialization").map(option => option.label)),
+    new Set(["Терапия · Эндокринология", "Хирургия · Флебология"]));
 });
 
 test("installed and standalone Viewer switch exported appointment and client-base windows", () => {
@@ -380,24 +430,18 @@ test("department head sees every doctor in the department while a regular doctor
   assert.equal(viewer.readReport(regularSession, { subjectDoctorId: "d1", periodKey: "2026-01", pageType: "doctor" }), null);
 
   const standalone = await createStandaloneViewerHtml({ appVersion: "2.3.0", periods: ["2026-01"], doctors, subjects: doctors, pages,
-    credentials: database.viewerExportCredentials(["d1", "d2"], { requireAdmin: false }) });
+    credentials: database.viewerExportCredentials(["d1", "d2"], { adminPin: "654321" }) });
   const embedded = standalone.buffer.toString("utf8").match(/<script id="standaloneViewerData" type="application\/json">([\s\S]*?)<\/script>/);
   const bundle = JSON.parse(embedded[1]);
-  const decrypt = (doctor, pin) => {
-    const key = crypto.pbkdf2Sync(pin, Buffer.from(doctor.encryption.salt, "base64"), doctor.encryption.iterations,
-      doctor.encryption.keyLength / 8, "sha256");
-    const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(doctor.encryption.iv, "base64"));
-    decipher.setAuthTag(Buffer.from(doctor.encryption.tag, "base64"));
-    return JSON.parse(zlib.gunzipSync(Buffer.concat([
-      decipher.update(Buffer.from(doctor.ciphertext, "base64")), decipher.final(),
-    ])).toString("utf8"));
-  };
-  const headPayload = decrypt(bundle.doctors.find(item => item.doctorId === "d1"), "1357");
-  const regularPayload = decrypt(bundle.doctors.find(item => item.doctorId === "d2"), "2468");
+  const headPayload = decryptStandaloneRecord(bundle.doctors.find(item => item.doctorId === "d1"), "1357");
+  const regularPayload = decryptStandaloneRecord(bundle.doctors.find(item => item.doctorId === "d2"), "2468");
   assert.deepEqual(headPayload.subjects.map(item => item.doctorId), ["d1", "d2"]);
   assert.deepEqual(regularPayload.subjects.map(item => item.doctorId), ["d2"]);
   assert.equal(headPayload.reports.length, 6);
   assert.equal(regularPayload.reports.length, 3);
   assert.deepEqual([...new Set(headPayload.reports.filter(report => report.pageType === "specialization").map(report => report.scopeId))].sort(),
     ["Кардиология", "Неврология"]);
+  const adminPayload = decryptStandaloneRecord(bundle.adminAccess, "654321");
+  assert.deepEqual(adminPayload.subjects.map(item => item.doctorId), ["d1", "d2"]);
+  assert.equal(adminPayload.reports.length, 6);
 });

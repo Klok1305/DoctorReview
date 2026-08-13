@@ -1113,6 +1113,10 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
 .viewer-export-dialog .viewer-doctor-list { flex: 1 1 320px; min-height: 220px; max-height: none; }
 .viewer-export-dialog .pdf-export-dialog-actions { flex: 0 0 auto; flex-wrap: wrap; }
 .viewer-export-dialog #viewerExportStatus { margin-right: auto; }
+.viewer-export-admin-access { display: flex; align-items: end; gap: 14px; flex-wrap: wrap; }
+.viewer-export-admin-access > b { align-self: center; }
+.viewer-export-admin-access .fld { margin: 0 0 0 auto; min-width: min(280px, 100%); }
+.viewer-export-admin-access input { width: 100%; }
 .viewer-doctor-row { display: grid; grid-template-columns: 34px minmax(190px, 1fr) minmax(150px, .8fr) minmax(150px, .8fr); gap: 10px; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--line); }
 .viewer-doctor-row:last-child { border-bottom: 0; }
 .viewer-access-table input[type="text"], .viewer-access-table input[type="password"] { min-width: 110px; }
@@ -1276,6 +1280,9 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
       </div>
       <div class="viewer-doctor-list" id="viewerExportDoctors"></div>
       <div class="notice blue"><b>Заведующие:</b> если назначенный заведующий выбран среди получателей, в файл автоматически добавятся отчёты всех врачей его отделения. Остальные врачи увидят только собственные страницы.</div>
+      <div class="notice blue viewer-export-admin-access"><b>Вход администратора в HTML:</b> подтвердите действующий администраторский PIN Viewer. Он зашифрует отдельный полный каталог всех отчётов, включённых в файл, и не будет сохранён открытым текстом.
+        <label class="fld"><span>Администраторский PIN Viewer</span><input id="viewerExportAdminPin" type="password" inputmode="numeric" minlength="6" maxlength="12" autocomplete="off" placeholder="6–12 цифр"></label>
+      </div>
       <div class="notice bad hidden" id="viewerExportError"></div>
     </div>
     <div class="pdf-export-dialog-actions">
@@ -10423,7 +10430,7 @@ function updateViewerExportStatus() {
   if (!status) return;
   const doctors = document.querySelectorAll('#viewerExportDoctors input[data-viewer-export-doctor]:checked').length;
   const periods = document.querySelectorAll('#viewerExportPeriods input:checked').length;
-  const zipHint = VIEWER_ACCESS.adminPinConfigured ? "" : " · ZIP недоступен, пока не задан PIN администратора Viewer";
+  const zipHint = VIEWER_ACCESS.adminPinConfigured ? "" : " · HTML и ZIP недоступны, пока не задан PIN администратора Viewer";
   status.textContent = `Выбрано: врачей — ${doctors}, периодов — ${periods}${zipHint}`;
 }
 
@@ -10482,7 +10489,8 @@ async function openViewerExportDialog() {
   const error = document.getElementById("viewerExportError");
   error.textContent = "";
   error.classList.add("hidden");
-  document.getElementById("viewerExportStart").disabled = false;
+  document.getElementById("viewerExportAdminPin").value = "";
+  document.getElementById("viewerExportStart").disabled = !VIEWER_ACCESS.adminPinConfigured;
   document.getElementById("viewerExportZip").disabled = !VIEWER_ACCESS.adminPinConfigured;
   document.getElementById("viewerExportDialog").showModal();
   updateViewerExportStatus();
@@ -10494,6 +10502,7 @@ async function exportViewerPackage(format = "html") {
   const periodKeys = [...document.querySelectorAll("#viewerExportPeriods input:checked")].map(input => input.value);
   const pageTypes = new Set([...document.querySelectorAll("#viewerExportPageTypes input:checked")].map(input => input.value));
   const doctorIds = [...document.querySelectorAll("#viewerExportDoctors input[data-viewer-export-doctor]:checked")].map(input => input.value);
+  const adminPin = format === "html" ? document.getElementById("viewerExportAdminPin").value.trim() : "";
   if (!periodKeys.length || !pageTypes.size || !doctorIds.length) {
     errorBox.textContent = "Выберите хотя бы один период, тип отчёта и врача.";
     errorBox.classList.remove("hidden");
@@ -10505,6 +10514,17 @@ async function exportViewerPackage(format = "html") {
   if (!eligibleDoctorIds.length) {
     errorBox.textContent = "У выбранных врачей нет отчёта «Выработка» ни за один выбранный период.";
     errorBox.classList.remove("hidden");
+    return;
+  }
+  if (format === "html" && !VIEWER_ACCESS.adminPinConfigured) {
+    errorBox.textContent = "Сначала задайте администраторский PIN Viewer в настройках публикации.";
+    errorBox.classList.remove("hidden");
+    return;
+  }
+  if (format === "html" && !/^\d{6,12}$/.test(adminPin)) {
+    errorBox.textContent = "Для входа администратора в HTML введите действующий PIN Viewer из 6–12 цифр.";
+    errorBox.classList.remove("hidden");
+    document.getElementById("viewerExportAdminPin").focus();
     return;
   }
   const skippedDoctors = doctorIds.length - eligibleDoctorIds.length;
@@ -10597,7 +10617,10 @@ async function exportViewerPackage(format = "html") {
         if (completed % 4 === 0) await new Promise(resolve => requestAnimationFrame(resolve));
       }
     }
-    const result = await DESKTOP_API.exportViewerPackage({ format, doctors, subjects, periods: publicationPeriodKeys, pages });
+    const result = await DESKTOP_API.exportViewerPackage({
+      format, doctors, subjects, periods: publicationPeriodKeys, pages,
+      ...(format === "html" ? { adminPin } : {}),
+    });
     if (result.canceled) {
       updateViewerExportStatus();
       return;
@@ -10610,9 +10633,10 @@ async function exportViewerPackage(format = "html") {
     errorBox.textContent = "Публикация не выполнена: " + error.message;
     errorBox.classList.remove("hidden");
   } finally {
+    document.getElementById("viewerExportAdminPin").value = "";
     Object.assign(UI, previousUi);
     switchTab(previousUi.tab);
-    document.getElementById("viewerExportStart").disabled = false;
+    document.getElementById("viewerExportStart").disabled = !VIEWER_ACCESS.adminPinConfigured;
     document.getElementById("viewerExportZip").disabled = !VIEWER_ACCESS.adminPinConfigured;
   }
 }

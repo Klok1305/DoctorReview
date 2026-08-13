@@ -1267,7 +1267,11 @@ function registerIpc() {
     if (subjectIds.some(id => !knownDoctors.has(id))) throw new Error("В публикации указан неизвестный врач отделения");
     const format = String(input.format || "html");
     if (format !== "html" && format !== "zip") throw new Error("Неизвестный формат публикации Viewer");
-    const credentials = database.viewerExportCredentials(doctorIds, { requireAdmin: format === "zip" });
+    const adminPin = format === "html" ? String(input.adminPin || "") : null;
+    if (format === "html" && !/^\d{6,12}$/.test(adminPin)) {
+      throw new Error("Для автономного HTML введите администраторский PIN Viewer (6–12 цифр)");
+    }
+    const credentials = database.viewerExportCredentials(doctorIds, { requireAdmin: true, adminPin });
     const publication = {
       appVersion: app.getVersion(),
       doctors: input.doctors,
