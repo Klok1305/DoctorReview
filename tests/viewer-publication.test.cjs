@@ -258,7 +258,7 @@ test("department head report switcher lists the department and every published s
     window: { viewerAPI: {} },
     document: { addEventListener() {} },
   });
-  vm.runInContext(`${installedSource}\n;globalThis.__viewerNavigation = { state, availableReportScopes };`, context);
+  vm.runInContext(`${installedSource}\n;globalThis.__viewerNavigation = { state, availableReportScopes, renderReportScopeNavigation };`, context);
   const navigation = context.__viewerNavigation;
   navigation.state.doctor = {
     doctorId: "d1", displayName: "Заведующая", department: "Косметология",
@@ -276,9 +276,15 @@ test("department head report switcher lists the department and every published s
   assert.deepEqual(options.map(option => option.pageType), ["doctor", "department", "specialization", "specialization"]);
   assert.equal(options.find(option => option.label === "Косметология").subjectDoctorId, "d1");
   assert.equal(options.find(option => option.label === "Эстетисты").subjectDoctorId, "d2");
+  const groupedHtml = navigation.renderReportScopeNavigation(options);
+  assert.equal((groupedHtml.match(/class="viewer-scope-row"/g) || []).length, 1);
+  assert.match(groupedHtml, /class="viewer-scope-cell viewer-scope-department"/);
+  assert.match(groupedHtml, /class="viewer-scope-cell viewer-scope-specializations"/);
+  assert.match(groupedHtml, /data-department-name="Косметология"/);
 
   for (const source of [installedSource, standaloneSource]) {
     assert.match(source, /function availableReportScopes\(periodKey\)/);
+    assert.match(source, /function renderReportScopeNavigation\(options\)/);
     assert.match(source, /label: departments\.length === 1 \? "Всё отделение"/);
     assert.match(source, /data-report-key/);
     assert.match(source, /managedDepartments/);
@@ -298,7 +304,7 @@ test("standalone administrator navigation exposes every published doctor, depart
       },
     },
   });
-  vm.runInContext(`${source}\n;globalThis.__adminNavigation = { state, availableReportScopes };`, context);
+  vm.runInContext(`${source}\n;globalThis.__adminNavigation = { state, availableReportScopes, renderReportScopeNavigation };`, context);
   const navigation = context.__adminNavigation;
   navigation.state.role = "admin";
   navigation.state.doctor = { doctorId: "__admin__", displayName: "Администратор", managedDepartments: [] };
@@ -317,6 +323,12 @@ test("standalone administrator navigation exposes every published doctor, depart
     new Set(["Отделение: Терапия", "Отделение: Хирургия"]));
   assert.deepEqual(new Set(options.filter(option => option.pageType === "specialization").map(option => option.label)),
     new Set(["Терапия · Эндокринология", "Хирургия · Флебология"]));
+  const groupedHtml = navigation.renderReportScopeNavigation(options);
+  assert.equal((groupedHtml.match(/class="viewer-scope-row"/g) || []).length, 2);
+  assert.match(groupedHtml, /data-department-name="Терапия"/);
+  assert.match(groupedHtml, /data-department-name="Хирургия"/);
+  assert.ok(groupedHtml.indexOf("Терапия") < groupedHtml.indexOf("Эндокринология"));
+  assert.ok(groupedHtml.indexOf("Хирургия") < groupedHtml.indexOf("Флебология"));
 });
 
 test("installed and standalone Viewer switch exported appointment and client-base windows", () => {

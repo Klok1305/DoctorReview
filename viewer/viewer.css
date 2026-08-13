@@ -17,6 +17,16 @@ body.viewer-app { min-height: 100vh; margin: 0; background: #f4f6fa; color: var(
 .viewer-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; padding: 4px; border-radius: 10px; background: #e9eef6; }
 .viewer-tabs .btn { background: transparent; }
 .viewer-tabs .active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.viewer-tabs-grouped { display: block; padding: 8px; }
+.viewer-scope-personal { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 0 8px; margin-bottom: 8px; border-bottom: 1px solid rgba(100,116,139,.2); }
+.viewer-scope-groups { display: grid; gap: 8px; }
+.viewer-scope-row { display: grid; grid-template-columns: minmax(260px,.8fr) minmax(320px,2fr); gap: 8px; }
+.viewer-scope-cell { display: flex; align-content: flex-start; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; padding: 10px; border: 1px solid rgba(148,163,184,.25); border-radius: 9px; background: rgba(255,255,255,.72); }
+.viewer-scope-department { background: rgba(219,234,254,.58); }
+.viewer-scope-department .btn { width: 100%; text-align: left; }
+.viewer-scope-cell-label { width: 100%; color: #64748b; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.viewer-scope-empty { display: flex; flex-direction: column; gap: 2px; color: #64748b; font-size: 12px; }
+.viewer-scope-empty small { font-size: 11px; }
 .viewer-report-body { min-height: 300px; }
 .viewer-report-body .pdf-chart-image { display: block; width: 100%; height: auto; object-fit: contain; }
 .viewer-version { font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -30,5 +40,6 @@ body.viewer-app { min-height: 100vh; margin: 0; background: #f4f6fa; color: var(
 .viewer-import-grid h3 { margin-top: 0; }
 .viewer-import-grid label { display: block; padding: 5px 0; }
 .viewer-import-doctors { max-height: 280px; overflow: auto; }
+@media (max-width: 900px) { .viewer-scope-row { grid-template-columns: 1fr; } }
 @media (max-width: 720px) { .viewer-import-grid { grid-template-columns: 1fr; } .viewer-report-toolbar { position: static; } }
 @media print { .viewer-header, .viewer-report-toolbar, .viewer-tabs { display: none !important; } .viewer-main { max-width: none; padding: 0; } }

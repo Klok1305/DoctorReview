@@ -98,11 +98,12 @@ function availableReportScopes(periodKey) {
   if (!isDepartmentHead()) {
     if (selected && subjectHasPage(selected, periodKey, "specialization")) {
       options.push({ key: reportScopeKey("specialization", selected.department, selected.specialization), pageType: "specialization",
-        subjectDoctorId: selected.doctorId, label: "Специализация" });
+        subjectDoctorId: selected.doctorId, department: selected.department, specialization: selected.specialization,
+        label: "Специализация" });
     }
     if (selected && subjectHasPage(selected, periodKey, "department")) {
       options.push({ key: reportScopeKey("department", selected.department), pageType: "department",
-        subjectDoctorId: selected.doctorId, label: "Отделение" });
+        subjectDoctorId: selected.doctorId, department: selected.department, label: "Отделение" });
     }
     return options;
   }
@@ -115,6 +116,7 @@ function availableReportScopes(periodKey) {
       && subjectHasPage(subject, periodKey, "department"));
     if (representative) options.push({
       key: reportScopeKey("department", department), pageType: "department", subjectDoctorId: representative.doctorId,
+      department,
       label: departments.length === 1 ? "Всё отделение" : `Отделение: ${department}`,
     });
   }
@@ -133,10 +135,48 @@ function availableReportScopes(periodKey) {
       key: reportScopeKey("specialization", item.department, item.specialization),
       pageType: "specialization",
       subjectDoctorId: item.subject.doctorId,
+      department: item.department,
+      specialization: item.specialization,
       label: departments.length === 1 ? item.specialization : `${item.department} · ${item.specialization}`,
     });
   }
   return options;
+}
+
+function reportScopeButton(option, label = option.label) {
+  return `<button class="btn ${option.key === state.reportKey ? "active" : ""}" data-report-key="${esc(option.key)}">${esc(label)}</button>`;
+}
+
+function renderReportScopeNavigation(options) {
+  if (!isDepartmentHead()) return options.map(option => reportScopeButton(option)).join("");
+  const personal = options.filter(option => option.pageType === "doctor");
+  const aggregate = options.filter(option => option.pageType !== "doctor");
+  const departments = new Map();
+  for (const option of aggregate) {
+    const department = String(option.department || "").trim();
+    if (!department) continue;
+    const group = departments.get(department) || { department, departmentReport: null, specializations: [] };
+    if (option.pageType === "department") group.departmentReport = option;
+    if (option.pageType === "specialization") group.specializations.push(option);
+    departments.set(department, group);
+  }
+  if (!departments.size) return options.map(option => reportScopeButton(option)).join("");
+  const personalHtml = personal.length
+    ? `<div class="viewer-scope-personal" aria-label="Личный отчёт">${personal.map(option => reportScopeButton(option)).join("")}</div>`
+    : "";
+  const rows = [...departments.values()].map(group => {
+    const departmentControl = group.departmentReport
+      ? reportScopeButton(group.departmentReport, group.department)
+      : `<span class="viewer-scope-empty"><b>${esc(group.department)}</b><small>Отчёт отделения не включён</small></span>`;
+    const specializationControls = group.specializations.length
+      ? group.specializations.map(option => reportScopeButton(option, option.specialization || option.label)).join("")
+      : '<span class="viewer-scope-empty">Нет включённых специализаций</span>';
+    return `<div class="viewer-scope-row" data-department-name="${esc(group.department)}">
+      <div class="viewer-scope-cell viewer-scope-department"><span class="viewer-scope-cell-label">Отделение</span>${departmentControl}</div>
+      <div class="viewer-scope-cell viewer-scope-specializations"><span class="viewer-scope-cell-label">Специализации</span>${specializationControls}</div>
+    </div>`;
+  }).join("");
+  return `${personalHtml}<div class="viewer-scope-groups">${rows}</div>`;
 }
 
 function showError(id, message) {
@@ -387,6 +427,7 @@ async function loadReport() {
     || options.find(option => option.key === preferredDoctorKey)
     || options[0];
   if (!selected) {
+    document.getElementById("viewerTabs").classList.remove("viewer-tabs-grouped");
     document.getElementById("viewerTabs").innerHTML = "";
     document.getElementById("viewerReportBody").innerHTML = '<div class="card"><p class="muted">Для этого периода страницы не опубликованы.</p></div>';
     updatePeriodButtons();
@@ -394,9 +435,8 @@ async function loadReport() {
   }
   state.reportKey = selected.key;
   state.pageType = selected.pageType;
-  document.getElementById("viewerTabs").innerHTML = options.map(option =>
-    `<button class="btn ${option.key === state.reportKey ? "active" : ""}" data-report-key="${esc(option.key)}">${esc(option.label)}</button>`
-  ).join("");
+  document.getElementById("viewerTabs").classList.toggle("viewer-tabs-grouped", isDepartmentHead());
+  document.getElementById("viewerTabs").innerHTML = renderReportScopeNavigation(options);
   document.querySelectorAll("[data-report-key]").forEach(button => button.addEventListener("click", async () => {
     state.reportKey = button.dataset.reportKey;
     await loadReport();
