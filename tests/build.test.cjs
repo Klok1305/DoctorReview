@@ -59,7 +59,7 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /image\.style\.aspectRatio/);
   assert.match(actual, /async function saveSessionState/);
   assert.match(actual, /Все изменения текущей сессии сохранены/);
-  assert.match(actual, /Экспорт данных в JSON/);
+  assert.match(actual, /Полная копия в JSON/);
   assert.match(actual, /Полная копия для переноса/);
   assert.match(actual, /pdf-chart-image/);
   assert.match(actual, /pdf-continuation-title/);
@@ -447,7 +447,7 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "2.5.9");
+  assert.equal(packageJson.version, "2.5.10");
   assert.equal(packageJson.build.productName, "КлинВект Щербатова — Администратор");
   assert.equal(packageJson.build.artifactName, "KlinVekt-Shcherbatova-Admin-Setup-${version}-${arch}.${ext}");
   assert.equal(packageJson.scripts["dist:portable"], undefined);
@@ -900,26 +900,60 @@ test("Viewer export dialog uses the shared sorted month helper", () => {
   assert.doesNotMatch(handler, /sortedMonths\(\)/);
 });
 
-test("Viewer doctor HTML includes a PIN-encrypted searchable patient register", () => {
+test("portable JSON uses the authoritative SQLite data and restores auxiliary tables", () => {
+  const core = fs.readFileSync(path.join(build, "app-core.js"), "utf8");
+  const template = fs.readFileSync(path.join(build, "index.template.html"), "utf8");
+  const preload = fs.readFileSync(path.join(root, "desktop", "preload.cjs"), "utf8");
+  const main = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
+  const database = fs.readFileSync(path.join(root, "desktop", "services", "database.cjs"), "utf8");
+
+  assert.match(template, /Полная копия в JSON/);
+  assert.match(template, /комментарии, публикации, PIN и настройки Viewer/);
+  assert.match(core, /parsed && parsed\.format === PORTABLE_JSON_FORMAT/);
+  assert.match(core, /DESKTOP_API\.importJson\(String\(reader\.result\)\)/);
+  assert.match(core, /Комментарии:|Комментариев:/i);
+  assert.match(preload, /importJson: json => invoke\("database:import-json", json\)/);
+  assert.match(main, /database\.createPortableJson/);
+  assert.match(main, /ipcMain\.handle\("database:import-json"/);
+  assert.match(main, /backupService\.createAutomatic\("перед-import-json"\)/);
+  assert.match(database, /"comments"[\s\S]*"comment_versions"[\s\S]*"viewer_department_heads"/);
+  assert.match(database, /snapshot\.settings\.departmentHeadDoctorIds = departmentHeads/);
+});
+
+test("Viewer doctor HTML keeps safe period switchers, patient search and read-only platform ratings", () => {
   const adminUi = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const appCss = fs.readFileSync(path.join(build, "app.css"), "utf8");
   const viewerApp = fs.readFileSync(path.join(root, "viewer", "app.js"), "utf8");
   const standaloneApp = fs.readFileSync(path.join(root, "viewer", "standalone-app.js"), "utf8");
 
-  assert.match(adminUi, /function viewerPatientRegisterHtml\(target, periodKey\)/);
+  assert.match(adminUi, /function viewerClientBaseHtml\(target, periodKey\)/);
   assert.match(adminUi, /target\.tab !== "doctor"/);
-  assert.match(adminUi, /selectedClientBaseForReport\(result, doctorId\)/);
+  assert.match(adminUi, /const windows = \[12, 24, 36\]/);
+  assert.match(adminUi, /data-viewer-kb-window/);
+  assert.match(adminUi, /data-viewer-kb-panel/);
+  assert.match(adminUi, /Источник данных:[\s\S]*periodStr\(kb\.period\)/);
   assert.match(adminUi, /data-viewer-patient-row/);
   assert.match(adminUi, /data-viewer-patient-search/);
   assert.match(adminUi, /data-viewer-patient-segment/);
-  assert.match(adminUi, /clientBaseBlock\.insertAdjacentHTML\("afterend", patientRegister\)/);
+  assert.match(adminUi, /collapsible-list viewer-patient-register-card/);
+  assert.match(adminUi, /function viewerInterdisciplinarySwitcherHtml\(target, periodKey\)/);
+  assert.match(adminUi, /data-viewer-naz-window/);
+  assert.match(adminUi, /data-viewer-naz-panel/);
+  assert.match(adminUi, /РЕЙТИНГИ ПО ПЛОЩАДКАМ/);
+  assert.match(adminUi, /rating-platform-grid/);
+  assert.match(adminUi, /\["specialization", "Отчёт специализации", true\]/);
+  assert.match(adminUi, /\["department", "Отчёт отделения", true\]/);
   for (const source of [viewerApp, standaloneApp]) {
     assert.match(source, /function initializePatientRegisters\(root\)/);
+    assert.match(source, /function initializeReportWindowSwitchers\(root\)/);
+    assert.match(source, /data-viewer-interdisciplinary/);
+    assert.match(source, /data-viewer-client-base/);
     assert.match(source, /\["newRisk", "loyalSleep", "lost"\]/);
     assert.match(source, /initializePatientRegisters\(reportBody\)/);
   }
   assert.match(appCss, /\.viewer-patient-table-wrap\s*\{[^}]*max-height:\s*68vh/s);
   assert.match(appCss, /\.viewer-patient-controls input[^}]*width:\s*100%/s);
+  assert.match(appCss, /\.rating-platform-grid/);
 });
 
 test("completed referrals reuse 1C assignment groups and Viewer export dialog fills the window", () => {

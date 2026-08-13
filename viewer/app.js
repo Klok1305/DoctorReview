@@ -11,6 +11,7 @@ const state = {
   periods: [],
   periodKey: null,
   pageType: "doctor",
+  reportKey: "",
 };
 
 function esc(value) {
@@ -29,6 +30,113 @@ function sortDoctorsAlphabetically(doctors) {
   return [...(doctors || [])].sort((first, second) =>
     String(first && first.displayName || "").localeCompare(String(second && second.displayName || ""), "ru", { sensitivity: "base" })
     || String(first && first.doctorId || "").localeCompare(String(second && second.doctorId || ""), "ru"));
+}
+
+function reportScopeKey(pageType, department = "", specialization = "", doctorId = "") {
+  return [pageType, department, specialization, doctorId].map(value => encodeURIComponent(String(value || ""))).join("|");
+}
+
+function isDepartmentHead() {
+  return Boolean(state.doctor && ((Array.isArray(state.doctor.managedDepartments) && state.doctor.managedDepartments.length)
+    || state.subjects.length > 1));
+}
+
+function managedSubjects() {
+  const departments = new Set((state.doctor && Array.isArray(state.doctor.managedDepartments)
+    ? state.doctor.managedDepartments : []).map(String).filter(Boolean));
+  return departments.size
+    ? state.subjects.filter(subject => departments.has(String(subject.department || "")))
+    : state.subjects;
+}
+
+function subjectPeriod(subject, periodKey) {
+  return subject && Array.isArray(subject.periods)
+    ? subject.periods.find(item => item.periodKey === String(periodKey)) || null
+    : null;
+}
+
+function subjectHasPage(subject, periodKey, pageType) {
+  const period = subjectPeriod(subject, periodKey);
+  return Boolean(period && Array.isArray(period.pageTypes) && period.pageTypes.includes(pageType));
+}
+
+function availablePeriods() {
+  const selected = state.subjects.find(subject => String(subject.doctorId) === String(state.subjectDoctorId));
+  const sources = isDepartmentHead() ? managedSubjects() : (selected ? [selected] : []);
+  const periods = new Map();
+  for (const subject of sources) {
+    for (const period of subject.periods || []) {
+      const item = periods.get(period.periodKey) || { periodKey: period.periodKey, pageTypes: [] };
+      for (const pageType of period.pageTypes || []) {
+        if (!item.pageTypes.includes(pageType)) item.pageTypes.push(pageType);
+      }
+      periods.set(period.periodKey, item);
+    }
+  }
+  return [...periods.values()].sort((first, second) => second.periodKey.localeCompare(first.periodKey));
+}
+
+function refreshAvailablePeriods(preferredPeriodKey = state.periodKey) {
+  state.periods = availablePeriods();
+  state.periodKey = state.periods.some(item => item.periodKey === preferredPeriodKey)
+    ? preferredPeriodKey : (state.periods[0] ? state.periods[0].periodKey : null);
+  document.getElementById("viewerPeriod").innerHTML = state.periods.map(item =>
+    `<option value="${esc(item.periodKey)}">${esc(monthLabel(item.periodKey))}</option>`).join("");
+}
+
+function availableReportScopes(periodKey) {
+  const selected = state.subjects.find(subject => String(subject.doctorId) === String(state.subjectDoctorId));
+  const options = [];
+  if (selected && subjectHasPage(selected, periodKey, "doctor")) {
+    options.push({
+      key: reportScopeKey("doctor", "", "", selected.doctorId),
+      pageType: "doctor",
+      subjectDoctorId: selected.doctorId,
+      label: String(selected.doctorId) === String(state.doctor && state.doctor.doctorId) ? "Мой отчёт" : "Личный отчёт",
+    });
+  }
+  if (!isDepartmentHead()) {
+    if (selected && subjectHasPage(selected, periodKey, "specialization")) {
+      options.push({ key: reportScopeKey("specialization", selected.department, selected.specialization), pageType: "specialization",
+        subjectDoctorId: selected.doctorId, label: "Специализация" });
+    }
+    if (selected && subjectHasPage(selected, periodKey, "department")) {
+      options.push({ key: reportScopeKey("department", selected.department), pageType: "department",
+        subjectDoctorId: selected.doctorId, label: "Отделение" });
+    }
+    return options;
+  }
+
+  const subjects = managedSubjects();
+  const departments = [...new Set(subjects.map(subject => String(subject.department || "")).filter(Boolean))]
+    .sort((first, second) => first.localeCompare(second, "ru", { sensitivity: "base" }));
+  for (const department of departments) {
+    const representative = subjects.find(subject => String(subject.department || "") === department
+      && subjectHasPage(subject, periodKey, "department"));
+    if (representative) options.push({
+      key: reportScopeKey("department", department), pageType: "department", subjectDoctorId: representative.doctorId,
+      label: departments.length === 1 ? "Всё отделение" : `Отделение: ${department}`,
+    });
+  }
+  const specializations = new Map();
+  for (const subject of subjects) {
+    const department = String(subject.department || "");
+    const specialization = String(subject.specialization || "");
+    if (!department || !specialization || !subjectHasPage(subject, periodKey, "specialization")) continue;
+    const key = `${department}\u0000${specialization}`;
+    if (!specializations.has(key)) specializations.set(key, { department, specialization, subject });
+  }
+  for (const item of [...specializations.values()].sort((first, second) =>
+    first.department.localeCompare(second.department, "ru", { sensitivity: "base" })
+    || first.specialization.localeCompare(second.specialization, "ru", { sensitivity: "base" }))) {
+    options.push({
+      key: reportScopeKey("specialization", item.department, item.specialization),
+      pageType: "specialization",
+      subjectDoctorId: item.subject.doctorId,
+      label: departments.length === 1 ? item.specialization : `${item.department} · ${item.specialization}`,
+    });
+  }
+  return options;
 }
 
 function showError(id, message) {
@@ -189,9 +297,9 @@ async function loginDoctor() {
     state.subjects = sortDoctorsAlphabetically(Array.isArray(result.subjects) ? result.subjects : []);
     const ownSubject = state.subjects.find(subject => String(subject.doctorId) === String(state.doctor.doctorId)) || state.subjects[0];
     state.subjectDoctorId = ownSubject ? ownSubject.doctorId : null;
-    state.periods = ownSubject ? ownSubject.periods || [] : [];
-    state.periodKey = state.periods[0] ? state.periods[0].periodKey : null;
-    state.pageType = state.periods[0] && state.periods[0].pageTypes.includes("doctor") ? "doctor" : (state.periods[0]?.pageTypes[0] || "doctor");
+    state.reportKey = reportScopeKey("doctor", "", "", state.subjectDoctorId);
+    refreshAvailablePeriods(null);
+    state.pageType = "doctor";
     document.getElementById("viewerDoctorPin").value = "";
     showError("viewerLoginError", "");
     document.getElementById("viewerDoctorName").textContent = state.doctor.displayName;
@@ -202,7 +310,6 @@ async function loginDoctor() {
       `<option value="${esc(subject.doctorId)}">${esc(subject.displayName)}${subject.specialization ? ` · ${esc(subject.specialization)}` : ""}</option>`
     ).join("");
     document.getElementById("viewerSubject").value = state.subjectDoctorId || "";
-    document.getElementById("viewerPeriod").innerHTML = state.periods.map(item => `<option value="${esc(item.periodKey)}">${esc(monthLabel(item.periodKey))}</option>`).join("");
     await refreshStatus();
     await loadReport();
   } catch (error) {
@@ -216,7 +323,30 @@ function updatePeriodButtons() {
   document.getElementById("btnNextPeriod").disabled = index <= 0;
 }
 
+function initializeReportWindowSwitchers(root) {
+  const bind = (containerSelector, buttonAttribute, panelAttribute) => {
+    for (const container of root.querySelectorAll(containerSelector)) {
+      if (container.dataset.viewerSwitcherReady === "true") continue;
+      container.dataset.viewerSwitcherReady = "true";
+      const buttons = [...container.querySelectorAll(`[${buttonAttribute}]`)];
+      const panels = [...container.querySelectorAll(`[${panelAttribute}]`)];
+      for (const button of buttons) button.addEventListener("click", () => {
+        const value = button.getAttribute(buttonAttribute);
+        for (const item of buttons) {
+          const active = item.getAttribute(buttonAttribute) === value;
+          item.classList.toggle("active", active);
+          item.setAttribute("aria-pressed", active ? "true" : "false");
+        }
+        for (const panel of panels) panel.hidden = panel.getAttribute(panelAttribute) !== value;
+      });
+    }
+  };
+  bind("[data-viewer-interdisciplinary]", "data-viewer-naz-window", "data-viewer-naz-panel");
+  bind("[data-viewer-client-base]", "data-viewer-kb-window", "data-viewer-kb-panel");
+}
+
 function initializePatientRegisters(root) {
+  initializeReportWindowSwitchers(root);
   for (const register of root.querySelectorAll("[data-viewer-patient-register]")) {
     if (register.dataset.viewerPatientReady === "true") continue;
     register.dataset.viewerPatientReady = "true";
@@ -251,16 +381,27 @@ function initializePatientRegisters(root) {
 async function loadReport() {
   const period = state.periods.find(item => item.periodKey === state.periodKey);
   if (!period) return;
-  if (!period.pageTypes.includes(state.pageType)) state.pageType = period.pageTypes.includes("doctor") ? "doctor" : period.pageTypes[0];
-  const labels = { doctor: state.subjectDoctorId === state.doctor.doctorId ? "Мой отчёт" : "Личный отчёт", specialization: "Специализация", department: "Отделение" };
-  document.getElementById("viewerTabs").innerHTML = period.pageTypes.map(pageType =>
-    `<button class="btn ${pageType === state.pageType ? "active" : ""}" data-page-type="${pageType}">${labels[pageType] || pageType}</button>`
+  const options = availableReportScopes(state.periodKey);
+  const preferredDoctorKey = reportScopeKey("doctor", "", "", state.subjectDoctorId);
+  const selected = options.find(option => option.key === state.reportKey)
+    || options.find(option => option.key === preferredDoctorKey)
+    || options[0];
+  if (!selected) {
+    document.getElementById("viewerTabs").innerHTML = "";
+    document.getElementById("viewerReportBody").innerHTML = '<div class="card"><p class="muted">Для этого периода страницы не опубликованы.</p></div>';
+    updatePeriodButtons();
+    return;
+  }
+  state.reportKey = selected.key;
+  state.pageType = selected.pageType;
+  document.getElementById("viewerTabs").innerHTML = options.map(option =>
+    `<button class="btn ${option.key === state.reportKey ? "active" : ""}" data-report-key="${esc(option.key)}">${esc(option.label)}</button>`
   ).join("");
-  document.querySelectorAll("[data-page-type]").forEach(button => button.addEventListener("click", async () => {
-    state.pageType = button.dataset.pageType;
+  document.querySelectorAll("[data-report-key]").forEach(button => button.addEventListener("click", async () => {
+    state.reportKey = button.dataset.reportKey;
     await loadReport();
   }));
-  const report = await API.report({ subjectDoctorId: state.subjectDoctorId, periodKey: state.periodKey, pageType: state.pageType });
+  const report = await API.report({ subjectDoctorId: selected.subjectDoctorId, periodKey: state.periodKey, pageType: selected.pageType });
   const reportBody = document.getElementById("viewerReportBody");
   reportBody.innerHTML = report && report.html
     ? report.html
@@ -275,12 +416,9 @@ async function changeSubject(doctorId) {
   const subject = state.subjects.find(item => String(item.doctorId) === String(doctorId));
   if (!subject) return;
   state.subjectDoctorId = subject.doctorId;
-  state.periods = subject.periods || [];
-  state.periodKey = state.periods[0] ? state.periods[0].periodKey : null;
-  state.pageType = state.periods[0] && state.periods[0].pageTypes.includes("doctor")
-    ? "doctor" : (state.periods[0]?.pageTypes[0] || "doctor");
-  document.getElementById("viewerPeriod").innerHTML = state.periods.map(item =>
-    `<option value="${esc(item.periodKey)}">${esc(monthLabel(item.periodKey))}</option>`).join("");
+  state.reportKey = reportScopeKey("doctor", "", "", subject.doctorId);
+  state.pageType = "doctor";
+  refreshAvailablePeriods(state.periodKey);
   await loadReport();
 }
 
@@ -298,6 +436,7 @@ async function logoutDoctor() {
   state.subjects = [];
   state.subjectDoctorId = null;
   state.periods = [];
+  state.reportKey = "";
   document.getElementById("viewerReportBody").innerHTML = "";
   await refreshStatus();
 }

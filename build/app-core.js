@@ -5,6 +5,7 @@
 
 const APP_VERSION = 4;
 const LS_KEY = "dpi_app_db_v1"; // ключ не меняем — миграция по полю version
+const PORTABLE_JSON_FORMAT = "klinvekt-portable-json";
 const DESKTOP_API = window.desktopAPI || null;
 let DESKTOP_STATE = null;
 let DESKTOP_DATABASE_LOADED = false;
@@ -1839,7 +1840,10 @@ async function exportDB() {
     try {
       if (!await saveLocal()) throw new Error("Текущие изменения не записаны в SQLite");
       const result = await DESKTOP_API.exportJson(JSON.stringify(DB, null, 1));
-      if (!result.canceled) toast("JSON-копия сохранена: " + result.path);
+      if (!result.canceled) {
+        const comments = Number(result.counts && result.counts.comments || 0);
+        toast(`Полная JSON-копия сохранена: ${result.path}. Комментариев: ${comments}. Файл содержит PIN Viewer и персональные данные — храните его в защищённой папке.`);
+      }
     } catch (error) {
       toast("Не удалось сохранить JSON-копию: " + error.message, true);
     }
@@ -1859,12 +1863,27 @@ function importDBFile(file) {
   reader.onload = async () => {
     try {
       const parsed = JSON.parse(reader.result);
-      if (!migrateDB(parsed)) throw new Error("не похоже на файл базы или версия данных не поддерживается");
+      const portable = parsed && parsed.format === PORTABLE_JSON_FORMAT;
+      const snapshot = portable ? parsed.snapshot : parsed;
+      if (!migrateDB(snapshot)) throw new Error("не похоже на файл базы или версия данных не поддерживается");
       if (DESKTOP_API) {
         if (!await saveLocal()) throw new Error("текущая база не сохранена; импорт отменён");
+        if (portable) {
+          if (typeof DESKTOP_API.importJson !== "function") throw new Error("эта версия приложения не поддерживает полную JSON-копию");
+          const restored = await DESKTOP_API.importJson(String(reader.result));
+          if (!applyLoadedDatabase(restored.snapshot)) throw new Error("версия данных не поддерживается");
+          if (DESKTOP_STATE) DESKTOP_STATE.summary = restored.summary;
+          if (typeof refreshViewerPublicationAccess === "function") await refreshViewerPublicationAccess();
+          renderAll();
+          const headCount = Object.keys(restored.departmentHeads || {}).length;
+          toast(`Полная база восстановлена: месяцев — ${Object.keys(DB.months).length}, врачей — ${Object.keys(DB.doctors).length}, комментариев — ${Number(restored.comments || 0)}, заведующих — ${headCount}.`);
+          return;
+        }
         await DESKTOP_API.createBackup();
+      } else if (portable) {
+        throw new Error("полную JSON-копию можно восстановить только в настольном приложении");
       }
-      if (!applyLoadedDatabase(parsed)) throw new Error("версия данных не поддерживается");
+      if (!applyLoadedDatabase(snapshot)) throw new Error("версия данных не поддерживается");
       if (!await saveLocal()) throw new Error("импортированные данные не удалось записать");
       renderAll();
       toast("База загружена: месяцев — " + Object.keys(DB.months).length + ", врачей — " + Object.keys(DB.doctors).length);

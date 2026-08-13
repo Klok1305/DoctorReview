@@ -755,6 +755,11 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .client-base-description-list li + li { margin-top: 3px; }
 .viewer-patient-register-card { border-top: 4px solid #0f766e; }
 .viewer-patient-register-card h2 { margin: 0; }
+.viewer-client-base-card > .vhead { align-items: flex-start; }
+.viewer-client-base-card > .vhead > div { min-width: 0; }
+.viewer-interdisciplinary-switcher { margin: 10px 0 14px; }
+.viewer-interdisciplinary-switcher > .vhead { align-items: center; }
+.viewer-interdisciplinary-switcher [data-viewer-naz-panel] > details + details { margin-top: 10px; }
 .viewer-patient-privacy { margin: 12px 0; }
 .viewer-patient-controls { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(220px, .5fr); gap: 12px; align-items: end; }
 .viewer-patient-controls .fld { margin: 0; }
@@ -764,7 +769,13 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .viewer-patient-table { margin: 0; min-width: 900px; }
 .viewer-patient-table thead { position: sticky; top: 0; z-index: 2; background: #fff; }
 .viewer-patient-table tr[hidden] { display: none; }
+.rating-platform-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0 0 10px; }
+.rating-platform-card { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); }
+.rating-platform-card span { color: var(--muted); font-size: 12px; font-weight: 700; }
+.rating-platform-card strong { font-size: 18px; white-space: nowrap; }
 @media (max-width: 720px) { .viewer-patient-controls { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .rating-platform-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .rating-platform-grid { grid-template-columns: 1fr; } }
 @media print { .viewer-patient-table-wrap { max-height: none; overflow: visible; border: 0; } .viewer-patient-table { min-width: 0; } }
 .dyn-target-badges { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-left: 4px; vertical-align: middle; }
 .dyn-target-value { font-weight: 700; }
@@ -1153,7 +1164,7 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
   <div class="toolbar" style="margin-top:14px">
     <button class="btn primary" id="btnSaveSession" title="Зафиксировать текущее состояние рабочей базы со всеми изменениями этой сессии">💾 Сохранить изменения</button>
     <span class="small muted" id="sessionSaveStatus" role="status" aria-live="polite"></span>
-    <button class="btn" id="btnExport">⇓ Экспорт данных в JSON</button>
+    <button class="btn" id="btnExport" title="Полная переносимая копия: данные, комментарии, публикации, PIN и настройки Viewer">⇓ Полная копия в JSON</button>
     <button class="btn" id="btnImport">📂 Импорт данных из JSON</button>
     <input type="file" id="importInput" accept=".json" class="hidden">
     <button class="btn" id="btnAutosave" title="База будет автоматически записываться в выбранный файл при каждом изменении (Chrome/Edge)">⚡ Автосохранение в файл</button>
@@ -1800,6 +1811,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
 
 const APP_VERSION = 4;
 const LS_KEY = "dpi_app_db_v1"; // ключ не меняем — миграция по полю version
+const PORTABLE_JSON_FORMAT = "klinvekt-portable-json";
 const DESKTOP_API = window.desktopAPI || null;
 let DESKTOP_STATE = null;
 let DESKTOP_DATABASE_LOADED = false;
@@ -3634,7 +3646,10 @@ async function exportDB() {
     try {
       if (!await saveLocal()) throw new Error("Текущие изменения не записаны в SQLite");
       const result = await DESKTOP_API.exportJson(JSON.stringify(DB, null, 1));
-      if (!result.canceled) toast("JSON-копия сохранена: " + result.path);
+      if (!result.canceled) {
+        const comments = Number(result.counts && result.counts.comments || 0);
+        toast(`Полная JSON-копия сохранена: ${result.path}. Комментариев: ${comments}. Файл содержит PIN Viewer и персональные данные — храните его в защищённой папке.`);
+      }
     } catch (error) {
       toast("Не удалось сохранить JSON-копию: " + error.message, true);
     }
@@ -3654,12 +3669,27 @@ function importDBFile(file) {
   reader.onload = async () => {
     try {
       const parsed = JSON.parse(reader.result);
-      if (!migrateDB(parsed)) throw new Error("не похоже на файл базы или версия данных не поддерживается");
+      const portable = parsed && parsed.format === PORTABLE_JSON_FORMAT;
+      const snapshot = portable ? parsed.snapshot : parsed;
+      if (!migrateDB(snapshot)) throw new Error("не похоже на файл базы или версия данных не поддерживается");
       if (DESKTOP_API) {
         if (!await saveLocal()) throw new Error("текущая база не сохранена; импорт отменён");
+        if (portable) {
+          if (typeof DESKTOP_API.importJson !== "function") throw new Error("эта версия приложения не поддерживает полную JSON-копию");
+          const restored = await DESKTOP_API.importJson(String(reader.result));
+          if (!applyLoadedDatabase(restored.snapshot)) throw new Error("версия данных не поддерживается");
+          if (DESKTOP_STATE) DESKTOP_STATE.summary = restored.summary;
+          if (typeof refreshViewerPublicationAccess === "function") await refreshViewerPublicationAccess();
+          renderAll();
+          const headCount = Object.keys(restored.departmentHeads || {}).length;
+          toast(`Полная база восстановлена: месяцев — ${Object.keys(DB.months).length}, врачей — ${Object.keys(DB.doctors).length}, комментариев — ${Number(restored.comments || 0)}, заведующих — ${headCount}.`);
+          return;
+        }
         await DESKTOP_API.createBackup();
+      } else if (portable) {
+        throw new Error("полную JSON-копию можно восстановить только в настольном приложении");
       }
-      if (!applyLoadedDatabase(parsed)) throw new Error("версия данных не поддерживается");
+      if (!applyLoadedDatabase(snapshot)) throw new Error("версия данных не поддерживается");
       if (!await saveLocal()) throw new Error("импортированные данные не удалось записать");
       renderAll();
       toast("База загружена: месяцев — " + Object.keys(DB.months).length + ", врачей — " + Object.keys(DB.doctors).length);
@@ -7446,18 +7476,7 @@ function clientSegmentLimitMarkup(clients) {
   return clients.length > 250 ? `Показаны первые 250 из ${fmtNum(clients.length)} пациентов.` : "";
 }
 
-function viewerPatientRegisterHtml(target, periodKey) {
-  if (!target || target.tab !== "doctor" || !target.doctorId) return "";
-  const doctorId = String(target.doctorId);
-  const result = computeMetrics(doctorId, periodKey);
-  const kb = selectedClientBaseForReport(result, doctorId);
-  if (!kb) {
-    return `<section class="card viewer-patient-register-card" data-viewer-patient-register>
-      <h2>Пациенты для работы</h2>
-      <p class="muted">Нет выгрузки «Давность посещений» за выбранный период клиентской базы.</p>
-    </section>`;
-  }
-
+function viewerPatientRowsHtml(kb) {
   const groups = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
   const rows = [...(kb.clientRows || [])].sort((a, b) =>
     Number(b.s || 0) - Number(a.s || 0)
@@ -7488,16 +7507,102 @@ function viewerPatientRegisterHtml(target, periodKey) {
     </tr>`;
   }).join("") : '<tr><td colspan="6" class="muted">В выбранной выгрузке пациентов нет.</td></tr>';
 
-  return `<section class="card viewer-patient-register-card" data-viewer-patient-register>
-    <div class="vhead"><div><h2>Пациенты для работы</h2><p class="small muted">${esc(doctorName(doctorId))} · клиентская база за ${fmtNum(kb.window)} мес.</p></div><span class="badge mut">${fmtNum(rows.length)} чел.</span></div>
-    <div class="notice blue viewer-patient-privacy"><b>Персональные данные.</b> Этот раздел находится внутри PIN-зашифрованной части публикации. Храните HTML только в защищённой папке.</div>
+  return `<details class="collapsible-list viewer-patient-register-card" data-viewer-patient-register>
+    <summary class="collapsible-list-summary"><span>ПАЦИЕНТСКАЯ БАЗА · ${fmtNum(kb.window)} МЕС. <span class="badge mut">${fmtNum(rows.length)} чел.</span></span><span class="collapse-hint"></span></summary>
+    <div class="collapsible-list-body">
+    <div class="notice blue viewer-patient-privacy"><b>Персональные данные.</b> Раздел находится внутри PIN-зашифрованной части публикации. Храните HTML только в защищённой папке.</div>
     <div class="viewer-patient-controls no-print">
       <label class="fld"><span>Поиск по ФИО или ID</span><input type="search" data-viewer-patient-search placeholder="Начните вводить ФИО или ID" autocomplete="off"></label>
       <label class="fld"><span>Сегмент</span><select data-viewer-patient-segment>${options.join("")}</select></label>
     </div>
     <p class="small muted viewer-patient-status" data-viewer-patient-status>Показано: ${fmtNum(rows.length)} из ${fmtNum(rows.length)}</p>
     <div class="viewer-patient-table-wrap"><table class="data viewer-patient-table"><thead><tr><th>Пациент</th><th>ID</th><th>Сегменты</th><th class="num">Визитов</th><th class="num">Дней с визита</th><th class="num">Историческая выручка</th></tr></thead><tbody>${body}</tbody></table></div>
+    </div>
+  </details>`;
+}
+
+function viewerClientBasePanelHtml(kb, windowMonths, periodKey) {
+  if (!kb) {
+    return `<div class="notice blue"><b>${fmtNum(windowMonths)} мес.</b> — нет выгрузки «Давность посещений» ровно за этот период. Другой период автоматически не подставляется.</div>`;
+  }
+  const groups = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+  const groupCards = groups.filter(group => kb.groupAvailable && kb.groupAvailable[group]).map(group => {
+    const cls = group === "active" || group === "loyal" ? "good" : group === "lost" ? "bad" : "warn";
+    return `<div class="kb-summary-card ${cls}">
+      <div class="kb-summary-label">${esc(clientBaseGroupLabel(group))}</div>
+      <div class="kb-summary-value-line"><div class="kb-summary-value">${fmtNum(kb.seg[group])} чел.</div><div class="kb-summary-share">${fmtPct(clientBaseGroupPct(kb, group))}</div></div>
+      <div class="kb-summary-meta">${esc(clientBaseGroupDescription(kb, group))}</div>
+    </div>`;
+  }).join("");
+  const groupRules = groups.filter(group => kb.groupAvailable && kb.groupAvailable[group])
+    .map(group => `<li><b>${esc(clientBaseGroupLabel(group))}:</b> ${esc(clientBaseGroupDescription(kb, group))}.</li>`).join("");
+  return `<p class="kb-source"><b>Источник данных:</b> отчёт за ${esc(monthLabel(periodKey))} · период выгрузки ${esc(periodStr(kb.period))} · окно анализа ${fmtNum(kb.window)} мес.</p>
+    <div class="kb-summary-grid">
+      <div class="kb-summary-card"><div class="kb-summary-label">Общая база</div><div class="kb-summary-value-line"><div class="kb-summary-value">${fmtNum(kb.total)} чел.</div><div class="kb-summary-share">100%</div></div><div class="kb-summary-meta">уникальные пациенты · ${fmtNum(kb.visits)} визитов</div></div>
+      ${groupCards}
+    </div>
+    <div class="kb-group-rules"><b>Правила сегментов для этого периода:</b><ul>${groupRules}</ul><p class="small muted">Проценты рассчитаны от общей базы. Группы могут пересекаться.</p></div>
+    ${viewerPatientRowsHtml(kb)}`;
+}
+
+function viewerClientBaseHtml(target, periodKey) {
+  if (!target || target.tab !== "doctor" || !target.doctorId) return "";
+  const doctorId = String(target.doctorId);
+  const result = computeMetrics(doctorId, periodKey);
+  const available = result && result.akb && Array.isArray(result.akb.availableWins) ? result.akb.availableWins.map(Number).filter(Number.isFinite) : [];
+  const windows = [12, 24, 36];
+  const requested = Object.prototype.hasOwnProperty.call(UI.kbWinByDoctor, doctorId) ? UI.kbWinByDoctor[doctorId] : UI.kbWin;
+  const preferred = recommendedClientBaseWindow(available, profileForDoctor(doctorId), requested);
+  const selected = windows.includes(preferred) ? preferred : (windows.find(windowMonths => available.includes(windowMonths)) || windows[0]);
+  const buttons = windows.map(windowMonths => `<button type="button" data-viewer-kb-window="${windowMonths}" aria-pressed="${windowMonths === selected ? "true" : "false"}" class="${windowMonths === selected ? "active" : ""}">${windowMonths === 12 ? "12 мес." : windowMonths === 24 ? "24 мес." : windowMonths === 36 ? "36 мес." : `${windowMonths} мес.`}</button>`).join("");
+  const panels = windows.map(windowMonths => `<div data-viewer-kb-panel="${windowMonths}" ${windowMonths === selected ? "" : "hidden"}>${viewerClientBasePanelHtml(result && result.akb ? result.akb.wins[windowMonths] : null, windowMonths, periodKey)}</div>`).join("");
+  return `<section class="card vector-card viewer-client-base-card" data-vector-key="v4" data-viewer-client-base style="border-top-color:${VECTOR_META.v4.color}">
+    <div class="vhead"><div><h3 class="mt0">Вектор 4. Работа с клиентской базой <span class="badge ${VECTOR_META.v4.cls}">${VECTOR_META.v4.tag}</span></h3><p class="small muted">${esc(doctorName(doctorId))} · выберите окно анализа; период исходной выгрузки указан внутри.</p></div><span class="seg no-print">${buttons}</span></div>
+    ${panels}
   </section>`;
+}
+
+function viewerAppointmentRowsHtml(nz) {
+  const rows = [];
+  if (Array.isArray(nz.sourceGroups) && nz.sourceGroups.length) {
+    for (const group of nz.sourceGroups) {
+      const label = (group.path || []).join(" → ") || "Без группы";
+      const conv = validNaznachCounts(group) && group.assigned > 0 ? group.resultQ / group.assigned * 100 : null;
+      rows.push(`<tr><td><b>${esc(label)}</b></td><td class="num"><b>${fmtNum(group.assigned)}</b></td><td class="num"><b>${fmtNum(group.done)}</b></td><td class="num"><b>${fmtNum(group.soldQ)}</b></td><td class="num"><b>${conv != null ? fmtPct(conv) : "—"}</b></td></tr>`);
+      for (const [name, values] of Object.entries(group.items || {})) {
+        if (!(values.assigned || values.done || values.soldQ)) continue;
+        rows.push(`<tr><td class="small muted" style="padding-left:26px">${esc(name)}</td><td class="num small muted">${fmtNum(values.assigned)}</td><td class="num small muted">${fmtNum(values.done)}</td><td class="num small muted">${fmtNum(values.soldQ)}</td><td></td></tr>`);
+      }
+    }
+  } else {
+    for (const type of REF_TYPES) {
+      const item = nz.byType && nz.byType[type];
+      if (!item || !(item.assigned || item.done || item.soldQ)) continue;
+      rows.push(`<tr><td><b>${esc(type)}</b></td><td class="num">${fmtNum(item.assigned)}</td><td class="num">${fmtNum(item.done)}</td><td class="num">${fmtNum(item.soldQ)}</td><td class="num">${item.conv != null ? fmtPct(item.conv) : "—"}</td></tr>`);
+    }
+  }
+  return rows.join("") || '<tr><td colspan="5" class="muted">Назначений за это окно нет.</td></tr>';
+}
+
+function viewerInterdisciplinarySwitcherHtml(target, periodKey) {
+  if (!target || target.tab !== "doctor" || !target.doctorId) return "";
+  const result = computeMetrics(String(target.doctorId), periodKey);
+  const slices = result && result.cross && Array.isArray(result.cross.nazSlices) ? result.cross.nazSlices.map(Number).filter(Number.isFinite) : [];
+  if (!slices.length) return "";
+  const selected = slices.includes(Number(UI.nazSlice)) ? Number(UI.nazSlice) : slices[0];
+  const buttons = slices.map(windowMonths => `<button type="button" data-viewer-naz-window="${windowMonths}" aria-pressed="${windowMonths === selected ? "true" : "false"}" class="${windowMonths === selected ? "active" : ""}">${windowMonths} мес.</button>`).join("");
+  const panels = slices.map(windowMonths => {
+    const nz = result.cross.naz[windowMonths];
+    const focusRows = nz && nz.focus ? Object.entries(nz.focus.items || {}).filter(([, item]) => item.assigned || item.resultQ)
+      .map(([name, item]) => `<tr><td>${esc(name)}</td><td class="num">${fmtNum(item.assigned)}</td><td class="num">${fmtNum(item.resultQ)}</td></tr>`).join("") : "";
+    return `<div data-viewer-naz-panel="${windowMonths}" ${windowMonths === selected ? "" : "hidden"}>
+      <div class="tracked-metric ${trackedMetricState(nz.totals.conv, null)}"><div><div class="tracked-title">Конверсия назначений за ${windowMonths} мес.</div><div class="tracked-note">Услуги: выполнено + продано; товары: продано · ${fmtNum(nz.totals.resultQ)} из ${fmtNum(nz.totals.assigned)}</div></div><div class="tracked-side"><div class="tracked-value">${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</div></div></div>
+      ${nz.totals.valid === false ? `<div class="notice bad"><b>Конверсия не рассчитана:</b> ${esc(nz.totals.issue)}</div>` : ""}
+      <details class="collapsible-list"><summary class="collapsible-list-summary"><span>ДЕТАЛИ НАЗНАЧЕНИЙ · назначено ${fmtNum(nz.totals.assigned)} · результат ${fmtNum(nz.totals.resultQ)}</span><span class="collapse-hint"></span></summary><div class="collapsible-list-body"><div class="viewer-patient-table-wrap"><table class="data"><thead><tr><th>Вид услуги / специализация / номенклатура</th><th class="num">Назначено</th><th class="num">Выполнено</th><th class="num">Продано</th><th class="num">Конверсия</th></tr></thead><tbody>${viewerAppointmentRowsHtml(nz)}<tr><td><b>Итого</b></td><td class="num"><b>${fmtNum(nz.totals.assigned)}</b></td><td class="num"><b>${fmtNum(nz.totals.done)}</b></td><td class="num"><b>${fmtNum(nz.totals.soldQ)}</b></td><td class="num"><b>${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</b></td></tr></tbody></table></div></div></details>
+      ${focusRows ? `<details class="collapsible-list"><summary class="collapsible-list-summary"><span>${esc(String(nz.focus.title || "Фокусы междисциплинарного подхода").toUpperCase())}</span><span class="collapse-hint"></span></summary><div class="collapsible-list-body"><table class="data"><thead><tr><th>Фокус</th><th class="num">Назначено</th><th class="num">Выполнено + продано</th></tr></thead><tbody>${focusRows}</tbody></table></div></details>` : ""}
+    </div>`;
+  }).join("");
+  return `<div class="viewer-interdisciplinary-switcher" data-viewer-interdisciplinary><div class="vhead"><b>Назначения: окно анализа</b><span class="seg no-print">${buttons}</span></div>${panels}</div>`;
 }
 
 function setClientSegment(v) {
@@ -9241,7 +9346,7 @@ function renderDoctor() {
     && !isNaN(completedReferralTarget)
     && Number(completedReferralTarget) > 0;
   const shownV3Score = shownVecScores ? shownVecScores.v3 : undefined;
-  html += `<div class="card vector-card" id="blkV3" style="border-top-color:${VECTOR_META.v3.color}">
+  html += `<div class="card vector-card" id="blkV3" data-vector-key="v3" style="border-top-color:${VECTOR_META.v3.color}">
     <div class="vhead"><h3 class="mt0">Вектор 3. Междисциплинарный подход <span class="badge ${VECTOR_META.v3.cls}">${VECTOR_META.v3.tag}</span></h3>
     <span>${vecBadge("v3", r, docProfile, shownV3Score)} ${blockBtn("blkV3")} ${nz && nz.focus && nz.focus.park ? `<span class="vscore">${nz.focus.used}<span class="small muted"> из ${nz.focus.park} фокусов</span></span>` : ""} ${r.cross.nazSlices.length ? segToggle("nazSeg", r.cross.nazSlices.map(s => ({ v: s, label: "назначения " + s + " мес" })), nazCur, "setNazSlice") : ""}</span></div>`;
   if (nz) {
@@ -9567,6 +9672,12 @@ function renderDoctor() {
   const npsDyn = doctorMetricDynamics(UI.docId, mk, rr => rr.rep ? rr.rep.nps : null);
   const reviewsDyn = doctorMetricDynamics(UI.docId, mk, rr => rr.rep ? rr.rep.reviews : null);
   const inp = (id, val, step, max, min = 0) => `<input type="number" id="m6_${id}" value="${val != null ? val : ""}" min="${min}" ${max != null ? `max="${max}"` : ""} step="${step}" style="width:90px">`;
+  const platformRatings = [
+    ["ПроДокторов", man6.prodoctorov],
+    ["НаПоправку", man6.napopravku],
+    ["DocTu", man6.doctu],
+    ["СберЗдоровье", man6.sberhealth],
+  ];
   html += `<div class="card vector-card" id="blkV6" style="border-top-color:${VECTOR_META.v6.color}">
     <div class="vhead"><h3 class="mt0">Вектор 6. Репутация и NPS <span class="badge ${VECTOR_META.v6.cls}">${VECTOR_META.v6.tag}</span></h3>
     <span>${vecBadge("v6", r, docProfile)} ${blockBtn("blkV6")} ${r.rep && r.rep.avgRating != null ? `<span class="vscore">${fmtNum(r.rep.avgRating, 2)} ★</span>` : ""}</span></div>
@@ -9575,7 +9686,9 @@ function renderDoctor() {
       ${metricHighlight("NPS", fmtPct(npsValue), "индекс готовности рекомендовать", trackedMetricState(npsValue, B6.nps), metricGoalText(B6.nps, fmtPct), metricHistoryMarkup(npsValue, npsDyn, "pp", "", 1, fmtPct))}
       ${metricHighlight("Новые отзывы", reviewsValue != null ? fmtNum(reviewsValue) + " шт." : "—", "новые отзывы за выбранный месяц", trackedMetricState(reviewsValue, B6.reviews), metricGoalText(B6.reviews, v => fmtNum(v) + " шт."), metricHistoryMarkup(reviewsValue, reviewsDyn, "absolute", " шт.", 0, v => fmtNum(v) + " шт."))}
     </div>
-    <h3 class="section-title no-print" style="margin:4px 0 8px">РУЧНОЙ ВВОД ПО ПЛОЩАДКАМ</h3>
+    <h3 class="section-title" style="margin:4px 0 8px">РЕЙТИНГИ ПО ПЛОЩАДКАМ</h3>
+    <div class="rating-platform-grid">${platformRatings.map(([name, value]) => `<div class="rating-platform-card"><span>${esc(name)}</span><strong>${value != null ? `${fmtNum(value, 1)} ★` : "—"}</strong></div>`).join("")}</div>
+    <h3 class="section-title no-print" style="margin:12px 0 8px">РЕДАКТИРОВАНИЕ ДАННЫХ РЕПУТАЦИИ</h3>
     <div class="flex no-print" style="margin-top:8px">
       <label class="fld"><span>ПроДокторов (0–5)</span>${inp("prodoctorov", man6.prodoctorov, "0.1", 5)}</label>
       <label class="fld"><span>НаПоправку (0–5)</span>${inp("napopravku", man6.napopravku, "0.1", 5)}</label>
@@ -10271,11 +10384,20 @@ async function composeViewerDashboardHtml(target, periodKey, context, comments) 
   const { clone } = await cloneDashboardForViewer(source);
   const root = document.createElement("div");
   root.innerHTML = composeViewerReportHtml(clone.innerHTML, context, comments);
-  const patientRegister = viewerPatientRegisterHtml(target, periodKey);
-  if (patientRegister) {
-    const clientBaseBlock = root.querySelector('[data-vector-key="v4"]');
-    if (clientBaseBlock) clientBaseBlock.insertAdjacentHTML("afterend", patientRegister);
-    else root.insertAdjacentHTML("beforeend", patientRegister);
+  const interdisciplinarySwitcher = viewerInterdisciplinarySwitcherHtml(target, periodKey);
+  if (interdisciplinarySwitcher) {
+    const interdisciplinaryBlock = root.querySelector('[data-vector-key="v3"]');
+    const originalAppointmentDetails = interdisciplinaryBlock && interdisciplinaryBlock.querySelector("details");
+    const emptyOriginalSwitcher = interdisciplinaryBlock && interdisciplinaryBlock.querySelector(".vhead .seg");
+    if (emptyOriginalSwitcher) emptyOriginalSwitcher.remove();
+    if (originalAppointmentDetails) originalAppointmentDetails.outerHTML = interdisciplinarySwitcher;
+    else if (interdisciplinaryBlock) interdisciplinaryBlock.insertAdjacentHTML("beforeend", interdisciplinarySwitcher);
+  }
+  const clientBase = viewerClientBaseHtml(target, periodKey);
+  if (clientBase) {
+    const originalClientBase = root.querySelector('[data-vector-key="v4"]');
+    if (originalClientBase) originalClientBase.outerHTML = clientBase;
+    else root.insertAdjacentHTML("beforeend", clientBase);
   }
   return `<div class="viewer-dashboard-snapshot" data-source-tab="${esc(target.tab)}">${root.innerHTML}</div>`;
 }
@@ -10337,8 +10459,8 @@ async function openViewerExportDialog() {
   ).join("");
   document.getElementById("viewerExportPageTypes").innerHTML = [
     ["doctor", "Личный отчёт", true],
-    ["specialization", "Отчёт специализации", false],
-    ["department", "Отчёт отделения", false],
+    ["specialization", "Отчёт специализации", true],
+    ["department", "Отчёт отделения", true],
   ].map(([value, label, checked]) => `<label><input type="checkbox" value="${value}" ${checked ? "checked" : ""}> ${label}</label>`).join("");
   const enriched = doctors.map(item => ({
     ...item,

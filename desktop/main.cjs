@@ -496,6 +496,9 @@ function createWindow() {
                 DB.months[mk].naznach.d1 = { '1': { items: [
                   { n: 'Фокус А услуга', a: 2, d: 1, sq: 1, ss: 10000, groupPath: ['Клиника', 'Диагностика', 'Фокусные услуги'] },
                   { n: 'Прочая услуга', a: 2, d: 0, sq: 1, ss: 10000, groupPath: ['Клиника', 'Диагностика', 'Прочие услуги'] }
+                ] }, '3': { items: [
+                  { n: 'Фокус А услуга', a: 5, d: 2, sq: 2, ss: 20000, groupPath: ['Клиника', 'Диагностика', 'Фокусные услуги'] },
+                  { n: 'Прочая услуга', a: 3, d: 1, sq: 1, ss: 12000, groupPath: ['Клиника', 'Диагностика', 'Прочие услуги'] }
                 ] } };
               }
               clearMetricsCache();
@@ -841,14 +844,42 @@ function createWindow() {
               );
               const viewerDoctorRoot = document.createElement('div');
               viewerDoctorRoot.innerHTML = viewerDoctorHtml;
-              const viewerPatientRegister = viewerDoctorRoot.querySelector('[data-viewer-patient-register]');
+              const viewerPatientRegisters = [...viewerDoctorRoot.querySelectorAll('[data-viewer-patient-register]')];
               const viewerPatientRows = [...viewerDoctorRoot.querySelectorAll('[data-viewer-patient-row]')];
-              const viewerPatientRegisterValid = Boolean(viewerPatientRegister)
-                && viewerPatientRows.length === 4
-                && viewerPatientRows.some(row => row.textContent.includes('Потерянный Пациент') && row.textContent.includes('3'))
-                && Boolean(viewerPatientRegister.querySelector('[data-viewer-patient-search]'))
-                && Boolean(viewerPatientRegister.querySelector('[data-viewer-patient-segment]'))
-                && !viewerDoctorRoot.querySelector('#tblClientSegment');
+              const viewerKbButtons = [...viewerDoctorRoot.querySelectorAll('[data-viewer-kb-window]')];
+              const viewerNazButtons = [...viewerDoctorRoot.querySelectorAll('[data-viewer-naz-window]')];
+              const viewerPlatformRatings = [...viewerDoctorRoot.querySelectorAll('.rating-platform-card')];
+              const viewerRatingsValid = viewerPlatformRatings.length === 4
+                && viewerPlatformRatings.some(card => card.textContent.includes('ПроДокторов'))
+                && viewerPlatformRatings.some(card => card.textContent.includes('СберЗдоровье'))
+                && !viewerDoctorRoot.querySelector('[id^="m6_"]')
+                && !viewerDoctorRoot.textContent.includes('РЕДАКТИРОВАНИЕ ДАННЫХ РЕПУТАЦИИ');
+              const viewerPatientRegisterDetails = {
+                registers: viewerPatientRegisters.length,
+                rows: viewerPatientRows.length,
+                lostPatient: viewerPatientRows.some(row => row.textContent.includes('Потерянный Пациент') && row.textContent.includes('3')),
+                collapsibleAndSearchable: viewerPatientRegisters.every(register => register.tagName === 'DETAILS' && !register.open
+                  && register.querySelector('[data-viewer-patient-search]')
+                  && register.querySelector('[data-viewer-patient-segment]')),
+                kbWindows: viewerKbButtons.map(button => button.dataset.viewerKbWindow),
+                nazWindows: viewerNazButtons.map(button => button.dataset.viewerNazWindow),
+                metricNazWindows: computeMetrics('d1', '2026-02').cross.nazSlices,
+                directInterdisciplinaryMarkup: viewerInterdisciplinarySwitcherHtml(
+                  { tab: 'doctor', doctorId: 'd1' }, '2026-02'
+                ).includes('data-viewer-interdisciplinary'),
+                interdisciplinaryMarkup: viewerDoctorHtml.includes('data-viewer-interdisciplinary'),
+                originalInterdisciplinaryBlock: viewerDoctorRoot.querySelectorAll('[data-vector-key="v3"]').length,
+                sourcePeriod: viewerDoctorRoot.textContent.includes('Источник данных:'),
+                legacyTableRemoved: !viewerDoctorRoot.querySelector('#tblClientSegment')
+              };
+              const viewerPatientRegisterValid = viewerPatientRegisterDetails.registers === 3
+                && viewerPatientRegisterDetails.rows === 9
+                && viewerPatientRegisterDetails.lostPatient
+                && viewerPatientRegisterDetails.collapsibleAndSearchable
+                && viewerPatientRegisterDetails.kbWindows.join(',') === '12,24,36'
+                && viewerPatientRegisterDetails.nazWindows.length >= 2
+                && viewerPatientRegisterDetails.sourcePeriod
+                && viewerPatientRegisterDetails.legacyTableRemoved;
               UI.setDoctor = 'd1';
               switchTab('settings');
               enableDoctorMetricSettings();
@@ -908,6 +939,8 @@ function createWindow() {
                 interdisciplinaryFocus,
                 interdisciplinaryFocusDetails,
                 viewerPatientRegisterValid,
+                viewerPatientRegisterDetails,
+                viewerRatingsValid,
                 doctorMetricSettings,
                 xlsx: typeof XLSX !== 'undefined',
                 chart: typeof Chart !== 'undefined',
@@ -1076,8 +1109,9 @@ function createWindow() {
             stage.style.cssText = 'position:fixed;inset:0;z-index:10000;overflow:auto;background:#f4f6fa;padding:24px';
             stage.innerHTML = html;
             document.body.appendChild(stage);
-            const element = stage.querySelector('[data-viewer-patient-register]');
+            const element = stage.querySelector('[data-viewer-kb-panel]:not([hidden]) [data-viewer-patient-register]');
             if (!element) { stage.remove(); return ''; }
+            element.open = true;
             const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.25, logging: false, windowWidth: 1400 });
             stage.remove();
             return canvas.toDataURL('image/png');
@@ -1124,7 +1158,7 @@ function createWindow() {
         process.stdout.write(`${JSON.stringify(result)}\n`);
         const passed = result.dataPage && result.optionalLibrariesDeferred && result.xlsx && result.chart && result.desktop
           && result.rendererErrors.length === 0
-          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.specializationFocusBlockValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.viewerPatientRegisterValid && result.doctorMetricSettings && result.commentWorkflowValid))
+          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.specializationFocusBlockValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.viewerPatientRegisterValid && result.viewerRatingsValid && result.doctorMetricSettings && result.commentWorkflowValid))
           && (!PDF_SMOKE_TEST || (result.pdfSelectionDialogValid && result.pdfExport && result.pdfExport.saved === 1
             && result.pdfExport.chartImages >= 1 && result.pdfFiles.length === 1));
         app.exit(passed ? 0 : 2);
@@ -1298,14 +1332,42 @@ function registerIpc() {
   ipcMain.handle("database:export-json", async (_event, json) => {
     localAdminActor();
     if (typeof json !== "string") throw new Error("Некорректный JSON");
+    JSON.parse(json);
+    const portable = database.createPortableJson({ appVersion: app.getVersion() });
     const date = new Date().toISOString().slice(0, 10);
     const result = await dialog.showSaveDialog(mainWindow, {
-      title: "Сохранить переносимую JSON-копию",
+      title: "Сохранить полную переносимую JSON-копию",
       defaultPath: path.join(configStore.publicConfig().backupDir, `база_оценки_врачей_${date}.json`),
       filters: [{ name: "JSON-база", extensions: ["json"] }],
     });
     if (result.canceled || !result.filePath) return { canceled: true };
-    return { canceled: false, path: fileService.writeJsonExport(result.filePath, json) };
+    const exportedJson = JSON.stringify(portable, null, 1);
+    return {
+      canceled: false,
+      path: fileService.writeJsonExport(result.filePath, exportedJson),
+      counts: portable.counts,
+      containsSensitiveData: true,
+    };
+  });
+
+  ipcMain.handle("database:import-json", async (_event, json) => {
+    localAdminActor();
+    if (typeof json !== "string" || Buffer.byteLength(json, "utf8") > 300 * 1024 * 1024) {
+      throw new Error("Некорректный размер полной JSON-копии");
+    }
+    const portable = JSON.parse(json);
+    const safety = await backupService.createAutomatic("перед-import-json");
+    try {
+      const restored = database.restorePortableJson(portable);
+      const actor = localAdminActor();
+      database.audit({ actorUserId: actor.userId, action: "database.portable-json-imported", targetType: "database",
+        targetId: path.basename(database.databasePath), details: { safetyBackup: safety.path, comments: restored.comments } });
+      return { ...restored, safetyBackup: safety.path };
+    } catch (error) {
+      try { await backupService.restore(safety.path); }
+      catch (restoreError) { logEvent("portable-json-rollback-failed", { error: restoreError.message, safety: safety.path }); }
+      throw error;
+    }
   });
 
   ipcMain.handle("config:choose-workspace", async () => {

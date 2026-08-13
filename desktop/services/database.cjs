@@ -8,6 +8,40 @@ const { backup, DatabaseSync } = require("node:sqlite");
 const SCHEMA_VERSION = 5;
 const SNAPSHOT_VERSION = 4;
 const MIN_SNAPSHOT_VERSION = 1;
+const PORTABLE_JSON_FORMAT = "klinvekt-portable-json";
+const PORTABLE_JSON_VERSION = 1;
+const PORTABLE_AUXILIARY_TABLES = Object.freeze([
+  "users",
+  "source_files",
+  "import_batches",
+  "import_events",
+  "export_runs",
+  "comments",
+  "comment_versions",
+  "publications",
+  "published_pages",
+  "audit_log",
+  "viewer_settings",
+  "viewer_doctor_access",
+  "viewer_exports",
+  "viewer_department_heads",
+]);
+const PORTABLE_DELETE_ORDER = Object.freeze([
+  "viewer_department_heads",
+  "viewer_exports",
+  "viewer_doctor_access",
+  "viewer_settings",
+  "audit_log",
+  "published_pages",
+  "publications",
+  "comment_versions",
+  "comments",
+  "export_runs",
+  "import_events",
+  "import_batches",
+  "source_files",
+  "users",
+]);
 
 function stableJson(value) {
   return JSON.stringify(value == null ? null : value);
@@ -493,6 +527,104 @@ class DatabaseService {
       }
     });
     return this.summary();
+  }
+
+  createPortableJson({ appVersion = "" } = {}) {
+    const snapshot = this.loadSnapshot();
+    if (!snapshot) throw new Error("Рабочая база ещё не содержит данных для экспорта");
+    const departmentHeads = Object.fromEntries(this.db.prepare(
+      "SELECT department, doctor_id FROM viewer_department_heads ORDER BY department"
+    ).all().map(row => [String(row.department), String(row.doctor_id)]));
+    if (!snapshot.settings || typeof snapshot.settings !== "object") snapshot.settings = {};
+    // В старых JSON это поле могло отставать от фактической таблицы Viewer.
+    // В полной копии SQLite-назначения всегда являются источником истины.
+    snapshot.settings.departmentHeadDoctorIds = departmentHeads;
+
+    const tables = {};
+    const counts = {};
+    for (const table of PORTABLE_AUXILIARY_TABLES) {
+      const rows = this.db.prepare(`SELECT * FROM ${table}`).all();
+      tables[table] = rows;
+      counts[table] = rows.length;
+    }
+    return {
+      format: PORTABLE_JSON_FORMAT,
+      formatVersion: PORTABLE_JSON_VERSION,
+      schemaVersion: SCHEMA_VERSION,
+      snapshotVersion: SNAPSHOT_VERSION,
+      appVersion: String(appVersion || ""),
+      exportedAt: new Date().toISOString(),
+      containsSensitiveData: true,
+      snapshot,
+      tables,
+      counts,
+    };
+  }
+
+  restorePortableJson(portable) {
+    if (!portable || typeof portable !== "object" || Array.isArray(portable)
+      || portable.format !== PORTABLE_JSON_FORMAT || Number(portable.formatVersion) !== PORTABLE_JSON_VERSION) {
+      throw new Error("Неподдерживаемый формат полной JSON-копии");
+    }
+    if (Number(portable.schemaVersion) !== SCHEMA_VERSION) {
+      throw new Error(`Версия структуры JSON ${portable.schemaVersion || "не определена"} не поддерживается`);
+    }
+    const snapshot = portable.snapshot;
+    if (!snapshot || typeof snapshot !== "object" || Number(snapshot.version) !== SNAPSHOT_VERSION
+      || !snapshot.settings || !snapshot.doctors || !snapshot.months) {
+      throw new Error("Полная JSON-копия не содержит совместимого снимка базы");
+    }
+    const inputTables = portable.tables;
+    if (!inputTables || typeof inputTables !== "object" || Array.isArray(inputTables)) {
+      throw new Error("Полная JSON-копия не содержит служебных таблиц");
+    }
+
+    const normalizedTables = {};
+    let totalRows = 0;
+    for (const table of PORTABLE_AUXILIARY_TABLES) {
+      const rows = inputTables[table];
+      if (!Array.isArray(rows)) throw new Error(`В полной JSON-копии отсутствует таблица ${table}`);
+      const columns = this.db.prepare(`PRAGMA table_info(${table})`).all().map(column => String(column.name));
+      normalizedTables[table] = rows.map((row, index) => {
+        if (!row || typeof row !== "object" || Array.isArray(row)) {
+          throw new Error(`Некорректная строка ${index + 1} таблицы ${table}`);
+        }
+        const normalized = {};
+        for (const column of columns) {
+          if (!Object.hasOwn(row, column)) throw new Error(`В таблице ${table} отсутствует колонка ${column}`);
+          const value = row[column];
+          if (value != null && !["string", "number"].includes(typeof value)) {
+            throw new Error(`Некорректное значение ${table}.${column}`);
+          }
+          normalized[column] = value;
+        }
+        return normalized;
+      });
+      totalRows += rows.length;
+      if (totalRows > 1000000) throw new Error("Полная JSON-копия содержит слишком много служебных записей");
+    }
+
+    this.saveSnapshot(snapshot);
+    this.#transaction(() => {
+      for (const table of PORTABLE_DELETE_ORDER) this.db.exec(`DELETE FROM ${table}`);
+      for (const table of PORTABLE_AUXILIARY_TABLES) {
+        const rows = normalizedTables[table];
+        if (!rows.length) continue;
+        const columns = Object.keys(rows[0]);
+        const placeholders = columns.map(() => "?").join(", ");
+        const insert = this.db.prepare(`INSERT INTO ${table}(${columns.join(", ")}) VALUES (${placeholders})`);
+        for (const row of rows) insert.run(...columns.map(column => row[column]));
+      }
+    });
+    this.ensureLocalAdministrator();
+    this.viewerAccessSnapshot();
+    return {
+      summary: this.summary(),
+      snapshot: this.loadSnapshot(),
+      departmentHeads: this.viewerAccessSnapshot().departmentHeads,
+      comments: this.db.prepare("SELECT COUNT(*) AS n FROM comments").get().n,
+      commentVersions: this.db.prepare("SELECT COUNT(*) AS n FROM comment_versions").get().n,
+    };
   }
 
   summary() {
@@ -1260,4 +1392,13 @@ class DatabaseService {
   }
 }
 
-module.exports = { DatabaseService, SCHEMA_VERSION, SNAPSHOT_VERSION, MIN_SNAPSHOT_VERSION, contentHash };
+module.exports = {
+  DatabaseService,
+  SCHEMA_VERSION,
+  SNAPSHOT_VERSION,
+  MIN_SNAPSHOT_VERSION,
+  PORTABLE_JSON_FORMAT,
+  PORTABLE_JSON_VERSION,
+  PORTABLE_AUXILIARY_TABLES,
+  contentHash,
+};

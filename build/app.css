@@ -746,6 +746,11 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .client-base-description-list li + li { margin-top: 3px; }
 .viewer-patient-register-card { border-top: 4px solid #0f766e; }
 .viewer-patient-register-card h2 { margin: 0; }
+.viewer-client-base-card > .vhead { align-items: flex-start; }
+.viewer-client-base-card > .vhead > div { min-width: 0; }
+.viewer-interdisciplinary-switcher { margin: 10px 0 14px; }
+.viewer-interdisciplinary-switcher > .vhead { align-items: center; }
+.viewer-interdisciplinary-switcher [data-viewer-naz-panel] > details + details { margin-top: 10px; }
 .viewer-patient-privacy { margin: 12px 0; }
 .viewer-patient-controls { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(220px, .5fr); gap: 12px; align-items: end; }
 .viewer-patient-controls .fld { margin: 0; }
@@ -755,7 +760,13 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .viewer-patient-table { margin: 0; min-width: 900px; }
 .viewer-patient-table thead { position: sticky; top: 0; z-index: 2; background: #fff; }
 .viewer-patient-table tr[hidden] { display: none; }
+.rating-platform-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0 0 10px; }
+.rating-platform-card { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); }
+.rating-platform-card span { color: var(--muted); font-size: 12px; font-weight: 700; }
+.rating-platform-card strong { font-size: 18px; white-space: nowrap; }
 @media (max-width: 720px) { .viewer-patient-controls { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .rating-platform-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .rating-platform-grid { grid-template-columns: 1fr; } }
 @media print { .viewer-patient-table-wrap { max-height: none; overflow: visible; border: 0; } .viewer-patient-table { min-width: 0; } }
 .dyn-target-badges { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-left: 4px; vertical-align: middle; }
 .dyn-target-value { font-weight: 700; }

@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const vm = require("node:vm");
 const zlib = require("node:zlib");
 const { DatabaseSync } = require("node:sqlite");
 const { DatabaseService } = require("../desktop/services/database.cjs");
@@ -234,6 +235,92 @@ test("standalone HTML contains the encrypted Viewer and opens with the doctor PI
   assert.doesNotMatch(payload.reports[0].html, /<script/i);
 });
 
+test("department head report switcher lists the department and every published specialization", () => {
+  const installedSource = fs.readFileSync(path.join(__dirname, "..", "viewer", "app.js"), "utf8");
+  const standaloneSource = fs.readFileSync(path.join(__dirname, "..", "viewer", "standalone-app.js"), "utf8");
+  const context = vm.createContext({
+    window: { viewerAPI: {} },
+    document: { addEventListener() {} },
+  });
+  vm.runInContext(`${installedSource}\n;globalThis.__viewerNavigation = { state, availableReportScopes };`, context);
+  const navigation = context.__viewerNavigation;
+  navigation.state.doctor = {
+    doctorId: "d1", displayName: "Заведующая", department: "Косметология",
+    specialization: "Косметология", managedDepartments: ["Косметология"],
+  };
+  navigation.state.subjectDoctorId = "d1";
+  navigation.state.subjects = [
+    { doctorId: "d1", displayName: "Заведующая", department: "Косметология", specialization: "Косметология",
+      periods: [{ periodKey: "2026-01", pageTypes: ["doctor", "specialization", "department"] }] },
+    { doctorId: "d2", displayName: "Врач-эстетист", department: "Косметология", specialization: "Эстетисты",
+      periods: [{ periodKey: "2026-01", pageTypes: ["doctor", "specialization", "department"] }] },
+  ];
+  const options = JSON.parse(JSON.stringify(navigation.availableReportScopes("2026-01")));
+  assert.deepEqual(options.map(option => option.label), ["Мой отчёт", "Всё отделение", "Косметология", "Эстетисты"]);
+  assert.deepEqual(options.map(option => option.pageType), ["doctor", "department", "specialization", "specialization"]);
+  assert.equal(options.find(option => option.label === "Косметология").subjectDoctorId, "d1");
+  assert.equal(options.find(option => option.label === "Эстетисты").subjectDoctorId, "d2");
+
+  for (const source of [installedSource, standaloneSource]) {
+    assert.match(source, /function availableReportScopes\(periodKey\)/);
+    assert.match(source, /label: departments\.length === 1 \? "Всё отделение"/);
+    assert.match(source, /data-report-key/);
+    assert.match(source, /managedDepartments/);
+  }
+});
+
+test("installed and standalone Viewer switch exported appointment and client-base windows", () => {
+  const sources = [
+    fs.readFileSync(path.join(__dirname, "..", "viewer", "app.js"), "utf8"),
+    fs.readFileSync(path.join(__dirname, "..", "viewer", "standalone-app.js"), "utf8"),
+  ];
+  const element = attributes => ({
+    attributes: { ...attributes }, hidden: false, listeners: {},
+    classList: { values: new Set(), toggle(name, active) { if (active) this.values.add(name); else this.values.delete(name); } },
+    getAttribute(name) { return this.attributes[name] || null; },
+    setAttribute(name, value) { this.attributes[name] = String(value); },
+    addEventListener(name, handler) { this.listeners[name] = handler; },
+  });
+  for (const source of sources) {
+    const context = vm.createContext({
+      window: { viewerAPI: {} },
+      document: {
+        addEventListener() {},
+        getElementById(id) {
+          return id === "standaloneViewerData"
+            ? { textContent: JSON.stringify({ format: "pulse-clinic-standalone-viewer", formatVersion: 2, doctors: [], periods: [] }) }
+            : null;
+        },
+      },
+    });
+    const testableSource = source.replace(/\ninitialize\(\);\s*$/, "");
+    vm.runInContext(`${testableSource}\n;globalThis.__initializeReportWindowSwitchers = initializeReportWindowSwitchers;`, context);
+    for (const [containerSelector, buttonAttribute, panelAttribute] of [
+      ["[data-viewer-interdisciplinary]", "data-viewer-naz-window", "data-viewer-naz-panel"],
+      ["[data-viewer-client-base]", "data-viewer-kb-window", "data-viewer-kb-panel"],
+    ]) {
+      const buttons = [element({ [buttonAttribute]: "12" }), element({ [buttonAttribute]: "24" })];
+      const panels = [element({ [panelAttribute]: "12" }), element({ [panelAttribute]: "24" })];
+      panels[1].hidden = true;
+      const container = {
+        dataset: {},
+        querySelectorAll(selector) {
+          if (selector === `[${buttonAttribute}]`) return buttons;
+          if (selector === `[${panelAttribute}]`) return panels;
+          return [];
+        },
+      };
+      const root = { querySelectorAll(selector) { return selector === containerSelector ? [container] : []; } };
+      context.__initializeReportWindowSwitchers(root);
+      buttons[1].listeners.click();
+      assert.equal(buttons[1].attributes["aria-pressed"], "true");
+      assert.equal(buttons[0].attributes["aria-pressed"], "false");
+      assert.equal(panels[0].hidden, true);
+      assert.equal(panels[1].hidden, false);
+    }
+  }
+});
+
 test("department head sees every doctor in the department while a regular doctor stays personal", async t => {
   const { root, database } = fixture(t);
   database.setViewerAdminPin("654321");
@@ -245,14 +332,21 @@ test("department head sees every doctor in the department while a regular doctor
     { doctorId: "d1", displayName: "Первый Врач", department: "Терапия", specialization: "Кардиология" },
     { doctorId: "d2", displayName: "Второй Врач", department: "Терапия", specialization: "Неврология" },
   ];
-  const pages = doctors.map(doctor => ({
-    doctorId: doctor.doctorId,
-    periodKey: "2026-01",
-    pageType: "doctor",
-    scopeId: doctor.doctorId,
-    title: `Отчёт ${doctor.displayName}`,
-    html: `<div>${doctor.doctorId === "d1" ? "Секрет первого" : "Секрет второго"}</div>`,
-  }));
+  const pages = doctors.flatMap(doctor => ([
+    {
+      doctorId: doctor.doctorId, periodKey: "2026-01", pageType: "doctor", scopeId: doctor.doctorId,
+      title: `Отчёт ${doctor.displayName}`,
+      html: `<div>${doctor.doctorId === "d1" ? "Секрет первого" : "Секрет второго"}</div>`,
+    },
+    {
+      doctorId: doctor.doctorId, periodKey: "2026-01", pageType: "department", scopeId: "Терапия",
+      title: "Общий отчёт Терапии", html: "<div>Все врачи Терапии</div>",
+    },
+    {
+      doctorId: doctor.doctorId, periodKey: "2026-01", pageType: "specialization", scopeId: doctor.specialization,
+      title: `Специализация ${doctor.specialization}`, html: `<div>Сводная специализация ${doctor.specialization}</div>`,
+    },
+  ]));
 
   const created = await createViewerPackage({ appVersion: "2.3.0", periods: ["2026-01"], doctors, subjects: doctors, pages, credentials });
   const inspected = await inspectViewerPackage(created.buffer, { includeZip: true });
@@ -275,6 +369,12 @@ test("department head sees every doctor in the department while a regular doctor
   const headSession = viewer.doctorLogin({ doctorId: "d1", pin: "1357" });
   assert.equal(headSession.subjects.length, 2);
   assert.match(viewer.readReport(headSession, { subjectDoctorId: "d2", periodKey: "2026-01", pageType: "doctor" }).html, /Секрет второго/);
+  assert.match(viewer.readReport(headSession, { subjectDoctorId: "d1", periodKey: "2026-01", pageType: "department" }).html, /Все врачи Терапии/);
+  assert.match(viewer.readReport(headSession, { subjectDoctorId: "d1", periodKey: "2026-01", pageType: "specialization" }).html, /Кардиология/);
+  assert.match(viewer.readReport(headSession, { subjectDoctorId: "d2", periodKey: "2026-01", pageType: "specialization" }).html, /Неврология/);
+  assert.deepEqual(headSession.subjects.map(subject => Object.keys(subject.publications[0].pages).sort()), [
+    ["department", "doctor", "specialization"], ["department", "doctor", "specialization"],
+  ]);
   const regularSession = viewer.doctorLogin({ doctorId: "d2", pin: "2468" });
   assert.equal(regularSession.subjects.length, 1);
   assert.equal(viewer.readReport(regularSession, { subjectDoctorId: "d1", periodKey: "2026-01", pageType: "doctor" }), null);
@@ -296,6 +396,8 @@ test("department head sees every doctor in the department while a regular doctor
   const regularPayload = decrypt(bundle.doctors.find(item => item.doctorId === "d2"), "2468");
   assert.deepEqual(headPayload.subjects.map(item => item.doctorId), ["d1", "d2"]);
   assert.deepEqual(regularPayload.subjects.map(item => item.doctorId), ["d2"]);
-  assert.equal(headPayload.reports.length, 2);
-  assert.equal(regularPayload.reports.length, 1);
+  assert.equal(headPayload.reports.length, 6);
+  assert.equal(regularPayload.reports.length, 3);
+  assert.deepEqual([...new Set(headPayload.reports.filter(report => report.pageType === "specialization").map(report => report.scopeId))].sort(),
+    ["Кардиология", "Неврология"]);
 });

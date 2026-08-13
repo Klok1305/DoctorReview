@@ -14,6 +14,7 @@ function Test-MatchesAny([string]$Value, [string[]]$Patterns) {
 $allowedPatterns = @(
   '^\.gitattributes$',
   '^\.gitignore$',
+  '^AGENTS\.md$',
   '^\.github/workflows/(ci|release)\.yml$',
   '^README\.md$',
   '^index\.html$',

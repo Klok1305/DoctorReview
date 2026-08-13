@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   exportViewerPins: payload => invoke("viewer-publication:export-pins", payload),
   saveDatabase: json => invoke("database:save", json),
   exportJson: json => invoke("database:export-json", json),
+  importJson: json => invoke("database:import-json", json),
 
   chooseWorkspace: () => invoke("config:choose-workspace"),
   chooseFolder: kind => invoke("config:choose-folder", kind),

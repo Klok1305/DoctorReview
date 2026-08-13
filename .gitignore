@@ -6,6 +6,7 @@
 # Служебные файлы репозитория.
 !/.gitignore
 !/.gitattributes
+!/AGENTS.md
 !/.github/
 /.github/*
 !/.github/workflows/

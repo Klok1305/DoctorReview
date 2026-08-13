@@ -14,7 +14,8 @@ body.viewer-app { min-height: 100vh; margin: 0; background: #f4f6fa; color: var(
 .viewer-report-toolbar { position: sticky; top: 62px; z-index: 15; display: flex; align-items: center; gap: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.97); box-shadow: 0 3px 14px rgba(15,23,42,.06); }
 .viewer-subject-control { padding: 6px 8px; border-radius: 8px; background: var(--accent-soft); color: #1e4fa3; font-weight: 700; }
 .viewer-subject-control select { max-width: 260px; }
-.viewer-tabs { display: flex; gap: 8px; margin: 14px 0; }
+.viewer-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; padding: 4px; border-radius: 10px; background: #e9eef6; }
+.viewer-tabs .btn { background: transparent; }
 .viewer-tabs .active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .viewer-report-body { min-height: 300px; }
 .viewer-report-body .pdf-chart-image { display: block; width: 100%; height: auto; object-fit: contain; }
