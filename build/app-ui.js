@@ -4330,8 +4330,10 @@ function updateViewerExportStatus() {
   if (!status) return;
   const doctors = document.querySelectorAll('#viewerExportDoctors input[data-viewer-export-doctor]:checked').length;
   const periods = document.querySelectorAll('#viewerExportPeriods input:checked').length;
+  const headScope = document.querySelector('input[name="viewerExportHeadScope"]:checked')?.value === "department"
+    ? "все управляемые отделения" : "только выбранные";
   const zipHint = VIEWER_ACCESS.adminPinConfigured ? "" : " · HTML и ZIP недоступны, пока не задан PIN администратора Viewer";
-  status.textContent = `Выбрано: врачей — ${doctors}, периодов — ${periods}${zipHint}`;
+  status.textContent = `Выбрано: врачей — ${doctors}, периодов — ${periods} · заведующие: ${headScope}${zipHint}`;
 }
 
 function filterViewerExportDoctors(selectMatching) {
@@ -4402,6 +4404,7 @@ async function exportViewerPackage(format = "html") {
   const periodKeys = [...document.querySelectorAll("#viewerExportPeriods input:checked")].map(input => input.value);
   const pageTypes = new Set([...document.querySelectorAll("#viewerExportPageTypes input:checked")].map(input => input.value));
   const doctorIds = [...document.querySelectorAll("#viewerExportDoctors input[data-viewer-export-doctor]:checked")].map(input => input.value);
+  const includeManagedDepartmentDoctors = document.querySelector('input[name="viewerExportHeadScope"]:checked')?.value === "department";
   const adminPin = format === "html" ? document.getElementById("viewerExportAdminPin").value.trim() : "";
   if (!periodKeys.length || !pageTypes.size || !doctorIds.length) {
     errorBox.textContent = "Выберите хотя бы один период, тип отчёта и врача.";
@@ -4448,9 +4451,11 @@ async function exportViewerPackage(format = "html") {
       specialization: resolvedSpecializationName(doctorId) || "",
     }));
     const selectedDoctorIds = new Set(eligibleDoctorIds);
-    const managedDepartments = new Set(Object.entries(VIEWER_ACCESS.departmentHeads || {})
-      .filter(([, headDoctorId]) => selectedDoctorIds.has(String(headDoctorId)))
-      .map(([department]) => department));
+    const managedDepartments = includeManagedDepartmentDoctors
+      ? new Set(Object.entries(VIEWER_ACCESS.departmentHeads || {})
+        .filter(([, headDoctorId]) => selectedDoctorIds.has(String(headDoctorId)))
+        .map(([department]) => department))
+      : new Set();
     const subjectIds = new Set(eligibleDoctorIds);
     if (managedDepartments.size) {
       for (const doctorId of Object.keys(DB.doctors)) {
@@ -6133,6 +6138,7 @@ async function initApp() {
   });
   document.getElementById("viewerExportDoctors").addEventListener("change", updateViewerExportStatus);
   document.getElementById("viewerExportPeriods").addEventListener("change", updateViewerExportStatus);
+  document.getElementById("viewerExportHeadScope").addEventListener("change", updateViewerExportStatus);
   document.getElementById("btnSaveSession").addEventListener("click", saveSessionState);
   document.getElementById("btnExport").addEventListener("click", exportDB);
   document.getElementById("btnImport").addEventListener("click", () => document.getElementById("importInput").click());

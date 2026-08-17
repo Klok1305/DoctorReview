@@ -1099,7 +1099,9 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
 .viewer-export-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .viewer-export-grid section { border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
 .viewer-export-grid h3 { margin: 0 0 8px; }
+.viewer-export-grid .viewer-export-head-scope { grid-column: 1 / -1; }
 .viewer-choice-list { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+.viewer-head-scope-list label { flex: 1 1 320px; }
 .viewer-doctor-list { max-height: 360px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
 .viewer-export-dialog .viewer-doctor-list { flex: 1 1 320px; min-height: 220px; max-height: none; }
 .viewer-export-dialog .pdf-export-dialog-actions { flex: 0 0 auto; flex-wrap: wrap; }
@@ -1114,6 +1116,7 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
 .viewer-access-pin { width: 76px; font-family: ui-monospace, Consolas, monospace; letter-spacing: .12em; }
 @media (max-width: 760px) {
   .viewer-export-grid { grid-template-columns: 1fr; }
+  .viewer-export-grid .viewer-export-head-scope { grid-column: auto; }
   .viewer-doctor-row { grid-template-columns: 34px 1fr; }
   .viewer-doctor-row > span { grid-column: 2; }
 }

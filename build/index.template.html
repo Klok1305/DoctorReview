@@ -148,6 +148,10 @@
       <div class="viewer-export-grid">
         <section><h3>Периоды</h3><div id="viewerExportPeriods" class="viewer-choice-list"></div></section>
         <section><h3>Состав отчёта</h3><div id="viewerExportPageTypes" class="viewer-choice-list"></div></section>
+        <section class="viewer-export-head-scope"><h3>Заведующие отделениями</h3><div id="viewerExportHeadScope" class="viewer-choice-list viewer-head-scope-list">
+          <label><input type="radio" name="viewerExportHeadScope" value="selected" checked> Только выбранные врачи и их сводные</label>
+          <label><input type="radio" name="viewerExportHeadScope" value="department"> Добавить всех врачей управляемых отделений</label>
+        </div></section>
       </div>
       <div class="toolbar">
         <label>Отделение: <select id="viewerExportDepartmentFilter"></select></label>
@@ -156,7 +160,7 @@
         <button class="btn mini" type="button" id="viewerExportClearDoctors">Снять всё</button>
       </div>
       <div class="viewer-doctor-list" id="viewerExportDoctors"></div>
-      <div class="notice blue"><b>Заведующие:</b> если назначенный заведующий выбран среди получателей, в файл автоматически добавятся отчёты всех врачей его отделения. Остальные врачи увидят только собственные страницы.</div>
+      <div class="notice blue"><b>Заведующие:</b> в режиме «Только выбранные врачи» заведующий получит свою личную страницу и выбранные сводные своего отделения и специализации. Второй режим дополнительно включит личные и сводные страницы всех врачей управляемых отделений.</div>
       <div class="notice blue viewer-export-admin-access"><b>Вход администратора в HTML:</b> подтвердите действующий администраторский PIN Viewer. Он зашифрует отдельный полный каталог всех отчётов, включённых в файл, и не будет сохранён открытым текстом.
         <label class="fld"><span>Администраторский PIN Viewer</span><input id="viewerExportAdminPin" type="password" inputmode="numeric" minlength="6" maxlength="12" autocomplete="off" placeholder="6–12 цифр"></label>
       </div>

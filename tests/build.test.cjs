@@ -447,7 +447,7 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "2.5.12");
+  assert.equal(packageJson.version, "2.5.13");
   assert.equal(packageJson.build.productName, "КлинВект Щербатова — Администратор");
   assert.equal(packageJson.build.artifactName, "KlinVekt-Shcherbatova-Admin-Setup-${version}-${arch}.${ext}");
   assert.equal(packageJson.scripts["dist:portable"], undefined);
@@ -882,7 +882,11 @@ test("Viewer access is name plus PIN with encrypted pages and no Windows or NTFS
   assert.match(packages, /accessRole: "admin"/);
   assert.match(packages, /adminAccess: encryptedAdminAccess/);
   assert.match(adminTemplate, /id="viewerExportAdminPin"/);
+  assert.match(adminTemplate, /name="viewerExportHeadScope" value="selected" checked/);
+  assert.match(adminTemplate, /name="viewerExportHeadScope" value="department"/);
   assert.match(adminUi, /\.\.\.\(format === "html" \? \{ adminPin \} : \{\}\)/);
+  assert.match(adminUi, /const includeManagedDepartmentDoctors = document\.querySelector\('input\[name="viewerExportHeadScope"\]:checked'\)\?\.value === "department"/);
+  assert.match(adminUi, /const managedDepartments = includeManagedDepartmentDoctors/);
   assert.match(adminUi, /saveViewerDepartmentHead/);
   assert.match(adminUi, /function exportViewerPinsTable\(\)/);
   assert.match(adminUi, /Выгрузить все PIN в Excel/);

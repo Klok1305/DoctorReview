@@ -457,3 +457,32 @@ test("department head sees every doctor in the department while a regular doctor
   assert.deepEqual(adminPayload.subjects.map(item => item.doctorId), ["d1", "d2"]);
   assert.equal(adminPayload.reports.length, 6);
 });
+
+test("department head publication can be limited to the selected doctor and that doctor's summaries", async t => {
+  const { database } = fixture(t);
+  database.setViewerAdminPin("654321");
+  database.updateViewerDoctorAccess({ doctorId: "d1", active: true, pin: "1357" });
+  database.updateViewerDepartmentHead({ department: "Терапия", doctorId: "d1" });
+  const doctor = {
+    doctorId: "d1", displayName: "Первый Врач", department: "Терапия", specialization: "Кардиология",
+  };
+  const pages = [
+    { doctorId: "d1", periodKey: "2026-01", pageType: "doctor", scopeId: "d1", title: "Личный отчёт", html: "<div>Личный</div>" },
+    { doctorId: "d1", periodKey: "2026-01", pageType: "department", scopeId: "Терапия", title: "Отделение", html: "<div>Терапия</div>" },
+    { doctorId: "d1", periodKey: "2026-01", pageType: "specialization", scopeId: "Кардиология", title: "Специализация", html: "<div>Кардиология</div>" },
+  ];
+  const created = await createStandaloneViewerHtml({
+    appVersion: "2.5.13",
+    periods: ["2026-01"],
+    doctors: [doctor],
+    subjects: [doctor],
+    pages,
+    credentials: database.viewerExportCredentials(["d1"], { adminPin: "654321" }),
+  });
+  const embedded = created.buffer.toString("utf8").match(/<script id="standaloneViewerData" type="application\/json">([\s\S]*?)<\/script>/);
+  const bundle = JSON.parse(embedded[1]);
+  const headPayload = decryptStandaloneRecord(bundle.doctors[0], "1357");
+  assert.deepEqual(headPayload.subjects.map(item => item.doctorId), ["d1"]);
+  assert.deepEqual(headPayload.reports.map(report => report.pageType).sort(), ["department", "doctor", "specialization"]);
+  assert.deepEqual(bundle.subjects.map(item => item.doctorId), ["d1"]);
+});
