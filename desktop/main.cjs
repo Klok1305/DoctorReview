@@ -15,6 +15,10 @@ const { BackupService } = require("./services/backup-service.cjs");
 const { FileService } = require("./services/file-service.cjs");
 const { UpdateService } = require("./services/update-service.cjs");
 const { createStandaloneViewerHtml, createViewerPackage } = require("./services/viewer-package-service.cjs");
+const {
+  MOBILE_PUBLICATION_EXTENSION,
+  serializeMobilePublication,
+} = require("./services/mobile-publication-service.cjs");
 
 const PDF_SMOKE_TEST = process.argv.includes("--pdf-smoke");
 const SMOKE_TEST = PDF_SMOKE_TEST || process.argv.includes("--smoke-test");
@@ -1325,6 +1329,38 @@ function registerIpc() {
     database.audit({ actorUserId: session.userId, action: "viewer-pins.exported", targetType: "viewer", targetId: "doctor-pins",
       details: { doctorCount, fileName: path.basename(selected.filePath) } });
     return { canceled: false, path: selected.filePath, doctorCount };
+  });
+  ipcMain.handle("mobile-publication:export", async (_event, payload) => {
+    const session = localAdminActor();
+    const input = ensureObject(payload, "мобильная публикация");
+    const publication = ensureObject(input.publication, "содержимое мобильной публикации");
+    const serialized = serializeMobilePublication(publication);
+    const doctorName = String(publication.doctor.name || "врач")
+      .replace(/[<>:"/\\|?*\x00-\x1f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80) || "врач";
+    const date = new Date().toISOString().slice(0, 10);
+    const selected = await dialog.showSaveDialog(mainWindow, {
+      title: "Сохранить файл для мобильного КлинВект",
+      defaultPath: path.join(configStore.publicConfig().outputDir, `КлинВект-мобильный-${doctorName}-${date}.${MOBILE_PUBLICATION_EXTENSION}`),
+      filters: [{ name: "Мобильная публикация КлинВект", extensions: [MOBILE_PUBLICATION_EXTENSION] }],
+    });
+    if (selected.canceled || !selected.filePath) return { canceled: true };
+    fs.writeFileSync(selected.filePath, serialized, { encoding: "utf8", flag: "w" });
+    database.audit({
+      actorUserId: session.userId,
+      action: "mobile-publication.exported",
+      targetType: "doctor",
+      targetId: doctorName,
+      details: {
+        fileName: path.basename(selected.filePath),
+        periods: publication.periods.length,
+        patientRegistryIncluded: false,
+        rawExportsIncluded: false,
+      },
+    });
+    return { canceled: false, path: selected.filePath, periods: publication.periods.length, doctorName };
   });
   ipcMain.handle("database:save", (_event, json) => {
     localAdminActor();

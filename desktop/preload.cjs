@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   setViewerAdminPin: pin => invoke("viewer-publication:set-admin-pin", { pin }),
   exportViewerPackage: payload => invoke("viewer-publication:export", payload),
   exportViewerPins: payload => invoke("viewer-publication:export-pins", payload),
+  exportMobilePublication: payload => invoke("mobile-publication:export", payload),
   saveDatabase: json => invoke("database:save", json),
   exportJson: json => invoke("database:export-json", json),
   importJson: json => invoke("database:import-json", json),

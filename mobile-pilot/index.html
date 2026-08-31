@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1d4ed8">
+  <meta name="description" content="Мобильный пилот КлинВект с демо-режимом и загрузкой агрегированных метрик из Admin.">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="КлинВект">
+  <title>КлинВект — мобильный пилот</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="512x512" href="./icons/app-icon-512.png">
+  <link rel="apple-touch-icon" href="./icons/app-icon-192.png">
+  <link rel="stylesheet" href="./app.css?v=3">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="./" aria-label="КлинВект — на главную">
+      <img src="./icons/app-icon-192.png" alt="" width="40" height="40">
+      <span><b>КлинВект</b><small>Мобильный пилот</small></span>
+    </a>
+    <button class="icon-button hidden" id="logoutButton" type="button" aria-label="Выйти из отчёта" title="Выйти">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M10 17l5-5-5-5M15 12H3M13 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6"/></svg>
+    </button>
+  </header>
+
+  <main>
+    <section class="login-view" id="loginView" aria-labelledby="loginTitle">
+      <div class="login-card">
+        <span class="eyebrow">Мобильная версия</span>
+        <h1 id="loginTitle">Личный отчёт врача на телефоне</h1>
+        <p class="lead">Откройте тестовый отчёт или загрузите из Admin агрегированные показатели врача без списка пациентов.</p>
+
+        <div class="demo-profile" aria-label="Профиль отчёта">
+          <span class="avatar" aria-hidden="true">ДВ</span>
+          <span><b id="loginDoctorName">Тестовый врач</b><small id="loginDoctorDepartment">Демонстрационное отделение</small></span>
+          <span class="secure-label" id="profileBadge">Демо</span>
+        </div>
+
+        <button class="primary-button" id="openDemoButton" type="button">
+          <span id="openReportLabel">Открыть тестовый отчёт</span>
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </button>
+        <button class="publication-button" id="loadPublicationButton" type="button">Загрузить файл из Admin</button>
+        <input class="hidden" id="publicationInput" type="file" accept=".kvmobile,application/json">
+        <p class="publication-help">Выберите файл <b>.kvmobile</b>. Он содержит только агрегированные метрики одного врача и хранится в памяти до обновления страницы.</p>
+        <p class="publication-status" id="publicationStatus" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <section class="report-view hidden" id="reportView" aria-label="Личный отчёт врача">
+      <div class="report-heading">
+        <div>
+          <span class="eyebrow">Мой отчёт</span>
+          <h1 id="doctorName">Тестовый врач</h1>
+          <p id="doctorDepartment">Демонстрационное отделение</p>
+        </div>
+        <span class="connection-pill" id="connectionStatus"><span></span>В сети</span>
+      </div>
+
+      <div class="period-control" aria-label="Выбор периода отчёта">
+        <button class="period-arrow" id="previousPeriod" type="button" aria-label="Предыдущий период">←</button>
+        <label>
+          <span>Период</span>
+          <select id="periodSelect" aria-label="Период отчёта"></select>
+        </label>
+        <button class="period-arrow" id="nextPeriod" type="button" aria-label="Следующий период">→</button>
+      </div>
+
+      <section class="score-card" aria-labelledby="scoreTitle">
+        <div class="score-ring" id="scoreRing"><span><b id="overallScore">0</b><small>из 100</small></span></div>
+        <div class="score-copy">
+          <span class="eyebrow" id="scoreTitle">Общий индекс</span>
+          <h2 id="scoreAssessment">Уверенная динамика</h2>
+          <p id="scoreSummary"></p>
+          <span class="delta positive" id="scoreDelta"></span>
+        </div>
+      </section>
+
+      <div class="tab-list" role="tablist" aria-label="Разделы отчёта">
+        <button class="tab-button active" type="button" role="tab" aria-selected="true" aria-controls="overviewPanel" data-tab="overview">Метрики</button>
+        <button class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="dynamicsPanel" data-tab="dynamics">Динамика</button>
+        <button class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="goalsPanel" data-tab="goals">Цели</button>
+      </div>
+
+      <section class="tab-panel" id="overviewPanel" role="tabpanel" data-panel="overview">
+        <div class="section-heading">
+          <div><span class="eyebrow">Текущий месяц</span><h2>Ключевые показатели</h2></div>
+        </div>
+        <div class="headline-grid" id="headlineMetrics"></div>
+
+        <div class="section-heading">
+          <div><span class="eyebrow">Шесть направлений</span><h2>Векторы результата</h2></div>
+          <span class="small-muted">Нажмите на карточку</span>
+        </div>
+        <div class="vector-grid" id="vectorGrid"></div>
+        <article class="detail-card" id="vectorDetail" aria-live="polite"></article>
+      </section>
+
+      <section class="tab-panel hidden" id="dynamicsPanel" role="tabpanel" data-panel="dynamics">
+        <div class="section-heading">
+          <div><span class="eyebrow">Последние периоды</span><h2>Динамика общего индекса</h2></div>
+        </div>
+        <article class="chart-card">
+          <div class="chart-summary"><b id="trendValue"></b><span id="trendCaption"></span></div>
+          <div class="trend-chart" id="trendChart" role="img" aria-label="График динамики общего индекса"></div>
+          <div class="chart-labels" id="trendLabels"></div>
+        </article>
+        <div class="section-heading compact-heading">
+          <div><span class="eyebrow">Изменение за период</span><h2>Все показатели</h2></div>
+        </div>
+        <div class="comparison-list" id="comparisonList"></div>
+      </section>
+
+      <section class="tab-panel hidden" id="goalsPanel" role="tabpanel" data-panel="goals">
+        <div class="section-heading">
+          <div><span class="eyebrow">Текущий фокус</span><h2>Цели и комментарий</h2></div>
+        </div>
+        <div class="goals-list" id="goalsList"></div>
+        <article class="comment-card">
+          <div class="comment-heading"><span class="avatar small" aria-hidden="true">Р</span><span><b>Комментарий руководителя</b><small id="commentDate"></small></span></div>
+          <blockquote id="managerComment"></blockquote>
+        </article>
+      </section>
+
+      <section class="install-card" id="installCard">
+        <div><b>Добавить КлинВект на экран телефона</b><p>Прототип будет открываться как отдельное приложение.</p></div>
+        <button class="secondary-button" id="installButton" type="button">Установить</button>
+      </section>
+    </section>
+  </main>
+
+  <nav class="bottom-nav hidden" id="bottomNav" aria-label="Мобильная навигация">
+    <button class="active" type="button" data-tab="overview">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 13h6V4H4v9zm0 7h6v-4H4v4zm10 0h6v-9h-6v9zm0-16v4h6V4h-6z"/></svg>
+      Метрики
+    </button>
+    <button type="button" data-tab="dynamics">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 7-8M17 7h3v3"/></svg>
+      Динамика
+    </button>
+    <button type="button" data-tab="goals">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zm0-4a6 6 0 1 0 0-12 6 6 0 0 0 0 12zm0-4a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg>
+      Цели
+    </button>
+  </nav>
+
+  <dialog class="install-dialog" id="installDialog">
+    <form method="dialog">
+      <button class="dialog-close" value="close" aria-label="Закрыть">×</button>
+      <span class="eyebrow">Установка без магазина</span>
+      <h2>Добавьте КлинВект на главный экран</h2>
+      <div class="install-step"><span>iPhone</span><p>Откройте страницу в Safari → нажмите «Поделиться» → «На экран Домой» → включите «Открывать как веб‑приложение».</p></div>
+      <div class="install-step"><span>Android</span><p>Откройте меню браузера Chrome → выберите «Установить приложение» или «Добавить на главный экран».</p></div>
+      <button class="primary-button compact" value="close">Понятно</button>
+    </form>
+  </dialog>
+
+  <noscript><div class="noscript">Для работы мобильного прототипа включите JavaScript.</div></noscript>
+  <script src="./demo-data.js?v=3" defer></script>
+  <script src="./app.js?v=3" defer></script>
+</body>
+</html>

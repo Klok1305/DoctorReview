@@ -1,0 +1,27 @@
+{
+  "name": "КлинВект — мобильный пилот",
+  "short_name": "КлинВект",
+  "description": "Демонстрационная мобильная версия КлинВект на синтетических данных.",
+  "lang": "ru",
+  "id": "klinvekt-mobile-pilot",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f2f6fb",
+  "theme_color": "#1d4ed8",
+  "icons": [
+    {
+      "src": "./icons/app-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/app-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

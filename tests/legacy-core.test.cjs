@@ -6,6 +6,8 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
+const { validateMobilePublication } = require("../desktop/services/mobile-publication-service.cjs");
+
 const build = path.resolve(__dirname, "..", "build");
 
 function createContext({ desktop = false } = {}) {
@@ -48,6 +50,40 @@ test("core date and doctor-name helpers preserve legacy behavior", () => {
   assert.equal(vm.runInContext("periodMonths(extractPeriod('01.01.2026 - 31.03.2026'))", context), 3);
   assert.equal(vm.runInContext("isFullMonthPeriod(extractPeriod('01.01.2026 - 31.03.2026'))", context), true);
   assert.equal(vm.runInContext("isFullMonthPeriod(extractPeriod('02.01.2026 - 31.03.2026'))", context), false);
+});
+
+test("Admin builds a valid mobile publication from calculated metrics without patient rows", () => {
+  const context = createContext();
+  const uiSource = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const publicationSource = uiSource.slice(
+    uiSource.indexOf("function mobilePublicationText"),
+    uiSource.indexOf("function doctorMetricsHeaderHtml"),
+  );
+  vm.runInContext(publicationSource, context, { filename: "app-ui-mobile-publication.js" });
+
+  const publication = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], dept: 'По умолчанию' } };
+    DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].manual6.d1 = {
+      prodoctorov: 4.9,
+      napopravku: 4.8,
+      doctu: 4.7,
+      sberhealth: 4.9,
+      nps: 82,
+      reviews: 14
+    };
+    clearMetricsCache();
+    return buildMobilePublication('d1');
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(publication));
+  const validated = validateMobilePublication(plain);
+  const serialized = JSON.stringify(validated);
+
+  assert.equal(validated.doctor.name, "Тестов Врач");
+  assert.equal(validated.periods.length, 1);
+  assert.equal(validated.periods[0].headlineMetrics.length, 5);
+  assert.equal(validated.periods[0].vectors.length, 6);
+  assert.doesNotMatch(serialized, /"(?:patientId|patientName|clientRows|clients)"/);
 });
 
 test("client-base groups use B-F thresholds and may overlap", () => {

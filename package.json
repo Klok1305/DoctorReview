@@ -1,6 +1,6 @@
 {
   "name": "doctor-performance-app",
-  "version": "2.5.13",
+  "version": "2.5.14",
   "description": "Административное приложение «КлинВект Щербатова» для аналитики врачей и отделений",
   "main": "desktop/main.cjs",
   "author": "Nikita",
@@ -14,12 +14,14 @@
     "node": ">=22",
     "pnpm": ">=11"
   },
-  "packageManager": "pnpm@11.9.0",
+  "packageManager": "pnpm@11.19.0",
   "scripts": {
     "assemble": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./build/assemble.ps1",
     "audit:repo": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/audit-repository.ps1",
     "start": "pnpm run assemble && electron .",
     "start:viewer": "electron ./viewer",
+    "start:mobile-pilot": "node ./scripts/serve-mobile-pilot.cjs",
+    "start:mobile-pilot:lan": "node ./scripts/serve-mobile-pilot.cjs --lan",
     "test": "node --test tests/*.test.cjs",
     "test:smoke": "pnpm run assemble && electron . --smoke-test",
     "test:pdf": "pnpm run assemble && electron . --pdf-smoke",

@@ -26,15 +26,17 @@ $allowedPatterns = @(
   '^desktop/[^/]+\.cjs$',
   '^desktop/services/[^/]+\.cjs$',
   '^viewer/[^/]+\.(cjs|js|css|html|json)$',
+  '^mobile-pilot/[^/]+\.(html|css|js|webmanifest)$',
+  '^mobile-pilot/icons/app-icon-(192|512)\.png$',
   '^docs/[^/]+\.md$',
   '^resources/(app-icon\.(ico|png)|update-config\.json)$',
-  '^scripts/[^/]+\.(ps1|py)$',
+  '^scripts/[^/]+\.(cjs|ps1|py)$',
   '^tests/[^/]+\.test\.cjs$'
 )
 
 $blockedPatterns = @(
   '(^|/)(node_modules|dist|out|tmp|output)(/|$)',
-  '\.(sqlite|sqlite-shm|sqlite-wal|db|db-shm|db-wal|ovbackup|xls|xlsx|xlsm|csv|tsv|pdf|zip|7z|rar|log|exe|msi|blockmap)$',
+  '\.(sqlite|sqlite-shm|sqlite-wal|db|db-shm|db-wal|ovbackup|xls|xlsx|xlsm|csv|tsv|pdf|zip|kvmobile|7z|rar|log|exe|msi|blockmap)$',
   '(^|/)latest\.yml$',
   '(^|/)config\.json$',
   '(^|/)\.env(?:\..+)?$',
@@ -48,7 +50,7 @@ if ($LASTEXITCODE -ne 0) { throw "Could not read the Git file list." }
 
 $problems = [System.Collections.Generic.List[string]]::new()
 $secretPattern = '(?i)(github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----)'
-$textExtensions = @('.cjs', '.css', '.html', '.js', '.json', '.md', '.ps1', '.py', '.yaml', '.yml')
+$textExtensions = @('.cjs', '.css', '.html', '.js', '.json', '.md', '.ps1', '.py', '.webmanifest', '.yaml', '.yml')
 
 foreach ($file in $files) {
   if (-not (Test-MatchesAny $file $allowedPatterns)) {

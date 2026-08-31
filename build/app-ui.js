@@ -2980,6 +2980,363 @@ function metricHighlight(title, valueHtml, sub, state, goalText, historyHtml) {
   </div>`;
 }
 
+function mobilePublicationText(value, fallback = "—") {
+  if (value == null || value === "") return fallback;
+  return String(value);
+}
+
+function mobilePublicationMetric(label, value, note = "", target = "", state = "neutral") {
+  const metric = { label: mobilePublicationText(label), value: mobilePublicationText(value), state };
+  if (note) metric.note = mobilePublicationText(note);
+  if (target) metric.target = mobilePublicationText(target);
+  return metric;
+}
+
+function mobilePublicationDelta(current, previous, digits = 1, suffix = "") {
+  if (!Number.isFinite(current) || !Number.isFinite(previous)) return "—";
+  const delta = current - previous;
+  return `${delta > 0 ? "+" : ""}${fmtNum(delta, digits)}${suffix}`;
+}
+
+function mobilePublicationPercentChange(value) {
+  if (!Number.isFinite(value)) return "—";
+  return `${value > 0 ? "+" : ""}${fmtNum(value, 1)}%`;
+}
+
+function mobilePublicationScore(result, vectorKey = null) {
+  if (!result || !result.scores) return null;
+  const value = vectorKey ? result.scores.vec[vectorKey] : result.scores.total;
+  return Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : null;
+}
+
+function mobilePublicationState(value, target, lowerIsBetter = false) {
+  if (!Number.isFinite(value) || !Number.isFinite(target)) return "neutral";
+  const achieved = lowerIsBetter ? value <= target : value >= target;
+  return achieved ? "good" : "warn";
+}
+
+function mobilePublicationReferralSection(result, profile) {
+  const refRows = Object.entries(result.cross.refByType || {})
+    .filter(([, item]) => item && (item.q || item.s || item.includedS))
+    .map(([type, item]) => [
+      type,
+      fmtNum(item.q),
+      fmtMoney(item.s),
+      fmtMoney(item.includedS == null ? item.s : item.includedS),
+    ]);
+  const workTotal = Object.values(result.cross.refByType || {}).reduce((sum, item) => sum + Number(item && item.s || 0), 0);
+  const creditedTotal = result.cross.refSum == null ? workTotal : result.cross.refSum;
+  const target = Number(profile.scoring && profile.scoring.benchmarks && profile.scoring.benchmarks.crossShare);
+  return {
+    title: "Выполненные направления",
+    note: "Источник выручки — отчёт «Выработка»; персональные строки и пациенты в мобильный файл не включаются.",
+    metrics: [
+      mobilePublicationMetric("Выполнено по выработке", fmtMoney(workTotal)),
+      mobilePublicationMetric("Учтено в перенаправлениях", fmtMoney(creditedTotal), "по правилам профиля", "", "good"),
+      mobilePublicationMetric("Выручка с перенаправлениями", fmtMoney(result.econ.revenueWithRef), "", "", "good"),
+      mobilePublicationMetric("Доля выручки", fmtPct(result.cross.crossShare), "", Number.isFinite(target) && target > 0 ? `цель ≥ ${fmtPct(target)}` : "", mobilePublicationState(result.cross.crossShare, target)),
+    ],
+    columns: ["Тип", "Штук", "Выполнено", "Учтено"],
+    rows: refRows,
+  };
+}
+
+function mobilePublicationAppointmentSections(result, profile, windowMonths) {
+  const slice = result.cross.naz && result.cross.naz[windowMonths];
+  if (!slice) {
+    return [{
+      title: "Конверсия назначений",
+      metrics: [mobilePublicationMetric("Данные", "Нет точной выгрузки", `окно ${windowMonths} мес.`)],
+    }, mobilePublicationReferralSection(result, profile)];
+  }
+  const target = Number(profile.scoring && profile.scoring.benchmarks && profile.scoring.benchmarks.nazConv);
+  const sourceRows = Array.isArray(slice.sourceGroups) && slice.sourceGroups.length
+    ? slice.sourceGroups.map(group => {
+      const assigned = Number(group.assigned || 0);
+      const resultQty = Number(group.resultQ || 0);
+      const name = [...(group.path || []), group.name || ""].filter(Boolean).join(" / ") || "Без группы";
+      return [name, fmtNum(assigned), fmtNum(group.done), fmtNum(group.soldQ), assigned ? fmtPct(resultQty / assigned * 100) : "—"];
+    })
+    : REF_TYPES.map(type => [type, slice.byType && slice.byType[type]])
+      .filter(([, item]) => item && (item.assigned || item.done || item.soldQ))
+      .map(([type, item]) => [type, fmtNum(item.assigned), fmtNum(item.done), fmtNum(item.soldQ), fmtPct(item.conv)]);
+  const focusRows = slice.focus && slice.focus.items
+    ? Object.entries(slice.focus.items)
+      .filter(([, item]) => item && (item.assigned || item.resultQ))
+      .map(([name, item]) => [name, fmtNum(item.assigned), fmtNum(item.resultQ)])
+    : [];
+  return [
+    {
+      title: `Конверсия назначений · ${windowMonths} мес.`,
+      metrics: [
+        mobilePublicationMetric("Назначено", fmtNum(slice.totals.assigned)),
+        mobilePublicationMetric("Выполнено", fmtNum(slice.totals.done)),
+        mobilePublicationMetric("Продано", fmtNum(slice.totals.soldQ)),
+        mobilePublicationMetric("Результат", fmtNum(slice.totals.resultQ), "выполнено + продано", "", "good"),
+        mobilePublicationMetric("Конверсия", fmtPct(slice.totals.conv), "", Number.isFinite(target) && target > 0 ? `цель ≥ ${fmtPct(target)}` : "", mobilePublicationState(slice.totals.conv, target)),
+      ],
+    },
+    {
+      title: "Детали назначений",
+      columns: ["Группа", "Назначено", "Выполнено", "Продано", "Конверсия"],
+      rows: sourceRows.length ? sourceRows : [["Нет сгруппированных данных", "—", "—", "—", "—"]],
+    },
+    {
+      title: "Фокусы междисциплинарного подхода",
+      columns: ["Фокус", "Назначено", "Выполнено + продано"],
+      rows: focusRows.length ? focusRows : [["Нет настроенных фокусов", "—", "—"]],
+    },
+    mobilePublicationReferralSection(result, profile),
+  ];
+}
+
+function mobilePublicationClientWindows(result, profile) {
+  const groupOrder = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+  return (result.akb.availableWins || []).map(windowMonths => {
+    const base = result.akb.wins[windowMonths];
+    if (!base) return null;
+    const rows = groupOrder.filter(group => base.groupAvailable[group]).map(group => [
+      clientBaseGroupLabel(group),
+      `${fmtNum(base.seg[group])} чел.`,
+      fmtPct(clientBaseGroupPct(base, group)),
+      clientBaseGroupDescription(base, group),
+    ]);
+    return {
+      id: String(windowMonths),
+      label: Number(windowMonths) === 36 ? "3 года" : `${windowMonths} мес.`,
+      period: `${periodStr(base.period)} · точное окно ${windowMonths} мес.`,
+      sections: [
+        {
+          title: "Объём базы",
+          note: "Только агрегаты. Группы могут пересекаться; персональный список пациентов исключён.",
+          metrics: [
+            mobilePublicationMetric("Общая база", `${fmtNum(base.total)} чел.`, "уникальные пациенты"),
+            mobilePublicationMetric("Визиты", fmtNum(base.visits), "за окно анализа"),
+            mobilePublicationMetric("Активная база", fmtPct(base.activeBasePct), `${fmtNum(base.seg.active)} чел.`, "ключевой показатель", "good"),
+            mobilePublicationMetric("Потерянные", fmtPct(base.lostPct), `${fmtNum(base.seg.lost)} чел.`, "чем ниже, тем лучше", "warn"),
+          ],
+        },
+        {
+          title: "Группы клиентской базы",
+          note: "Процент каждой группы считается от общей базы выбранного окна.",
+          columns: ["Группа", "Пациенты", "Доля", "Условие"],
+          rows: rows.length ? rows : [["Нет доступных групп", "—", "—", "—"]],
+        },
+      ],
+    };
+  }).filter(Boolean);
+}
+
+function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult) {
+  const profile = profileForDoctor(doctorId);
+  const product = result.product;
+  const ownRevenue = Number(result.extras && result.extras.vy && result.extras.vy.ownSum || result.econ.sales || 0);
+  const categoryRows = product ? Object.entries(product.byGroup || {})
+    .filter(([, item]) => item && (item.q || item.s))
+    .map(([name, item]) => [name, fmtNum(item.q), fmtMoney(item.s), ownRevenue ? fmtPct(item.s / ownRevenue * 100) : "—"]) : [];
+  const expertRows = product ? Object.entries(product.expert || {})
+    .filter(([, item]) => item && (item.q || item.s))
+    .map(([name, item]) => [name, fmtNum(item.q), fmtMoney(item.s)]) : [];
+  const coreExpertNames = new Set((profile.expertise.items || []).filter(item => item.core !== false).map(item => item.name));
+  const unusedExpertNames = product ? [...coreExpertNames].filter(name => !product.expert[name]) : [...coreExpertNames];
+  const activeBase = selectedClientBaseSummary(result, profile);
+  const previousBase = previousResult ? selectedClientBaseSummary(previousResult, profile, activeBase && activeBase.window) : null;
+  const loyalty = result.loyalty;
+  const reputation = result.rep || {};
+  const manualReputation = result.extras.man6 || {};
+  const vectorScores = Object.fromEntries(["v1", "v2", "v3", "v4", "v5", "v6"].map(key => [key, mobilePublicationScore(result, key)]));
+  const previousVectorScores = Object.fromEntries(["v1", "v2", "v3", "v4", "v5", "v6"].map(key => [key, mobilePublicationScore(previousResult, key)]));
+  const scoreDelta = key => Number.isFinite(vectorScores[key]) && Number.isFinite(previousVectorScores[key]) ? vectorScores[key] - previousVectorScores[key] : null;
+  const benchmark = profile.scoring && profile.scoring.benchmarks ? profile.scoring.benchmarks : {};
+  const appointmentWindows = (result.cross.nazSlices || []).map(windowMonths => ({
+    id: String(windowMonths),
+    label: `${windowMonths} мес.`,
+    period: `Назначения · точное окно ${windowMonths} мес.`,
+    sections: mobilePublicationAppointmentSections(result, profile, windowMonths),
+  }));
+  const clientWindows = mobilePublicationClientWindows(result, profile);
+  const primaryRows = (loyalty.slices || []).map(windowMonths => {
+    const item = loyalty.pvSlices[windowMonths];
+    return item ? [`${windowMonths} мес.`, fmtNum(item.first), fmtNum(item.ret), fmtNum(item.notRet), fmtPct(item.pct)] : null;
+  }).filter(Boolean);
+  const platformRows = [
+    ["ПроДокторов", manualReputation.prodoctorov],
+    ["НаПоправку", manualReputation.napopravku],
+    ["DocTu", manualReputation.doctu],
+    ["СберЗдоровье", manualReputation.sberhealth],
+  ].map(([name, value]) => [name, Number.isFinite(value) ? `${fmtNum(value, 1)} ★` : "—"]);
+
+  const vectors = [
+    {
+      id: "v1", number: 1, title: VECTOR_META.v1.name, score: vectorScores.v1, delta: scoreDelta("v1"),
+      detail: "Выручка, средние чеки и сравнение с предыдущими периодами.",
+      sections: [
+        {
+          title: "Выручка",
+          metrics: [
+            mobilePublicationMetric("Собственная выручка", fmtMoney(result.econ.sales), "", "", "good"),
+            mobilePublicationMetric("Участие ассистентом", fmtMoney(result.econ.assistSum), "не входит в собственную выручку"),
+            mobilePublicationMetric("Выручка от перенаправлений", fmtMoney(result.econ.refRevenue)),
+            mobilePublicationMetric("Выручка с перенаправлениями", fmtMoney(result.econ.revenueWithRef), "", "", "good"),
+          ],
+        },
+        {
+          title: "Средний чек",
+          metrics: [
+            mobilePublicationMetric("На пациента", fmtMoney(result.econ.avgClient), "выручка / пациенты", "", "good"),
+            mobilePublicationMetric("На посещение", fmtMoney(result.econ.avgVisit), "выручка / визиты"),
+            mobilePublicationMetric("С перенаправлениями", fmtMoney(result.econ.avgClientRef), "на пациента"),
+          ],
+        },
+        {
+          title: "Динамика среднего чека",
+          columns: ["Сравнение", "База", "Изменение"],
+          rows: [
+            ["К прошлому месяцу", fmtMoney(result.econ.prev1), mobilePublicationPercentChange(result.econ.dynPrev)],
+            ["К среднему за квартал", fmtMoney(result.econ.prevQ), mobilePublicationPercentChange(result.econ.dynQ)],
+            ["К среднему прошлого года", fmtMoney(result.econ.prevY), mobilePublicationPercentChange(result.econ.dynY)],
+          ],
+        },
+      ],
+    },
+    {
+      id: "v2", number: 2, title: VECTOR_META.v2.name, score: vectorScores.v2, delta: scoreDelta("v2"),
+      detail: "Структура выручки и использование экспертных позиций.",
+      sections: product ? [
+        {
+          title: "Экспертный профиль",
+          metrics: [
+            mobilePublicationMetric("Использовано позиций", `${fmtNum(product.devicesUsed)} из ${fmtNum(product.park)}`, profile.expertise.title || "Экспертность", "", "good"),
+            mobilePublicationMetric("Итого услуг", fmtNum(result.extras.vy.ownQty), "по собственной выработке"),
+            mobilePublicationMetric("Итого выручка", fmtMoney(ownRevenue), "100% структуры", "", "good"),
+            mobilePublicationMetric("Не задействовано", unusedExpertNames.length ? unusedExpertNames.join(", ") : "нет", "из настроенного парка", "", unusedExpertNames.length ? "warn" : "good"),
+          ],
+        },
+        { title: "Распределение выручки", columns: ["Категория", "Кол-во", "Сумма", "Доля"], rows: categoryRows.length ? categoryRows : [["Без категории", "—", "—", "—"]] },
+        { title: `${profile.expertise.title || "Экспертность"}: позиции`, columns: ["Позиция", "Штук", "Выручка"], rows: expertRows.length ? expertRows : [["Нет использованных позиций", "—", "—"]] },
+      ] : [{ title: "Экспертный профиль", metrics: [mobilePublicationMetric("Данные", "Нет выработки за месяц")] }],
+    },
+    {
+      id: "v3", number: 3, title: VECTOR_META.v3.name, score: vectorScores.v3, delta: scoreDelta("v3"),
+      detail: "Назначения, междисциплинарные фокусы и выполненные направления.",
+      ...(appointmentWindows.length ? { windowPickerLabel: "Окно назначений", windows: appointmentWindows } : { sections: mobilePublicationAppointmentSections(result, profile, 1) }),
+    },
+    {
+      id: "v4", number: 4, title: VECTOR_META.v4.name, score: vectorScores.v4, delta: scoreDelta("v4"),
+      detail: "Сегменты клиентской базы в доступных точных окнах — без списка пациентов.",
+      ...(clientWindows.length ? { windowPickerLabel: "Окно клиентской базы", windows: clientWindows } : { sections: [{ title: "Клиентская база", metrics: [mobilePublicationMetric("Данные", "Нет точной выгрузки клиентской базы")] }] }),
+    },
+    {
+      id: "v5", number: 5, title: VECTOR_META.v5.name, score: vectorScores.v5, delta: scoreDelta("v5"),
+      detail: "Расписание, собственная запись, курсовое лечение и возвращаемость.",
+      sections: [{
+        title: "Лояльность и удержание",
+        metrics: [
+          mobilePublicationMetric("Загрузка расписания", fmtPct(loyalty.sched && loyalty.sched.pct), loyalty.sched ? `записано ${minToHours(loyalty.sched.busyMin)} из ${minToHours(loyalty.sched.normaMin)} по графику` : "нет выгрузки", Number.isFinite(Number(benchmark.schedLoad)) ? `цель ≥ ${fmtPct(Number(benchmark.schedLoad))}` : "", mobilePublicationState(loyalty.sched && loyalty.sched.pct, Number(benchmark.schedLoad))),
+          mobilePublicationMetric("Собственная запись в 1С", fmtPct(loyalty.ownRec && loyalty.ownRec.pct), loyalty.ownRec ? `${fmtNum(loyalty.ownRec.count)} записей / ${fmtNum(result.traffic.visits)} визитов` : "нет выгрузки", Number.isFinite(Number(benchmark.ownRecords)) ? `цель ≥ ${fmtPct(Number(benchmark.ownRecords))}` : "", mobilePublicationState(loyalty.ownRec && loyalty.ownRec.pct, Number(benchmark.ownRecords))),
+          mobilePublicationMetric(`Курсовое лечение: ≥${loyalty.courseX} виз. за ${loyalty.courseM} мес.`, fmtPct(loyalty.courseIdx), `${fmtNum(loyalty.courseCnt)} чел. · точное окно ${loyalty.courseM} мес.`, Number.isFinite(Number(benchmark.courseIdx)) ? `цель ≥ ${fmtPct(Number(benchmark.courseIdx))}` : "", mobilePublicationState(loyalty.courseIdx, Number(benchmark.courseIdx))),
+          mobilePublicationMetric("Индекс возвращаемости за 12 мес.", Number.isFinite(loyalty.freq12) ? fmtNum(loyalty.freq12, 2) : "—", "визитов на пациента"),
+        ],
+        columns: ["Первичка", "Первичных", "Вернулось", "Не вернулось", "Возвращаемость"],
+        rows: primaryRows.length ? primaryRows : [["Нет выгрузки", "—", "—", "—", "—"]],
+      }],
+    },
+    {
+      id: "v6", number: 6, title: VECTOR_META.v6.name, score: vectorScores.v6, delta: scoreDelta("v6"),
+      detail: "Средний рейтинг, NPS, новые отзывы и площадки.",
+      sections: [
+        {
+          title: "Репутация",
+          metrics: [
+            mobilePublicationMetric("Средний рейтинг площадок", Number.isFinite(reputation.avgRating) ? `${fmtNum(reputation.avgRating, 2)} ★` : "—", "среднее по заполненным площадкам", Number.isFinite(Number(benchmark.rating)) ? `цель ≥ ${fmtNum(Number(benchmark.rating), 2)} ★` : "", mobilePublicationState(reputation.avgRating, Number(benchmark.rating))),
+            mobilePublicationMetric("NPS", fmtPct(reputation.nps), "индекс готовности рекомендовать", Number.isFinite(Number(benchmark.nps)) ? `цель ≥ ${fmtPct(Number(benchmark.nps))}` : "", mobilePublicationState(reputation.nps, Number(benchmark.nps))),
+            mobilePublicationMetric("Новые отзывы", Number.isFinite(reputation.reviews) ? `${fmtNum(reputation.reviews)} шт.` : "—", "за выбранный месяц", Number.isFinite(Number(benchmark.reviews)) ? `цель ≥ ${fmtNum(Number(benchmark.reviews))} шт.` : "", mobilePublicationState(reputation.reviews, Number(benchmark.reviews))),
+          ],
+        },
+        { title: "Рейтинги по площадкам", columns: ["Площадка", "Рейтинг"], rows: platformRows },
+      ],
+    },
+  ];
+
+  const overall = mobilePublicationScore(result);
+  const previousOverall = mobilePublicationScore(previousResult);
+  const vectorDeltas = vectors.map(vector => vector.delta).filter(Number.isFinite);
+  const grew = vectorDeltas.filter(value => value > 0).length;
+  const fell = vectorDeltas.filter(value => value < 0).length;
+  const assessment = overall == null ? "Балл пока не рассчитан" : overall >= 85 ? "Сильный результат" : overall >= 70 ? "Рабочий результат" : overall >= 40 ? "Есть точки роста" : "Требуется внимание";
+  const lowGoals = [...vectors]
+    .filter(vector => Number.isFinite(vector.score))
+    .sort((first, second) => first.score - second.score)
+    .slice(0, 3)
+    .map(vector => ({ title: vector.title, description: "Ближайшая цель — не менее 80 баллов", progress: Math.max(0, Math.min(100, vector.score)) }));
+  return {
+    id: monthKey,
+    label: monthLabel(monthKey),
+    shortLabel: monthLabel(monthKey).split(/\s+/)[0],
+    overall,
+    overallDelta: Number.isFinite(overall) && Number.isFinite(previousOverall) ? overall - previousOverall : null,
+    assessment,
+    summary: vectorDeltas.length ? `${grew} вект. выросли, ${fell} снизились, ${vectorDeltas.length - grew - fell} без изменений.` : "Для динамики нужен предыдущий период.",
+    updatedAt: new Date().toLocaleDateString("ru-RU"),
+    comment: "Мобильная публикация сформирована в Admin КлинВект. Управленческий комментарий остаётся в основной системе.",
+    headlineMetrics: [
+      { label: "Пациентов за месяц", value: fmtNum(result.traffic.patients), note: "уникальные пациенты", delta: mobilePublicationDelta(result.traffic.patients, previousResult && previousResult.traffic.patients, 0) },
+      { label: "Загрузка расписания", value: fmtPct(loyalty.sched && loyalty.sched.pct), note: loyalty.sched ? `${minToHours(loyalty.sched.busyMin)} из ${minToHours(loyalty.sched.normaMin)} по графику` : "нет выгрузки", delta: mobilePublicationDelta(loyalty.sched && loyalty.sched.pct, previousResult && previousResult.loyalty.sched && previousResult.loyalty.sched.pct, 1, " п.п.") },
+      { label: "Визитов на пациента за месяц", value: Number.isFinite(result.traffic.freq) ? fmtNum(result.traffic.freq, 2) : "—", note: Number.isFinite(result.traffic.visits) && Number.isFinite(result.traffic.patients) ? `${fmtNum(result.traffic.visits)} визитов / ${fmtNum(result.traffic.patients)} пациентов` : result.traffic.src, delta: mobilePublicationDelta(result.traffic.freq, previousResult && previousResult.traffic.freq, 2) },
+      { label: "Визитов на пациента за 12 мес.", value: Number.isFinite(loyalty.freq12) ? fmtNum(loyalty.freq12, 2) : "—", note: "визиты / уникальные пациенты", delta: mobilePublicationDelta(loyalty.freq12, previousResult && previousResult.loyalty.freq12, 2) },
+      { label: "Активная клиентская база", value: fmtPct(activeBase && activeBase.activeBasePct), note: activeBase ? `${fmtNum(activeBase.seg.active)} из ${fmtNum(activeBase.total)} · окно ${activeBase.window} мес.` : "нет точной выгрузки", delta: mobilePublicationDelta(activeBase && activeBase.activeBasePct, previousBase && previousBase.activeBasePct, 1, " п.п.") },
+    ],
+    vectors,
+    goals: lowGoals,
+  };
+}
+
+function buildMobilePublication(doctorId) {
+  if (!doctorId || !DB.doctors[doctorId]) throw new Error("Выберите специалиста");
+  const months = monthKeysSorted().filter(monthKey => computeMetrics(doctorId, monthKey)).slice(-6).reverse();
+  if (!months.length) throw new Error("Для выбранного специалиста нет рассчитанных периодов");
+  const results = Object.fromEntries(months.map(monthKey => [monthKey, computeMetrics(doctorId, monthKey)]));
+  const periods = months.map((monthKey, index) => buildMobilePublicationPeriod(doctorId, monthKey, results[monthKey], results[months[index + 1]] || null));
+  return {
+    format: "klinvekt-mobile-publication",
+    version: 1,
+    createdAt: new Date().toISOString(),
+    security: { patientRegistryIncluded: false, rawExportsIncluded: false },
+    doctor: {
+      name: doctorName(doctorId),
+      department: doctorStructureLabel(doctorId),
+    },
+    periods,
+  };
+}
+
+async function exportMobilePublication() {
+  const button = document.getElementById("btnExportMobilePublication");
+  try {
+    if (button) button.disabled = true;
+    const publication = buildMobilePublication(UI.docId);
+    if (DESKTOP_API && DESKTOP_API.exportMobilePublication) {
+      const result = await DESKTOP_API.exportMobilePublication({ publication });
+      if (!result.canceled) toast(`Мобильный файл сохранён: ${result.path}`);
+      return;
+    }
+    const blob = new Blob([JSON.stringify(publication, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `КлинВект-мобильный-${doctorName(UI.docId).replace(/[^а-яёa-z0-9._-]+/gi, "-")}.kvmobile`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    toast("Мобильный файл сформирован");
+  } catch (error) {
+    toast(error.message || "Не удалось сформировать мобильный файл", true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 function doctorMetricsHeaderHtml(docId, mk, r, { blockId = "blkHead", slide = false, nazSlice = UI.nazSlice } = {}) {
   const docProfile = profileForDoctor(docId);
   const scoreNazSlice = r.cross.naz[nazSlice] ? nazSlice : (r.cross.nazSlices[0] || null);
@@ -3093,7 +3450,7 @@ function setDoctorSemanticSections(open) {
 function renderDoctor() {
   const months = monthKeysSorted();
   const body = document.getElementById("doctorBody");
-  setControlsDisabled(["docMonth", "docSelect"], !months.length);
+  setControlsDisabled(["docMonth", "docSelect", "btnExportMobilePublication"], !months.length);
   if (!months.length) {
     body.innerHTML = '<div class="card"><p class="muted">Загрузите данные на вкладке «Данные».</p></div>';
     document.getElementById("docMonth").innerHTML = "";
@@ -3105,7 +3462,7 @@ function renderDoctor() {
   const ids = doctorsInMonth(mk);
   const core = coreDoctorsInMonth(mk);
   const list = sortDoctorIdsAlphabetically(core.length ? core : ids);
-  setControlsDisabled(["docSelect"], !list.length);
+  setControlsDisabled(["docSelect", "btnExportMobilePublication"], !list.length);
   if (!UI.docId || !list.includes(UI.docId)) UI.docId = list[0] || null;
 
   document.getElementById("docMonth").innerHTML = months.map(k => `<option value="${k}" ${k === mk ? "selected" : ""}>${monthLabel(k)}</option>`).join("");
@@ -6116,6 +6473,7 @@ async function initApp() {
   document.getElementById("btnXlsx").addEventListener("click", exportDeptXlsx);
   document.getElementById("docMonth").addEventListener("change", e => { UI.docMonth = e.target.value; renderDoctor(); });
   document.getElementById("docSelect").addEventListener("change", e => { UI.docId = e.target.value; renderDoctor(); });
+  document.getElementById("btnExportMobilePublication").addEventListener("click", exportMobilePublication);
   document.getElementById("repMonth").addEventListener("change", e => { UI.repMonth = e.target.value; });
   document.getElementById("btnExportAllPdf").addEventListener("click", openPdfExportDialog);
   document.getElementById("btnExportViewerPackage").addEventListener("click", openViewerExportDialog);

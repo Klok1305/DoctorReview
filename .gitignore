@@ -47,6 +47,18 @@
 !/viewer/*.html
 !/viewer/package.json
 
+# Изолированный мобильный PWA-пилот только с синтетическими данными.
+!/mobile-pilot/
+/mobile-pilot/*
+!/mobile-pilot/*.html
+!/mobile-pilot/*.css
+!/mobile-pilot/*.js
+!/mobile-pilot/*.webmanifest
+!/mobile-pilot/icons/
+/mobile-pilot/icons/*
+!/mobile-pilot/icons/app-icon-192.png
+!/mobile-pilot/icons/app-icon-512.png
+
 # Документация, безопасные ресурсы, сценарии и тесты.
 !/docs/
 /docs/*
@@ -60,6 +72,7 @@
 /scripts/*
 !/scripts/*.ps1
 !/scripts/*.py
+!/scripts/*.cjs
 !/tests/
 /tests/*
 !/tests/*.test.cjs
@@ -85,6 +98,7 @@ output/
 *.tsv
 *.pdf
 *.zip
+*.kvmobile
 *.7z
 *.rar
 *.log

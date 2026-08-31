@@ -40,7 +40,7 @@ test("assembled HTML is reproducible and complete", () => {
   for (const id of ["lib-xlsx", "lib-jszip", "lib-html2canvas", "lib-jspdf"]) {
     assert.match(actual, new RegExp(`<script type="text/plain" id="${id}">`));
   }
-  for (const required of ["btnExportAllPdf", "btnSaveSession", "desktopWorkspaceCard", "btnScanInput", "Content-Security-Policy", "departmentBody", "departmentFilter", "departmentMonth", "settingsAppVersion", "headerAppVersion"]) {
+  for (const required of ["btnExportAllPdf", "btnSaveSession", "btnExportMobilePublication", "desktopWorkspaceCard", "btnScanInput", "Content-Security-Policy", "departmentBody", "departmentFilter", "departmentMonth", "settingsAppVersion", "headerAppVersion"]) {
     assert.match(actual, new RegExp(required));
   }
   assert.doesNotMatch(actual, /data-tab="report"|id="page-report"/);
@@ -447,7 +447,7 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "2.5.13");
+  assert.equal(packageJson.version, "2.5.14");
   assert.equal(packageJson.build.productName, "КлинВект Щербатова — Администратор");
   assert.equal(packageJson.build.artifactName, "KlinVekt-Shcherbatova-Admin-Setup-${version}-${arch}.${ext}");
   assert.equal(packageJson.scripts["dist:portable"], undefined);
@@ -911,6 +911,22 @@ test("Viewer export dialog uses the shared sorted month helper", () => {
   assert.match(handler, /const months = monthKeysSorted\(\);/);
   assert.match(adminUi, /doctorHasDashboardData\(item\.doctorId, monthKey\)/);
   assert.doesNotMatch(handler, /sortedMonths\(\)/);
+});
+
+test("Admin exports a patient-free mobile publication for the selected doctor", () => {
+  const template = fs.readFileSync(path.join(build, "index.template.html"), "utf8");
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const preload = fs.readFileSync(path.join(root, "desktop", "preload.cjs"), "utf8");
+  const main = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
+
+  assert.match(template, /id="btnExportMobilePublication"/);
+  assert.match(ui, /function buildMobilePublication\(doctorId\)/);
+  assert.match(ui, /patientRegistryIncluded: false, rawExportsIncluded: false/);
+  assert.match(ui, /btnExportMobilePublication"\)\.addEventListener\("click", exportMobilePublication\)/);
+  assert.doesNotMatch(ui.slice(ui.indexOf("function buildMobilePublication(doctorId)"), ui.indexOf("function doctorMetricsHeaderHtml")), /clientRows|patientId|patientName/);
+  assert.match(preload, /exportMobilePublication: payload => invoke\("mobile-publication:export", payload\)/);
+  assert.match(main, /ipcMain\.handle\("mobile-publication:export"/);
+  assert.match(main, /mobile-publication\.exported/);
 });
 
 test("portable JSON uses the authoritative SQLite data and restores auxiliary tables", () => {
