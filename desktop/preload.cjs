@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   exportViewerPackage: payload => invoke("viewer-publication:export", payload),
   exportViewerPins: payload => invoke("viewer-publication:export-pins", payload),
   exportMobilePublication: payload => invoke("mobile-publication:export", payload),
+  exportMobilePublicationBundle: payload => invoke("mobile-publication:export-bundle", payload),
   saveDatabase: json => invoke("database:save", json),
   exportJson: json => invoke("database:export-json", json),
   importJson: json => invoke("database:import-json", json),

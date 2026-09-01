@@ -4,10 +4,16 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const {
+  MOBILE_BUNDLE_EXTENSION,
+  MOBILE_BUNDLE_FORMAT,
   MOBILE_PUBLICATION_FORMAT,
   MOBILE_PUBLICATION_VERSION,
+  createMobilePublicationBundle,
+  decryptMobilePublication,
   serializeMobilePublication,
+  serializeMobilePublicationBundle,
   validateMobilePublication,
+  validateMobilePublicationBundle,
 } = require("../desktop/services/mobile-publication-service.cjs");
 
 const root = path.resolve(__dirname, "..");
@@ -52,9 +58,9 @@ test("mobile pilot scripts parse and use only bundled relative assets", () => {
 
   const html = read("mobile-pilot/index.html");
   assert.match(html, /rel="manifest" href="\.\/manifest\.webmanifest"/);
-  assert.match(html, /src="\.\/demo-data\.js\?v=3"/);
-  assert.match(html, /src="\.\/app\.js\?v=3"/);
-  assert.match(html, /href="\.\/app\.css\?v=3"/);
+  assert.match(html, /src="\.\/demo-data\.js\?v=5"/);
+  assert.match(html, /src="\.\/app\.js\?v=5"/);
+  assert.match(html, /href="\.\/app\.css\?v=5"/);
   assert.doesNotMatch(html, /https?:\/\//i);
 
   const worker = read("mobile-pilot/service-worker.js");
@@ -71,9 +77,14 @@ test("mobile pilot bundles only synthetic fallback data and accepts a separate m
   assert.doesNotMatch(data, /\.sqlite|viewer_doctor_access|patientRegistry|source_files/i);
 
   const page = read("mobile-pilot/index.html");
-  assert.match(page, /агрегированные показатели врача без списка пациентов/);
+  assert.match(page, /агрегированные показатели врача.+без списка пациентов/i);
   assert.match(page, /id="loadPublicationButton"/);
   assert.match(page, /accept="\.kvmobile,application\/json"/);
+  assert.match(page, /accept="\.kvmobilebundle,application\/json"/);
+  assert.match(page, /id="serverLoginForm"/);
+  assert.match(page, /id="serverPin"/);
+  assert.match(page, />Открыть отчёт</);
+  assert.doesNotMatch(page, /Открыть тестовый отчёт|Открыть загруженный отчёт/);
   assert.doesNotMatch(page, /pilot-note|Безопасный макет/);
   assert.doesNotMatch(page, /ПАЦИЕНТЫ ДЛЯ РАБОТЫ|clientSegmentPatients/i);
   const app = read("mobile-pilot/app.js");
@@ -128,4 +139,38 @@ test("mobile publication format validates aggregates and rejects patient-bearing
   const raw = JSON.parse(JSON.stringify(publication));
   raw.security.rawExportsIncluded = true;
   assert.throws(() => validateMobilePublication(raw), /отсутствие реестра пациентов/);
+});
+
+test("one mobile bundle encrypts every doctor publication with the existing PIN", () => {
+  const context = { window: {} };
+  vm.runInNewContext(read("mobile-pilot/demo-data.js"), context);
+  const demo = JSON.parse(JSON.stringify(context.window.KLINVEKT_MOBILE_DEMO));
+  const publication = {
+    format: MOBILE_PUBLICATION_FORMAT,
+    version: MOBILE_PUBLICATION_VERSION,
+    createdAt: new Date(0).toISOString(),
+    security: { patientRegistryIncluded: false, rawExportsIncluded: false },
+    doctor: { id: "d1", ...demo.doctor },
+    periods: demo.periods,
+  };
+  const second = JSON.parse(JSON.stringify(publication));
+  second.doctor = { ...second.doctor, id: "d2", name: "Второй врач" };
+  const bundle = createMobilePublicationBundle({
+    publications: [{ doctorId: "d1", publication }, { doctorId: "d2", publication: second }],
+    credentials: { doctors: [
+      { doctorId: "d1", pinCode: "1234", pinVersion: 2 },
+      { doctorId: "d2", pinCode: "5678", pinVersion: 1 },
+    ] },
+    appVersion: "2.6.0",
+  });
+
+  assert.equal(bundle.format, MOBILE_BUNDLE_FORMAT);
+  assert.equal(MOBILE_BUNDLE_EXTENSION, "kvmobilebundle");
+  assert.equal(validateMobilePublicationBundle(bundle), bundle);
+  assert.equal(bundle.doctors.length, 2);
+  assert.equal(decryptMobilePublication(bundle.doctors.find(item => item.doctorId === "d1"), "1234").doctor.name, demo.doctor.name);
+  assert.equal(decryptMobilePublication(bundle.doctors.find(item => item.doctorId === "d2"), "5678").doctor.name, "Второй врач");
+  assert.throws(() => decryptMobilePublication(bundle.doctors[0], "0000"), /Проверьте PIN/);
+  const serialized = serializeMobilePublicationBundle(bundle);
+  assert.doesNotMatch(serialized, /"pinCode"|"pinHash"|"patientsforwork"|"rawExports"\s*:/i);
 });

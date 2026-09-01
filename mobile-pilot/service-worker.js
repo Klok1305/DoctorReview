@@ -1,10 +1,10 @@
-const CACHE_NAME = "klinvekt-mobile-pilot-v4";
+const CACHE_NAME = "klinvekt-mobile-pilot-v6";
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./app.css?v=3",
-  "./demo-data.js?v=3",
-  "./app.js?v=3",
+  "./app.css?v=5",
+  "./demo-data.js?v=5",
+  "./app.js?v=5",
   "./manifest.webmanifest",
   "./icons/app-icon-192.png",
   "./icons/app-icon-512.png",
@@ -27,6 +27,7 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const requestUrl = new URL(event.request.url);
   if (requestUrl.origin !== self.location.origin) return;
+  if (requestUrl.pathname.startsWith("/api/")) return;
 
   if (event.request.mode === "navigate") {
     event.respondWith(

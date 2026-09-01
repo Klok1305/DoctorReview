@@ -18,6 +18,17 @@
     loadPublicationButton: document.getElementById("loadPublicationButton"),
     publicationInput: document.getElementById("publicationInput"),
     publicationStatus: document.getElementById("publicationStatus"),
+    serverPublicationShortcut: document.getElementById("serverPublicationShortcut"),
+    loadBundleButton: document.getElementById("loadBundleButton"),
+    bundleInput: document.getElementById("bundleInput"),
+    serverPublicationStatus: document.getElementById("serverPublicationStatus"),
+    staticProfile: document.getElementById("staticProfile"),
+    serverLoginForm: document.getElementById("serverLoginForm"),
+    serverDoctorSelect: document.getElementById("serverDoctorSelect"),
+    serverPin: document.getElementById("serverPin"),
+    serverLoginButton: document.getElementById("serverLoginButton"),
+    serverLoginStatus: document.getElementById("serverLoginStatus"),
+    bitrixAccount: document.getElementById("bitrixAccount"),
     loginDoctorName: document.getElementById("loginDoctorName"),
     loginDoctorDepartment: document.getElementById("loginDoctorDepartment"),
     profileBadge: document.getElementById("profileBadge"),
@@ -49,7 +60,15 @@
     installDialog: document.getElementById("installDialog"),
   };
 
-  const state = { periodIndex: 0, vectorId: "v1", windowSelections: {}, tab: "overview", installPrompt: null };
+  const state = {
+    periodIndex: 0,
+    vectorId: "v1",
+    windowSelections: {},
+    tab: "overview",
+    installPrompt: null,
+    serverMode: false,
+    serverContext: null,
+  };
 
   const escapeHtml = (value) => String(value)
     .replaceAll("&", "&amp;")
@@ -106,23 +125,31 @@
     return value;
   }
 
+  function resetReportState() {
+    state.periodIndex = 0;
+    state.vectorId = "v1";
+    state.windowSelections = {};
+    state.tab = "overview";
+  }
+
+  function usePublication(publication) {
+    reportData = validatePublication(publication);
+    resetReportState();
+  }
+
   function applyReportIdentity() {
     elements.loginDoctorName.textContent = reportData.doctor.name;
     elements.loginDoctorDepartment.textContent = reportData.doctor.department;
     elements.loginAvatar.textContent = reportInitials(reportData.doctor.name);
     elements.profileBadge.textContent = reportData.demo ? "Демо" : "Из Admin";
-    elements.openReportLabel.textContent = reportData.demo ? "Открыть тестовый отчёт" : "Открыть загруженный отчёт";
+    elements.openReportLabel.textContent = "Открыть отчёт";
   }
 
   async function loadPublicationFile(file) {
     if (!file) return;
     if (file.size > 10 * 1024 * 1024) throw new Error("Мобильный файл превышает 10 МБ");
     const parsed = JSON.parse(await file.text());
-    reportData = validatePublication(parsed);
-    state.periodIndex = 0;
-    state.vectorId = "v1";
-    state.windowSelections = {};
-    state.tab = "overview";
+    usePublication(parsed);
     sessionStorage.removeItem("klinvekt-mobile-pilot-open");
     applyReportIdentity();
     elements.publicationStatus.textContent = `Загружено: ${reportData.doctor.name} · ${reportData.periods.length} периодов`;
@@ -137,7 +164,7 @@
     elements.logoutButton.classList.remove("hidden");
     elements.doctorName.textContent = reportData.doctor.name;
     elements.doctorDepartment.textContent = reportData.doctor.department;
-    if (reportData.demo) sessionStorage.setItem("klinvekt-mobile-pilot-open", "1");
+    if (!state.serverMode && reportData.demo) sessionStorage.setItem("klinvekt-mobile-pilot-open", "1");
     else sessionStorage.removeItem("klinvekt-mobile-pilot-open");
     render();
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -149,6 +176,10 @@
     elements.bottomNav.classList.add("hidden");
     elements.logoutButton.classList.add("hidden");
     sessionStorage.removeItem("klinvekt-mobile-pilot-open");
+    if (state.serverMode) {
+      elements.serverPin.value = "";
+      elements.serverLoginStatus.textContent = "";
+    }
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -351,6 +382,132 @@
     if (typeof elements.installDialog.showModal === "function") elements.installDialog.showModal();
   }
 
+  async function apiRequest(path, options = {}) {
+    const response = await fetch(path, { credentials: "same-origin", cache: "no-store", ...options });
+    const contentType = String(response.headers.get("content-type") || "");
+    const payload = contentType.includes("application/json") ? await response.json() : null;
+    if (!response.ok) {
+      const error = new Error(payload && payload.error || "Сервер временно недоступен");
+      error.status = response.status;
+      throw error;
+    }
+    return payload;
+  }
+
+  function renderServerContext(context) {
+    state.serverContext = context;
+    state.serverMode = true;
+    sessionStorage.setItem("klinvekt-mobile-server-mode", "1");
+    elements.loadPublicationButton.closest(".publication-shortcut").classList.add("hidden");
+    elements.staticProfile.classList.add("hidden");
+    elements.openDemoButton.classList.add("hidden");
+    elements.serverLoginForm.classList.remove("hidden");
+    elements.serverLoginForm.classList.remove("server-locked");
+    elements.serverPublicationShortcut.classList.toggle("hidden", !context.canUpload);
+    elements.bitrixAccount.textContent = context.user && context.user.name ? `Битрикс24: ${context.user.name}` : "Вход выполнен через Битрикс24";
+    elements.serverDoctorSelect.innerHTML = context.doctors.length
+      ? context.doctors.map(doctor => `<option value="${escapeHtml(doctor.doctorId)}">${escapeHtml(doctor.displayName)}${doctor.department ? ` — ${escapeHtml(doctor.department)}` : ""}</option>`).join("")
+      : '<option value="">Отчёты ещё не загружены</option>';
+    elements.serverDoctorSelect.disabled = !context.doctors.length;
+    elements.serverPin.disabled = !context.doctors.length;
+    elements.serverLoginButton.disabled = !context.doctors.length;
+    elements.serverLoginStatus.textContent = context.doctors.length ? "" : "Администратор должен загрузить общий файл из Admin";
+  }
+
+  async function refreshServerContext({ restoreSession = false } = {}) {
+    const context = await apiRequest("/api/context");
+    renderServerContext(context);
+    if (restoreSession && context.sessionActive) {
+      try {
+        const result = await apiRequest("/api/report");
+        usePublication(result.publication);
+        showReport();
+      } catch (_) {
+        showLogin();
+      }
+    }
+    return context;
+  }
+
+  async function detectServerMode() {
+    try {
+      const response = await fetch("/api/context", { credentials: "same-origin", cache: "no-store" });
+      const contentType = String(response.headers.get("content-type") || "");
+      if (response.status === 404 || !contentType.includes("application/json")) return false;
+      const payload = await response.json();
+      if (!response.ok) {
+        state.serverMode = true;
+        sessionStorage.setItem("klinvekt-mobile-server-mode", "1");
+        elements.loadPublicationButton.closest(".publication-shortcut").classList.add("hidden");
+        elements.staticProfile.classList.add("hidden");
+        elements.openDemoButton.classList.add("hidden");
+        elements.serverLoginForm.classList.remove("hidden");
+        elements.serverLoginForm.classList.add("server-locked");
+        elements.bitrixAccount.textContent = payload.error || "Откройте приложение через Битрикс24";
+        return true;
+      }
+      renderServerContext(payload);
+      if (payload.sessionActive) {
+        try {
+          const result = await apiRequest("/api/report");
+          usePublication(result.publication);
+          showReport();
+        } catch (_) {
+          showLogin();
+        }
+      }
+      return true;
+    } catch (_) {
+      if (sessionStorage.getItem("klinvekt-mobile-server-mode") === "1") {
+        state.serverMode = true;
+        elements.loadPublicationButton.closest(".publication-shortcut").classList.add("hidden");
+        elements.staticProfile.classList.add("hidden");
+        elements.openDemoButton.classList.add("hidden");
+        elements.serverLoginForm.classList.remove("hidden");
+        elements.serverLoginForm.classList.add("server-locked");
+        elements.bitrixAccount.textContent = "Нет соединения с сервером КлинВект";
+        return true;
+      }
+      return false;
+    }
+  }
+
+  async function loginToServer(event) {
+    event.preventDefault();
+    elements.serverLoginButton.disabled = true;
+    elements.serverLoginStatus.textContent = "Проверяем PIN…";
+    elements.serverLoginStatus.classList.remove("error");
+    try {
+      const result = await apiRequest("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ doctorId: elements.serverDoctorSelect.value, pin: elements.serverPin.value }),
+      });
+      usePublication(result.publication);
+      elements.serverPin.value = "";
+      showReport();
+    } catch (error) {
+      elements.serverLoginStatus.textContent = error.message || "Не удалось войти";
+      elements.serverLoginStatus.classList.add("error");
+      elements.serverPin.select();
+    } finally {
+      elements.serverLoginButton.disabled = !elements.serverDoctorSelect.value;
+    }
+  }
+
+  async function uploadBundle(file) {
+    if (!file) return;
+    if (file.size > 100 * 1024 * 1024) throw new Error("Общий файл превышает 100 МБ");
+    const result = await apiRequest("/api/admin/publications", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: await file.text(),
+    });
+    elements.serverPublicationStatus.textContent = `Обновлено: ${result.doctors} врачей`;
+    elements.serverPublicationStatus.classList.remove("error");
+    await refreshServerContext();
+  }
+
   elements.openDemoButton.addEventListener("click", showReport);
   elements.loadPublicationButton.addEventListener("click", () => elements.publicationInput.click());
   elements.publicationInput.addEventListener("change", async () => {
@@ -365,7 +522,28 @@
       elements.publicationStatus.classList.add("error");
     }
   });
-  elements.logoutButton.addEventListener("click", showLogin);
+  elements.serverLoginForm.addEventListener("submit", loginToServer);
+  elements.loadBundleButton.addEventListener("click", () => elements.bundleInput.click());
+  elements.bundleInput.addEventListener("change", async () => {
+    const file = elements.bundleInput.files && elements.bundleInput.files[0];
+    elements.bundleInput.value = "";
+    try {
+      elements.serverPublicationStatus.textContent = "Загружаем…";
+      elements.serverPublicationStatus.classList.remove("error");
+      await uploadBundle(file);
+    } catch (error) {
+      elements.serverPublicationStatus.textContent = error.message || "Не удалось обновить отчёты";
+      elements.serverPublicationStatus.classList.add("error");
+    }
+  });
+  elements.logoutButton.addEventListener("click", async () => {
+    if (state.serverMode) {
+      try {
+        await apiRequest("/api/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      } catch (_) { /* локальный выход всё равно должен сработать */ }
+    }
+    showLogin();
+  });
   elements.periodSelect.addEventListener("change", () => { state.periodIndex = Number(elements.periodSelect.value); state.vectorId = "v1"; state.windowSelections = {}; render(); });
   elements.previousPeriod.addEventListener("click", () => { if (state.periodIndex < reportData.periods.length - 1) { state.periodIndex += 1; state.vectorId = "v1"; state.windowSelections = {}; render(); } });
   elements.nextPeriod.addEventListener("click", () => { if (state.periodIndex > 0) { state.periodIndex -= 1; state.vectorId = "v1"; state.windowSelections = {}; render(); } });
@@ -386,5 +564,7 @@
   updateConnectionStatus();
   applyReportIdentity();
   render();
-  if (sessionStorage.getItem("klinvekt-mobile-pilot-open") === "1") showReport();
+  detectServerMode().then((serverMode) => {
+    if (!serverMode && sessionStorage.getItem("klinvekt-mobile-pilot-open") === "1") showReport();
+  });
 })();

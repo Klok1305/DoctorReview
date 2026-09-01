@@ -16,8 +16,11 @@ const { FileService } = require("./services/file-service.cjs");
 const { UpdateService } = require("./services/update-service.cjs");
 const { createStandaloneViewerHtml, createViewerPackage } = require("./services/viewer-package-service.cjs");
 const {
+  MOBILE_BUNDLE_EXTENSION,
   MOBILE_PUBLICATION_EXTENSION,
+  createMobilePublicationBundle,
   serializeMobilePublication,
+  serializeMobilePublicationBundle,
 } = require("./services/mobile-publication-service.cjs");
 
 const PDF_SMOKE_TEST = process.argv.includes("--pdf-smoke");
@@ -1361,6 +1364,49 @@ function registerIpc() {
       },
     });
     return { canceled: false, path: selected.filePath, periods: publication.periods.length, doctorName };
+  });
+  ipcMain.handle("mobile-publication:export-bundle", async (_event, payload) => {
+    const session = localAdminActor();
+    const input = ensureObject(payload, "пакет мобильных публикаций");
+    if (!Array.isArray(input.publications) || !input.publications.length || input.publications.length > 1000) {
+      throw new Error("Некорректный список мобильных публикаций");
+    }
+    const snapshot = database.loadSnapshot() || {};
+    const knownDoctors = new Set(Object.keys(snapshot.doctors || {}));
+    const doctorIds = input.publications.map(item => String(item && item.doctorId || ""));
+    if (doctorIds.some(id => !knownDoctors.has(id))) throw new Error("В мобильном пакете указан неизвестный врач");
+    if (new Set(doctorIds).size !== doctorIds.length) throw new Error("Врач указан в мобильном пакете повторно");
+    const credentials = database.viewerExportCredentials(doctorIds, { requireAdmin: false });
+    const bundle = createMobilePublicationBundle({
+      publications: input.publications,
+      credentials,
+      appVersion: app.getVersion(),
+    });
+    const serialized = serializeMobilePublicationBundle(bundle);
+    const date = new Date().toISOString().slice(0, 10);
+    const selected = await dialog.showSaveDialog(mainWindow, {
+      title: "Сохранить общий пакет для мобильного сервера",
+      defaultPath: path.join(configStore.publicConfig().outputDir, `КлинВект-мобильные-отчёты-${date}.${MOBILE_BUNDLE_EXTENSION}`),
+      filters: [{ name: "Пакет мобильных отчётов КлинВект", extensions: [MOBILE_BUNDLE_EXTENSION] }],
+    });
+    if (selected.canceled || !selected.filePath) return { canceled: true };
+    fs.writeFileSync(selected.filePath, serialized, { encoding: "utf8", flag: "w" });
+    const periods = input.publications.reduce((sum, item) => sum + item.publication.periods.length, 0);
+    database.audit({
+      actorUserId: session.userId,
+      action: "mobile-publication.bundle-exported",
+      targetType: "mobile-server",
+      targetId: date,
+      details: {
+        fileName: path.basename(selected.filePath),
+        doctors: doctorIds.length,
+        periods,
+        encryptedPerDoctor: true,
+        patientRegistryIncluded: false,
+        rawExportsIncluded: false,
+      },
+    });
+    return { canceled: false, path: selected.filePath, doctors: doctorIds.length, periods };
   });
   ipcMain.handle("database:save", (_event, json) => {
     localAdminActor();

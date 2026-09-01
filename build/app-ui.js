@@ -3303,6 +3303,7 @@ function buildMobilePublication(doctorId) {
     createdAt: new Date().toISOString(),
     security: { patientRegistryIncluded: false, rawExportsIncluded: false },
     doctor: {
+      id: String(doctorId),
       name: doctorName(doctorId),
       department: doctorStructureLabel(doctorId),
     },
@@ -3332,6 +3333,42 @@ async function exportMobilePublication() {
     toast("Мобильный файл сформирован");
   } catch (error) {
     toast(error.message || "Не удалось сформировать мобильный файл", true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function exportAllMobilePublications() {
+  const button = document.getElementById("btnExportAllMobilePublications");
+  try {
+    if (button) button.disabled = true;
+    if (!DESKTOP_API || !DESKTOP_API.exportMobilePublicationBundle) {
+      throw new Error("Пакет для сервера формируется только в установленном Admin");
+    }
+    await refreshViewerPublicationAccess();
+    const activeDoctorIds = (VIEWER_ACCESS.doctors || [])
+      .filter(item => item && item.active && DB.doctors[String(item.doctorId)])
+      .map(item => String(item.doctorId));
+    if (!activeDoctorIds.length) {
+      throw new Error("Сначала откройте Настройки → Публикация в Viewer и нажмите «Включить всех»");
+    }
+    const publications = [];
+    let skipped = 0;
+    for (const doctorId of activeDoctorIds) {
+      try {
+        publications.push({ doctorId, publication: buildMobilePublication(doctorId) });
+      } catch (error) {
+        if (/нет рассчитанных периодов/i.test(String(error && error.message))) skipped += 1;
+        else throw error;
+      }
+    }
+    if (!publications.length) throw new Error("У активных врачей пока нет рассчитанных периодов");
+    const result = await DESKTOP_API.exportMobilePublicationBundle({ publications });
+    if (!result.canceled) {
+      toast(`Общий мобильный пакет сохранён: ${result.doctors} врачей${skipped ? `, без данных пропущено: ${skipped}` : ""}`);
+    }
+  } catch (error) {
+    toast(error.message || "Не удалось сформировать общий мобильный пакет", true);
   } finally {
     if (button) button.disabled = false;
   }
@@ -6473,6 +6510,7 @@ async function initApp() {
   document.getElementById("btnXlsx").addEventListener("click", exportDeptXlsx);
   document.getElementById("docMonth").addEventListener("change", e => { UI.docMonth = e.target.value; renderDoctor(); });
   document.getElementById("docSelect").addEventListener("change", e => { UI.docId = e.target.value; renderDoctor(); });
+  document.getElementById("btnExportAllMobilePublications").addEventListener("click", exportAllMobilePublications);
   document.getElementById("btnExportMobilePublication").addEventListener("click", exportMobilePublication);
   document.getElementById("repMonth").addEventListener("change", e => { UI.repMonth = e.target.value; });
   document.getElementById("btnExportAllPdf").addEventListener("click", openPdfExportDialog);

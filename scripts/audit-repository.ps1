@@ -28,6 +28,7 @@ $allowedPatterns = @(
   '^viewer/[^/]+\.(cjs|js|css|html|json)$',
   '^mobile-pilot/[^/]+\.(html|css|js|webmanifest)$',
   '^mobile-pilot/icons/app-icon-(192|512)\.png$',
+  '^mobile-server/[^/]+\.cjs$',
   '^docs/[^/]+\.md$',
   '^resources/(app-icon\.(ico|png)|update-config\.json)$',
   '^scripts/[^/]+\.(cjs|ps1|py)$',
@@ -36,7 +37,7 @@ $allowedPatterns = @(
 
 $blockedPatterns = @(
   '(^|/)(node_modules|dist|out|tmp|output)(/|$)',
-  '\.(sqlite|sqlite-shm|sqlite-wal|db|db-shm|db-wal|ovbackup|xls|xlsx|xlsm|csv|tsv|pdf|zip|kvmobile|7z|rar|log|exe|msi|blockmap)$',
+  '\.(sqlite|sqlite-shm|sqlite-wal|db|db-shm|db-wal|ovbackup|xls|xlsx|xlsm|csv|tsv|pdf|zip|kvmobile|kvmobilebundle|7z|rar|log|exe|msi|blockmap)$',
   '(^|/)latest\.yml$',
   '(^|/)config\.json$',
   '(^|/)\.env(?:\..+)?$',

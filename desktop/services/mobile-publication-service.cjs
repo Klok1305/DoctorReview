@@ -1,9 +1,19 @@
 "use strict";
 
+const crypto = require("node:crypto");
+
 const MOBILE_PUBLICATION_FORMAT = "klinvekt-mobile-publication";
 const MOBILE_PUBLICATION_VERSION = 1;
 const MOBILE_PUBLICATION_EXTENSION = "kvmobile";
 const MAX_PUBLICATION_BYTES = 10 * 1024 * 1024;
+const MOBILE_BUNDLE_FORMAT = "klinvekt-mobile-bundle";
+const MOBILE_BUNDLE_VERSION = 1;
+const MOBILE_BUNDLE_EXTENSION = "kvmobilebundle";
+const MOBILE_ENCRYPTED_PUBLICATION_FORMAT = "klinvekt-mobile-encrypted-publication";
+const MOBILE_ENCRYPTED_PUBLICATION_VERSION = 1;
+const MAX_BUNDLE_BYTES = 100 * 1024 * 1024;
+const MAX_BUNDLE_DOCTORS = 1000;
+const CONTENT_KDF_PARAMS = Object.freeze({ N: 32768, r: 8, p: 1, keylen: 32 });
 const VECTOR_IDS = ["v1", "v2", "v3", "v4", "v5", "v6"];
 const FORBIDDEN_KEYS = new Set([
   "clients",
@@ -122,6 +132,7 @@ function validateMobilePublication(publication) {
   }
 
   const doctor = plainObject(value.doctor, "врач");
+  if (doctor.id != null) shortText(String(doctor.id), "идентификатор врача", 200);
   shortText(doctor.name, "имя врача", 200);
   shortText(doctor.department, "подразделение врача", 300);
 
@@ -165,11 +176,190 @@ function serializeMobilePublication(publication) {
   return JSON.stringify(validateMobilePublication(publication), null, 2);
 }
 
+function bundleFail(message) {
+  throw new Error(`Некорректный пакет мобильных публикаций: ${message}`);
+}
+
+function bundleText(value, label, max = 500) {
+  if (typeof value !== "string" || !value.trim() || value.length > max) bundleFail(label);
+  return value;
+}
+
+function base64Bytes(value, label, { exact = null, min = 1, max = MAX_PUBLICATION_BYTES + 1024 } = {}) {
+  if (typeof value !== "string" || !value || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) bundleFail(label);
+  const buffer = Buffer.from(value, "base64");
+  if (buffer.toString("base64") !== value || (exact != null && buffer.length !== exact) || buffer.length < min || buffer.length > max) {
+    bundleFail(label);
+  }
+  return buffer;
+}
+
+function encryptionAad(doctorId, pinVersion) {
+  return Buffer.from(`${MOBILE_ENCRYPTED_PUBLICATION_FORMAT}:${MOBILE_ENCRYPTED_PUBLICATION_VERSION}:${doctorId}:${pinVersion}`, "utf8");
+}
+
+function validateEncryptedMobilePublication(record) {
+  const value = record && typeof record === "object" && !Array.isArray(record) ? record : bundleFail("зашифрованная публикация");
+  if (value.format !== MOBILE_ENCRYPTED_PUBLICATION_FORMAT || Number(value.version) !== MOBILE_ENCRYPTED_PUBLICATION_VERSION) {
+    bundleFail("неподдерживаемый формат зашифрованной публикации");
+  }
+  bundleText(value.doctorId, "идентификатор врача", 200);
+  bundleText(value.displayName, "имя врача", 200);
+  if (typeof value.department !== "string" || value.department.length > 300) bundleFail("подразделение врача");
+  if (!Number.isInteger(value.pinVersion) || value.pinVersion < 1) bundleFail("версия PIN врача");
+  if (!Number.isInteger(value.periods) || value.periods < 1 || value.periods > 24) bundleFail("количество периодов врача");
+  const encryption = value.encryption && typeof value.encryption === "object" && !Array.isArray(value.encryption)
+    ? value.encryption
+    : bundleFail("описание шифрования");
+  if (encryption.algorithm !== "aes-256-gcm" || encryption.kdf !== "scrypt") bundleFail("алгоритм шифрования");
+  const params = encryption.params || {};
+  if (Number(params.N) !== CONTENT_KDF_PARAMS.N || Number(params.r) !== CONTENT_KDF_PARAMS.r
+    || Number(params.p) !== CONTENT_KDF_PARAMS.p || Number(params.keylen) !== CONTENT_KDF_PARAMS.keylen) {
+    bundleFail("параметры шифрования");
+  }
+  base64Bytes(encryption.salt, "соль шифрования", { exact: 24 });
+  base64Bytes(encryption.iv, "вектор шифрования", { exact: 12 });
+  base64Bytes(encryption.tag, "метка целостности", { exact: 16 });
+  base64Bytes(value.ciphertext, "зашифрованные данные");
+  return value;
+}
+
+function encryptMobilePublication(publication, { doctorId, pinCode, pinVersion }) {
+  const value = validateMobilePublication(publication);
+  const id = bundleText(String(doctorId || ""), "идентификатор врача", 200);
+  if (!/^\d{4}$/.test(String(pinCode || ""))) bundleFail(`не настроен четырёхзначный PIN врача ${id}`);
+  const version = Number(pinVersion);
+  if (!Number.isInteger(version) || version < 1) bundleFail(`версия PIN врача ${id}`);
+  const doctor = value.doctor || {};
+  if (doctor.id != null && String(doctor.id) !== id) bundleFail(`публикация не принадлежит врачу ${id}`);
+  const salt = crypto.randomBytes(24);
+  const iv = crypto.randomBytes(12);
+  const key = crypto.scryptSync(String(pinCode), salt, CONTENT_KDF_PARAMS.keylen, {
+    N: CONTENT_KDF_PARAMS.N,
+    r: CONTENT_KDF_PARAMS.r,
+    p: CONTENT_KDF_PARAMS.p,
+    maxmem: 64 * 1024 * 1024,
+  });
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(encryptionAad(id, version));
+  const ciphertext = Buffer.concat([cipher.update(Buffer.from(JSON.stringify(value), "utf8")), cipher.final()]);
+  return validateEncryptedMobilePublication({
+    format: MOBILE_ENCRYPTED_PUBLICATION_FORMAT,
+    version: MOBILE_ENCRYPTED_PUBLICATION_VERSION,
+    doctorId: id,
+    displayName: String(doctor.name),
+    department: String(doctor.department),
+    pinVersion: version,
+    periods: value.periods.length,
+    encryption: {
+      algorithm: "aes-256-gcm",
+      kdf: "scrypt",
+      salt: salt.toString("base64"),
+      params: CONTENT_KDF_PARAMS,
+      iv: iv.toString("base64"),
+      tag: cipher.getAuthTag().toString("base64"),
+    },
+    ciphertext: ciphertext.toString("base64"),
+  });
+}
+
+function decryptMobilePublication(record, pin) {
+  try {
+    const value = validateEncryptedMobilePublication(record);
+    if (!/^\d{4}$/.test(String(pin || ""))) throw new Error("invalid-pin");
+    const encryption = value.encryption;
+    const key = crypto.scryptSync(String(pin), Buffer.from(encryption.salt, "base64"), CONTENT_KDF_PARAMS.keylen, {
+      N: CONTENT_KDF_PARAMS.N,
+      r: CONTENT_KDF_PARAMS.r,
+      p: CONTENT_KDF_PARAMS.p,
+      maxmem: 64 * 1024 * 1024,
+    });
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(encryption.iv, "base64"));
+    decipher.setAAD(encryptionAad(value.doctorId, value.pinVersion));
+    decipher.setAuthTag(Buffer.from(encryption.tag, "base64"));
+    const plaintext = Buffer.concat([decipher.update(Buffer.from(value.ciphertext, "base64")), decipher.final()]);
+    const publication = validateMobilePublication(JSON.parse(plaintext.toString("utf8")));
+    if (publication.doctor.id != null && String(publication.doctor.id) !== value.doctorId) throw new Error("doctor-mismatch");
+    if (publication.doctor.name !== value.displayName || publication.doctor.department !== value.department
+      || publication.periods.length !== value.periods) throw new Error("metadata-mismatch");
+    return publication;
+  } catch (_) {
+    throw new Error("Не удалось открыть отчёт. Проверьте PIN врача");
+  }
+}
+
+function validateMobilePublicationBundle(bundle) {
+  const value = bundle && typeof bundle === "object" && !Array.isArray(bundle) ? bundle : bundleFail("корневой объект");
+  rejectForbiddenKeys(value, "пакет");
+  if (value.format !== MOBILE_BUNDLE_FORMAT || Number(value.version) !== MOBILE_BUNDLE_VERSION) bundleFail("неподдерживаемая версия");
+  if (typeof value.createdAt !== "string" || !value.createdAt || value.createdAt.length > 50) bundleFail("дата создания");
+  if (value.appVersion != null && (typeof value.appVersion !== "string" || value.appVersion.length > 50)) bundleFail("версия приложения");
+  const security = value.security && typeof value.security === "object" && !Array.isArray(value.security) ? value.security : bundleFail("описание безопасности");
+  if (security.patientRegistryIncluded !== false || security.rawExportsIncluded !== false || security.encryptedPerDoctor !== true) {
+    bundleFail("пакет не подтверждает безопасный состав и шифрование по врачам");
+  }
+  if (!Array.isArray(value.doctors) || !value.doctors.length || value.doctors.length > MAX_BUNDLE_DOCTORS) bundleFail("список врачей");
+  const ids = new Set();
+  value.doctors.forEach((doctor) => {
+    const entry = validateEncryptedMobilePublication(doctor);
+    if (ids.has(entry.doctorId)) bundleFail(`врач ${entry.doctorId} указан повторно`);
+    ids.add(entry.doctorId);
+  });
+  const bytes = Buffer.byteLength(JSON.stringify(value), "utf8");
+  if (bytes > MAX_BUNDLE_BYTES) bundleFail("файл превышает 100 МБ");
+  return value;
+}
+
+function createMobilePublicationBundle({ publications, credentials, appVersion = "" }) {
+  if (!Array.isArray(publications) || !publications.length || publications.length > MAX_BUNDLE_DOCTORS) bundleFail("список публикаций");
+  const credentialItems = credentials && Array.isArray(credentials.doctors) ? credentials.doctors : [];
+  const credentialsByDoctor = new Map(credentialItems.map(item => [String(item.doctorId || ""), item]));
+  const doctors = publications.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) bundleFail("публикация врача");
+    const doctorId = String(item.doctorId || "");
+    const access = credentialsByDoctor.get(doctorId);
+    if (!access) bundleFail(`нет настроенного доступа врача ${doctorId}`);
+    return encryptMobilePublication(item.publication, {
+      doctorId,
+      pinCode: access.pinCode,
+      pinVersion: Number(access.pinVersion),
+    });
+  }).sort((a, b) => a.displayName.localeCompare(b.displayName, "ru", { sensitivity: "base" }) || a.doctorId.localeCompare(b.doctorId, "ru"));
+  return validateMobilePublicationBundle({
+    format: MOBILE_BUNDLE_FORMAT,
+    version: MOBILE_BUNDLE_VERSION,
+    createdAt: new Date().toISOString(),
+    appVersion: String(appVersion || ""),
+    security: {
+      patientRegistryIncluded: false,
+      rawExportsIncluded: false,
+      encryptedPerDoctor: true,
+    },
+    doctors,
+  });
+}
+
+function serializeMobilePublicationBundle(bundle) {
+  return JSON.stringify(validateMobilePublicationBundle(bundle), null, 2);
+}
+
 module.exports = {
+  CONTENT_KDF_PARAMS,
   MAX_PUBLICATION_BYTES,
+  MAX_BUNDLE_BYTES,
+  MAX_BUNDLE_DOCTORS,
+  MOBILE_BUNDLE_EXTENSION,
+  MOBILE_BUNDLE_FORMAT,
+  MOBILE_BUNDLE_VERSION,
   MOBILE_PUBLICATION_EXTENSION,
   MOBILE_PUBLICATION_FORMAT,
   MOBILE_PUBLICATION_VERSION,
+  createMobilePublicationBundle,
+  decryptMobilePublication,
+  encryptMobilePublication,
   serializeMobilePublication,
+  serializeMobilePublicationBundle,
+  validateEncryptedMobilePublication,
   validateMobilePublication,
+  validateMobilePublicationBundle,
 };

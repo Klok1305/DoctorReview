@@ -40,7 +40,7 @@ test("assembled HTML is reproducible and complete", () => {
   for (const id of ["lib-xlsx", "lib-jszip", "lib-html2canvas", "lib-jspdf"]) {
     assert.match(actual, new RegExp(`<script type="text/plain" id="${id}">`));
   }
-  for (const required of ["btnExportAllPdf", "btnSaveSession", "btnExportMobilePublication", "desktopWorkspaceCard", "btnScanInput", "Content-Security-Policy", "departmentBody", "departmentFilter", "departmentMonth", "settingsAppVersion", "headerAppVersion"]) {
+  for (const required of ["btnExportAllPdf", "btnSaveSession", "btnExportMobilePublication", "btnExportAllMobilePublications", "desktopWorkspaceCard", "btnScanInput", "Content-Security-Policy", "departmentBody", "departmentFilter", "departmentMonth", "settingsAppVersion", "headerAppVersion"]) {
     assert.match(actual, new RegExp(required));
   }
   assert.doesNotMatch(actual, /data-tab="report"|id="page-report"/);
@@ -447,7 +447,7 @@ test("specialization and department comparisons include aggregate totals with st
 test("first-run folder prompt is attached to a visible application window", () => {
   const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageJson.version, "2.5.14");
+  assert.equal(packageJson.version, "2.6.0");
   assert.equal(packageJson.build.productName, "КлинВект Щербатова — Администратор");
   assert.equal(packageJson.build.artifactName, "KlinVekt-Shcherbatova-Admin-Setup-${version}-${arch}.${ext}");
   assert.equal(packageJson.scripts["dist:portable"], undefined);
@@ -920,13 +920,35 @@ test("Admin exports a patient-free mobile publication for the selected doctor", 
   const main = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
 
   assert.match(template, /id="btnExportMobilePublication"/);
+  assert.match(template, /id="btnExportAllMobilePublications"/);
   assert.match(ui, /function buildMobilePublication\(doctorId\)/);
+  assert.match(ui, /function exportAllMobilePublications\(\)/);
   assert.match(ui, /patientRegistryIncluded: false, rawExportsIncluded: false/);
   assert.match(ui, /btnExportMobilePublication"\)\.addEventListener\("click", exportMobilePublication\)/);
   assert.doesNotMatch(ui.slice(ui.indexOf("function buildMobilePublication(doctorId)"), ui.indexOf("function doctorMetricsHeaderHtml")), /clientRows|patientId|patientName/);
   assert.match(preload, /exportMobilePublication: payload => invoke\("mobile-publication:export", payload\)/);
+  assert.match(preload, /exportMobilePublicationBundle: payload => invoke\("mobile-publication:export-bundle", payload\)/);
   assert.match(main, /ipcMain\.handle\("mobile-publication:export"/);
+  assert.match(main, /ipcMain\.handle\("mobile-publication:export-bundle"/);
   assert.match(main, /mobile-publication\.exported/);
+  assert.match(main, /mobile-publication\.bundle-exported/);
+});
+
+test("release publishes a self-contained Bitrix Black Hole mobile server package", () => {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  const builder = fs.readFileSync(path.join(root, "scripts", "build-mobile-server-package.cjs"), "utf8");
+  const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "release.yml"), "utf8");
+  const server = fs.readFileSync(path.join(root, "mobile-server", "server.cjs"), "utf8");
+
+  assert.equal(packageJson.version, "2.6.0");
+  assert.equal(packageJson.scripts["build:mobile-server"], "node ./scripts/build-mobile-server-package.cjs");
+  assert.match(builder, /klinvekt-mobile-server/);
+  assert.match(builder, /mobile-publication-service\.cjs/);
+  assert.match(workflow, /KlinVekt-Mobile-Server-\$version\.zip/);
+  assert.match(workflow, /Compress-Archive/);
+  assert.match(server, /process\.env\.PORT \|\| 3000/);
+  assert.match(server, /x-vibe-user-id/);
+  assert.match(server, /x-vibe-user-role/);
 });
 
 test("portable JSON uses the authoritative SQLite data and restores auxiliary tables", () => {
