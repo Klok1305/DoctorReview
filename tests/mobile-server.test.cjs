@@ -11,7 +11,8 @@ const {
   MOBILE_PUBLICATION_VERSION,
   createMobilePublicationBundle,
 } = require("../desktop/services/mobile-publication-service.cjs");
-const { createMobileServer } = require("../mobile-server/server.cjs");
+const { createMobileServer, MAX_UPLOAD_CHUNK_BYTES } = require("../mobile-server/server.cjs");
+const crypto = require("node:crypto");
 
 const root = path.resolve(__dirname, "..");
 
@@ -58,6 +59,21 @@ test("Black Hole server gates access by Bitrix account, admin role and doctor PI
   const address = server.address();
   const base = `http://127.0.0.1:${address.port}`;
 
+  for (const [route, contentType] of [
+    ["/", "text/html"],
+    ["/app.css?v=8", "text/css"],
+    ["/app.js?v=8", "text/javascript"],
+    ["/icons/app-icon-192.png", "image/png"],
+    ["/mobile/", "text/html"],
+    ["/mobile/app.css?v=8", "text/css"],
+    ["/mobile/app.js?v=8", "text/javascript"],
+    ["/mobile/icons/app-icon-192.png", "image/png"],
+  ]) {
+    const assetResponse = await fetch(`${base}${route}`);
+    assert.equal(assetResponse.status, 200, route);
+    assert.match(assetResponse.headers.get("content-type"), new RegExp(`^${contentType.replace("/", "\\/")}`), route);
+  }
+
   let response = await fetch(`${base}/api/context`);
   assert.equal(response.status, 401);
 
@@ -72,6 +88,37 @@ test("Black Hole server gates access by Bitrix account, admin role and doctor PI
     method: "POST",
     headers: { ...vibeHeaders({ userId: "admin-1", role: "portal_admin" }), "Content-Type": "application/json" },
     body: JSON.stringify(testBundle()),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).doctors, 1);
+
+  const chunkedBundle = { ...testBundle(), transportPadding: "x".repeat(MAX_UPLOAD_CHUNK_BYTES + 1000) };
+  const chunkedBytes = Buffer.from(JSON.stringify(chunkedBundle), "utf8");
+  response = await fetch(`${base}/api/admin/publications/uploads`, {
+    method: "POST",
+    headers: { ...vibeHeaders({ userId: "admin-1", role: "portal_admin" }), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      bytes: chunkedBytes.length,
+      sha256: crypto.createHash("sha256").update(chunkedBytes).digest("hex"),
+    }),
+  });
+  assert.equal(response.status, 201);
+  const upload = await response.json();
+  assert.equal(upload.chunkBytes, MAX_UPLOAD_CHUNK_BYTES);
+  assert.ok(upload.chunks > 1);
+  for (let index = 0; index < upload.chunks; index += 1) {
+    const start = index * upload.chunkBytes;
+    response = await fetch(`${base}/api/admin/publications/uploads/${upload.uploadId}/chunks/${index}`, {
+      method: "PUT",
+      headers: { ...vibeHeaders({ userId: "admin-1", role: "portal_admin" }), "Content-Type": "application/octet-stream" },
+      body: chunkedBytes.subarray(start, Math.min(chunkedBytes.length, start + upload.chunkBytes)),
+    });
+    assert.equal(response.status, 200);
+  }
+  response = await fetch(`${base}/api/admin/publications/uploads/${upload.uploadId}/complete`, {
+    method: "POST",
+    headers: { ...vibeHeaders({ userId: "admin-1", role: "portal_admin" }), "Content-Type": "application/json" },
+    body: "{}",
   });
   assert.equal(response.status, 200);
   assert.equal((await response.json()).doctors, 1);

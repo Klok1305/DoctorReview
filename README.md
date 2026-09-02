@@ -8,11 +8,11 @@
 
 Используйте только актуальный установщик:
 
-[Скачать КлинВект Admin 2.6 для Windows](https://github.com/Klok1305/DoctorReview/releases/download/v2.6.0/KlinVekt-Shcherbatova-Admin-Setup-2.6.0-x64.exe)
+[Скачать КлинВект Admin 2.6 для Windows](https://github.com/Klok1305/DoctorReview/releases/download/v2.6.1/KlinVekt-Shcherbatova-Admin-Setup-2.6.1-x64.exe)
 
 Portable-версия не выпускается. Установщик создаёт ярлык «КлинВект — Администратор» и устанавливается в профиль текущего пользователя Windows. Устанавливать приложение нужно под той же индивидуальной учётной записью, которая будет его запускать.
 
-Для врачей используется [отдельный установщик КлинВект Viewer 2.6](https://github.com/Klok1305/DoctorReview/releases/download/v2.6.0/KlinVekt-Shcherbatova-Viewer-Setup-2.6.0-x64.exe). Он создаёт обычный ярлык, не запускает службу и не требует SQL-сервера.
+Для врачей используется [отдельный установщик КлинВект Viewer 2.6](https://github.com/Klok1305/DoctorReview/releases/download/v2.6.1/KlinVekt-Shcherbatova-Viewer-Setup-2.6.1-x64.exe). Он создаёт обычный ярлык, не запускает службу и не требует SQL-сервера.
 
 При первом запуске:
 
@@ -57,7 +57,7 @@ PulseClinic-Test
 
 ## Мобильная версия через Битрикс24
 
-1. Разверните серверный пакет `KlinVekt-Mobile-Server-2.6.0.zip` из GitHub Release на Black Hole с Node.js и портом 3000.
+1. Разверните серверный пакет `KlinVekt-Mobile-Server-2.6.1.zip` из GitHub Release на Black Hole с Node.js и портом 3000.
 2. В политике доступа Black Hole разрешите сотрудников портала (`PORTAL`), но не включайте публичный режим.
 3. В Admin откройте «Настройки → Публикация в Viewer», нажмите «Включить всех» и сохраните постоянные PIN врачей.
 4. После загрузки выгрузок 1С откройте вкладку «Специалист» и нажмите «Все врачи для сервера».

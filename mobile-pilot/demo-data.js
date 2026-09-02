@@ -263,6 +263,39 @@
     }),
   ];
 
+  periods.forEach((period, index) => {
+    const chronological = periods.slice(index).reverse();
+    period.goalsSource = "Индивидуальные цели врача";
+    period.goals = period.goals.map((goal, goalIndex) => ({
+      ...goal,
+      key: `demo-goal-${goalIndex + 1}`,
+      vector: `v${Math.min(6, goalIndex + 1)}`,
+      target: goal.description,
+      fact: `${goal.progress}%`,
+      state: goal.progress >= 85 ? "good" : goal.progress >= 70 ? "warn" : "bad",
+    }));
+    period.comments = [{
+      blockKey: "doctor.dynamics",
+      title: "Динамика, точки роста и риска",
+      text: period.comment,
+      author: "Администратор",
+      updatedAt: "",
+    }];
+    period.dynamics = {
+      columns: chronological.map((item) => item.label),
+      rows: [
+        { key: "score", label: "Общий балл", values: chronological.map((item) => String(item.overall)), delta: period.overallDelta > 0 ? `+${period.overallDelta}%` : `${period.overallDelta}%`, averageDelta: "—", target: "≥ 80", state: period.overallDelta >= 0 ? "good" : "bad" },
+        { key: "patients", label: "Пациенты", values: chronological.map((item) => item.headlineMetrics[0].value), delta: period.headlineMetrics[0].delta, averageDelta: "—", target: "", state: "good" },
+        { key: "schedule", label: "Загрузка расписания", values: chronological.map((item) => item.headlineMetrics[1].value), delta: period.headlineMetrics[1].delta, averageDelta: "—", target: "≥ 85%", state: "good" },
+        { key: "active-base", label: "Активная клиентская база", values: chronological.map((item) => item.headlineMetrics[4].value), delta: period.headlineMetrics[4].delta, averageDelta: "—", target: "≥ 65%", state: period.headlineMetrics[4].delta.startsWith("-") ? "bad" : "good" },
+      ],
+      growth: ["Улучшилась загрузка расписания", "Вырос объём активной клиентской базы"],
+      risk: index === 0 ? ["Конверсия междисциплинарных назначений требует внимания"] : [],
+      conclusion: period.comment,
+      conclusionManual: true,
+    };
+  });
+
   window.KLINVEKT_MOBILE_DEMO = Object.freeze({
     demo: true,
     doctor: { name: "Тестовый врач", department: "Демонстрационное отделение" },

@@ -119,6 +119,44 @@ function validateVector(vector, index) {
   }
 }
 
+function validatePublicationDynamics(dynamics, periodId) {
+  if (dynamics == null) return;
+  const value = plainObject(dynamics, `динамика периода ${periodId}`);
+  if (!Array.isArray(value.columns) || !value.columns.length || value.columns.length > 6) fail(`месяцы динамики ${periodId}`);
+  value.columns.forEach((column, index) => shortText(column, `месяц динамики ${periodId}.${index + 1}`, 100));
+  if (!Array.isArray(value.rows) || !value.rows.length || value.rows.length > 30) fail(`показатели динамики ${periodId}`);
+  value.rows.forEach((row, index) => {
+    const entry = plainObject(row, `показатель динамики ${periodId}.${index + 1}`);
+    shortText(entry.key, `код показателя динамики ${periodId}.${index + 1}`, 100);
+    shortText(entry.label, `название показателя динамики ${periodId}.${index + 1}`, 300);
+    if (!Array.isArray(entry.values) || entry.values.length !== value.columns.length) fail(`значения динамики ${periodId}.${index + 1}`);
+    entry.values.forEach((cell, cellIndex) => shortText(cell, `значение динамики ${periodId}.${index + 1}.${cellIndex + 1}`, 200));
+    shortText(entry.delta, `изменение динамики ${periodId}.${index + 1}`, 50);
+    optionalText(entry.averageDelta, `изменение к среднему ${periodId}.${index + 1}`, 50);
+    optionalText(entry.target, `цель динамики ${periodId}.${index + 1}`, 200);
+    optionalText(entry.state, `состояние динамики ${periodId}.${index + 1}`, 30);
+  });
+  for (const [key, label] of [["growth", "точки роста"], ["risk", "точки риска"]]) {
+    if (!Array.isArray(value[key]) || value[key].length > 20) fail(`${label} ${periodId}`);
+    value[key].forEach((item, index) => shortText(item, `${label} ${periodId}.${index + 1}`, 1000));
+  }
+  optionalText(value.conclusion, `выводы динамики ${periodId}`, 10000);
+  if (value.conclusionManual != null && typeof value.conclusionManual !== "boolean") fail(`признак ручных выводов ${periodId}`);
+}
+
+function validatePublicationComments(comments, periodId) {
+  if (comments == null) return;
+  if (!Array.isArray(comments) || comments.length > 50) fail(`комментарии периода ${periodId}`);
+  comments.forEach((comment, index) => {
+    const entry = plainObject(comment, `комментарий ${periodId}.${index + 1}`);
+    shortText(entry.blockKey, `раздел комментария ${periodId}.${index + 1}`, 200);
+    shortText(entry.title, `заголовок комментария ${periodId}.${index + 1}`, 300);
+    shortText(entry.text, `текст комментария ${periodId}.${index + 1}`, 10000);
+    shortText(entry.author, `автор комментария ${periodId}.${index + 1}`, 300);
+    optionalText(entry.updatedAt, `дата комментария ${periodId}.${index + 1}`, 100);
+  });
+}
+
 function validateMobilePublication(publication) {
   const value = plainObject(publication, "корневой объект");
   rejectForbiddenKeys(value);
@@ -158,13 +196,21 @@ function validateMobilePublication(publication) {
     });
     if (!Array.isArray(item.vectors) || item.vectors.length !== VECTOR_IDS.length) fail(`векторы периода ${item.id}`);
     item.vectors.forEach(validateVector);
-    if (!Array.isArray(item.goals) || item.goals.length > 12) fail(`цели периода ${item.id}`);
+    if (!Array.isArray(item.goals) || item.goals.length > 20) fail(`цели периода ${item.id}`);
     item.goals.forEach((goal, index) => {
       const entry = plainObject(goal, `цель ${item.id}.${index + 1}`);
       shortText(entry.title, `название цели ${item.id}.${index + 1}`, 300);
       shortText(entry.description, `описание цели ${item.id}.${index + 1}`, 1000);
       finiteNumber(entry.progress, `прогресс цели ${item.id}.${index + 1}`, { min: 0, max: 100 });
+      optionalText(entry.key, `код цели ${item.id}.${index + 1}`, 100);
+      optionalText(entry.vector, `вектор цели ${item.id}.${index + 1}`, 10);
+      optionalText(entry.target, `целевое значение ${item.id}.${index + 1}`, 300);
+      optionalText(entry.fact, `фактическое значение ${item.id}.${index + 1}`, 300);
+      optionalText(entry.state, `состояние цели ${item.id}.${index + 1}`, 30);
     });
+    optionalText(item.goalsSource, `источник целей ${item.id}`, 500);
+    validatePublicationDynamics(item.dynamics, item.id);
+    validatePublicationComments(item.comments, item.id);
   });
 
   const bytes = Buffer.byteLength(JSON.stringify(value), "utf8");

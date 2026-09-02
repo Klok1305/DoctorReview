@@ -51,9 +51,10 @@
     trendChart: document.getElementById("trendChart"),
     trendLabels: document.getElementById("trendLabels"),
     comparisonList: document.getElementById("comparisonList"),
+    dynamicsInsights: document.getElementById("dynamicsInsights"),
+    goalsSource: document.getElementById("goalsSource"),
     goalsList: document.getElementById("goalsList"),
-    managerComment: document.getElementById("managerComment"),
-    commentDate: document.getElementById("commentDate"),
+    commentsList: document.getElementById("commentsList"),
     connectionStatus: document.getElementById("connectionStatus"),
     installButton: document.getElementById("installButton"),
     installCard: document.getElementById("installCard"),
@@ -79,6 +80,12 @@
 
   const signed = (value) => Number.isFinite(value) ? `${value > 0 ? "+" : ""}${value}` : "—";
   const currentPeriod = () => reportData.periods[state.periodIndex];
+
+  function formatCommentDate(value) {
+    if (!value) return "";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("ru-RU");
+  }
 
   function reportInitials(name) {
     return String(name || "КВ").split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "КВ";
@@ -120,6 +127,14 @@
       for (const vector of period.vectors) {
         const collections = Array.isArray(vector.windows) ? vector.windows.map((item) => item.sections) : [vector.sections];
         if (collections.some((sections) => !Array.isArray(sections) || !sections.length)) throw new Error(`Нет расшифровки ${vector.id}`);
+      }
+      if (!Array.isArray(period.goals) || period.goals.length > 20) throw new Error("Некорректный набор целей");
+      if (period.comments != null && (!Array.isArray(period.comments) || period.comments.length > 50)) throw new Error("Некорректный набор комментариев");
+      if (period.dynamics != null) {
+        if (!period.dynamics || !Array.isArray(period.dynamics.columns) || !Array.isArray(period.dynamics.rows)) {
+          throw new Error("Некорректная динамика отчёта");
+        }
+        if (period.dynamics.columns.length > 6 || period.dynamics.rows.length > 30) throw new Error("Слишком большой блок динамики");
       }
     }
     return value;
@@ -332,22 +347,42 @@
     elements.trendCaption.textContent = `пунктов за ${chronological.length} период${chronological.length === 1 ? "" : chronological.length < 5 ? "а" : "ов"}`;
 
     const period = currentPeriod();
-    const headlineRows = period.headlineMetrics.map((metric) => `
-      <div class="comparison-row"><div><b>${escapeHtml(metric.label)}</b><span>${escapeHtml(metric.value)} · ${escapeHtml(metric.note)}</span></div><span class="delta ${String(metric.delta).startsWith("-") ? "negative" : "positive"}">${escapeHtml(metric.delta)}</span></div>`).join("");
-    const vectorRows = period.vectors.map((vector) => `
-      <div class="comparison-row"><div><b>${escapeHtml(vector.title)}</b><span>Вектор ${vector.number} · ${Number.isFinite(vector.score) ? vector.score : "—"} из 100</span></div><span class="delta ${vector.delta < 0 ? "negative" : "positive"}">${signed(vector.delta)}</span></div>`).join("");
-    elements.comparisonList.innerHTML = `<h3>Ключевые показатели</h3>${headlineRows}<h3>Баллы векторов</h3>${vectorRows}`;
+    const dynamics = period.dynamics;
+    if (dynamics && Array.isArray(dynamics.rows) && dynamics.rows.length) {
+      elements.comparisonList.innerHTML = `<h3>Детализация по месяцам</h3>
+        <div class="viewer-dynamics-table"><table>
+          <thead><tr><th>Метрика</th>${dynamics.columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}<th>Δ к прошлому</th><th>Δ к среднему</th></tr></thead>
+          <tbody>${dynamics.rows.map((row) => `<tr><td><b>${escapeHtml(row.label)}</b>${row.target ? `<small>Цель ${escapeHtml(row.target)}</small>` : ""}</td>${row.values.map((value) => `<td>${escapeHtml(value)}</td>`).join("")}<td><span class="delta ${row.state === "bad" ? "negative" : row.state === "good" ? "positive" : "neutral"}">${escapeHtml(row.delta)}</span></td><td>${escapeHtml(row.averageDelta || "—")}</td></tr>`).join("")}</tbody>
+        </table></div>`;
+      const insightColumn = (title, items, className) => `<section class="insight-card ${className}"><h3>${title}</h3>${items.length ? `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : "<p>Выраженных изменений нет.</p>"}</section>`;
+      elements.dynamicsInsights.innerHTML = `<div class="insight-grid">${insightColumn("Точки роста", dynamics.growth || [], "good")}${insightColumn("Точки риска", dynamics.risk || [], "warn")}</div>
+        ${dynamics.conclusion ? `<article class="conclusion-card"><span class="eyebrow">Выводы и комментарии${dynamics.conclusionManual ? " · сохранено вручную" : ""}</span><p>${escapeHtml(dynamics.conclusion)}</p></article>` : ""}`;
+    } else {
+      const headlineRows = period.headlineMetrics.map((metric) => `
+        <div class="comparison-row"><div><b>${escapeHtml(metric.label)}</b><span>${escapeHtml(metric.value)} · ${escapeHtml(metric.note)}</span></div><span class="delta ${String(metric.delta).startsWith("-") ? "negative" : "positive"}">${escapeHtml(metric.delta)}</span></div>`).join("");
+      const vectorRows = period.vectors.map((vector) => `
+        <div class="comparison-row"><div><b>${escapeHtml(vector.title)}</b><span>Вектор ${vector.number} · ${Number.isFinite(vector.score) ? vector.score : "—"} из 100</span></div><span class="delta ${vector.delta < 0 ? "negative" : "positive"}">${signed(vector.delta)}</span></div>`).join("");
+      elements.comparisonList.innerHTML = `<h3>Ключевые показатели</h3>${headlineRows}<h3>Баллы векторов</h3>${vectorRows}`;
+      elements.dynamicsInsights.innerHTML = "";
+    }
   }
 
   function renderGoals(period) {
+    elements.goalsSource.textContent = period.goalsSource || "Цели из Viewer";
     elements.goalsList.innerHTML = period.goals.length ? period.goals.map((goal) => `
-      <article class="goal-card">
-        <div class="goal-heading"><h3>${escapeHtml(goal.title)}</h3><span>${goal.progress}%</span></div>
-        <p>${escapeHtml(goal.description)}</p>
+      <article class="goal-card ${escapeHtml(goal.state || "neutral")}">
+        <div class="goal-heading"><h3>${goal.vector ? `<small>В${escapeHtml(String(goal.vector).replace("v", ""))}</small>` : ""}${escapeHtml(goal.title)}</h3><span>${escapeHtml(goal.fact || `${goal.progress}%`)}</span></div>
+        <p>${goal.target ? `Цель: <b>${escapeHtml(goal.target)}</b>` : escapeHtml(goal.description)}</p>
         <div class="progress-track" aria-label="Выполнение ${goal.progress}%"><span style="width:${Math.max(0, Math.min(100, goal.progress))}%"></span></div>
       </article>`).join("") : '<article class="goal-card"><p>Цели появятся после расчёта баллов.</p></article>';
-    elements.managerComment.textContent = period.comment;
-    elements.commentDate.textContent = `Обновлено ${period.updatedAt}`;
+    const comments = Array.isArray(period.comments) && period.comments.length
+      ? period.comments
+      : period.comment ? [{ title: "Комментарий", text: period.comment, author: "Администратор", updatedAt: period.updatedAt }] : [];
+    elements.commentsList.innerHTML = comments.length ? comments.map((comment) => `
+      <article class="comment-card">
+        <div class="comment-heading"><span class="avatar small" aria-hidden="true">К</span><span><b>${escapeHtml(comment.title || "Комментарий")}</b><small>${escapeHtml([comment.author, comment.updatedAt ? `обновлено ${formatCommentDate(comment.updatedAt)}` : ""].filter(Boolean).join(" · "))}</small></span></div>
+        <blockquote>${escapeHtml(comment.text)}</blockquote>
+      </article>`).join("") : '<article class="comment-card empty-comment"><p>Комментариев к этому периоду нет.</p></article>';
   }
 
   function setTab(tab) {
@@ -498,13 +533,42 @@
   async function uploadBundle(file) {
     if (!file) return;
     if (file.size > 100 * 1024 * 1024) throw new Error("Общий файл превышает 100 МБ");
-    const result = await apiRequest("/api/admin/publications", {
+    if (!window.crypto || !window.crypto.subtle) throw new Error("Браузер не поддерживает безопасную проверку файла");
+    elements.serverPublicationStatus.textContent = "Проверяем файл…";
+    const digest = await window.crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+    const sha256 = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    const upload = await apiRequest("/api/admin/publications/uploads", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: await file.text(),
+      body: JSON.stringify({ bytes: file.size, sha256 }),
     });
-    elements.serverPublicationStatus.textContent = `Обновлено: ${result.doctors} врачей`;
-    elements.serverPublicationStatus.classList.remove("error");
+    let completed = false;
+    try {
+      for (let index = 0; index < upload.chunks; index += 1) {
+        elements.serverPublicationStatus.textContent = `Загружаем: ${index + 1} из ${upload.chunks}`;
+        const start = index * upload.chunkBytes;
+        await apiRequest(`/api/admin/publications/uploads/${upload.uploadId}/chunks/${index}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/octet-stream" },
+          body: file.slice(start, Math.min(file.size, start + upload.chunkBytes)),
+        });
+      }
+      elements.serverPublicationStatus.textContent = "Проверяем и применяем…";
+      const result = await apiRequest(`/api/admin/publications/uploads/${upload.uploadId}/complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      completed = true;
+      elements.serverPublicationStatus.textContent = `Обновлено: ${result.doctors} врачей`;
+      elements.serverPublicationStatus.classList.remove("error");
+    } finally {
+      if (!completed) {
+        try {
+          await apiRequest(`/api/admin/publications/uploads/${upload.uploadId}`, { method: "DELETE" });
+        } catch (_) { /* временная загрузка сама удалится по таймауту */ }
+      }
+    }
     await refreshServerContext();
   }
 

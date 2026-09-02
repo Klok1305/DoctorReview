@@ -223,15 +223,42 @@ h2 { margin-bottom: 6px; font-size: 21px; line-height: 1.2; letter-spacing: -.01
 .comparison-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 13px 15px; border: 1px solid var(--line); border-radius: 15px; background: var(--card); }
 .comparison-row span { color: var(--muted); font-size: 12px; }
 .comparison-row b { font-size: 14px; }
+.viewer-dynamics-table { overflow-x: auto; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
+.viewer-dynamics-table table { width: 100%; min-width: 760px; border-collapse: collapse; }
+.viewer-dynamics-table th, .viewer-dynamics-table td { padding: 10px 11px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 11px; text-align: right; white-space: nowrap; }
+.viewer-dynamics-table th:first-child, .viewer-dynamics-table td:first-child { position: sticky; left: 0; z-index: 1; min-width: 210px; background: #fff; text-align: left; white-space: normal; }
+.viewer-dynamics-table thead th { background: #eef2f7; color: #526075; font-size: 9px; letter-spacing: .03em; text-transform: uppercase; }
+.viewer-dynamics-table thead th:first-child { z-index: 2; background: #eef2f7; }
+.viewer-dynamics-table tr:last-child td { border-bottom: 0; }
+.viewer-dynamics-table th:last-child, .viewer-dynamics-table td:last-child { border-right: 0; }
+.viewer-dynamics-table td small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; font-weight: 500; }
+.dynamics-insights { display: grid; gap: 10px; margin-top: 12px; }
+.insight-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.insight-card, .conclusion-card { padding: 16px; border: 1px solid var(--line); border-radius: 17px; background: var(--card); }
+.insight-card.good { border-color: #cae8d3; background: #f2fbf5; }
+.insight-card.warn { border-color: #f2d6aa; background: #fff8ed; }
+.insight-card h3 { margin: 0 0 8px; font-size: 14px; }
+.insight-card ul { margin: 0; padding-left: 18px; }
+.insight-card li, .insight-card p, .conclusion-card p { color: #475467; font-size: 12px; line-height: 1.55; }
+.insight-card p { margin: 0; }
+.conclusion-card p { margin: 9px 0 0; white-space: pre-line; }
 
 .goals-list { display: grid; gap: 10px; }
 .goal-card { padding: 16px; border: 1px solid var(--line); border-radius: 17px; background: var(--card); }
+.goal-card.good { border-color: #cae8d3; background: #f2fbf5; }
+.goal-card.warn { border-color: #f2d6aa; background: #fff8ed; }
+.goal-card.bad { border-color: #f2bebe; background: #fff5f5; }
 .goal-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .goal-heading h3 { margin: 0; font-size: 15px; }
+.goal-heading h3 small { display: inline-flex; margin-right: 7px; padding: 3px 6px; border-radius: 7px; background: var(--accent-soft); color: var(--accent); font-size: 9px; vertical-align: 2px; }
 .goal-heading span { flex: 0 0 auto; color: var(--accent); font-size: 13px; font-weight: 800; }
 .goal-card p { margin: 5px 0 12px; color: var(--muted); font-size: 12px; }
+.goals-source { margin: -5px 2px 12px; color: var(--muted); font-size: 11px; }
+.comments-list { display: grid; gap: 10px; }
 .comment-heading { display: flex; align-items: center; gap: 10px; }
+.comment-heading small { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
 .comment-card blockquote { margin: 15px 0 0; padding-left: 14px; border-left: 3px solid var(--teal); color: #344054; font-size: 14px; line-height: 1.6; }
+.empty-comment p { margin: 0; color: var(--muted); font-size: 13px; }
 .install-card { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-top: 18px; padding: 16px; border: 1px solid #bdd0f8; border-radius: 18px; background: var(--accent-soft); }
 .install-card p { margin: 3px 0 0; color: #51698f; font-size: 11px; }
 
@@ -277,6 +304,8 @@ h2 { margin-bottom: 6px; font-size: 21px; line-height: 1.2; letter-spacing: -.01
   .aggregate-row > span:first-child { grid-column: 1 / -1; padding-bottom: 8px; border-bottom: 1px solid #edf1f5; }
   .aggregate-row small { display: block; margin-bottom: 2px; color: var(--muted); font-size: 8px; font-weight: 700; text-transform: uppercase; }
   .aggregate-row b { font-size: 11px; }
+  .insight-grid { grid-template-columns: 1fr; }
+  .goal-heading { flex-direction: column; gap: 5px; }
   .install-card { align-items: stretch; flex-direction: column; }
   .secondary-button { width: 100%; }
 }

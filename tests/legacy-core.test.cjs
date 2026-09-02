@@ -55,10 +55,19 @@ test("core date and doctor-name helpers preserve legacy behavior", () => {
 test("Admin builds a valid mobile publication from calculated metrics without patient rows", () => {
   const context = createContext();
   const uiSource = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
-  const publicationSource = uiSource.slice(
+  const goalSource = uiSource.slice(
+    uiSource.indexOf("function doctorGoalsSource"),
+    uiSource.indexOf("function metricHighlight"),
+  );
+  const scoringSource = uiSource.slice(
+    uiSource.indexOf("function scoringBenchmarkDefs"),
+    uiSource.indexOf("function viewerAccessSettingsHtml"),
+  );
+  const publicationSource = goalSource + scoringSource + uiSource.slice(
     uiSource.indexOf("function mobilePublicationText"),
     uiSource.indexOf("function doctorMetricsHeaderHtml"),
   );
+  vm.runInContext("const UI = { nazSlice: 1 };", context);
   vm.runInContext(publicationSource, context, { filename: "app-ui-mobile-publication.js" });
 
   const publication = vm.runInContext(`(() => {
@@ -73,7 +82,11 @@ test("Admin builds a valid mobile publication from calculated metrics without pa
       reviews: 14
     };
     clearMetricsCache();
-    return buildMobilePublication('d1');
+    return buildMobilePublication('d1', { '2026-01': [{
+      scopeType: 'doctor', scopeId: 'd1', periodKey: '2026-01', blockKey: 'doctor.dynamics',
+      status: 'published', bodyText: 'Сохранённый комментарий Viewer', authorName: 'Администратор',
+      updatedAt: '2026-02-01T10:00:00.000Z'
+    }] });
   })()`, context);
   const plain = JSON.parse(JSON.stringify(publication));
   const validated = validateMobilePublication(plain);
@@ -83,6 +96,9 @@ test("Admin builds a valid mobile publication from calculated metrics without pa
   assert.equal(validated.periods.length, 1);
   assert.equal(validated.periods[0].headlineMetrics.length, 5);
   assert.equal(validated.periods[0].vectors.length, 6);
+  assert.equal(validated.periods[0].goals.length, 15);
+  assert.equal(validated.periods[0].dynamics, null);
+  assert.equal(validated.periods[0].comments[0].text, "Сохранённый комментарий Viewer");
   assert.doesNotMatch(serialized, /"(?:patientId|patientName|clientRows|clients)"/);
 });
 

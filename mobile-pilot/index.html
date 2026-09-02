@@ -12,7 +12,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="512x512" href="./icons/app-icon-512.png">
   <link rel="apple-touch-icon" href="./icons/app-icon-192.png">
-  <link rel="stylesheet" href="./app.css?v=5">
+  <link rel="stylesheet" href="./app.css?v=8">
 </head>
 <body>
   <header class="site-header">
@@ -131,17 +131,19 @@
           <div><span class="eyebrow">Изменение за период</span><h2>Все показатели</h2></div>
         </div>
         <div class="comparison-list" id="comparisonList"></div>
+        <div class="dynamics-insights" id="dynamicsInsights"></div>
       </section>
 
       <section class="tab-panel hidden" id="goalsPanel" role="tabpanel" data-panel="goals">
         <div class="section-heading">
-          <div><span class="eyebrow">Текущий фокус</span><h2>Цели и комментарий</h2></div>
+          <div><span class="eyebrow">Текущий фокус</span><h2>Цели и комментарии</h2></div>
         </div>
+        <p class="goals-source" id="goalsSource"></p>
         <div class="goals-list" id="goalsList"></div>
-        <article class="comment-card">
-          <div class="comment-heading"><span class="avatar small" aria-hidden="true">Р</span><span><b>Комментарий руководителя</b><small id="commentDate"></small></span></div>
-          <blockquote id="managerComment"></blockquote>
-        </article>
+        <div class="section-heading compact-heading">
+          <div><span class="eyebrow">К разделам Viewer</span><h2>Комментарии</h2></div>
+        </div>
+        <div class="comments-list" id="commentsList"></div>
       </section>
 
       <section class="install-card" id="installCard">
@@ -178,7 +180,7 @@
   </dialog>
 
   <noscript><div class="noscript">Для работы мобильного прототипа включите JavaScript.</div></noscript>
-  <script src="./demo-data.js?v=5" defer></script>
-  <script src="./app.js?v=5" defer></script>
+  <script src="./demo-data.js?v=8" defer></script>
+  <script src="./app.js?v=8" defer></script>
 </body>
 </html>

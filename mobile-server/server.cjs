@@ -27,6 +27,9 @@ const RATE_WINDOW_MS = 10 * 60 * 1000;
 const RATE_LOCK_MS = 15 * 60 * 1000;
 const RATE_MAX_FAILURES = 5;
 const MAX_SESSIONS = 2000;
+const UPLOAD_TTL_MS = 20 * 60 * 1000;
+const MAX_UPLOAD_CHUNK_BYTES = 512 * 1024;
+const MAX_ACTIVE_UPLOADS = 4;
 const BUNDLE_FILE_NAME = "publications.kvmobilebundle";
 const SESSION_COOKIE = "klinvekt_mobile_session";
 
@@ -151,7 +154,19 @@ function createMobileServer(options = {}) {
     bundle: loadBundle(bundlePath),
     sessions: new Map(),
     failures: new Map(),
+    uploads: new Map(),
   };
+
+  function discardUpload(uploadId) {
+    const upload = state.uploads.get(uploadId);
+    state.uploads.delete(uploadId);
+    if (!upload || !upload.temporaryPath) return;
+    try {
+      fs.unlinkSync(upload.temporaryPath);
+    } catch (error) {
+      if (error && error.code !== "ENOENT") throw error;
+    }
+  }
 
   function cleanState(now = Date.now()) {
     for (const [token, session] of state.sessions) if (session.expiresAt <= now) state.sessions.delete(token);
@@ -159,6 +174,21 @@ function createMobileServer(options = {}) {
       rate.failures = rate.failures.filter(time => now - time <= RATE_WINDOW_MS);
       if ((!rate.lockedUntil || rate.lockedUntil <= now) && !rate.failures.length) state.failures.delete(key);
     }
+    for (const [uploadId, upload] of state.uploads) if (upload.expiresAt <= now) discardUpload(uploadId);
+  }
+
+  function requireAdmin(identity) {
+    if (isAdminRole(identity.role)) return;
+    throw Object.assign(new Error("Загрузка доступна только администратору портала"), { statusCode: 403 });
+  }
+
+  function ownedUpload(uploadId, identity) {
+    const upload = state.uploads.get(uploadId);
+    if (!upload) throw Object.assign(new Error("Загрузка не найдена или устарела. Выберите файл заново"), { statusCode: 410 });
+    if (upload.userId !== identity.userId || upload.portalId !== identity.portalId) {
+      throw Object.assign(new Error("Эта загрузка принадлежит другому администратору"), { statusCode: 403 });
+    }
+    return upload;
   }
 
   function sessionFor(request, identity) {
@@ -226,14 +256,109 @@ function createMobileServer(options = {}) {
     }
 
     if (request.method === "POST" && url.pathname === "/api/admin/publications") {
-      if (!isAdminRole(identity.role)) {
-        sendJson(response, 403, { error: "Загрузка доступна только администратору портала" });
-        return;
-      }
+      requireAdmin(identity);
       const bundle = validateMobilePublicationBundle(await readJson(request, MAX_BUNDLE_BYTES));
       saveBundle(bundle);
       state.sessions.clear();
       sendJson(response, 200, { ok: true, doctors: bundle.doctors.length, createdAt: bundle.createdAt });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/admin/publications/uploads") {
+      requireAdmin(identity);
+      const input = await readJson(request, 16 * 1024);
+      const expectedBytes = Number(input && input.bytes);
+      const expectedSha256 = String(input && input.sha256 || "").toLowerCase();
+      if (!Number.isInteger(expectedBytes) || expectedBytes < 1 || expectedBytes > MAX_BUNDLE_BYTES) {
+        throw Object.assign(new Error("Некорректный размер мобильного пакета"), { statusCode: 400 });
+      }
+      if (!/^[a-f0-9]{64}$/.test(expectedSha256)) {
+        throw Object.assign(new Error("Не удалось проверить целостность мобильного пакета"), { statusCode: 400 });
+      }
+      for (const [uploadId, upload] of state.uploads) {
+        if (upload.userId === identity.userId && upload.portalId === identity.portalId) discardUpload(uploadId);
+      }
+      if (state.uploads.size >= MAX_ACTIVE_UPLOADS) {
+        throw Object.assign(new Error("Сервер уже принимает другой пакет. Повторите через несколько минут"), { statusCode: 429 });
+      }
+      const uploadId = crypto.randomBytes(18).toString("hex");
+      const temporaryPath = path.join(dataDir, `.klinvekt-upload-${uploadId}.tmp`);
+      fs.writeFileSync(temporaryPath, Buffer.alloc(0), { flag: "wx", mode: 0o600 });
+      const chunks = Math.ceil(expectedBytes / MAX_UPLOAD_CHUNK_BYTES);
+      state.uploads.set(uploadId, {
+        userId: identity.userId,
+        portalId: identity.portalId,
+        temporaryPath,
+        expectedBytes,
+        expectedSha256,
+        chunks,
+        nextIndex: 0,
+        receivedBytes: 0,
+        expiresAt: Date.now() + UPLOAD_TTL_MS,
+      });
+      sendJson(response, 201, { uploadId, chunkBytes: MAX_UPLOAD_CHUNK_BYTES, chunks });
+      return;
+    }
+
+    const chunkMatch = url.pathname.match(/^\/api\/admin\/publications\/uploads\/([a-f0-9]{36})\/chunks\/(\d+)$/);
+    if (request.method === "PUT" && chunkMatch) {
+      requireAdmin(identity);
+      const upload = ownedUpload(chunkMatch[1], identity);
+      const index = Number(chunkMatch[2]);
+      if (index !== upload.nextIndex || index < 0 || index >= upload.chunks) {
+        throw Object.assign(new Error("Части файла получены не по порядку. Выберите файл заново"), { statusCode: 409 });
+      }
+      if (!String(request.headers["content-type"] || "").toLowerCase().startsWith("application/octet-stream")) {
+        throw Object.assign(new Error("Некорректный формат части файла"), { statusCode: 415 });
+      }
+      const chunk = await readBody(request, MAX_UPLOAD_CHUNK_BYTES);
+      const expectedChunkBytes = Math.min(MAX_UPLOAD_CHUNK_BYTES, upload.expectedBytes - (index * MAX_UPLOAD_CHUNK_BYTES));
+      if (chunk.length !== expectedChunkBytes) {
+        throw Object.assign(new Error("Часть файла передана не полностью. Выберите файл заново"), { statusCode: 400 });
+      }
+      fs.appendFileSync(upload.temporaryPath, chunk);
+      upload.nextIndex += 1;
+      upload.receivedBytes += chunk.length;
+      upload.expiresAt = Date.now() + UPLOAD_TTL_MS;
+      sendJson(response, 200, { ok: true, received: upload.nextIndex, chunks: upload.chunks });
+      return;
+    }
+
+    const uploadMatch = url.pathname.match(/^\/api\/admin\/publications\/uploads\/([a-f0-9]{36})(\/complete)?$/);
+    if (request.method === "DELETE" && uploadMatch && !uploadMatch[2]) {
+      requireAdmin(identity);
+      ownedUpload(uploadMatch[1], identity);
+      discardUpload(uploadMatch[1]);
+      sendJson(response, 200, { ok: true });
+      return;
+    }
+
+    if (request.method === "POST" && uploadMatch && uploadMatch[2]) {
+      requireAdmin(identity);
+      const uploadId = uploadMatch[1];
+      const upload = ownedUpload(uploadId, identity);
+      try {
+        if (upload.nextIndex !== upload.chunks || upload.receivedBytes !== upload.expectedBytes) {
+          throw Object.assign(new Error("Файл передан не полностью. Выберите его заново"), { statusCode: 409 });
+        }
+        const raw = fs.readFileSync(upload.temporaryPath);
+        const actualSha256 = crypto.createHash("sha256").update(raw).digest("hex");
+        if (actualSha256 !== upload.expectedSha256) {
+          throw Object.assign(new Error("Проверка целостности не пройдена. Выберите файл заново"), { statusCode: 400 });
+        }
+        let parsed;
+        try {
+          parsed = JSON.parse(raw.toString("utf8"));
+        } catch (_) {
+          throw Object.assign(new Error("Файл повреждён или не является пакетом КлинВект"), { statusCode: 400 });
+        }
+        const bundle = validateMobilePublicationBundle(parsed);
+        saveBundle(bundle);
+        state.sessions.clear();
+        sendJson(response, 200, { ok: true, doctors: bundle.doctors.length, createdAt: bundle.createdAt });
+      } finally {
+        discardUpload(uploadId);
+      }
       return;
     }
 
@@ -307,13 +432,17 @@ function createMobileServer(options = {}) {
       sendJson(response, 405, { error: "Метод не поддерживается" });
       return;
     }
-    if (url.pathname === "/") {
-      response.writeHead(302, { Location: "/mobile/", "Cache-Control": "no-store" });
-      response.end();
-      return;
+    let relative = "";
+    if (url.pathname === "/" || url.pathname === "/mobile" || url.pathname === "/mobile/") {
+      relative = "index.html";
+    } else if (url.pathname.startsWith("/mobile/")) {
+      relative = url.pathname.slice("/mobile/".length);
+    } else if (url.pathname.startsWith("/")) {
+      // Black Hole opens the application origin at `/`. Keep the same static
+      // shell available there so relative CSS/JS/icon URLs remain valid even
+      // when the gateway consumes or hides the `/mobile/` redirect.
+      relative = url.pathname.slice(1);
     }
-    let relative = url.pathname.startsWith("/mobile/") ? url.pathname.slice("/mobile/".length) : "";
-    if (url.pathname === "/mobile" || url.pathname === "/mobile/") relative = "index.html";
     if (!relative) {
       sendJson(response, 404, { error: "Страница не найдена" });
       return;
@@ -387,6 +516,7 @@ if (require.main === module) {
 
 module.exports = {
   BUNDLE_FILE_NAME,
+  MAX_UPLOAD_CHUNK_BYTES,
   RATE_MAX_FAILURES,
   SESSION_COOKIE,
   createMobileServer,

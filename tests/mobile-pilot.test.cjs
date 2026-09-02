@@ -58,9 +58,9 @@ test("mobile pilot scripts parse and use only bundled relative assets", () => {
 
   const html = read("mobile-pilot/index.html");
   assert.match(html, /rel="manifest" href="\.\/manifest\.webmanifest"/);
-  assert.match(html, /src="\.\/demo-data\.js\?v=5"/);
-  assert.match(html, /src="\.\/app\.js\?v=5"/);
-  assert.match(html, /href="\.\/app\.css\?v=5"/);
+  assert.match(html, /src="\.\/demo-data\.js\?v=8"/);
+  assert.match(html, /src="\.\/app\.js\?v=8"/);
+  assert.match(html, /href="\.\/app\.css\?v=8"/);
   assert.doesNotMatch(html, /https?:\/\//i);
 
   const worker = read("mobile-pilot/service-worker.js");
@@ -87,10 +87,15 @@ test("mobile pilot bundles only synthetic fallback data and accepts a separate m
   assert.doesNotMatch(page, /Открыть тестовый отчёт|Открыть загруженный отчёт/);
   assert.doesNotMatch(page, /pilot-note|Безопасный макет/);
   assert.doesNotMatch(page, /ПАЦИЕНТЫ ДЛЯ РАБОТЫ|clientSegmentPatients/i);
+  assert.match(page, />Комментарии</);
+  assert.doesNotMatch(page, /Комментарий руководителя/);
   const app = read("mobile-pilot/app.js");
   assert.match(app, /klinvekt-mobile-publication/);
   assert.match(app, /patientRegistryIncluded !== false/);
   assert.match(app, /findForbiddenPublicationKey/);
+  assert.match(app, /api\/admin\/publications\/uploads/);
+  assert.match(app, /application\/octet-stream/);
+  assert.match(app, /SHA-256/);
 });
 
 test("mobile pilot mirrors all aggregate doctor metrics without a patient registry", () => {
@@ -102,6 +107,8 @@ test("mobile pilot mirrors all aggregate doctor metrics without a patient regist
   for (const period of demo.periods) {
     assert.equal(period.headlineMetrics.length, 5);
     assert.equal(period.vectors.length, 6);
+    assert.ok(period.dynamics.rows.length >= 4);
+    assert.ok(period.comments.length >= 1);
     for (const vector of period.vectors) {
       if (vector.id === "v4") {
         assert.deepEqual(Array.from(vector.windows, (item) => item.id), ["12", "24", "36"]);
@@ -133,12 +140,42 @@ test("mobile publication format validates aggregates and rejects patient-bearing
   assert.equal(validateMobilePublication(publication), publication);
   assert.match(serializeMobilePublication(publication), /"klinvekt-mobile-publication"/);
 
+  publication.periods[0].comments = [{
+    blockKey: "doctor.dynamics",
+    title: "Динамика, точки роста и риска",
+    text: "Сохранённый комментарий",
+    author: "Администратор",
+    updatedAt: new Date(0).toISOString(),
+  }];
+  assert.equal(validateMobilePublication(publication).periods[0].comments[0].text, "Сохранённый комментарий");
+
   const unsafe = JSON.parse(JSON.stringify(publication));
   unsafe.periods[0].vectors[3].patientRegistry = [{ patientId: "secret" }];
   assert.throws(() => validateMobilePublication(unsafe), /запрещённое поле/);
   const raw = JSON.parse(JSON.stringify(publication));
   raw.security.rawExportsIncluded = true;
   assert.throws(() => validateMobilePublication(raw), /отсутствие реестра пациентов/);
+});
+
+test("mobile publication keeps reading pre-parity version 1 files", () => {
+  const context = { window: {} };
+  vm.runInNewContext(read("mobile-pilot/demo-data.js"), context);
+  const demo = JSON.parse(JSON.stringify(context.window.KLINVEKT_MOBILE_DEMO));
+  for (const period of demo.periods) {
+    delete period.comments;
+    delete period.dynamics;
+    delete period.goalsSource;
+    period.goals = period.goals.map(({ title, description, progress }) => ({ title, description, progress }));
+  }
+  const publication = {
+    format: MOBILE_PUBLICATION_FORMAT,
+    version: MOBILE_PUBLICATION_VERSION,
+    createdAt: new Date(0).toISOString(),
+    security: { patientRegistryIncluded: false, rawExportsIncluded: false },
+    doctor: demo.doctor,
+    periods: demo.periods,
+  };
+  assert.equal(validateMobilePublication(publication), publication);
 });
 
 test("one mobile bundle encrypts every doctor publication with the existing PIN", () => {
