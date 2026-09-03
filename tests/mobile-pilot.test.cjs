@@ -31,6 +31,56 @@ function pngSize(relativePath) {
   return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
 }
 
+test("mobile Safari layout reserves navigation space and keeps controls readable", () => {
+  const css = read("mobile-pilot/app.css"), html = read("mobile-pilot/index.html"), app = read("mobile-pilot/app.js");
+  assert.match(html, /<main id="reportScroller">/);
+  assert.match(css, /body\s*\{[^}]*height:\s*100dvh[^}]*overflow:\s*hidden/s);
+  assert.match(css, /main\s*\{[^}]*min-height:\s*0[^}]*overflow-y:\s*auto/s);
+  assert.match(css, /\.bottom-nav\s*\{[^}]*flex:\s*0 0 auto/s);
+  assert.doesNotMatch(css, /\.bottom-nav\s*\{[^}]*position:\s*fixed/s);
+  for (const selector of ["\\.login-field", "\\.period-control select", "\\.team-reports select", "\\.chart-picker select"]) {
+    assert.match(css, new RegExp(`${selector}\\s*\\{[^}]*font-size:\\s*16px`, "s"));
+  }
+  assert.doesNotMatch(html, /user-scalable=no|maximum-scale=1/);
+  assert.doesNotMatch(app, /window\.scrollTo|\.scrollIntoView/);
+  assert.match(app, /preserveAspectRatio="xMidYMid meet"/);
+});
+
+test("report navigation scrolls only the report container with header clearance", () => {
+  const app = read("mobile-pilot/app.js");
+  const source = app.slice(app.indexOf("  function scrollReportTo("), app.indexOf("  function formatCommentDate("));
+  const calls = [];
+  let reducedMotion = false;
+  const context = { elements: { reportScroller: { scrollTop: 450, getBoundingClientRect: () => ({ top: 66 }), scrollTo: value => calls.push(value) } },
+    window: { matchMedia: () => ({ matches: reducedMotion }) } };
+  vm.runInNewContext(source, context);
+  context.scrollReportTo({ getBoundingClientRect: () => ({ top: 166 }) });
+  assert.equal(calls.at(-1).top, 538);
+  assert.equal(calls.at(-1).behavior, "smooth");
+  reducedMotion = true;
+  context.scrollReportTo();
+  assert.equal(calls.at(-1).top, 0);
+  assert.equal(calls.at(-1).behavior, "auto");
+});
+
+test("installation help closes explicitly without form submission and restores focus", () => {
+  const html = read("mobile-pilot/index.html"), app = read("mobile-pilot/app.js");
+  assert.equal((html.match(/type="button" data-close-install/g) || []).length, 2);
+  assert.doesNotMatch(html, /method="dialog"/);
+  assert.match(app, /addEventListener\("cancel", event => \{ event\.preventDefault\(\); closeInstallHelp\(\); \}\)/);
+  const source = app.slice(app.indexOf("  function showInstallHelp("), app.indexOf("  async function apiRequest("));
+  let opened = 0, closed = 0, focused;
+  const dialog = { open: false, showModal() { this.open = true; opened += 1; }, close() { this.open = false; closed += 1; } };
+  const context = { elements: { installDialog: dialog, installButton: { focus: options => { focused = options; } } } };
+  vm.runInNewContext(source, context);
+  context.showInstallHelp(); context.showInstallHelp();
+  assert.equal(opened, 1);
+  context.closeInstallHelp(); context.closeInstallHelp();
+  assert.equal(closed, 1);
+  assert.equal(dialog.open, false);
+  assert.equal(focused.preventScroll, true);
+});
+
 test("mobile pilot contains a complete installable static app shell", () => {
   const required = [
     "index.html",
@@ -61,8 +111,8 @@ test("mobile pilot scripts parse and use only bundled relative assets", () => {
   const html = read("mobile-pilot/index.html");
   assert.match(html, /rel="manifest" href="\.\/manifest\.webmanifest"/);
   assert.match(html, /src="\.\/demo-data\.js\?v=10"/);
-  assert.match(html, /src="\.\/app\.js\?v=11"/);
-  assert.match(html, /href="\.\/app\.css\?v=12"/);
+  assert.match(html, /src="\.\/app\.js\?v=12"/);
+  assert.match(html, /href="\.\/app\.css\?v=13"/);
   assert.doesNotMatch(html, /https?:\/\//i);
 
   const worker = read("mobile-pilot/service-worker.js");
@@ -233,8 +283,8 @@ test("mobile chart typography excludes icon strokes and keeps moderate font weig
     assert.match(rule(selector), /font-weight:\s*500/);
   }
   assert.match(rule(".report-chart h5"), /font-weight:\s*600/);
-  assert.match(read("mobile-pilot/service-worker.js"), /klinvekt-mobile-pilot-v13/);
-  assert.match(read("mobile-pilot/service-worker.js"), /app\.css\?v=12/);
+  assert.match(read("mobile-pilot/service-worker.js"), /klinvekt-mobile-pilot-v14/);
+  assert.match(read("mobile-pilot/service-worker.js"), /app\.css\?v=13/);
 });
 
 test("mobile tree renderer supports nested native disclosures and old revenue markers", () => {

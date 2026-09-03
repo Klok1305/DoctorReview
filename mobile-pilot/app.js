@@ -9,6 +9,7 @@
   let reportData = bundledDemo;
 
   const elements = {
+    reportScroller: document.getElementById("reportScroller"),
     loginView: document.getElementById("loginView"),
     reportView: document.getElementById("reportView"),
     bottomNav: document.getElementById("bottomNav"),
@@ -89,6 +90,12 @@
 
   const signed = (value) => Number.isFinite(value) ? `${value > 0 ? "+" : ""}${value}` : "—";
   const currentPeriod = () => reportData.periods[state.periodIndex];
+
+  function scrollReportTo(target = null) {
+    const scroller = elements.reportScroller;
+    const top = target ? scroller.scrollTop + target.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 12 : 0;
+    scroller.scrollTo({ top: Math.max(0, top), behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  }
 
   function formatCommentDate(value) {
     if (!value) return "";
@@ -289,7 +296,7 @@
     if (!state.serverMode && reportData.demo) sessionStorage.setItem("klinvekt-mobile-pilot-open", "1");
     else sessionStorage.removeItem("klinvekt-mobile-pilot-open");
     render();
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    scrollReportTo();
   }
 
   function showLogin() {
@@ -317,7 +324,7 @@
       elements.serverPin.value = "";
       elements.serverLoginStatus.textContent = "";
     }
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    scrollReportTo();
   }
 
   function renderPeriodOptions() {
@@ -511,10 +518,17 @@
     const shownScore = Number.isFinite(vector.score) ? vector.score : "—";
 
     elements.vectorDetail.innerHTML = `
+      <button class="vector-back" type="button" data-vector-back>↑ К векторам</button>
       <header><div><span class="eyebrow">Вектор ${vector.number}</span><h3>${escapeHtml(vector.title)}</h3></div><span class="vector-score">${shownScore}</span></header>
       <p class="vector-summary">${escapeHtml(vector.detail)}</p>
       ${windowPicker}
       <div class="metric-sections">${sections.map(renderSection).join("")}</div>`;
+
+    elements.vectorDetail.querySelector("[data-vector-back]").addEventListener("click", () => {
+      const card = elements.vectorGrid.querySelector('[aria-pressed="true"]');
+      card?.focus({ preventScroll: true });
+      scrollReportTo(elements.vectorGrid);
+    });
 
     elements.vectorDetail.querySelectorAll("[data-tree-action]").forEach(button => {
       button.addEventListener("click", () => button.closest(".report-tree").querySelectorAll("details.tree-node").forEach(node => { node.open = button.dataset.treeAction === "open"; }));
@@ -548,7 +562,8 @@
       button.addEventListener("click", () => {
         state.vectorId = button.dataset.vector;
         renderVectors(currentPeriod());
-        elements.vectorDetail.scrollIntoView({ behavior: "smooth", block: "start" });
+        elements.vectorDetail.focus({ preventScroll: true });
+        scrollReportTo(elements.vectorDetail);
       });
     });
 
@@ -565,7 +580,7 @@
       elements.trendCaption.textContent = "баллы пока не рассчитаны";
     } else {
     const values = chronological.map((period) => period.overall);
-    const width = 600;
+    const width = 320;
     const height = 170;
     const padX = 24;
     const padY = 20;
@@ -584,7 +599,7 @@
       return `<line class="chart-grid" x1="${padX}" y1="${y}" x2="${width - padX}" y2="${y}"/>`;
     }).join("");
     elements.trendChart.innerHTML = `
-      <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
+      <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
         <defs><linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2563eb" stop-opacity=".24"/><stop offset="1" stop-color="#2563eb" stop-opacity="0"/></linearGradient></defs>
         ${gridLines}<polygon class="chart-area" points="${area}"/><polyline class="chart-line" points="${line}"/>
         ${points.map((p) => `<circle class="chart-dot" cx="${p.x}" cy="${p.y}" r="5"/>`).join("")}
@@ -667,7 +682,13 @@
   }
 
   function showInstallHelp() {
+    if (elements.installDialog.open) return;
     if (typeof elements.installDialog.showModal === "function") elements.installDialog.showModal();
+  }
+
+  function closeInstallHelp() {
+    if (elements.installDialog.open) elements.installDialog.close();
+    elements.installButton.focus({ preventScroll: true });
   }
 
   async function apiRequest(path, options = {}) {
@@ -867,7 +888,17 @@
   elements.periodSelect.addEventListener("change", () => { state.periodIndex = Number(elements.periodSelect.value); state.vectorId = "v1"; state.windowSelections = {}; render(); });
   elements.previousPeriod.addEventListener("click", () => { if (state.periodIndex < reportData.periods.length - 1) { state.periodIndex += 1; state.vectorId = "v1"; state.windowSelections = {}; render(); } });
   elements.nextPeriod.addEventListener("click", () => { if (state.periodIndex > 0) { state.periodIndex -= 1; state.vectorId = "v1"; state.windowSelections = {}; render(); } });
-  document.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", () => setTab(button.dataset.tab)));
+  document.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", () => {
+    setTab(button.dataset.tab);
+    scrollReportTo(document.querySelector(".tab-list"));
+  }));
+  elements.installDialog.querySelectorAll("[data-close-install]").forEach(button => button.addEventListener("click", closeInstallHelp));
+  elements.installDialog.addEventListener("cancel", event => { event.preventDefault(); closeInstallHelp(); });
+  elements.installDialog.addEventListener("click", event => {
+    if (event.target !== elements.installDialog) return;
+    const box = elements.installDialog.getBoundingClientRect();
+    if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) closeInstallHelp();
+  });
   window.addEventListener("online", updateConnectionStatus);
   window.addEventListener("offline", updateConnectionStatus);
   window.addEventListener("beforeinstallprompt", (event) => { event.preventDefault(); state.installPrompt = event; });

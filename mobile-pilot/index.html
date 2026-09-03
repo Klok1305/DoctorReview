@@ -12,7 +12,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="512x512" href="./icons/app-icon-512.png">
   <link rel="apple-touch-icon" href="./icons/app-icon-192.png">
-  <link rel="stylesheet" href="./app.css?v=12">
+  <link rel="stylesheet" href="./app.css?v=13">
 </head>
 <body>
   <header class="site-header">
@@ -25,7 +25,7 @@
     </button>
   </header>
 
-  <main>
+  <main id="reportScroller">
     <section class="login-view" id="loginView" aria-labelledby="loginTitle">
       <div class="login-card">
         <div class="login-toolbar">
@@ -122,7 +122,7 @@
           <span class="small-muted">Нажмите на карточку</span>
         </div>
         <div class="vector-grid" id="vectorGrid"></div>
-        <article class="detail-card" id="vectorDetail" aria-live="polite"></article>
+        <article class="detail-card" id="vectorDetail" tabindex="-1" aria-live="polite"></article>
       </section>
 
       <section class="tab-panel hidden" id="dynamicsPanel" role="tabpanel" data-panel="dynamics">
@@ -155,7 +155,7 @@
       </section>
 
       <section class="install-card" id="installCard">
-        <div><b>Добавить КлинВект на экран телефона</b><p>Прототип будет открываться как отдельное приложение.</p></div>
+        <div><b>Добавить КлинВект на экран телефона</b><p>Отчёты будут открываться как отдельное приложение.</p></div>
         <button class="secondary-button" id="installButton" type="button">Установить</button>
       </section>
     </section>
@@ -176,19 +176,19 @@
     </button>
   </nav>
 
-  <dialog class="install-dialog" id="installDialog">
-    <form method="dialog">
-      <button class="dialog-close" value="close" aria-label="Закрыть">×</button>
+  <dialog class="install-dialog" id="installDialog" aria-labelledby="installDialogTitle">
+    <div class="install-dialog-content">
+      <button class="dialog-close" type="button" data-close-install aria-label="Закрыть">×</button>
       <span class="eyebrow">Установка без магазина</span>
-      <h2>Добавьте КлинВект на главный экран</h2>
+      <h2 id="installDialogTitle">Добавьте КлинВект на главный экран</h2>
       <div class="install-step"><span>iPhone</span><p>Откройте страницу в Safari → нажмите «Поделиться» → «На экран Домой» → включите «Открывать как веб‑приложение».</p></div>
       <div class="install-step"><span>Android</span><p>Откройте меню браузера Chrome → выберите «Установить приложение» или «Добавить на главный экран».</p></div>
-      <button class="primary-button compact" value="close">Понятно</button>
-    </form>
+      <button class="primary-button compact" type="button" data-close-install>Понятно</button>
+    </div>
   </dialog>
 
   <noscript><div class="noscript">Для работы мобильного прототипа включите JavaScript.</div></noscript>
   <script src="./demo-data.js?v=10" defer></script>
-  <script src="./app.js?v=11" defer></script>
+  <script src="./app.js?v=12" defer></script>
 </body>
 </html>
