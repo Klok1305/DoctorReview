@@ -17,7 +17,7 @@ function loadPublicationService() {
 
 const {
   MAX_BUNDLE_BYTES,
-  decryptMobilePublication,
+  openMobileReportSession,
   serializeMobilePublicationBundle,
   validateMobilePublicationBundle,
 } = loadPublicationService();
@@ -194,7 +194,7 @@ function createMobileServer(options = {}) {
   function sessionFor(request, identity) {
     const token = cookieValue(request, SESSION_COOKIE);
     const session = token && state.sessions.get(token);
-    if (!session || session.userId !== identity.userId || session.expiresAt <= Date.now()) return null;
+    if (!session || session.userId !== identity.userId || session.portalId !== identity.portalId || session.expiresAt <= Date.now()) return null;
     session.expiresAt = Date.now() + SESSION_TTL_MS;
     return { token, session };
   }
@@ -230,6 +230,15 @@ function createMobileServer(options = {}) {
       if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
     }
     state.bundle = bundle;
+  }
+
+  function reportResponse(session) {
+    return { publication: session.publication, access: {
+      owner: session.access.owner,
+      managedDepartments: session.access.managedDepartments,
+      reports: session.access.reports,
+      selectedDoctorId: session.selectedDoctorId,
+    } };
   }
 
   async function handleApi(request, response, url, identity) {
@@ -381,26 +390,32 @@ function createMobileServer(options = {}) {
         sendJson(response, 429, { error: "Слишком много попыток. Повторите вход позже" }, { "Retry-After": Math.ceil(retryAfterMs / 1000) });
         return;
       }
-      let publication;
+      let publication, access, selectedDoctorId;
       try {
-        publication = decryptMobilePublication(entry, pin);
+        access = openMobileReportSession(state.bundle, doctorId, pin);
+        selectedDoctorId = access.reports.some(report => report.doctorId === doctorId) ? doctorId : access.reports[0].doctorId;
+        publication = access.readReport(selectedDoctorId);
       } catch (_) {
         recordFailure(key);
         sendJson(response, 401, { error: "Неверно выбран врач или указан PIN" });
         return;
       }
       state.failures.delete(key);
-      for (const [token, session] of state.sessions) if (session.userId === identity.userId) state.sessions.delete(token);
+      for (const [token, session] of state.sessions) if (session.userId === identity.userId && session.portalId === identity.portalId) state.sessions.delete(token);
       if (state.sessions.size >= MAX_SESSIONS) cleanState(Date.now() + SESSION_TTL_MS);
       const token = crypto.randomBytes(32).toString("base64url");
-      state.sessions.set(token, {
+      const session = {
         userId: identity.userId,
+        portalId: identity.portalId,
         doctorId,
+        access,
+        selectedDoctorId,
         publication,
         expiresAt: Date.now() + SESSION_TTL_MS,
-      });
+      };
+      state.sessions.set(token, session);
       const cookieSecurity = trustLocal ? "SameSite=Strict" : "SameSite=None; Secure; Partitioned";
-      sendJson(response, 200, { ok: true, publication }, {
+      sendJson(response, 200, { ok: true, ...reportResponse(session) }, {
         "Set-Cookie": `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; ${cookieSecurity}; Max-Age=${SESSION_TTL_MS / 1000}`,
       });
       return;
@@ -411,7 +426,23 @@ function createMobileServer(options = {}) {
         sendJson(response, 401, { error: "Введите PIN врача" });
         return;
       }
-      sendJson(response, 200, { publication: activeSession.session.publication });
+      const session = activeSession.session;
+      const selectedDoctorId = url.searchParams.has("doctorId") ? url.searchParams.get("doctorId") : session.selectedDoctorId;
+      if (!session.access.reports.some(report => report.doctorId === selectedDoctorId)) {
+        sendJson(response, 403, { error: "Нет доступа к отчёту этого врача" });
+        return;
+      }
+      if (selectedDoctorId !== session.selectedDoctorId) {
+        try {
+          const publication = session.access.readReport(selectedDoctorId);
+          session.publication = publication;
+          session.selectedDoctorId = selectedDoctorId;
+        } catch (_) {
+          sendJson(response, 409, { error: "Отчёт повреждён. Попросите администратора заново загрузить общий файл" });
+          return;
+        }
+      }
+      sendJson(response, 200, reportResponse(session));
       return;
     }
 

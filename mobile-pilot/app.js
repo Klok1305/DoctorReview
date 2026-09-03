@@ -35,6 +35,12 @@
     loginAvatar: document.querySelector(".demo-profile .avatar"),
     doctorName: document.getElementById("doctorName"),
     doctorDepartment: document.getElementById("doctorDepartment"),
+    reportOwnerLabel: document.getElementById("reportOwnerLabel"),
+    teamReports: document.getElementById("teamReports"),
+    teamReportsContext: document.getElementById("teamReportsContext"),
+    teamDoctorSelect: document.getElementById("teamDoctorSelect"),
+    teamReportStatus: document.getElementById("teamReportStatus"),
+    ownReportButton: document.getElementById("ownReportButton"),
     periodSelect: document.getElementById("periodSelect"),
     previousPeriod: document.getElementById("previousPeriod"),
     nextPeriod: document.getElementById("nextPeriod"),
@@ -70,6 +76,8 @@
     installPrompt: null,
     serverMode: false,
     serverContext: null,
+    reportAccess: null,
+    reportRequestId: 0,
   };
 
   const escapeHtml = (value) => String(value)
@@ -189,6 +197,67 @@
     resetReportState();
   }
 
+  function useServerReport(result) {
+    usePublication(result.publication);
+    state.reportAccess = result.access || null;
+  }
+
+  function renderReportAccess() {
+    const access = state.reportAccess;
+    const isHead = Boolean(state.serverMode && access?.managedDepartments?.length);
+    elements.teamReports.classList.toggle("hidden", !isHead);
+    elements.reportOwnerLabel.textContent = access && access.selectedDoctorId !== access.owner.doctorId ? "Отчёт врача" : "Мой отчёт";
+    if (!isHead) return;
+    elements.teamReportsContext.textContent = `Вход: ${access.owner.displayName}. Доступны только отчёты ваших отделений.`;
+    const own = access.reports.find(report => report.doctorId === access.owner.doctorId);
+    const option = report => `<option value="${escapeHtml(report.doctorId)}">${escapeHtml(report.displayName)}</option>`;
+    const groups = new Map();
+    access.reports.filter(report => report.doctorId !== access.owner.doctorId).forEach(report => {
+      if (!groups.has(report.department)) groups.set(report.department, []);
+      groups.get(report.department).push(report);
+    });
+    elements.teamDoctorSelect.innerHTML = (own ? `<optgroup label="Мой отчёт">${option(own)}</optgroup>` : "")
+      + [...groups].map(([department, reports]) => `<optgroup label="${escapeHtml(department)}">${reports.map(option).join("")}</optgroup>`).join("");
+    elements.teamDoctorSelect.value = access.selectedDoctorId;
+    elements.ownReportButton.classList.toggle("hidden", !own);
+    elements.ownReportButton.disabled = !own || access.selectedDoctorId === access.owner.doctorId;
+  }
+
+  async function selectTeamReport(doctorId) {
+    const access = state.reportAccess;
+    if (!access || !access.reports.some(report => report.doctorId === doctorId)) return;
+    const requestId = ++state.reportRequestId;
+    const periodId = currentPeriod()?.id;
+    elements.teamDoctorSelect.disabled = true;
+    elements.ownReportButton.disabled = true;
+    elements.teamReportStatus.classList.remove("error");
+    elements.teamReportStatus.textContent = "Открываем отчёт…";
+    try {
+      const result = await apiRequest(`/api/report?doctorId=${encodeURIComponent(doctorId)}`);
+      if (requestId !== state.reportRequestId) return;
+      useServerReport(result);
+      const index = reportData.periods.findIndex(period => period.id === periodId);
+      if (index >= 0) state.periodIndex = index;
+      elements.teamReportStatus.textContent = "";
+      showReport();
+    } catch (error) {
+      if (requestId !== state.reportRequestId) return;
+      if (error.status === 401) {
+        showLogin();
+        elements.serverLoginStatus.textContent = "Сессия завершена. Войдите по PIN заново";
+      } else {
+        elements.teamReportStatus.textContent = error.message || "Не удалось открыть отчёт";
+        elements.teamReportStatus.classList.add("error");
+        renderReportAccess();
+      }
+    } finally {
+      if (requestId === state.reportRequestId) {
+        elements.teamDoctorSelect.disabled = false;
+        renderReportAccess();
+      }
+    }
+  }
+
   function applyReportIdentity() {
     elements.loginDoctorName.textContent = reportData.doctor.name;
     elements.loginDoctorDepartment.textContent = reportData.doctor.department;
@@ -216,6 +285,7 @@
     elements.logoutButton.classList.remove("hidden");
     elements.doctorName.textContent = reportData.doctor.name;
     elements.doctorDepartment.textContent = reportData.doctor.department;
+    renderReportAccess();
     if (!state.serverMode && reportData.demo) sessionStorage.setItem("klinvekt-mobile-pilot-open", "1");
     else sessionStorage.removeItem("klinvekt-mobile-pilot-open");
     render();
@@ -223,6 +293,21 @@
   }
 
   function showLogin() {
+    state.reportRequestId += 1;
+    state.reportAccess = null;
+    elements.teamReports.classList.add("hidden");
+    elements.teamDoctorSelect.innerHTML = "";
+    elements.teamDoctorSelect.disabled = false;
+    elements.teamReportStatus.textContent = "";
+    // Clear a server report from hidden DOM as well as memory; keep local imports reusable.
+    if (state.serverMode) {
+      reportData = bundledDemo;
+      resetReportState();
+      elements.doctorName.textContent = reportData.doctor.name;
+      elements.doctorDepartment.textContent = reportData.doctor.department;
+      elements.reportOwnerLabel.textContent = "Мой отчёт";
+      render();
+    }
     elements.loginView.classList.remove("hidden");
     elements.reportView.classList.add("hidden");
     elements.bottomNav.classList.add("hidden");
@@ -450,11 +535,12 @@
       const score = Number.isFinite(vector.score) ? vector.score : 0;
       const shownScore = Number.isFinite(vector.score) ? vector.score : "—";
       return `
-      <button class="vector-card${vector.id === state.vectorId ? " active" : ""}" type="button" data-vector="${escapeHtml(vector.id)}" aria-pressed="${vector.id === state.vectorId}">
+      <button class="vector-card${vector.id === state.vectorId ? " active" : ""}" type="button" data-vector="${escapeHtml(vector.id)}" aria-controls="vectorDetail" aria-pressed="${vector.id === state.vectorId}">
         <span class="vector-card-head"><span class="vector-number">Вектор ${vector.number}</span><span class="vector-score">${shownScore}</span></span>
         <h3>${escapeHtml(vector.title)}</h3>
         <span class="progress-track" aria-hidden="true"><span style="width:${Math.max(0, Math.min(100, score))}%"></span></span>
         <span class="vector-foot"><span>из 100</span><span class="delta ${vector.delta < 0 ? "negative" : "positive"}">${signed(vector.delta)}</span></span>
+        <span class="vector-action"><span>${vector.id === state.vectorId ? "Показатели открыты" : "Открыть показатели"}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>
       </button>`;
     }).join("");
 
@@ -622,7 +708,7 @@
     if (restoreSession && context.sessionActive) {
       try {
         const result = await apiRequest("/api/report");
-        usePublication(result.publication);
+        useServerReport(result);
         showReport();
       } catch (_) {
         showLogin();
@@ -652,7 +738,7 @@
       if (payload.sessionActive) {
         try {
           const result = await apiRequest("/api/report");
-          usePublication(result.publication);
+          useServerReport(result);
           showReport();
         } catch (_) {
           showLogin();
@@ -685,7 +771,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ doctorId: elements.serverDoctorSelect.value, pin: elements.serverPin.value }),
       });
-      usePublication(result.publication);
+      useServerReport(result);
       elements.serverPin.value = "";
       showReport();
     } catch (error) {
@@ -754,6 +840,8 @@
     }
   });
   elements.serverLoginForm.addEventListener("submit", loginToServer);
+  elements.teamDoctorSelect.addEventListener("change", () => selectTeamReport(elements.teamDoctorSelect.value));
+  elements.ownReportButton.addEventListener("click", () => selectTeamReport(state.reportAccess?.owner.doctorId));
   elements.loadBundleButton.addEventListener("click", () => elements.bundleInput.click());
   elements.bundleInput.addEventListener("change", async () => {
     const file = elements.bundleInput.files && elements.bundleInput.files[0];
@@ -768,6 +856,7 @@
     }
   });
   elements.logoutButton.addEventListener("click", async () => {
+    state.reportRequestId += 1;
     if (state.serverMode) {
       try {
         await apiRequest("/api/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });

@@ -9680,19 +9680,20 @@ async function exportAllMobilePublications() {
     const publicationPeriods = [...new Set(activeDoctorIds.flatMap(mobilePublicationMonthKeys))];
     const commentsByPeriod = await loadMobilePublicationComments(publicationPeriods);
     const publications = [];
+    const recipients = activeDoctorIds.map(doctorId => ({ doctorId, displayName: doctorName(doctorId), department: doctorStructureLabel(doctorId) }));
     let skipped = 0;
     for (const doctorId of activeDoctorIds) {
       try {
-        publications.push({ doctorId, publication: buildMobilePublication(doctorId, commentsByPeriod) });
+        publications.push({ doctorId, department: resolvedDepartmentName(doctorId), publication: buildMobilePublication(doctorId, commentsByPeriod) });
       } catch (error) {
         if (/нет рассчитанных периодов/i.test(String(error && error.message))) skipped += 1;
         else throw error;
       }
     }
     if (!publications.length) throw new Error("У активных врачей пока нет рассчитанных периодов");
-    const result = await DESKTOP_API.exportMobilePublicationBundle({ publications });
+    const result = await DESKTOP_API.exportMobilePublicationBundle({ publications, recipients });
     if (!result.canceled) {
-      toast(`Общий мобильный пакет сохранён: ${result.doctors} врачей${skipped ? `, без данных пропущено: ${skipped}` : ""}`);
+      toast(`Общий мобильный пакет сохранён: ${result.doctors} врачей${skipped ? `, без личных показателей: ${skipped}` : ""}`);
     }
   } catch (error) {
     toast(error.message || "Не удалось сформировать общий мобильный пакет", true);

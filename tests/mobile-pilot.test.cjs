@@ -10,6 +10,8 @@ const {
   MOBILE_PUBLICATION_VERSION,
   createMobilePublicationBundle,
   decryptMobilePublication,
+  encryptMobilePublication,
+  openMobileReportSession,
   serializeMobilePublication,
   serializeMobilePublicationBundle,
   validateMobilePublication,
@@ -59,8 +61,8 @@ test("mobile pilot scripts parse and use only bundled relative assets", () => {
   const html = read("mobile-pilot/index.html");
   assert.match(html, /rel="manifest" href="\.\/manifest\.webmanifest"/);
   assert.match(html, /src="\.\/demo-data\.js\?v=10"/);
-  assert.match(html, /src="\.\/app\.js\?v=10"/);
-  assert.match(html, /href="\.\/app\.css\?v=11"/);
+  assert.match(html, /src="\.\/app\.js\?v=11"/);
+  assert.match(html, /href="\.\/app\.css\?v=12"/);
   assert.doesNotMatch(html, /https?:\/\//i);
 
   const worker = read("mobile-pilot/service-worker.js");
@@ -231,8 +233,8 @@ test("mobile chart typography excludes icon strokes and keeps moderate font weig
     assert.match(rule(selector), /font-weight:\s*500/);
   }
   assert.match(rule(".report-chart h5"), /font-weight:\s*600/);
-  assert.match(read("mobile-pilot/service-worker.js"), /klinvekt-mobile-pilot-v12/);
-  assert.match(read("mobile-pilot/service-worker.js"), /app\.css\?v=11/);
+  assert.match(read("mobile-pilot/service-worker.js"), /klinvekt-mobile-pilot-v13/);
+  assert.match(read("mobile-pilot/service-worker.js"), /app\.css\?v=12/);
 });
 
 test("mobile tree renderer supports nested native disclosures and old revenue markers", () => {
@@ -310,9 +312,39 @@ test("one mobile bundle encrypts every doctor publication with the existing PIN"
   assert.equal(MOBILE_BUNDLE_EXTENSION, "kvmobilebundle");
   assert.equal(validateMobilePublicationBundle(bundle), bundle);
   assert.equal(bundle.doctors.length, 2);
-  assert.equal(decryptMobilePublication(bundle.doctors.find(item => item.doctorId === "d1"), "1234").doctor.name, demo.doctor.name);
-  assert.equal(decryptMobilePublication(bundle.doctors.find(item => item.doctorId === "d2"), "5678").doctor.name, "Второй врач");
-  assert.throws(() => decryptMobilePublication(bundle.doctors[0], "0000"), /Проверьте PIN/);
+  assert.equal(openMobileReportSession(bundle, "d1", "1234").readReport("d1").doctor.name, demo.doctor.name);
+  assert.equal(openMobileReportSession(bundle, "d2", "5678").readReport("d2").doctor.name, "Второй врач");
+  assert.throws(() => openMobileReportSession(bundle, "d1", "0000"), /Проверьте PIN/);
   const serialized = serializeMobilePublicationBundle(bundle);
   assert.doesNotMatch(serialized, /"pinCode"|"pinHash"|"patientsforwork"|"rawExports"\s*:/i);
+  const legacyRecord = encryptMobilePublication(publication, { doctorId: "d1", pinCode: "1234", pinVersion: 2 });
+  assert.equal(decryptMobilePublication(legacyRecord, "1234").doctor.name, demo.doctor.name);
+  const clone = () => JSON.parse(serialized);
+  for (const mutate of [
+    value => { value.bundleId += "changed"; },
+    value => { value.doctors.find(item => item.doctorId === "d1").displayName = "Подмена"; },
+    value => { const record = value.doctors.find(item => item.doctorId === "d1"); record.ciphertext = (record.ciphertext[0] === "A" ? "B" : "A") + record.ciphertext.slice(1); },
+  ]) {
+    const value = clone(); mutate(value);
+    assert.throws(() => openMobileReportSession(value, "d1", "1234"), /Проверьте PIN/);
+  }
+  const swapped = clone();
+  swapped.reports[0].ciphertext = swapped.reports[1].ciphertext;
+  assert.throws(() => openMobileReportSession(swapped, "d1", "1234").readReport("d1"));
+  assert.throws(() => openMobileReportSession(bundle, "d1", "1234").readReport("d2"), /Нет доступа/);
+  const malformed = clone();
+  malformed.doctors[0].encryption.params.N = 2 ** 28;
+  assert.throws(() => validateMobilePublicationBundle(malformed), /параметры PIN/);
+});
+
+test("mobile vectors advertise an action and head report controls start hidden", () => {
+  const source = read("mobile-pilot/app.js");
+  assert.match(source, /Открыть показатели/);
+  assert.match(source, /Показатели открыты/);
+  assert.match(source, /aria-controls="vectorDetail"/);
+  assert.match(read("mobile-pilot/app.css"), /\.vector-card:focus-visible/);
+  assert.match(read("mobile-pilot/index.html"), /class="team-reports hidden" id="teamReports"/);
+  assert.match(source, /encodeURIComponent\(doctorId\)/);
+  assert.match(read("build/app-ui.js"), /department: resolvedDepartmentName\(doctorId\), publication: buildMobilePublication/);
+  assert.match(read("desktop/main.cjs"), /viewerExportCredentials\(recipientIds, \{ requireAdmin: false \}\)/);
 });

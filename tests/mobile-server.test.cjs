@@ -10,6 +10,7 @@ const {
   MOBILE_PUBLICATION_FORMAT,
   MOBILE_PUBLICATION_VERSION,
   createMobilePublicationBundle,
+  encryptMobilePublication,
 } = require("../desktop/services/mobile-publication-service.cjs");
 const { createMobileServer, MAX_UPLOAD_CHUNK_BYTES } = require("../mobile-server/server.cjs");
 const crypto = require("node:crypto");
@@ -163,4 +164,79 @@ test("Black Hole server gates access by Bitrix account, admin role and doctor PI
     body: JSON.stringify({ doctorId: "doctor-1", pin: "2468" }),
   });
   assert.equal(response.status, 429);
+});
+
+test("mobile heads can switch only authenticated subordinate grants, including heads without own reports", async (t) => {
+  const context = { window: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(root, "mobile-pilot/demo-data.js"), "utf8"), context);
+  const demo = JSON.parse(JSON.stringify(context.window.KLINVEKT_MOBILE_DEMO));
+  const definitions = [["head", "Заведующий", "A", "1234"], ["a", "Врач А", "A", "2345"],
+    ["b", "Врач Б", "B", "3456"], ["outsider", "Другой врач", "C", "4567"], ["head-only", "Без личного отчёта", "B", "5678"]];
+  const publications = definitions.filter(([id]) => id !== "head-only").map(([doctorId, name, department]) => ({ doctorId, department,
+    publication: { format: MOBILE_PUBLICATION_FORMAT, version: 1, security: { patientRegistryIncluded: false, rawExportsIncluded: false },
+      doctor: { id: doctorId, name, department: `${department} · Специализация` }, periods: demo.periods } }));
+  const recipients = definitions.map(([doctorId, displayName, department]) => ({ doctorId, displayName, department,
+    // Renderer-supplied roles must not grant an ordinary doctor access.
+    headDepartments: ["A", "B", "C"] }));
+  const makeBundle = (departments = ["A", "B"]) => createMobilePublicationBundle({ publications, recipients,
+    credentials: { doctors: definitions.map(([doctorId, , , pinCode]) => ({ doctorId, pinCode, pinVersion: 1,
+      headDepartments: doctorId === "head" ? departments : doctorId === "head-only" ? ["B"] : [] })) } });
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "klinvekt-mobile-heads-"));
+  const server = createMobileServer({ dataDir });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); fs.rmSync(dataDir, { recursive: true, force: true }); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const publish = bundle => fetch(`${base}/api/admin/publications`, { method: "POST",
+    headers: { ...vibeHeaders({ role: "admin" }), "Content-Type": "application/json" }, body: JSON.stringify(bundle) });
+  const login = async (doctorId, pin, userId = doctorId) => {
+    const response = await fetch(`${base}/api/login`, { method: "POST", headers: { ...vibeHeaders({ userId }), "Content-Type": "application/json" },
+      body: JSON.stringify({ doctorId, pin }) });
+    assert.equal(response.status, 200);
+    return { data: await response.json(), headers: { ...vibeHeaders({ userId }), Cookie: response.headers.get("set-cookie").split(";", 1)[0] } };
+  };
+  const bundle = makeBundle();
+  assert.equal(bundle.version, 2);
+  assert.equal(bundle.reports.length, 4, "report ciphertext is stored once, not duplicated for heads");
+  assert.equal(bundle.doctors.length, 5);
+  assert.equal((await publish(bundle)).status, 200);
+  const head = await login("head", "1234");
+  assert.equal(head.data.publication.doctor.id, "head");
+  assert.deepEqual(head.data.access.reports.map(report => report.doctorId), ["head", "a", "b"]);
+  assert.deepEqual(head.data.access.managedDepartments, ["A", "B"]);
+  assert.doesNotMatch(JSON.stringify(head.data), /"grants"|"ciphertext"|"pinCode"|"encryption"/);
+  for (const id of ["a", "b", "head"]) {
+    const response = await fetch(`${base}/api/report?doctorId=${id}`, { headers: head.headers });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.publication.doctor.id, id);
+    assert.equal(body.access.selectedDoctorId, id);
+    assert.deepEqual(body.publication.periods[0].comments, demo.periods[0].comments);
+  }
+  for (const id of ["outsider", "missing", "head-only"]) {
+    assert.equal((await fetch(`${base}/api/report?doctorId=${id}`, { headers: head.headers })).status, 403);
+  }
+  const doctor = await login("a", "2345");
+  assert.deepEqual(doctor.data.access.reports.map(report => report.doctorId), ["a"]);
+  assert.deepEqual(doctor.data.access.managedDepartments, []);
+  assert.equal((await fetch(`${base}/api/report?doctorId=b`, { headers: { ...doctor.headers, "X-Vibe-User-Role": "admin" } })).status, 403);
+  assert.equal((await fetch(`${base}/api/report?doctorId=a`, { headers: { ...head.headers, "X-Vibe-User-Id": "different" } })).status, 401);
+  assert.equal((await fetch(`${base}/api/report?doctorId=a`, { headers: { ...head.headers, "X-Vibe-Portal-Id": "different" } })).status, 401);
+  const noOwn = await login("head-only", "5678");
+  assert.equal(noOwn.data.access.owner.doctorId, "head-only");
+  assert.equal(noOwn.data.access.owner.periods, 0);
+  assert.equal(noOwn.data.publication.doctor.id, "b");
+  assert.equal((await fetch(`${base}/api/report?doctorId=a`, { headers: noOwn.headers })).status, 403);
+  await fetch(`${base}/api/report?doctorId=b`, { headers: head.headers });
+  assert.equal((await (await fetch(`${base}/api/report`, { headers: head.headers })).json()).publication.doctor.id, "b", "selection survives page reload");
+  assert.equal((await publish(makeBundle(["A"]))).status, 200);
+  assert.equal((await fetch(`${base}/api/report`, { headers: head.headers })).status, 401, "new exports revoke previous sessions");
+  const reassigned = await login("head", "1234");
+  assert.equal((await fetch(`${base}/api/report?doctorId=b`, { headers: reassigned.headers })).status, 403);
+  const legacy = { format: "klinvekt-mobile-bundle", version: 1, createdAt: new Date(0).toISOString(),
+    security: { patientRegistryIncluded: false, rawExportsIncluded: false, encryptedPerDoctor: true },
+    doctors: [encryptMobilePublication(publications[0].publication, { doctorId: "head", pinCode: "1234", pinVersion: 1 })] };
+  assert.equal((await publish(legacy)).status, 200);
+  const old = await login("head", "1234");
+  assert.deepEqual(old.data.access.reports.map(report => report.doctorId), ["head"]);
+  assert.deepEqual(old.data.access.managedDepartments, [], "old bundles never infer head privileges from the login name or department");
 });

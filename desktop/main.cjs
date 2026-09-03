@@ -1422,9 +1422,17 @@ function registerIpc() {
     const doctorIds = input.publications.map(item => String(item && item.doctorId || ""));
     if (doctorIds.some(id => !knownDoctors.has(id))) throw new Error("В мобильном пакете указан неизвестный врач");
     if (new Set(doctorIds).size !== doctorIds.length) throw new Error("Врач указан в мобильном пакете повторно");
-    const credentials = database.viewerExportCredentials(doctorIds, { requireAdmin: false });
+    const recipients = input.recipients || input.publications.map(item => ({ doctorId: item.doctorId,
+      displayName: item.publication.doctor.name, department: item.publication.doctor.department }));
+    if (!Array.isArray(recipients) || !recipients.length || recipients.length > 1000) throw new Error("Некорректный список получателей");
+    const recipientIds = recipients.map(item => String(item && item.doctorId || ""));
+    if (new Set(recipientIds).size !== recipientIds.length || recipientIds.some(id => !knownDoctors.has(id))
+      || doctorIds.some(id => !recipientIds.includes(id))) throw new Error("Некорректные получатели мобильного пакета");
+    // PIN and managed departments come only from SQLite, never from renderer-supplied roles.
+    const credentials = database.viewerExportCredentials(recipientIds, { requireAdmin: false });
     const bundle = createMobilePublicationBundle({
       publications: input.publications,
+      recipients,
       credentials,
       appVersion: app.getVersion(),
     });
@@ -1445,14 +1453,15 @@ function registerIpc() {
       targetId: date,
       details: {
         fileName: path.basename(selected.filePath),
-        doctors: doctorIds.length,
+        doctors: bundle.doctors.length,
+        reports: doctorIds.length,
         periods,
         encryptedPerDoctor: true,
         patientRegistryIncluded: false,
         rawExportsIncluded: false,
       },
     });
-    return { canceled: false, path: selected.filePath, doctors: doctorIds.length, periods };
+    return { canceled: false, path: selected.filePath, doctors: bundle.doctors.length, periods };
   });
   ipcMain.handle("database:save", (_event, json) => {
     localAdminActor();

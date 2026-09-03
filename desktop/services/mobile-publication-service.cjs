@@ -7,7 +7,7 @@ const MOBILE_PUBLICATION_VERSION = 1;
 const MOBILE_PUBLICATION_EXTENSION = "kvmobile";
 const MAX_PUBLICATION_BYTES = 10 * 1024 * 1024;
 const MOBILE_BUNDLE_FORMAT = "klinvekt-mobile-bundle";
-const MOBILE_BUNDLE_VERSION = 1;
+const MOBILE_BUNDLE_VERSION = 2;
 const MOBILE_BUNDLE_EXTENSION = "kvmobilebundle";
 const MOBILE_ENCRYPTED_PUBLICATION_FORMAT = "klinvekt-mobile-encrypted-publication";
 const MOBILE_ENCRYPTED_PUBLICATION_VERSION = 1;
@@ -387,7 +387,7 @@ function decryptMobilePublication(record, pin) {
 function validateMobilePublicationBundle(bundle) {
   const value = bundle && typeof bundle === "object" && !Array.isArray(bundle) ? bundle : bundleFail("корневой объект");
   rejectForbiddenKeys(value, "пакет");
-  if (value.format !== MOBILE_BUNDLE_FORMAT || Number(value.version) !== MOBILE_BUNDLE_VERSION) bundleFail("неподдерживаемая версия");
+  if (value.format !== MOBILE_BUNDLE_FORMAT || ![1, 2].includes(Number(value.version))) bundleFail("неподдерживаемая версия");
   if (typeof value.createdAt !== "string" || !value.createdAt || value.createdAt.length > 50) bundleFail("дата создания");
   if (value.appVersion != null && (typeof value.appVersion !== "string" || value.appVersion.length > 50)) bundleFail("версия приложения");
   const security = value.security && typeof value.security === "object" && !Array.isArray(value.security) ? value.security : bundleFail("описание безопасности");
@@ -395,6 +395,20 @@ function validateMobilePublicationBundle(bundle) {
     bundleFail("пакет не подтверждает безопасный состав и шифрование по врачам");
   }
   if (!Array.isArray(value.doctors) || !value.doctors.length || value.doctors.length > MAX_BUNDLE_DOCTORS) bundleFail("список врачей");
+  if (Number(value.version) === 2) {
+    bundleText(value.bundleId, "идентификатор пакета", 100);
+    if (!Array.isArray(value.reports) || !value.reports.length || value.reports.length > MAX_BUNDLE_DOCTORS) bundleFail("список отчётов");
+    for (const [entries, recipient] of [[value.doctors, true], [value.reports, false]]) {
+      const seen = new Set();
+      entries.forEach(entry => {
+        validateEnvelopeRecord(entry, recipient);
+        if (seen.has(entry.doctorId)) bundleFail("повторяющийся врач");
+        seen.add(entry.doctorId);
+      });
+    }
+    if (Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_BUNDLE_BYTES) bundleFail("файл превышает 100 МБ");
+    return value;
+  }
   const ids = new Set();
   value.doctors.forEach((doctor) => {
     const entry = validateEncryptedMobilePublication(doctor);
@@ -406,33 +420,169 @@ function validateMobilePublicationBundle(bundle) {
   return value;
 }
 
-function createMobilePublicationBundle({ publications, credentials, appVersion = "" }) {
+function validateEnvelopeRecord(value, recipient) {
+  plainObject(value, "зашифрованная запись");
+  bundleText(value.doctorId, "идентификатор врача", 200);
+  bundleText(value.displayName, "имя врача", 200);
+  bundleText(value.department, "подразделение врача", 300);
+  if (!Number.isInteger(value.periods) || value.periods < (recipient ? 0 : 1) || value.periods > 24) bundleFail("периоды врача");
+  const encryption = plainObject(value.encryption, "шифрование записи");
+  if (encryption.algorithm !== "aes-256-gcm") bundleFail("алгоритм шифрования");
+  base64Bytes(encryption.iv, "вектор шифрования", { exact: 12 });
+  base64Bytes(encryption.tag, "метка целостности", { exact: 16 });
+  base64Bytes(value.ciphertext, "зашифрованная запись", { max: recipient ? 512 * 1024 : MAX_PUBLICATION_BYTES });
+  if (recipient) {
+    if (!Number.isInteger(value.pinVersion) || value.pinVersion < 1) bundleFail("версия PIN");
+    if (encryption.kdf !== "scrypt") bundleFail("алгоритм PIN");
+    const params = encryption.params || {};
+    for (const [key, expected] of Object.entries(CONTENT_KDF_PARAMS)) {
+      if (params[key] !== expected) bundleFail("параметры PIN");
+    }
+    base64Bytes(encryption.salt, "соль PIN", { exact: 24 });
+  }
+  return value;
+}
+
+function envelopeAad(bundleId, record, recipient) {
+  return Buffer.from(JSON.stringify([MOBILE_BUNDLE_FORMAT, 2, bundleId, recipient ? "access" : "report",
+    record.doctorId, record.displayName, record.department, record.periods, recipient ? record.pinVersion : null]), "utf8");
+}
+
+function pinKey(pin, salt) {
+  if (!/^\d{4}$/.test(String(pin || ""))) bundleFail("не настроен четырёхзначный PIN");
+  return crypto.scryptSync(String(pin), salt, 32, { ...CONTENT_KDF_PARAMS, maxmem: 64 * 1024 * 1024 });
+}
+
+function sealEnvelope(payload, key, aad) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(aad);
+  const ciphertext = Buffer.concat([cipher.update(JSON.stringify(payload), "utf8"), cipher.final()]);
+  return {
+    encryption: { algorithm: "aes-256-gcm", iv: iv.toString("base64"), tag: cipher.getAuthTag().toString("base64") },
+    ciphertext: ciphertext.toString("base64"),
+  };
+}
+
+function encryptEnvelopeRecord(payload, key, bundleId, metadata, recipient = false) {
+  const sealed = sealEnvelope(payload, key, envelopeAad(bundleId, metadata, recipient));
+  return { ...metadata, encryption: sealed.encryption, ciphertext: sealed.ciphertext };
+}
+
+function openEnvelope(record, key, aad) {
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(record.encryption.iv, "base64"));
+  decipher.setAAD(aad);
+  decipher.setAuthTag(Buffer.from(record.encryption.tag, "base64"));
+  return JSON.parse(Buffer.concat([decipher.update(Buffer.from(record.ciphertext, "base64")), decipher.final()]).toString("utf8"));
+}
+
+// Each report is stored once. A PIN decrypts only that recipient's authenticated list of report keys.
+function createMobilePublicationBundle({ publications, recipients, credentials, appVersion = "" }) {
   if (!Array.isArray(publications) || !publications.length || publications.length > MAX_BUNDLE_DOCTORS) bundleFail("список публикаций");
   const credentialItems = credentials && Array.isArray(credentials.doctors) ? credentials.doctors : [];
   const credentialsByDoctor = new Map(credentialItems.map(item => [String(item.doctorId || ""), item]));
-  const doctors = publications.map((item) => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) bundleFail("публикация врача");
-    const doctorId = String(item.doctorId || "");
-    const access = credentialsByDoctor.get(doctorId);
-    if (!access) bundleFail(`нет настроенного доступа врача ${doctorId}`);
-    return encryptMobilePublication(item.publication, {
-      doctorId,
-      pinCode: access.pinCode,
-      pinVersion: Number(access.pinVersion),
+  const recipientItems = recipients || publications.map(item => ({ doctorId: item.doctorId,
+    displayName: item.publication.doctor.name, department: item.publication.doctor.department }));
+  if (!Array.isArray(recipientItems) || !recipientItems.length || recipientItems.length > MAX_BUNDLE_DOCTORS) bundleFail("получатели");
+  const bundleId = crypto.randomUUID(), keys = new Map(), scopes = new Map();
+  try {
+    const reports = publications.map(item => {
+      plainObject(item, "публикация врача");
+      const doctorId = bundleText(String(item.doctorId || ""), "идентификатор врача", 200);
+      if (keys.has(doctorId) || !credentialsByDoctor.has(doctorId)) bundleFail("дублирующийся или неактивный врач");
+      const publication = validateMobilePublication(item.publication);
+      if (publication.doctor.id != null && String(publication.doctor.id) !== doctorId) bundleFail("отчёт другого врача");
+      const key = crypto.randomBytes(32);
+      keys.set(doctorId, key);
+      // Separate canonical department from the presentation label (which may include a specialization).
+      scopes.set(doctorId, bundleText(item.department || publication.doctor.department, "отделение отчёта", 300));
+      return encryptEnvelopeRecord(publication, key, bundleId, { doctorId, displayName: publication.doctor.name,
+        department: publication.doctor.department, periods: publication.periods.length });
     });
-  }).sort((a, b) => a.displayName.localeCompare(b.displayName, "ru", { sensitivity: "base" }) || a.doctorId.localeCompare(b.doctorId, "ru"));
-  return validateMobilePublicationBundle({
-    format: MOBILE_BUNDLE_FORMAT,
-    version: MOBILE_BUNDLE_VERSION,
-    createdAt: new Date().toISOString(),
-    appVersion: String(appVersion || ""),
-    security: {
-      patientRegistryIncluded: false,
-      rawExportsIncluded: false,
-      encryptedPerDoctor: true,
-    },
-    doctors,
-  });
+    const seen = new Set();
+    const doctors = recipientItems.flatMap(recipient => {
+      const id = bundleText(String(recipient.doctorId || ""), "получатель", 200);
+      if (seen.has(id)) bundleFail("повторяющийся получатель");
+      seen.add(id);
+      const access = credentialsByDoctor.get(id);
+      if (!access) bundleFail(`нет настроенного доступа врача ${id}`);
+      const managedDepartments = [...new Set((access.headDepartments || []).map(String).filter(Boolean))];
+      const allowed = reports.filter(report => report.doctorId === id || managedDepartments.includes(scopes.get(report.doctorId)));
+      if (!allowed.length) return [];
+      const own = reports.find(report => report.doctorId === id);
+      const metadata = { doctorId: id, displayName: own?.displayName || recipient.displayName,
+        department: own?.department || recipient.department, periods: own?.periods || 0, pinVersion: Number(access.pinVersion) };
+      const salt = crypto.randomBytes(24), key = pinKey(access.pinCode, salt);
+      try {
+        const record = encryptEnvelopeRecord({ doctorId: id, managedDepartments,
+          grants: allowed.map(report => ({ doctorId: report.doctorId, key: keys.get(report.doctorId).toString("base64") })) },
+        key, bundleId, metadata, true);
+        Object.assign(record.encryption, { kdf: "scrypt", salt: salt.toString("base64"), params: CONTENT_KDF_PARAMS });
+        return [record];
+      } finally { key.fill(0); }
+    }).sort((a, b) => a.displayName.localeCompare(b.displayName, "ru") || a.doctorId.localeCompare(b.doctorId));
+    if (reports.some(report => !seen.has(report.doctorId))) bundleFail("для отчёта не указан получатель");
+    return validateMobilePublicationBundle({
+      format: MOBILE_BUNDLE_FORMAT,
+      version: MOBILE_BUNDLE_VERSION,
+      bundleId,
+      createdAt: new Date().toISOString(),
+      appVersion: String(appVersion || ""),
+      security: {
+        patientRegistryIncluded: false,
+        rawExportsIncluded: false,
+        encryptedPerDoctor: true,
+      },
+      doctors,
+      reports,
+    });
+  } finally { for (const key of keys.values()) key.fill(0); }
+}
+
+function openMobileReportSession(bundle, doctorId, pin) {
+  try {
+    const record = bundle.doctors.find(item => item.doctorId === String(doctorId));
+    if (!record) bundleFail("врач не найден");
+    const owner = { doctorId: record.doctorId, displayName: record.displayName, department: record.department, periods: record.periods };
+    if (Number(bundle.version) === 1) {
+      const publication = decryptMobilePublication(record, pin);
+      return { owner, managedDepartments: [], reports: [owner], readReport(id) {
+        if (id !== owner.doctorId) throw new Error("Нет доступа к отчёту");
+        return publication;
+      } };
+    }
+    validateEnvelopeRecord(record, true);
+    const key = pinKey(pin, Buffer.from(record.encryption.salt, "base64"));
+    let access;
+    try { access = openEnvelope(record, key, envelopeAad(bundle.bundleId, record, true)); }
+    finally { key.fill(0); }
+    if (access.doctorId !== owner.doctorId || !Array.isArray(access.grants) || !access.grants.length
+      || access.grants.length > MAX_BUNDLE_DOCTORS || !Array.isArray(access.managedDepartments)
+      || access.managedDepartments.length > MAX_BUNDLE_DOCTORS) bundleFail("права получателя");
+    access.managedDepartments.forEach(department => bundleText(department, "отделение заведующего", 300));
+    const allowed = new Map();
+    for (const grant of access.grants) {
+      if (!grant || allowed.has(grant.doctorId)) bundleFail("повторяющееся разрешение");
+      base64Bytes(grant.key, "ключ отчёта", { exact: 32 });
+      const report = bundle.reports.find(item => item.doctorId === grant.doctorId);
+      if (!report) bundleFail("отчёт не найден");
+      allowed.set(grant.doctorId, { record: report, key: grant.key });
+    }
+    const reports = [...allowed.values()].map(({ record: item }) => ({ doctorId: item.doctorId, displayName: item.displayName,
+      department: item.department, periods: item.periods })).sort((a, b) => a.doctorId === owner.doctorId ? -1
+      : b.doctorId === owner.doctorId ? 1 : a.displayName.localeCompare(b.displayName, "ru"));
+    return { owner, managedDepartments: access.managedDepartments, reports, readReport(id) {
+      const grant = allowed.get(id);
+      if (!grant) throw new Error("Нет доступа к отчёту");
+      const contentKey = Buffer.from(grant.key, "base64");
+      let publication;
+      try { publication = validateMobilePublication(openEnvelope(grant.record, contentKey, envelopeAad(bundle.bundleId, grant.record, false))); }
+      finally { contentKey.fill(0); }
+      if ((publication.doctor.id != null && String(publication.doctor.id) !== id) || publication.doctor.name !== grant.record.displayName
+        || publication.doctor.department !== grant.record.department || publication.periods.length !== grant.record.periods) bundleFail("несовпадение отчёта");
+      return publication;
+    } };
+  } catch (_) { throw new Error("Не удалось открыть отчёт. Проверьте PIN врача"); }
 }
 
 function serializeMobilePublicationBundle(bundle) {
@@ -453,6 +603,7 @@ module.exports = {
   createMobilePublicationBundle,
   decryptMobilePublication,
   encryptMobilePublication,
+  openMobileReportSession,
   serializeMobilePublication,
   serializeMobilePublicationBundle,
   validateEncryptedMobilePublication,

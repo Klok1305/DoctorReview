@@ -12,7 +12,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="512x512" href="./icons/app-icon-512.png">
   <link rel="apple-touch-icon" href="./icons/app-icon-192.png">
-  <link rel="stylesheet" href="./app.css?v=11">
+  <link rel="stylesheet" href="./app.css?v=12">
 </head>
 <body>
   <header class="site-header">
@@ -70,9 +70,16 @@
     </section>
 
     <section class="report-view hidden" id="reportView" aria-label="Личный отчёт врача">
+      <section class="team-reports hidden" id="teamReports" aria-label="Отчёты подчинённых">
+        <div class="team-reports-heading"><h2>Отчёты отделения</h2><button type="button" id="ownReportButton">Мой отчёт</button></div>
+        <p id="teamReportsContext"></p>
+        <label for="teamDoctorSelect">Чей отчёт показать</label>
+        <select id="teamDoctorSelect"></select>
+        <span id="teamReportStatus" role="status" aria-live="polite"></span>
+      </section>
       <div class="report-heading">
         <div>
-          <span class="eyebrow">Мой отчёт</span>
+          <span class="eyebrow" id="reportOwnerLabel">Мой отчёт</span>
           <h1 id="doctorName">Тестовый врач</h1>
           <p id="doctorDepartment">Демонстрационное отделение</p>
         </div>
@@ -182,6 +189,6 @@
 
   <noscript><div class="noscript">Для работы мобильного прототипа включите JavaScript.</div></noscript>
   <script src="./demo-data.js?v=10" defer></script>
-  <script src="./app.js?v=10" defer></script>
+  <script src="./app.js?v=11" defer></script>
 </body>
 </html>

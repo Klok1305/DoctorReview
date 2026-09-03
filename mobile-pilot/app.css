@@ -165,6 +165,20 @@ h2 { margin-bottom: 6px; font-size: 21px; line-height: 1.2; letter-spacing: -.01
 .vector-card { min-width: 0; padding: 15px; border: 1px solid var(--line); border-radius: 18px; background: var(--card); text-align: left; cursor: pointer; transition: border-color .16s ease, transform .16s ease, box-shadow .16s ease; }
 .vector-card:hover { transform: translateY(-1px); border-color: #b7c9ea; }
 .vector-card.active { border-color: #8aacfa; box-shadow: 0 9px 24px rgba(37, 99, 235, .12); }
+.vector-card:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.vector-action { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; padding: 9px 10px; border-radius: 10px; background: #edf3ff; color: var(--accent); font-size: 11px; font-weight: 600; }
+.vector-action svg { flex: 0 0 18px; width: 18px; height: 18px; }
+.vector-card.active .vector-action { background: var(--accent); color: #fff; }
+.team-reports { margin-bottom: 20px; padding: 16px; border: 1px solid #b9ccf8; border-radius: 16px; background: #f5f8ff; }
+.team-reports-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.team-reports h2 { margin: 0; font-size: 17px; font-weight: 600; }
+.team-reports p { margin: 8px 0 14px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.team-reports label { display: block; margin-bottom: 6px; font-size: 12px; font-weight: 600; }
+.team-reports select { width: 100%; min-width: 0; min-height: 44px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); font: inherit; font-size: 13px; }
+.team-reports button { min-height: 36px; padding: 7px 12px; border: 1px solid #b9ccf8; border-radius: 9px; background: #fff; color: var(--accent); font-size: 12px; cursor: pointer; }
+.team-reports button:disabled { opacity: .5; cursor: default; }
+#teamReportStatus { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; }
+#teamReportStatus.error { color: #b42318; }
 .vector-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .vector-number { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .vector-score { font-size: 25px; font-weight: 800; letter-spacing: -.03em; }
