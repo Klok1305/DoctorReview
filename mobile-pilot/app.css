@@ -234,12 +234,13 @@ summary.tree-row:focus-visible, .tree-tools button:focus-visible, .chart-data su
 .report-chart { min-width: 0; margin-top: 14px; padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: #fff; }
 .desktop-charts > .report-chart { margin-top: 0; }
 .report-chart header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
-.report-chart h5 { margin: 0; font-size: 14px; line-height: 1.4; }
+.report-chart h5 { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.4; }
 .chart-picker { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--muted); font-size: 10px; }
 .chart-picker select { min-width: 0; max-width: 220px; min-height: 36px; border: 1px solid var(--line); border-radius: 8px; background: #f8faff; color: var(--ink); font: inherit; }
 .chart-plot { min-width: 0; margin-top: 12px; }
 .chart-plot svg { display: block; width: 100%; height: auto; }
-.chart-plot svg text { fill: #526075; font-family: inherit; font-size: 10px; }
+/* Chart labels must not inherit the stroke intended for outline icons. */
+.chart-plot svg text { fill: #526075; stroke: none; font-family: inherit; font-size: 10px; font-weight: 400; }
 .plot-scroll { max-height: 460px; overflow: auto; overscroll-behavior-x: contain; }
 .plot-scroll svg { min-width: 520px; }
 .line-plot .line-narrow { display: none; }
@@ -247,22 +248,23 @@ summary.tree-row:focus-visible, .tree-tools button:focus-visible, .chart-data su
 .chart-legend li { display: flex; align-items: baseline; gap: 7px; font-size: 11px; line-height: 1.4; }
 .chart-legend svg { flex: 0 0 9px; width: 9px; height: 9px; }
 .chart-legend span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.chart-legend b { text-align: right; font-size: 11px; }
+.chart-legend b { text-align: right; font-size: 11px; font-weight: 500; }
 .chart-legend small { display: block; color: var(--muted); font-size: 10px; font-weight: 500; }
 .donut-layout { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(0, 1fr); align-items: center; gap: 18px; }
 .chart-plot .donut-plot { width: min(100%, 230px); justify-self: center; }
-.chart-plot .donut-total { fill: var(--ink); font-size: 22px; font-weight: 800; }
+.chart-plot .donut-total { fill: var(--ink); font-size: 22px; font-weight: 500; }
 .donut-layout .chart-legend { margin-top: 0; }
 .chart-data { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); }
 .chart-data summary { padding: 5px 0; color: var(--accent); font-size: 11px; cursor: pointer; }
 .chart-data-scroll { max-height: 380px; overflow: auto; margin-top: 8px; }
 .chart-data table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .chart-data th, .chart-data td { padding: 8px; border: 1px solid var(--line); text-align: right; white-space: nowrap; }
+.chart-data th { font-weight: 500; }
 .chart-data th:first-child { min-width: 120px; max-width: 210px; white-space: normal; text-align: left; overflow-wrap: anywhere; }
 .chart-data thead th { background: #f2f6fc; white-space: normal; min-width: 100px; }
 .bar-plot { display: grid; gap: 13px; }
 .bar-item > div:first-child { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; }
-.bar-item b { flex-shrink: 0; }
+.bar-item b { flex-shrink: 0; font-weight: 500; }
 .chart-plot .bar-track { height: 9px; margin-top: 6px; }
 .chart-note { color: var(--muted); font-size: 11px; line-height: 1.5; }
 .chart-card { padding-bottom: 14px; }

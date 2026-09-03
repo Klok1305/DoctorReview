@@ -1,8 +1,8 @@
-const CACHE_NAME = "klinvekt-mobile-pilot-v11";
+const CACHE_NAME = "klinvekt-mobile-pilot-v12";
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./app.css?v=10",
+  "./app.css?v=11",
   "./demo-data.js?v=10",
   "./app.js?v=10",
   "./manifest.webmanifest",

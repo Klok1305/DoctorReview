@@ -60,7 +60,7 @@ test("mobile pilot scripts parse and use only bundled relative assets", () => {
   assert.match(html, /rel="manifest" href="\.\/manifest\.webmanifest"/);
   assert.match(html, /src="\.\/demo-data\.js\?v=10"/);
   assert.match(html, /src="\.\/app\.js\?v=10"/);
-  assert.match(html, /href="\.\/app\.css\?v=10"/);
+  assert.match(html, /href="\.\/app\.css\?v=11"/);
   assert.doesNotMatch(html, /https?:\/\//i);
 
   const worker = read("mobile-pilot/service-worker.js");
@@ -216,6 +216,24 @@ function mobileVisualContext() {
     + app.slice(app.indexOf("  function legacyRevenueTree"), app.indexOf("  function renderSection")), context);
   return context;
 }
+
+test("mobile chart typography excludes icon strokes and keeps moderate font weights", () => {
+  const css = read("mobile-pilot/app.css");
+  const rule = selector => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = css.match(new RegExp(`${escaped}\\s*\\{([^}]+)\\}`));
+    assert.ok(match, `missing rule: ${selector}`);
+    return match[1];
+  };
+  assert.match(rule(".chart-plot svg text"), /stroke:\s*none/);
+  assert.match(rule(".chart-plot svg text"), /font-weight:\s*400/);
+  for (const selector of [".chart-plot .donut-total", ".chart-legend b", ".bar-item b", ".chart-data th"]) {
+    assert.match(rule(selector), /font-weight:\s*500/);
+  }
+  assert.match(rule(".report-chart h5"), /font-weight:\s*600/);
+  assert.match(read("mobile-pilot/service-worker.js"), /klinvekt-mobile-pilot-v12/);
+  assert.match(read("mobile-pilot/service-worker.js"), /app\.css\?v=11/);
+});
 
 test("mobile tree renderer supports nested native disclosures and old revenue markers", () => {
   const context = mobileVisualContext();
