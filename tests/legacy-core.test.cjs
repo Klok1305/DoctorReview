@@ -52,8 +52,7 @@ test("core date and doctor-name helpers preserve legacy behavior", () => {
   assert.equal(vm.runInContext("isFullMonthPeriod(extractPeriod('02.01.2026 - 31.03.2026'))", context), false);
 });
 
-test("Admin builds a valid mobile publication from calculated metrics without patient rows", () => {
-  const context = createContext();
+function loadMobilePublicationRenderer(context) {
   const uiSource = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const goalSource = uiSource.slice(
     uiSource.indexOf("function doctorGoalsSource"),
@@ -63,12 +62,20 @@ test("Admin builds a valid mobile publication from calculated metrics without pa
     uiSource.indexOf("function scoringBenchmarkDefs"),
     uiSource.indexOf("function viewerAccessSettingsHtml"),
   );
-  const publicationSource = goalSource + scoringSource + uiSource.slice(
+  const colorSource = uiSource.slice(uiSource.indexOf("const DEVICE_COLORS"), uiSource.indexOf("/* Зеркальная выручка"))
+    + uiSource.match(/const VEC_LINE_COLORS = [^;]+;/)[0];
+  const clientBaseSource = uiSource.slice(uiSource.indexOf("function clientBaseGroupLabel"), uiSource.indexOf("function clientBaseProfileDescription"));
+  const publicationSource = colorSource + clientBaseSource + goalSource + scoringSource + uiSource.slice(
     uiSource.indexOf("function mobilePublicationText"),
     uiSource.indexOf("function doctorMetricsHeaderHtml"),
   );
   vm.runInContext("const UI = { nazSlice: 1 };", context);
   vm.runInContext(publicationSource, context, { filename: "app-ui-mobile-publication.js" });
+}
+
+test("Admin builds a valid mobile publication from calculated metrics without patient rows", () => {
+  const context = createContext();
+  loadMobilePublicationRenderer(context);
 
   const publication = vm.runInContext(`(() => {
     DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], dept: 'По умолчанию' } };
@@ -100,6 +107,73 @@ test("Admin builds a valid mobile publication from calculated metrics without pa
   assert.equal(validated.periods[0].dynamics, null);
   assert.equal(validated.periods[0].comments[0].text, "Сохранённый комментарий Viewer");
   assert.doesNotMatch(serialized, /"(?:patientId|patientName|clientRows|clients)"/);
+});
+
+test("mobile appointment tree aggregates full paths without double counting and preserves nomenclature", () => {
+  const context = createContext();
+  loadMobilePublicationRenderer(context);
+  const result = vm.runInContext(`(() => {
+    const counts = (assigned, done, soldQ) => ({ assigned, done, soldQ, resultQ: done + soldQ });
+    const sourceGroups = [
+      { path: ['Анализы', 'Лаборатория', 'Кровь'], ...counts(4, 2, 1), items: { 'Анализ А': counts(4, 2, 1) } },
+      { path: ['Анализы', 'Лаборатория', 'Моча'], ...counts(2, 1, 0), items: { 'Анализ Б': counts(2, 1, 0) } },
+      { path: ['Анализы', 'Лаборатория'], ...counts(1, 0, 2), items: { 'Прямая позиция': counts(1, 0, 2) } },
+      { path: ['Другая клиника', 'Лаборатория'], ...counts(3, 0, 0), items: { 'Анализ А': counts(3, 0, 0) } },
+      { path: ['Товары'], ...counts(0, 0, 4), items: { 'Товар': counts(0, 0, 4) } },
+    ];
+    const totals = counts(10, 3, 7);
+    return { tree: mobilePublicationAppointmentTree({ sourceGroups, totals }),
+      fallback: mobilePublicationAppointmentTree({ byType: { 'Товары': sourceGroups[4] }, totals }) };
+  })()`, context);
+  const { tree, fallback } = JSON.parse(JSON.stringify(result));
+  assert.equal(tree[0].label, "Анализы");
+  assert.deepEqual(tree[0].values.slice(0, 3), ["7", "3", "3"]);
+  assert.equal(tree[0].children[0].children.length, 3);
+  assert.equal(tree[0].children[0].children[0].children[0].label, "Анализ А");
+  assert.equal(tree[0].children[0].children[2].values[3], "200%");
+  assert.equal(tree[1].children[0].values[0], "3");
+  assert.equal(tree[2].values[3], "—");
+  assert.deepEqual(tree.at(-1).values, ["10", "3", "7", "100%"]);
+  assert.equal(fallback[0].children[0].label, "Товар");
+});
+
+test("mobile charts use canonical numeric metrics, preserve missing months and omit patient data", () => {
+  const context = createContext();
+  loadMobilePublicationRenderer(context);
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], dept: 'По умолчанию' } };
+    DB.months = Object.fromEntries(['2026-01', '2026-02', '2026-03', '2026-04'].map(key => [key, emptyMonth()]));
+    for (const key of ['2026-01', '2026-03', '2026-04']) {
+      DB.months[key].vyrabotka.d1 = { items: [
+        { form: '', cat: 'Приемы', n: 'Прием врача', q: 2, sOwn: 12345.67, sRef: 0 },
+        { form: '', cat: 'Анализы', n: 'Анализ крови', q: 3, sOwn: 0, sRef: 4321.98 },
+      ] };
+      DB.months[key].kb.d1 = { '1': { clients: [{ id: 'private-id', name: 'PRIVATE PATIENT', v: 2, s: 12345.67, r: 1 }] },
+        '12': { clients: [{ id: 'private-id', name: 'PRIVATE PATIENT', v: 2, s: 12345.67, r: 1 }] } };
+      DB.months[key].naznach.d1 = { '1': { items: [
+        { n: 'Анализ крови', group: 'Анализы', groupPath: ['Анализы', 'Кровь'], a: 3, d: 2, sq: 0, ss: 0 }
+      ] } };
+    }
+    clearMetricsCache();
+    const publication = buildMobilePublication('d1');
+    const dynamics = computeDoctorDynamics('d1', '2026-03');
+    const charts = mobilePublicationHistoryCharts('d1', '2026-03', dynamics);
+    return { publication, charts, expected: dynamics.rows.find(row => row.key === 'sales').values,
+      own: vyrabotkaSummary('d1', '2026-03').ownSum, ref: vyrabotkaSummary('d1', '2026-03').refIncludedSum };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  validateMobilePublication(plain.publication);
+  const money = plain.charts.find(chart => chart.id === "money");
+  assert.deepEqual(money.series[0].values, plain.expected);
+  assert.equal(money.series[0].values[1], null);
+  assert.equal(money.labels.length, 3);
+  assert.equal(money.series[0].values[2], 12345.67);
+  const mirror = plain.charts.find(chart => chart.type === "mirror");
+  assert.equal(mirror.series.filter(series => series.side === "own").reduce((sum, series) => sum + series.values[2], 0), plain.own);
+  assert.equal(mirror.series.find(series => series.side === "ref").values[2], plain.ref);
+  assert.equal(mirror.labels.length, 3);
+  assert.ok(plain.publication.periods[0].vectors[1].sections[1].tree.length);
+  assert.doesNotMatch(JSON.stringify(plain.publication), /private-id|PRIVATE PATIENT|"(?:patientId|patientName|clientRows|clients)"/);
 });
 
 test("client-base groups use B-F thresholds and may overlap", () => {

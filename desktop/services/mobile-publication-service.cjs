@@ -52,16 +52,63 @@ function finiteNumber(value, label, { nullable = false, min = -1000000, max = 10
   if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max) fail(label);
 }
 
-function rejectForbiddenKeys(value, path = "публикация") {
+function rejectForbiddenKeys(value, path = "публикация", depth = 0) {
+  if (depth > 80) fail("слишком глубокая вложенность");
   if (Array.isArray(value)) {
-    value.forEach((item, index) => rejectForbiddenKeys(item, `${path}[${index}]`));
+    value.forEach((item, index) => rejectForbiddenKeys(item, `${path}[${index}]`, depth + 1));
     return;
   }
   if (!value || typeof value !== "object") return;
   for (const [key, nested] of Object.entries(value)) {
     if (FORBIDDEN_KEYS.has(String(key).toLowerCase())) fail(`запрещённое поле ${path}.${key}`);
-    rejectForbiddenKeys(nested, `${path}.${key}`);
+    rejectForbiddenKeys(nested, `${path}.${key}`, depth + 1);
   }
+}
+
+function validateCharts(charts, label) {
+  if (charts == null) return;
+  if (!Array.isArray(charts) || charts.length > 12) fail(`${label}: графики`);
+  charts.forEach(chart => {
+    plainObject(chart, `${label}: график`);
+    shortText(chart.id, `${label}: код графика`, 100);
+    shortText(chart.title, `${label}: название графика`, 300);
+    if (!["donut", "bar", "line", "mirror"].includes(chart.type)) fail(`${label}: тип графика`);
+    optionalText(chart.unit, `${label}: единица измерения`, 30);
+    if (!Array.isArray(chart.labels) || !chart.labels.length || chart.labels.length > 500) fail(`${label}: подписи графика`);
+    chart.labels.forEach(value => shortText(value, `${label}: подпись`, 1000));
+    if (!Array.isArray(chart.series) || !chart.series.length || chart.series.length > 30) fail(`${label}: ряды графика`);
+    if (["donut", "bar"].includes(chart.type) && chart.series.length !== 1) fail(`${label}: число рядов`);
+    const color = value => { if (typeof value !== "string" || !/^#[0-9a-f]{6}$/i.test(value)) fail(`${label}: цвет графика`); };
+    chart.series.forEach(series => {
+      plainObject(series, `${label}: ряд графика`);
+      shortText(series.label, `${label}: название ряда`, 300);
+      if (!Array.isArray(series.values) || series.values.length !== chart.labels.length) fail(`${label}: значения графика`);
+      series.values.forEach(value => finiteNumber(value, `${label}: число графика`, { nullable: true, min: -1e15, max: 1e15 }));
+      if (series.color != null) color(series.color);
+      if (series.colors != null) {
+        if (!Array.isArray(series.colors) || series.colors.length !== chart.labels.length) fail(`${label}: цвета графика`);
+        series.colors.forEach(color);
+      }
+      if (chart.type === "donut" && series.values.some(value => value != null && value < 0)) fail(`${label}: отрицательный сектор`);
+      if (chart.type === "mirror" && !["own", "ref"].includes(series.side)) fail(`${label}: сторона выручки`);
+    });
+  });
+}
+
+function validateTree(tree, columns, label) {
+  let count = 0;
+  const visit = (nodes, depth) => {
+    if (!Array.isArray(nodes) || depth > 32) fail(`${label}: вложенность групп`);
+    for (const node of nodes) {
+      if (++count > 10000) fail(`${label}: слишком много групп и позиций`);
+      plainObject(node, `${label}: группа`);
+      shortText(node.label, `${label}: название группы`, 1000);
+      if (!Array.isArray(node.values) || node.values.length !== columns.length - 1) fail(`${label}: значения группы`);
+      node.values.forEach(value => shortText(value, `${label}: значение группы`, 1000));
+      if (node.children != null) visit(node.children, depth + 1);
+    }
+  };
+  visit(tree, 0);
 }
 
 function validateMetric(metric, label) {
@@ -79,10 +126,10 @@ function validateSection(section, label) {
   optionalText(item.note, `${label}: пояснение`, 2000);
   const metrics = Array.isArray(item.metrics) ? item.metrics : [];
   const rows = Array.isArray(item.rows) ? item.rows : [];
-  if (!metrics.length && !rows.length) fail(`${label}: пустой раздел`);
+  if (!metrics.length && !rows.length && !item.tree?.length && !item.charts?.length) fail(`${label}: пустой раздел`);
   if (metrics.length > 30 || rows.length > 500) fail(`${label}: слишком много данных`);
   metrics.forEach((metric, index) => validateMetric(metric, `${label}: показатель ${index + 1}`));
-  if (rows.length) {
+  if (rows.length || item.tree != null) {
     if (!Array.isArray(item.columns) || item.columns.length < 2 || item.columns.length > 6) fail(`${label}: столбцы таблицы`);
     item.columns.forEach((column, index) => shortText(column, `${label}: столбец ${index + 1}`, 100));
     rows.forEach((row, rowIndex) => {
@@ -90,6 +137,8 @@ function validateSection(section, label) {
       row.forEach((cell, cellIndex) => shortText(cell, `${label}: ячейка ${rowIndex + 1}.${cellIndex + 1}`, 1000));
     });
   }
+  if (item.tree != null) validateTree(item.tree, item.columns, label);
+  validateCharts(item.charts, label);
 }
 
 function validateSections(sections, label) {
@@ -142,6 +191,7 @@ function validatePublicationDynamics(dynamics, periodId) {
   }
   optionalText(value.conclusion, `выводы динамики ${periodId}`, 10000);
   if (value.conclusionManual != null && typeof value.conclusionManual !== "boolean") fail(`признак ручных выводов ${periodId}`);
+  validateCharts(value.charts, `динамика ${periodId}`);
 }
 
 function validatePublicationComments(comments, periodId) {

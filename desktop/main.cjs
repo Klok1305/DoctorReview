@@ -33,6 +33,48 @@ const SMOKE_ROOT = app.isPackaged
   : path.join(APPLICATION_ROOT, "tmp", "electron-smoke", String(process.pid));
 const SMOKE_ARTIFACT_ROOT = app.isPackaged ? path.join(SMOKE_ROOT, "artifacts") : path.join(APPLICATION_ROOT, "tmp");
 
+// Test output must not depend on the lifetime of the launching terminal.
+// A detached Windows process can lose stderr and otherwise open an error dialog on every renderer message.
+function smokeLog(message) {
+  if (!SMOKE_TEST) return;
+  try {
+    fs.mkdirSync(SMOKE_ROOT, { recursive: true });
+    fs.appendFileSync(path.join(SMOKE_ROOT, "smoke.log"), `${message}\n`, "utf8");
+  } catch (_) { /* a logging failure must not open an Electron error dialog */ }
+}
+
+let smokeFailing = false;
+function failSmoke(error, source = "smoke") {
+  if (smokeFailing) return;
+  smokeFailing = true;
+  const message = String(error && (error.stack || error.message) || error);
+  smokeLog(`[${source}] ${message}`);
+  try {
+    fs.mkdirSync(SMOKE_ARTIFACT_ROOT, { recursive: true });
+    fs.writeFileSync(path.join(SMOKE_ARTIFACT_ROOT, "smoke-result.json"), JSON.stringify({
+      status: "failed", pid: process.pid, source, error: message,
+      log: path.join(SMOKE_ROOT, "smoke.log"), finishedAt: new Date().toISOString(),
+    }, null, 2), "utf8");
+  } catch (_) { /* exit code still reports the failure if the disk is unavailable */ }
+  app.exit(3);
+}
+
+if (SMOKE_TEST) {
+  // These listeners apply only to isolated tests; production error handling is unchanged.
+  for (const stream of [process.stdout, process.stderr]) stream.on("error", error => {
+    if (error && ["EPIPE", "ERR_STREAM_DESTROYED"].includes(error.code)) smokeLog(`[output-disconnected] ${error.code}`);
+    else failSmoke(error, "test-output");
+  });
+  process.on("uncaughtException", error => failSmoke(error, "uncaught-exception"));
+  process.on("unhandledRejection", error => failSmoke(error, "unhandled-rejection"));
+  fs.mkdirSync(SMOKE_ARTIFACT_ROOT, { recursive: true });
+  fs.writeFileSync(path.join(SMOKE_ARTIFACT_ROOT, "smoke-result.json"), JSON.stringify({
+    status: "running", pid: process.pid, startedAt: new Date().toISOString(), log: path.join(SMOKE_ROOT, "smoke.log"),
+  }, null, 2), "utf8");
+  // A hung test must exit by itself instead of leaving a hidden renderer running indefinitely.
+  setTimeout(() => failSmoke(new Error("Smoke test timed out after 120 seconds"), "timeout"), 120000).unref();
+}
+
 // После переименования используем старую папку настроек, если в ней уже есть
 // конфигурация: обновление не должно «терять» выбранную рабочую базу.
 if (!SMOKE_TEST) {
@@ -303,10 +345,11 @@ function createWindow() {
   mainWindow.webContents.on("will-navigate", event => event.preventDefault());
   mainWindow.webContents.on("render-process-gone", (_event, details) => {
     logEvent("render-process-gone", details);
-    if (SMOKE_TEST) process.stderr.write(`[renderer-gone] ${JSON.stringify(details)}\n`);
+    if (SMOKE_TEST) failSmoke(new Error(JSON.stringify(details)), "renderer-gone");
   });
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (isMainFrame) logEvent("renderer-load-failed", { errorCode, errorDescription, validatedURL });
+    if (SMOKE_TEST && isMainFrame) failSmoke(new Error(`${errorCode}: ${errorDescription}`), "renderer-load-failed");
   });
   mainWindow.on("unresponsive", () => logEvent("window-unresponsive"));
   mainWindow.on("responsive", () => logEvent("window-responsive"));
@@ -316,7 +359,7 @@ function createWindow() {
       const message = details && details.message ? details.message : "";
       const sourceId = details && details.sourceId ? details.sourceId : "renderer";
       const line = details && details.lineNumber ? details.lineNumber : 0;
-      process.stderr.write(`[renderer:${level}] ${message} (${sourceId}:${line})\n`);
+      smokeLog(`[renderer:${level}] ${message} (${sourceId}:${line})`);
       if (level === "error") smokeRendererErrors.push({ message, sourceId, line });
     });
   }
@@ -346,7 +389,7 @@ function createWindow() {
   if (SMOKE_TEST) {
     mainWindow.webContents.once("did-finish-load", async () => {
       try {
-        process.stdout.write("[smoke] renderer loaded\n");
+        smokeLog("[smoke] renderer loaded");
         const smokeAction = PDF_SMOKE_TEST
           ? `(async () => {
               await new Promise(resolve => setTimeout(resolve, 1200));
@@ -955,7 +998,7 @@ function createWindow() {
               };
             })()`;
         const result = await mainWindow.webContents.executeJavaScript(smokeAction);
-        process.stdout.write("[smoke] renderer assertions completed\n");
+        smokeLog("[smoke] renderer assertions completed");
         if (!PDF_SMOKE_TEST) {
           const savedComment = database.listComments({
             periodKey: result.smokeCommentContext.periodKey,
@@ -1161,17 +1204,20 @@ function createWindow() {
           result.pdfDir = pdfDir;
         }
         result.rendererErrors = smokeRendererErrors.slice();
-        fs.writeFileSync(path.join(artifactRoot, "smoke-result.json"), JSON.stringify(result, null, 2), "utf8");
-        process.stdout.write(`${JSON.stringify(result)}\n`);
         const passed = result.dataPage && result.optionalLibrariesDeferred && result.xlsx && result.chart && result.desktop
           && result.rendererErrors.length === 0
           && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.specializationFocusBlockValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.viewerPatientRegisterValid && result.viewerRatingsValid && result.doctorMetricSettings && result.commentWorkflowValid))
           && (!PDF_SMOKE_TEST || (result.pdfSelectionDialogValid && result.pdfExport && result.pdfExport.saved === 1
             && result.pdfExport.chartImages >= 1 && result.pdfFiles.length === 1));
+        result.status = passed ? "passed" : "failed";
+        result.pid = process.pid;
+        result.log = path.join(SMOKE_ROOT, "smoke.log");
+        result.finishedAt = new Date().toISOString();
+        fs.writeFileSync(path.join(artifactRoot, "smoke-result.json"), JSON.stringify(result, null, 2), "utf8");
+        smokeLog(`[smoke] ${result.status}; result: ${path.join(artifactRoot, "smoke-result.json")}`);
         app.exit(passed ? 0 : 2);
       } catch (error) {
-        process.stderr.write(`${error.stack || error.message}\n`);
-        app.exit(3);
+        failSmoke(error);
       }
     });
   }
@@ -1626,6 +1672,7 @@ if (!gotLock) {
   app.quit();
 } else {
   app.on("second-instance", () => {
+    if (SMOKE_TEST) return;
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
@@ -1639,6 +1686,7 @@ if (!gotLock) {
       createWindow();
     } catch (error) {
       logEvent("startup-error", { message: error.message, stack: error.stack });
+      if (SMOKE_TEST) { failSmoke(error, "startup"); return; }
       dialog.showErrorBox("Не удалось запустить приложение", error.stack || error.message);
       app.exit(1);
     }

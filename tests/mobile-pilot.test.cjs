@@ -58,9 +58,9 @@ test("mobile pilot scripts parse and use only bundled relative assets", () => {
 
   const html = read("mobile-pilot/index.html");
   assert.match(html, /rel="manifest" href="\.\/manifest\.webmanifest"/);
-  assert.match(html, /src="\.\/demo-data\.js\?v=8"/);
-  assert.match(html, /src="\.\/app\.js\?v=8"/);
-  assert.match(html, /href="\.\/app\.css\?v=8"/);
+  assert.match(html, /src="\.\/demo-data\.js\?v=10"/);
+  assert.match(html, /src="\.\/app\.js\?v=10"/);
+  assert.match(html, /href="\.\/app\.css\?v=10"/);
   assert.doesNotMatch(html, /https?:\/\//i);
 
   const worker = read("mobile-pilot/service-worker.js");
@@ -166,6 +166,10 @@ test("mobile publication keeps reading pre-parity version 1 files", () => {
     delete period.dynamics;
     delete period.goalsSource;
     period.goals = period.goals.map(({ title, description, progress }) => ({ title, description, progress }));
+    period.vectors.forEach(vector => (vector.windows ? vector.windows.flatMap(window => window.sections) : vector.sections).forEach(section => {
+      delete section.tree;
+      delete section.charts;
+    }));
   }
   const publication = {
     format: MOBILE_PUBLICATION_FORMAT,
@@ -176,6 +180,89 @@ test("mobile publication keeps reading pre-parity version 1 files", () => {
     periods: demo.periods,
   };
   assert.equal(validateMobilePublication(publication), publication);
+});
+
+test("mobile visual schema rejects malformed trees, unsafe colors and invalid numbers", () => {
+  const context = { window: {} };
+  vm.runInNewContext(read("mobile-pilot/demo-data.js"), context);
+  const base = { format: MOBILE_PUBLICATION_FORMAT, version: 1,
+    security: { patientRegistryIncluded: false, rawExportsIncluded: false },
+    ...JSON.parse(JSON.stringify(context.window.KLINVEKT_MOBILE_DEMO)) };
+  for (const mutate of [
+    file => { file.periods[0].vectors[1].sections[1].tree[0].values.pop(); },
+    file => { file.periods[0].dynamics.charts[0].series[0].values.pop(); },
+    file => { file.periods[0].dynamics.charts[0].series[0].values[0] = NaN; },
+    file => { file.periods[0].dynamics.charts[0].series[0].color = "url(https://example.com)"; },
+    file => { file.periods[0].vectors[1].sections[1].charts[0].series[0].values[0] = -10; },
+    file => { file.periods[0].vectors[1].sections[1].tree[0].patientId = "must-not-leak"; },
+    file => {
+      let node = file.periods[0].vectors[1].sections[1].tree[0];
+      for (let i = 0; i < 34; i++) { node.children = [{ label: "Группа", values: ["1", "2", "3"] }]; node = node.children[0]; }
+    },
+  ]) {
+    const file = structuredClone(base);
+    mutate(file);
+    assert.throws(() => validateMobilePublication(file), /Некорректная мобильная публикация/);
+  }
+  const roundTrip = JSON.parse(serializeMobilePublication(base));
+  assert.deepEqual(roundTrip.periods[0].vectors[2].sections[1].tree, base.periods[0].vectors[2].sections[1].tree);
+  assert.deepEqual(roundTrip.periods[0].dynamics.charts, base.periods[0].dynamics.charts);
+});
+
+function mobileVisualContext() {
+  const app = read("mobile-pilot/app.js");
+  const context = vm.createContext({ Intl });
+  vm.runInContext(`const escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');\n`
+    + app.slice(app.indexOf("  function legacyRevenueTree"), app.indexOf("  function renderSection")), context);
+  return context;
+}
+
+test("mobile tree renderer supports nested native disclosures and old revenue markers", () => {
+  const context = mobileVisualContext();
+  const result = vm.runInContext(`(() => {
+    const nodes = legacyRevenueTree({ title: 'Распределение выручки', rows: [
+      ['Аппараты · итого', '2', '100 ₽', '100%'], ['↳ Кутера', '2', '100 ₽', '100%']
+    ] });
+    nodes[0].children[0].children = [{ label: '<img src=x onerror=alert(1)>', values: ['2', '100 ₽', '100%'] }];
+    return { nodes, html: renderTree(nodes, ['Категория', 'Количество', 'Выручка', 'Доля']) };
+  })()`, context);
+  assert.equal(result.nodes[0].label, "Аппараты");
+  assert.equal(result.nodes[0].children[0].label, "Кутера");
+  assert.equal((result.html.match(/<details /g) || []).length, 2);
+  assert.match(result.html, /data-tree-action="open"/);
+  assert.match(result.html, /&lt;img/);
+  assert.doesNotMatch(result.html, /<img/);
+});
+
+test("mobile SVG charts retain gaps, zeroes, exact tables and single-month values", () => {
+  const context = mobileVisualContext();
+  const result = vm.runInContext(`(() => {
+    const chart = { id: 'money', title: 'Выручка', type: 'line', unit: '₽', labels: ['Янв', 'Фев', 'Мар'],
+      series: [{ label: 'Собственная', color: '#2563eb', values: [0, null, 12345.67] }] };
+    const gap = chartPlot(chart);
+    const table = chartTable(chart);
+    const single = chartPlot({ ...chart, labels: ['Мар'], series: [{ ...chart.series[0], values: [12345.67] }] });
+    const signed = chartPlot({ ...chart, type: 'mirror', series: [{ ...chart.series[0], side: 'own', values: [1, null, -2] }] });
+    return { gap, table, single, signed };
+  })()`, context);
+  assert.match(result.gap, /d="M[^"L]+M/);
+  assert.equal((result.gap.match(/<circle /g) || []).length, 4); // desktop + compact SVG, two known values each
+  assert.match(result.table, /12 345,67/);
+  assert.match(result.table, /<td>—<\/td>/);
+  assert.equal((result.single.match(/<circle /g) || []).length, 2);
+  assert.doesNotMatch(result.gap + result.single, /NaN|Infinity/);
+  assert.match(result.signed, /отрицательные корректировки/);
+});
+
+test("mobile dynamics remains visible without an overall score", () => {
+  const source = read("mobile-pilot/app.js");
+  const elements = Object.fromEntries(["trendChart", "trendLabels", "trendValue", "trendCaption", "desktopCharts", "comparisonList", "dynamicsInsights"].map(id => [id, { innerHTML: "stale", style: {} }]));
+  const period = { id: "2026-03", overall: null, dynamics: { columns: ["Март"], rows: [{ label: "Выручка", values: ["10 ₽"], delta: "—" }], charts: [] } };
+  const context = vm.createContext({ elements, currentPeriod: () => period, reportData: { periods: [period] }, escapeHtml: String, renderCharts: () => "charts", bindCharts: () => {} });
+  vm.runInContext(source.slice(source.indexOf("  function renderTrend()"), source.indexOf("  function renderGoals")) + "\nrenderTrend();", context);
+  assert.match(elements.comparisonList.innerHTML, /10 ₽/);
+  assert.equal(elements.trendValue.textContent, "—");
+  assert.equal(elements.desktopCharts.innerHTML, "charts");
 });
 
 test("one mobile bundle encrypts every doctor publication with the existing PIN", () => {

@@ -8,6 +8,57 @@ const test = require("node:test");
 const root = path.resolve(__dirname, "..");
 const build = path.join(root, "build");
 
+test("smoke diagnostics survive closed pipes without dialogs and report fatal failures once", () => {
+  const vm = require("node:vm");
+  const { EventEmitter } = require("node:events");
+  const source = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
+  const diagnostics = source.slice(source.indexOf("function smokeLog"), source.indexOf("// После переименования"));
+  const makeContext = (enabled = true, diskFails = false) => {
+    const events = new EventEmitter();
+    events.stdout = new EventEmitter();
+    events.stderr = new EventEmitter();
+    events.pid = 123;
+    const records = new Map(), exits = [];
+    let watchdog;
+    const context = vm.createContext({ SMOKE_TEST: enabled, SMOKE_ROOT: "/test/smoke", SMOKE_ARTIFACT_ROOT: "/test/artifacts", path,
+      process: events, app: { exit: code => exits.push(code) },
+      fs: {
+        mkdirSync: () => {},
+        appendFileSync: (file, text) => { if (diskFails) throw new Error("disk full"); records.set(file, (records.get(file) || "") + text); },
+        writeFileSync: (file, text) => { records.set(file, text); },
+      },
+      setTimeout: (callback, ms) => { assert.equal(ms, 120000); watchdog = callback; return { unref() {} }; },
+    });
+    vm.runInContext(diagnostics, context);
+    return { events, records, exits, watchdog, context };
+  };
+  const run = makeContext();
+  assert.doesNotThrow(() => {
+    for (let i = 0; i < 20; i++) run.events.stderr.emit("error", Object.assign(new Error("pipe closed"), { code: "EPIPE" }));
+    run.events.stdout.emit("error", Object.assign(new Error("destroyed"), { code: "ERR_STREAM_DESTROYED" }));
+    vm.runInContext("smokeLog('renderer warning')", run.context);
+  });
+  assert.deepEqual(run.exits, []);
+  assert.match(run.records.get(path.join("/test/smoke", "smoke.log")), /renderer warning/);
+  run.events.emit("uncaughtException", new Error("actual test failure"));
+  run.events.emit("unhandledRejection", new Error("second failure"));
+  assert.deepEqual(run.exits, [3]);
+  const failure = JSON.parse(run.records.get(path.join("/test/artifacts", "smoke-result.json")));
+  assert.equal(failure.status, "failed");
+  assert.match(failure.error, /actual test failure/);
+  const brokenDisk = makeContext(true, true);
+  assert.doesNotThrow(() => brokenDisk.events.stderr.emit("error", Object.assign(new Error("pipe"), { code: "EPIPE" })));
+  brokenDisk.watchdog();
+  assert.deepEqual(brokenDisk.exits, [3]);
+  const production = makeContext(false);
+  assert.equal(production.events.listenerCount("uncaughtException"), 0);
+  assert.equal(production.events.stderr.listenerCount("error"), 0);
+  assert.equal(production.records.size, 0);
+  assert.doesNotMatch(source, /process\.(?:stdout|stderr)\.write/);
+  assert.match(source, /ready-to-show[\s\S]*?if \(SMOKE_TEST\) return;[\s\S]*?mainWindow\.show\(\)/);
+  assert.match(source, /if \(SMOKE_TEST\) \{ failSmoke\(error, "startup"\); return; \}/);
+});
+
 const replacements = {
   "/*__CSS__*/": "app.css",
   "/*__XLSX__*/": "xlsx.full.min.js",

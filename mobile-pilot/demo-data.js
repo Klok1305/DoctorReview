@@ -294,6 +294,39 @@
       conclusion: period.comment,
       conclusionManual: true,
     };
+    // UI fixtures only: production charts arrive as numeric aggregates from Admin.
+    const number = value => Number(String(value).replace(/[^\d,.-]/g, "").replace(",", "."));
+    const colors = ["#2563eb", "#7c3aed", "#16a34a", "#d97706", "#db2777", "#0891b2", "#64748b"];
+    const pie = (id, title, rows, column, unit) => ({ id, title, type: "donut", unit,
+      labels: rows.map(row => row[0]), series: [{ label: title, values: rows.map(row => number(row[column])), colors: rows.map((_, i) => colors[i % colors.length]) }] });
+    const product = period.vectors[1].sections;
+    product[1].tree = product[1].rows.map(row => ({ label: row[0], values: row.slice(1),
+      children: [{ label: `Подгруппа: ${row[0]}`, values: row.slice(1) }] }));
+    product[1].charts = [pie("revenue", "Долевое распределение выручки", product[1].rows, 2, "₽")];
+    product[2].charts = [pie("expert-quantity", "Экспертные позиции: штуки", product[2].rows, 1, "шт."), pie("expert-revenue", "Экспертные позиции: выручка", product[2].rows, 2, "₽")];
+    const cross = period.vectors[2].sections;
+    cross[1].tree = cross[1].rows.map(row => ({ label: row[0], values: row.slice(1), children: [{ label: "Группа услуг", values: row.slice(1),
+      children: [{ label: `Тестовая услуга — ${row[0]}`, values: row.slice(1) }] }] }));
+    cross[2].charts = [pie("focus-assigned", "Назначено по фокусам", cross[2].rows, 1, "шт."), pie("focus-result", "Выполнено + продано по фокусам", cross[2].rows, 2, "шт.")];
+    cross[3].charts = [pie("referrals", "Структура выполненных направлений", cross[3].rows, 2, "₽")];
+    period.vectors[3].windows.forEach(window => {
+      const section = window.sections[1];
+      section.charts = [{ ...pie("segments", "Группы клиентской базы", [["Общая база", window.sections[0].metrics[0].value], ...section.rows], 1, "чел."), type: "bar" }];
+    });
+    const line = (id, title, definitions, unit) => ({ id, title, type: "line", unit, labels: chronological.map(item => item.shortLabel),
+      series: definitions.map(([label, get], i) => ({ label, color: colors[i], values: chronological.map(get) })) });
+    const own = item => number(item.vectors[0].sections[0].metrics[0].value);
+    const ref = item => number(item.vectors[0].sections[0].metrics[2].value);
+    period.dynamics.charts = [
+      line("money", "Выручка по месяцам", [["Собственная выручка", own], ["С перенаправлениями", item => own(item) + ref(item)]], "₽"),
+      line("traffic", "Пациенты по месяцам", [["Пациенты", item => number(item.headlineMetrics[0].value)]], "чел."),
+      line("rates", "Загрузка и конверсии", [["Загрузка", item => number(item.headlineMetrics[1].value)], ["Конверсия назначений", item => number(item.vectors[2].sections[0].metrics[4].value)]], "%"),
+      line("base", "Клиентская база по месяцам", [["Общая база", item => number(item.vectors[3].windows[0].sections[0].metrics[0].value)]], "чел."),
+      line("scores", "Баллы по векторам", [["Общий балл", item => item.overall], ...vectorMeta.map(([id, n, title]) => [`В${n} ${title}`, item => item.vectors.find(v => v.id === id).score])], "баллов"),
+      { id: "revenue-structure", title: "Структура выручки по месяцам", type: "mirror", unit: "₽", labels: chronological.map(item => item.shortLabel),
+        series: [...product[1].rows.map((row, i) => ({ label: row[0], side: "own", color: colors[i], values: chronological.map(item => number(item.vectors[1].sections[1].rows[i][2])) })),
+          { label: "Выручка от перенаправлений", side: "ref", color: "#334155", values: chronological.map(ref) }] },
+    ];
   });
 
   window.KLINVEKT_MOBILE_DEMO = Object.freeze({

@@ -52,6 +52,7 @@
     trendLabels: document.getElementById("trendLabels"),
     comparisonList: document.getElementById("comparisonList"),
     dynamicsInsights: document.getElementById("dynamicsInsights"),
+    desktopCharts: document.getElementById("desktopCharts"),
     goalsSource: document.getElementById("goalsSource"),
     goalsList: document.getElementById("goalsList"),
     commentsList: document.getElementById("commentsList"),
@@ -91,11 +92,12 @@
     return String(name || "КВ").split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "КВ";
   }
 
-  function findForbiddenPublicationKey(value) {
+  function findForbiddenPublicationKey(value, depth = 0) {
+    if (depth > 80) throw new Error("Слишком глубокая вложенность файла");
     const forbidden = new Set(["clients", "clientrows", "patientregistry", "patientid", "patientname", "patientsforwork", "reactivationrows", "riskrows", "sourcefiles", "rawexports"]);
     if (Array.isArray(value)) {
       for (const item of value) {
-        const found = findForbiddenPublicationKey(item);
+        const found = findForbiddenPublicationKey(item, depth + 1);
         if (found) return found;
       }
       return null;
@@ -103,10 +105,43 @@
     if (!value || typeof value !== "object") return null;
     for (const [key, nested] of Object.entries(value)) {
       if (forbidden.has(String(key).toLowerCase())) return key;
-      const found = findForbiddenPublicationKey(nested);
+      const found = findForbiddenPublicationKey(nested, depth + 1);
       if (found) return found;
     }
     return null;
+  }
+
+  function validateVisualData(sections, charts = []) {
+    let nodeCount = 0;
+    const visit = (nodes, columns, depth = 0) => {
+      if (!Array.isArray(nodes) || depth > 32) throw new Error("Некорректная иерархия групп");
+      for (const node of nodes) {
+        if (++nodeCount > 10000 || !node || typeof node.label !== "string" || !Array.isArray(node.values)
+          || node.values.length !== columns.length - 1 || node.values.some(value => typeof value !== "string")) throw new Error("Некорректные значения группы");
+        if (node.children != null) visit(node.children, columns, depth + 1);
+      }
+    };
+    for (const section of sections) {
+      nodeCount = 0;
+      if (section.tree != null) {
+        if (!Array.isArray(section.columns) || section.columns.length < 2 || section.columns.length > 6) throw new Error("Некорректные столбцы групп");
+        visit(section.tree, section.columns);
+      }
+    }
+    for (const collection of [charts, ...sections.map(section => section.charts || [])]) {
+      if (!Array.isArray(collection) || collection.length > 12) throw new Error("Некорректные графики");
+      for (const chart of collection) {
+        if (!chart || !["donut", "bar", "line", "mirror"].includes(chart.type) || !Array.isArray(chart.labels)
+          || !chart.labels.length || chart.labels.length > 500 || !Array.isArray(chart.series) || !chart.series.length || chart.series.length > 30) throw new Error("Некорректный график");
+        if (["donut", "bar"].includes(chart.type) && chart.series.length !== 1) throw new Error("Некорректное число рядов");
+        for (const series of chart.series) {
+          if (!Array.isArray(series.values) || series.values.length !== chart.labels.length
+            || series.values.some(value => value !== null && (!Number.isFinite(value) || Math.abs(value) > 1e15))) throw new Error("Некорректные числа графика");
+          if (chart.type === "donut" && series.values.some(value => value < 0)) throw new Error("Отрицательный сектор диаграммы");
+          if (chart.type === "mirror" && !["own", "ref"].includes(series.side)) throw new Error("Некорректная сторона выручки");
+        }
+      }
+    }
   }
 
   function validatePublication(value) {
@@ -127,6 +162,7 @@
       for (const vector of period.vectors) {
         const collections = Array.isArray(vector.windows) ? vector.windows.map((item) => item.sections) : [vector.sections];
         if (collections.some((sections) => !Array.isArray(sections) || !sections.length)) throw new Error(`Нет расшифровки ${vector.id}`);
+        collections.forEach(sections => validateVisualData(sections));
       }
       if (!Array.isArray(period.goals) || period.goals.length > 20) throw new Error("Некорректный набор целей");
       if (period.comments != null && (!Array.isArray(period.comments) || period.comments.length > 50)) throw new Error("Некорректный набор комментариев");
@@ -135,6 +171,7 @@
           throw new Error("Некорректная динамика отчёта");
         }
         if (period.dynamics.columns.length > 6 || period.dynamics.rows.length > 30) throw new Error("Слишком большой блок динамики");
+        validateVisualData([], period.dynamics.charts || []);
       }
     }
     return value;
@@ -226,6 +263,127 @@
       </article>`).join("");
   }
 
+  function legacyRevenueTree(section) {
+    // Старый формат хранил подкатегории рядом с итогами. Восстанавливаем только известные маркеры, не пересчитывая суммы.
+    if (section.title !== "Распределение выручки" || !section.rows?.some(row => String(row[0]).endsWith(" · итого"))) return [];
+    const roots = [];
+    for (const row of section.rows) {
+      const label = String(row[0]);
+      if (label.startsWith("↳") && roots.length) roots.at(-1).children.push({ label: label.slice(1).trim(), values: row.slice(1) });
+      else roots.push({ label: label.replace(/ · итого$/, ""), values: row.slice(1), children: [] });
+    }
+    return roots;
+  }
+
+  function renderTree(nodes, columns) {
+    const visit = (items, depth = 0) => items.map(node => {
+      const expandable = Boolean(node.children?.length);
+      const row = `<span class="tree-label"><span class="tree-arrow" aria-hidden="true">${expandable ? "›" : "·"}</span>${escapeHtml(node.label)}</span>
+        <span class="tree-values">${node.values.map((value, i) => `<span><small>${escapeHtml(columns[i + 1])}</small><b>${escapeHtml(value)}</b></span>`).join("")}</span>`;
+      return expandable ? `<details class="tree-node"><summary class="tree-row">${row}</summary><div class="tree-children">${visit(node.children, depth + 1)}</div></details>`
+        : `<div class="tree-row tree-leaf">${row}</div>`;
+    }).join("");
+    return `<div class="report-tree" data-values="${columns.length - 1}">
+      <div class="tree-tools"><span>Нажмите на группу, чтобы раскрыть</span><button type="button" data-tree-action="open">Раскрыть всё</button><button type="button" data-tree-action="close">Свернуть всё</button></div>
+      ${visit(nodes)}</div>`;
+  }
+
+  const chartPalette = ["#2563eb", "#7c3aed", "#16a34a", "#d97706", "#db2777", "#0891b2", "#64748b"];
+  const chartColor = (value, index = 0) => /^#[0-9a-f]{6}$/i.test(value || "") ? value : chartPalette[index % chartPalette.length];
+  const chartNumber = (value, compact = false) => Number.isFinite(value)
+    ? new Intl.NumberFormat("ru-RU", { maximumFractionDigits: compact ? 1 : 2, ...(compact ? { notation: "compact" } : {}) }).format(value) : "—";
+
+  function chartTable(chart) {
+    return `<details class="chart-data"><summary>Точные значения${chart.unit ? ` · ${escapeHtml(chart.unit)}` : ""}</summary><div class="chart-data-scroll"><table>
+      <thead><tr><th scope="col">${chart.type === "line" || chart.type === "mirror" ? "Период" : "Категория"}</th>${chart.series.map(series => `<th scope="col">${escapeHtml(series.label)}</th>`).join("")}</tr></thead>
+      <tbody>${chart.labels.map((label, i) => `<tr><th scope="row">${escapeHtml(label)}</th>${chart.series.map(series => `<td>${chartNumber(series.values[i])}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`;
+  }
+
+  function chartLegend(chart, series = chart.series) {
+    const items = chart.type === "donut" || chart.type === "bar"
+      ? chart.labels.map((label, i) => ({ label, color: chartColor(series[0].colors?.[i], i), value: series[0].values[i] }))
+      : series.map((item, i) => ({ label: item.label, color: chartColor(item.color, i) }));
+    const total = chart.type === "donut" ? series[0].values.reduce((sum, value) => sum + (value || 0), 0) : 0;
+    return `<ul class="chart-legend">${items.map(item => `<li><svg viewBox="0 0 9 9" aria-hidden="true"><rect width="9" height="9" rx="3" fill="${item.color}"/></svg><span>${escapeHtml(item.label)}</span>${item.value !== undefined ? `<b>${chartNumber(item.value)}${chart.unit ? ` ${escapeHtml(chart.unit)}` : ""}${total > 0 ? `<small>${chartNumber(item.value / total * 100)}%</small>` : ""}</b>` : ""}</li>`).join("")}</ul>`;
+  }
+
+  function chartPlot(chart, selection = "all") {
+    const series = selection === "all" ? chart.series : [chart.series[Number(selection)]];
+    if (chart.type === "donut") {
+      const total = series[0].values.reduce((sum, value) => sum + (value || 0), 0);
+      let offset = 0;
+      const circles = total > 0 ? series[0].values.map((value, i) => {
+        const amount = (value || 0) / total * 100;
+        const circle = `<circle cx="100" cy="100" r="72" pathLength="100" fill="none" stroke="${chartColor(series[0].colors?.[i], i)}" stroke-width="25" stroke-dasharray="${amount} ${100 - amount}" stroke-dashoffset="${-offset}" transform="rotate(-90 100 100)"><title>${escapeHtml(chart.labels[i])}: ${chartNumber(value)}</title></circle>`;
+        offset += amount;
+        return value > 0 ? circle : "";
+      }).join("") : "";
+      return `<div class="donut-layout"><svg class="donut-plot" viewBox="0 0 200 200" role="img" aria-label="${escapeHtml(chart.title)}"><circle cx="100" cy="100" r="72" fill="none" stroke="#edf1f7" stroke-width="25"/>${circles}<text x="100" y="98" text-anchor="middle" class="donut-total">${chartNumber(total, true)}</text><text x="100" y="120" text-anchor="middle">${escapeHtml(chart.unit || "всего")}</text></svg>${chartLegend(chart)}</div>`;
+    }
+    if (chart.type === "bar") {
+      const values = series[0].values;
+      const max = Math.max(1, ...values.filter(Number.isFinite).map(Math.abs));
+      return `<div class="bar-plot">${chart.labels.map((label, i) => `<div class="bar-item"><div><span>${escapeHtml(label)}</span><b>${chartNumber(values[i])} ${escapeHtml(chart.unit || "")}</b></div><svg class="bar-track" width="100%" height="9" aria-hidden="true"><rect width="100%" height="9" fill="#eef2f7" rx="4"/><rect width="${Number.isFinite(values[i]) ? Math.abs(values[i]) / max * 100 : 0}%" height="9" rx="4" fill="${chartColor(series[0].colors?.[i], i)}"/></svg></div>`).join("")}</div>`;
+    }
+    if (chart.type === "mirror") {
+      // Отрицательные корректировки нельзя изображать как положительную выручку.
+      if (series.some(item => item.values.some(value => value < 0))) return `<p class="chart-note">Есть отрицательные корректировки. Суммы со знаком приведены в таблице «Точные значения».</p>${chartLegend(chart)}`;
+      const sums = chart.labels.map((_, i) => ["own", "ref"].map(side => series.filter(item => item.side === side).reduce((sum, item) => sum + (item.values[i] || 0), 0)));
+      const max = Math.max(1, ...sums.flat());
+      const height = 50 + chart.labels.length * 42;
+      const bars = chart.labels.map((label, i) => {
+        const y = 36 + i * 42;
+        let left = 332, right = 348;
+        return `<text x="10" y="${y + 15}">${escapeHtml(label)}</text>${series.map((item, j) => {
+          const w = (item.values[i] || 0) / max * 205;
+          const x = item.side === "own" ? left - w : right;
+          if (item.side === "own") left -= w; else right += w;
+          return `<rect x="${x}" y="${y}" width="${w}" height="22" rx="2" fill="${chartColor(item.color, j)}"><title>${escapeHtml(item.label)}: ${chartNumber(item.values[i])}</title></rect>`;
+        }).join("")}<text x="332" y="${y + 34}" text-anchor="end">${series.filter(item => item.side === "own").some(item => item.values[i] != null) ? chartNumber(sums[i][0], true) : "—"}</text><text x="348" y="${y + 34}">${series.filter(item => item.side === "ref").some(item => item.values[i] != null) ? chartNumber(sums[i][1], true) : "—"}</text>`;
+      }).join("");
+      return `<p class="chart-note">Слева — собственная выручка по категориям, справа — от перенаправлений. ${escapeHtml(chart.unit || "")}</p><div class="plot-scroll"><svg viewBox="0 0 580 ${height}" role="img" aria-label="${escapeHtml(chart.title)}"><text x="332" y="16" text-anchor="end">Собственная</text><text x="348" y="16">Перенаправления</text><line x1="340" x2="340" y1="28" y2="${height}" stroke="#dce5f0"/>${bars}</svg></div>${chartLegend(chart)}`;
+    }
+    const numbers = series.flatMap(item => item.values).filter(Number.isFinite);
+    if (!numbers.length) return '<p class="chart-note">Нет данных для этого ряда.</p>';
+    const min = Math.min(0, ...numbers), max = Math.max(1, ...numbers);
+    const lineSvg = compact => {
+    const width = compact ? 360 : 610;
+    const start = compact ? 52 : 62, end = width - (compact ? 25 : 48);
+    const x = index => start + index * (end - start) / Math.max(1, chart.labels.length - 1);
+    const y = value => 194 - (value - min) / (max - min) * 160;
+    const grid = Array.from({ length: 5 }, (_, i) => {
+      const value = min + (max - min) * i / 4;
+      return `<line x1="${start}" x2="${end}" y1="${y(value)}" y2="${y(value)}" stroke="#e8edf4"/><text x="${start - 8}" y="${y(value) + 4}" text-anchor="end">${chartNumber(value, true)}</text>`;
+    }).join("");
+    const lines = series.map((item, s) => {
+      let previous = false;
+      const color = chartColor(item.color, s);
+      const path = item.values.map((value, i) => {
+        if (!Number.isFinite(value)) { previous = false; return ""; }
+        const part = `${previous ? "L" : "M"}${x(i)},${y(value)}`;
+        previous = true;
+        return part;
+      }).join(" ");
+      return `<path d="${path}" fill="none" stroke="${color}" stroke-width="2.5"/>${item.values.map((value, i) => Number.isFinite(value) ? `<circle cx="${x(i)}" cy="${y(value)}" r="3.5" fill="${color}"><title>${escapeHtml(item.label)} · ${escapeHtml(chart.labels[i])}: ${chartNumber(value)}</title></circle>` : "").join("")}`;
+    }).join("");
+    const labelText = label => compact ? String(label).split(/\s+/).map((part, i) => i === 0 ? part.slice(0, 3) : /^\d{4}$/.test(part) ? part.slice(-2) : part).join(" ") : label;
+    return `<svg class="${compact ? "line-narrow" : "line-wide"}" viewBox="0 0 ${width} 235" role="img" aria-label="${escapeHtml(chart.title)}"><text x="${start}" y="16">${escapeHtml(chart.unit || "")}</text>${grid}${lines}${chart.labels.map((label, i) => `<text x="${x(i)}" y="219" text-anchor="middle">${escapeHtml(labelText(label))}</text>`).join("")}</svg>`;
+    };
+    return `<div class="line-plot">${lineSvg(false)}${lineSvg(true)}</div>${chartLegend(chart, series)}`;
+  }
+
+  function renderCharts(charts = []) {
+    return charts.map(chart => `<article class="report-chart"><header><h5>${escapeHtml(chart.title)}</h5>${chart.type === "line" && chart.series.length > 1 ? `<label class="chart-picker">Показать<select data-chart-series><option value="all">Все показатели</option>${chart.series.map((series, i) => `<option value="${i}"${chart.id === "scores" && i === 0 ? " selected" : ""}>${escapeHtml(series.label)}</option>`).join("")}</select></label>` : ""}</header><div class="chart-plot">${chartPlot(chart, chart.id === "scores" ? "0" : "all")}</div>${chartTable(chart)}</article>`).join("");
+  }
+
+  function bindCharts(root, charts) {
+    root.querySelectorAll(".report-chart").forEach((card, i) => {
+      card.querySelector("[data-chart-series]")?.addEventListener("change", event => {
+        card.querySelector(".chart-plot").innerHTML = chartPlot(charts[i], event.target.value);
+      });
+    });
+  }
+
   function renderSection(section) {
     const metrics = Array.isArray(section.metrics) && section.metrics.length
       ? `<div class="metric-grid">${section.metrics.map((metric) => `
@@ -236,7 +394,8 @@
             ${metric.target ? `<em>${escapeHtml(metric.target)}</em>` : ""}
           </div>`).join("")}</div>`
       : "";
-    const rows = Array.isArray(section.rows) && section.rows.length
+    const tree = section.tree?.length ? section.tree : legacyRevenueTree(section);
+    const rows = tree.length ? renderTree(tree, section.columns) : Array.isArray(section.rows) && section.rows.length
       ? `<div class="aggregate-table" role="table" aria-label="${escapeHtml(section.title)}">
           <div class="aggregate-head" role="row">${section.columns.map((column) => `<span role="columnheader">${escapeHtml(column)}</span>`).join("")}</div>
           ${section.rows.map((row) => `<div class="aggregate-row" role="row">${row.map((value, index) => `
@@ -246,7 +405,7 @@
     return `<section class="metric-section">
       <h4>${escapeHtml(section.title)}</h4>
       ${section.note ? `<p>${escapeHtml(section.note)}</p>` : ""}
-      ${metrics}${rows}
+      ${metrics}${rows}${renderCharts(section.charts)}
     </section>`;
   }
 
@@ -271,6 +430,11 @@
       <p class="vector-summary">${escapeHtml(vector.detail)}</p>
       ${windowPicker}
       <div class="metric-sections">${sections.map(renderSection).join("")}</div>`;
+
+    elements.vectorDetail.querySelectorAll("[data-tree-action]").forEach(button => {
+      button.addEventListener("click", () => button.closest(".report-tree").querySelectorAll("details.tree-node").forEach(node => { node.open = button.dataset.treeAction === "open"; }));
+    });
+    bindCharts(elements.vectorDetail, sections.flatMap(section => section.charts || []));
 
     elements.vectorDetail.querySelectorAll("[data-vector-window]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -307,14 +471,13 @@
   }
 
   function renderTrend() {
-    const chronological = [...reportData.periods].reverse().filter((period) => Number.isFinite(period.overall));
+    const chronological = reportData.periods.filter(period => period.id <= currentPeriod().id).sort((a, b) => a.id.localeCompare(b.id)).filter((period) => Number.isFinite(period.overall));
     if (!chronological.length) {
       elements.trendChart.innerHTML = "";
       elements.trendLabels.innerHTML = "";
       elements.trendValue.textContent = "—";
       elements.trendCaption.textContent = "баллы пока не рассчитаны";
-      return;
-    }
+    } else {
     const values = chronological.map((period) => period.overall);
     const width = 600;
     const height = 170;
@@ -345,9 +508,13 @@
     const change = values.at(-1) - values[0];
     elements.trendValue.textContent = signed(change);
     elements.trendCaption.textContent = `пунктов за ${chronological.length} период${chronological.length === 1 ? "" : chronological.length < 5 ? "а" : "ов"}`;
+    }
 
     const period = currentPeriod();
     const dynamics = period.dynamics;
+    const charts = dynamics?.charts || [];
+    elements.desktopCharts.innerHTML = renderCharts(charts);
+    bindCharts(elements.desktopCharts, charts);
     if (dynamics && Array.isArray(dynamics.rows) && dynamics.rows.length) {
       elements.comparisonList.innerHTML = `<h3>Детализация по месяцам</h3>
         <div class="viewer-dynamics-table"><table>

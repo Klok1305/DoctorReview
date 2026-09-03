@@ -3015,6 +3015,82 @@ function mobilePublicationState(value, target, lowerIsBetter = false) {
   return achieved ? "good" : "warn";
 }
 
+function mobilePublicationChart(id, title, type, labels, series, unit = "") {
+  const datasets = series.map(item => ({
+    ...item, values: item.values.map(value => Number.isFinite(value) ? value : null),
+  })).filter(item => item.values.some(value => value != null));
+  return labels.length && datasets.length ? { id, title, type, labels, series: datasets, unit } : null;
+}
+
+function mobilePublicationPie(id, title, entries, unit = "") {
+  const positive = entries.filter(item => Number.isFinite(item[1]) && item[1] > 0);
+  return mobilePublicationChart(id, title, "donut", positive.map(item => item[0]), [{
+    label: title, values: positive.map(item => item[1]), colors: positive.map(item => item[2] || "#2563eb"),
+  }], unit);
+}
+
+function mobilePublicationAppointmentTree(slice) {
+  const roots = new Map();
+  const keys = ["assigned", "done", "soldQ", "resultQ"];
+  const groups = slice.sourceGroups && slice.sourceGroups.length ? slice.sourceGroups
+    : REF_TYPES.filter(type => slice.byType && slice.byType[type]).map(type => ({ ...slice.byType[type], path: [type] }));
+  for (const group of groups) {
+    if (!keys.some(key => group[key])) continue;
+    let siblings = roots;
+    let node;
+    const parts = Array.isArray(group.path) && group.path.length ? group.path : ["Без группы"];
+    for (const part of parts) {
+      if (!siblings.has(part)) siblings.set(part, { label: String(part), children: new Map(), items: new Map(), assigned: 0, done: 0, soldQ: 0, resultQ: 0 });
+      node = siblings.get(part);
+      keys.forEach(key => { node[key] += Number(group[key] || 0); });
+      siblings = node.children;
+    }
+    for (const [name, item] of Object.entries(group.items || {})) {
+      if (!keys.some(key => item[key])) continue;
+      if (!node.items.has(name)) node.items.set(name, { label: name, assigned: 0, done: 0, soldQ: 0, resultQ: 0 });
+      keys.forEach(key => { node.items.get(name)[key] += Number(item[key] || 0); });
+    }
+  }
+  const values = node => [fmtNum(node.assigned), fmtNum(node.done), fmtNum(node.soldQ),
+    validNaznachCounts(node) && node.assigned > 0 ? fmtPct(node.resultQ / node.assigned * 100) : "—"];
+  const visit = nodes => [...nodes.values()].map(node => ({
+    label: node.label, values: values(node),
+    children: [...visit(node.children), ...[...node.items.values()].map(item => ({ label: item.label, values: values(item) }))],
+  }));
+  return [...visit(roots), { label: "Итого", values: values(slice.totals) }];
+}
+
+function mobilePublicationHistoryCharts(doctorId, monthKey, dynamics) {
+  const profile = profileForDoctor(doctorId);
+  const row = key => dynamics.rows.find(item => item.key === key);
+  const score = (month, key) => {
+    const scores = dynamics.results[month]?.scores;
+    const value = key ? scores?.vec[key] : scores?.total;
+    return Number.isFinite(value) ? value : null;
+  };
+  const line = (id, title, definitions, unit) => mobilePublicationChart(id, title, "line", dynamics.months.map(monthLabel),
+    definitions.map(([key, label, color]) => ({ label: row(key)?.name || label, color, values: row(key) ? row(key).values : dynamics.months.map(() => null) })), unit);
+  const charts = [
+    line("money", "Выручка по месяцам", [["sales", "Собственная выручка", "#2563eb"], ["withRef", "С перенаправлениями", "#7c3aed"]], "₽"),
+    line("traffic", "Визиты и пациенты", [["visits", "Визиты", "#2563eb"], ["patients", "Пациенты", "#16a34a"]], "чел. / виз."),
+    line("rates", "Загрузка и конверсии", [["sched", "Загрузка расписания", "#d97706"], ["perv", "Первичка", "#2563eb"], ["cross", "Доля выручки от перенаправлений", "#16a34a"], ["nazConv", "Конверсия назначений", "#db2777"]], "%"),
+    line("base", "Клиентская база по месяцам", [["akb", "Активная база", "#16a34a"], ["lost", "Потерянные", "#dc2626"]], "чел."),
+    mobilePublicationChart("scores", "Баллы по векторам", "line", dynamics.months.map(monthLabel), [
+      { label: "Общий балл", color: "#1c2333", values: dynamics.months.map(month => score(month)) },
+      ...["v1", "v2", "v3", "v4", "v5", "v6"].map(key => ({ label: `В${key[1]} ${VECTOR_META[key].name}`, color: VEC_LINE_COLORS[key], values: dynamics.months.map(month => score(month, key)) })),
+    ], "баллов"),
+  ];
+  // История структуры: те же агрегаты выработки, только до выбранного месяца.
+  const months = monthKeysSorted().filter(key => key <= monthKey);
+  const summaries = months.map(key => vyrabotkaSummary(doctorId, key));
+  const groups = [...new Set([...Object.keys(profile.groups || {}), ...summaries.flatMap(item => Object.keys(item && item.byGroup || {}))])];
+  charts.push(mobilePublicationChart("revenue-structure", "Структура выручки по месяцам", "mirror", months.map(monthLabel), [
+    ...groups.map(name => ({ label: name, color: groupColor(profile, name), side: "own", values: summaries.map(item => item ? Number(item.byGroup[name] && item.byGroup[name].s || 0) : null) })).filter(item => item.values.some(value => value !== null && value !== 0)),
+    { label: "Выручка от перенаправлений", color: "#334155", side: "ref", values: summaries.map(item => item ? Number(item.refIncludedSum || 0) : null) },
+  ], "₽"));
+  return charts.filter(Boolean);
+}
+
 function mobilePublicationGoals(doctorId, result, profile) {
   const benchmarks = profile && profile.scoring ? profile.scoring.benchmarks || {} : {};
   const lowerGoals = new Set(["riskShare", "churn"]);
@@ -3068,6 +3144,7 @@ function mobilePublicationDynamics(doctorId, monthKey) {
     risk: dynamics.risk.slice(0, 8).map(insight),
     conclusion: narrative.text || "",
     conclusionManual: Boolean(narrative.manual),
+    charts: mobilePublicationHistoryCharts(doctorId, monthKey, dynamics),
   };
 }
 
@@ -3129,6 +3206,7 @@ function mobilePublicationReferralSection(result, profile) {
     ],
     columns: ["Тип", "Штук", "Выполнено", "Учтено"],
     rows: refRows,
+    charts: [mobilePublicationPie("referrals", "Структура выполненных направлений", REF_TYPES.map((name, index) => [name, result.cross.refByType?.[name]?.s, ["#db2777", "#d97706", "#0d9488", "#2563eb", "#94a3b8"][index]]), "₽")].filter(Boolean),
   };
 }
 
@@ -3171,11 +3249,17 @@ function mobilePublicationAppointmentSections(result, profile, windowMonths) {
       title: "Детали назначений",
       columns: ["Группа", "Назначено", "Выполнено", "Продано", "Конверсия"],
       rows: sourceRows.length ? sourceRows : [["Нет сгруппированных данных", "—", "—", "—", "—"]],
+      tree: mobilePublicationAppointmentTree(slice),
+      note: slice.sourceGroups && slice.sourceGroups.length ? "Раскройте вид услуги, затем группу и номенклатуру. Итоги родительских групп включают все вложенные позиции." : "В исходной выгрузке нет иерархии 1С: показаны типы направлений и номенклатура.",
     },
     {
       title: "Фокусы междисциплинарного подхода",
       columns: ["Фокус", "Назначено", "Выполнено + продано"],
       rows: focusRows.length ? focusRows : [["Нет настроенных фокусов", "—", "—"]],
+      charts: [
+        mobilePublicationPie("focus-assigned", "Назначено по фокусам", Object.entries(slice.focus && slice.focus.items || {}).map(([name, item]) => [name, item.assigned, crossFocusColor(profile, name)]), "шт."),
+        mobilePublicationPie("focus-result", "Выполнено + продано по фокусам", Object.entries(slice.focus && slice.focus.items || {}).map(([name, item]) => [name, item.resultQ, crossFocusColor(profile, name)]), "шт."),
+      ].filter(Boolean),
     },
     mobilePublicationReferralSection(result, profile),
   ];
@@ -3212,6 +3296,10 @@ function mobilePublicationClientWindows(result, profile) {
           note: "Процент каждой группы считается от общей базы выбранного окна.",
           columns: ["Группа", "Пациенты", "Доля", "Условие"],
           rows: rows.length ? rows : [["Нет доступных групп", "—", "—", "—"]],
+          charts: [mobilePublicationChart("segments", "Группы клиентской базы", "bar", ["Общая база", ...groupOrder.filter(group => base.groupAvailable[group]).map(clientBaseGroupLabel)], [{
+            label: "Пациенты", values: [base.total, ...groupOrder.filter(group => base.groupAvailable[group]).map(group => base.seg[group])],
+            colors: ["#2563eb", ...groupOrder.filter(group => base.groupAvailable[group]).map(group => ({ loyal: "#059669", active: "#16a34a", newRisk: "#d97706", loyalSleep: "#94a3b8", lost: "#dc2626" })[group])],
+          }], "чел.")].filter(Boolean),
         },
       ],
     };
@@ -3226,10 +3314,15 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
     ? [...new Set([...Object.keys(profile.groups || {}), ...Object.keys(product.byGroup || {})])]
     : [];
   const categoryRows = [];
+  const categoryTree = [];
   for (const name of revenueGroupNames) {
     const item = product && product.byGroup ? product.byGroup[name] : null;
     if (!item || (!item.q && !item.s)) continue;
     categoryRows.push([`${name} · итого`, fmtNum(item.q), fmtMoney(item.s), ownRevenue ? fmtPct(item.s / ownRevenue * 100) : "—"]);
+    const subs = Object.entries(item.subs || {}).filter(([, entry]) => entry && (entry.q || entry.s)).sort((a, b) => b[1].s - a[1].s);
+    categoryTree.push({ label: name, values: [fmtNum(item.q), fmtMoney(item.s), ownRevenue ? fmtPct(item.s / ownRevenue * 100) : "—"],
+      children: subs.length === 1 && subs[0][0] === "—" ? [] : subs.map(([label, entry]) => ({ label, values: [fmtNum(entry.q), fmtMoney(entry.s), ownRevenue ? fmtPct(entry.s / ownRevenue * 100) : "—"] })),
+    });
     for (const [subName, subItem] of Object.entries(item.subs || {}).sort((first, second) => Number(second[1].s || 0) - Number(first[1].s || 0))) {
       if (subName === "—" || !subItem || (!subItem.q && !subItem.s)) continue;
       categoryRows.push([`↳ ${subName}`, fmtNum(subItem.q), fmtMoney(subItem.s), ownRevenue ? fmtPct(subItem.s / ownRevenue * 100) : "—"]);
@@ -3313,8 +3406,13 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
             mobilePublicationMetric("Не задействовано", unusedExpertNames.length ? unusedExpertNames.join(", ") : "нет", "из настроенного парка", "", unusedExpertNames.length ? "warn" : "good"),
           ],
         },
-        { title: "Распределение выручки", columns: ["Категория", "Кол-во", "Сумма", "Доля"], rows: categoryRows.length ? categoryRows : [["Без категории", "—", "—", "—"]] },
-        { title: `${profile.expertise.title || "Экспертность"}: позиции`, columns: ["Позиция", "Штук", "Выручка"], rows: expertRows.length ? expertRows : [["Нет использованных позиций", "—", "—"]] },
+        { title: "Распределение выручки", columns: ["Категория", "Кол-во", "Сумма", "Доля"], rows: categoryRows.length ? categoryRows : [["Без категории", "—", "—", "—"]], tree: categoryTree,
+          charts: [mobilePublicationPie("revenue", "Долевое распределение выручки", revenueGroupNames.map(name => [name, product.byGroup[name] && product.byGroup[name].s, groupColor(profile, name)]), "₽")].filter(Boolean) },
+        { title: `${profile.expertise.title || "Экспертность"}: позиции`, columns: ["Позиция", "Штук", "Выручка"], rows: expertRows.length ? expertRows : [["Нет использованных позиций", "—", "—"]],
+          charts: profile.expertise.mode === "none" ? [] : [
+            mobilePublicationPie("expert-quantity", "Экспертные позиции: штуки", Object.entries(product.expert || {}).map(([name, item]) => [name, item.q, deviceColor(profile, name)]), "шт."),
+            mobilePublicationPie("expert-revenue", "Экспертные позиции: выручка", Object.entries(product.expert || {}).map(([name, item]) => [name, item.s, deviceColor(profile, name)]), "₽"),
+          ].filter(Boolean) },
       ] : [{ title: "Экспертный профиль", metrics: [mobilePublicationMetric("Данные", "Нет выработки за месяц")] }],
     },
     {

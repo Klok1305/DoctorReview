@@ -61,12 +61,12 @@ test("Black Hole server gates access by Bitrix account, admin role and doctor PI
 
   for (const [route, contentType] of [
     ["/", "text/html"],
-    ["/app.css?v=8", "text/css"],
-    ["/app.js?v=8", "text/javascript"],
+    ["/app.css?v=10", "text/css"],
+    ["/app.js?v=10", "text/javascript"],
     ["/icons/app-icon-192.png", "image/png"],
     ["/mobile/", "text/html"],
-    ["/mobile/app.css?v=8", "text/css"],
-    ["/mobile/app.js?v=8", "text/javascript"],
+    ["/mobile/app.css?v=10", "text/css"],
+    ["/mobile/app.js?v=10", "text/javascript"],
     ["/mobile/icons/app-icon-192.png", "image/png"],
   ]) {
     const assetResponse = await fetch(`${base}${route}`);
