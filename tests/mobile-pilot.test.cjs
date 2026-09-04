@@ -111,8 +111,8 @@ test("mobile pilot scripts parse and use only bundled relative assets", () => {
   const html = read("mobile-pilot/index.html");
   assert.match(html, /rel="manifest" href="\.\/manifest\.webmanifest"/);
   assert.match(html, /src="\.\/demo-data\.js\?v=10"/);
-  assert.match(html, /src="\.\/app\.js\?v=12"/);
-  assert.match(html, /href="\.\/app\.css\?v=13"/);
+  assert.match(html, /src="\.\/app\.js\?v=13"/);
+  assert.match(html, /href="\.\/app\.css\?v=14"/);
   assert.doesNotMatch(html, /https?:\/\//i);
 
   const worker = read("mobile-pilot/service-worker.js");
@@ -201,12 +201,49 @@ test("mobile publication format validates aggregates and rejects patient-bearing
   }];
   assert.equal(validateMobilePublication(publication).periods[0].comments[0].text, "Сохранённый комментарий");
 
+  const metric = publication.periods[0].headlineMetrics[0];
+  metric.history = [
+    { label: "К прошлому месяцу", value: "нет данных за Февраль 2026", delta: "н/д", state: "neutral" },
+    { label: "К среднему с начала 2026 года", value: "среднее за 2 мес.: 4", delta: "+50%", state: "good" },
+  ];
+  assert.equal(validateMobilePublication(publication), publication);
+  const badHistory = structuredClone(publication);
+  badHistory.periods[0].headlineMetrics[0].history[0].state = 'bad" onclick="alert(1)';
+  assert.throws(() => validateMobilePublication(badHistory), /состояние сравнения/);
+  badHistory.periods[0].headlineMetrics[0].history = [];
+  assert.throws(() => validateMobilePublication(badHistory), /история/);
+
   const unsafe = JSON.parse(JSON.stringify(publication));
   unsafe.periods[0].vectors[3].patientRegistry = [{ patientId: "secret" }];
   assert.throws(() => validateMobilePublication(unsafe), /запрещённое поле/);
   const raw = JSON.parse(JSON.stringify(publication));
   raw.security.rawExportsIncluded = true;
   assert.throws(() => validateMobilePublication(raw), /отсутствие реестра пациентов/);
+});
+
+test("mobile renders calendar comparisons safely and still opens metrics from old publications", () => {
+  const app = read("mobile-pilot/app.js");
+  const context = vm.createContext({ elements: { headlineMetrics: {} },
+    escapeHtml: value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;"),
+    legacyRevenueTree: () => [], renderCharts: () => "" });
+  vm.runInContext(app.slice(app.indexOf("  function renderMetricHistory("), app.indexOf("  function legacyRevenueTree("))
+    + app.slice(app.indexOf("  function renderSection("), app.indexOf("  function renderVectorDetail(")), context);
+  const metric = { label: "Пациенты", value: "6", note: "за месяц", delta: "+50%", history: [
+    { label: "К прошлому месяцу", value: "Март 2026: 4", delta: "+50%", state: "good" },
+    { label: "К среднему с начала 2026 года", value: '<img src=x onerror="alert(1)">', delta: "н/д", state: "neutral" },
+  ] };
+  context.renderHeadlineMetrics({ headlineMetrics: [metric] });
+  const html = context.elements.headlineMetrics.innerHTML;
+  assert.match(html, /К прошлому месяцу/);
+  assert.match(html, /К среднему с начала 2026 года/);
+  assert.match(html, /class="positive">\+50%/);
+  assert.match(html, /&lt;img/);
+  assert.doesNotMatch(html, /<img/);
+  assert.match(context.renderSection({ title: "Репутация", metrics: [metric] }), /metric-history-row/);
+  delete metric.history;
+  context.renderHeadlineMetrics({ headlineMetrics: [metric] });
+  assert.match(context.elements.headlineMetrics.innerHTML, /<em class="positive">\+50%/);
+  assert.doesNotMatch(context.renderSection({ title: "Репутация", metrics: [metric] }), /metric-history-row/);
 });
 
 test("mobile publication keeps reading pre-parity version 1 files", () => {
@@ -283,8 +320,8 @@ test("mobile chart typography excludes icon strokes and keeps moderate font weig
     assert.match(rule(selector), /font-weight:\s*500/);
   }
   assert.match(rule(".report-chart h5"), /font-weight:\s*600/);
-  assert.match(read("mobile-pilot/service-worker.js"), /klinvekt-mobile-pilot-v14/);
-  assert.match(read("mobile-pilot/service-worker.js"), /app\.css\?v=13/);
+  assert.match(read("mobile-pilot/service-worker.js"), /klinvekt-mobile-pilot-v15/);
+  assert.match(read("mobile-pilot/service-worker.js"), /app\.css\?v=14/);
 });
 
 test("mobile tree renderer supports nested native disclosures and old revenue markers", () => {

@@ -3003,6 +3003,26 @@ function mobilePublicationPercentChange(value) {
   return `${value > 0 ? "+" : ""}${fmtNum(value, 1)}%`;
 }
 
+// Та же календарная база и среднее с начала года, что в metricHistoryMarkup().
+function mobilePublicationMetricHistory(doctorId, monthKey, getValue, mode, formatter, digits = 1, unit = "") {
+  const current = getValue(computeMetrics(doctorId, monthKey));
+  const history = doctorMetricDynamics(doctorId, monthKey, getValue);
+  const comparison = (label, baseline, value) => {
+    const valid = Number.isFinite(current) && Number.isFinite(baseline) && (mode !== "relative" || baseline !== 0);
+    const delta = valid ? (mode === "relative" ? (current - baseline) / Math.abs(baseline) * 100 : current - baseline) : null;
+    return {
+      label, value,
+      delta: delta == null ? "н/д" : Math.abs(delta) < 0.0001 ? "без изменений"
+        : `${delta > 0 ? "+" : ""}${fmtNum(delta, digits)}${mode === "relative" ? "%" : mode === "pp" ? " п.п." : unit}`,
+      state: delta == null || Math.abs(delta) < 0.0001 ? "neutral" : delta > 0 ? "good" : "bad",
+    };
+  };
+  return [
+    comparison("К прошлому месяцу", history.prev, history.prev == null ? `нет данных за ${monthLabel(history.prevKey)}` : `${monthLabel(history.prevKey)}: ${formatter(history.prev)}`),
+    comparison(`К среднему с начала ${history.year} года`, history.avg, history.avg == null ? "нет данных" : `среднее за ${history.count} мес.: ${formatter(history.avg)}`),
+  ];
+}
+
 function mobilePublicationScore(result, vectorKey = null) {
   if (!result || !result.scores) return null;
   const value = vectorKey ? result.scores.vec[vectorKey] : result.scores.total;
@@ -3334,7 +3354,6 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
   const coreExpertNames = new Set((profile.expertise.items || []).filter(item => item.core !== false).map(item => item.name));
   const unusedExpertNames = product ? [...coreExpertNames].filter(name => !product.expert[name]) : [...coreExpertNames];
   const activeBase = selectedClientBaseSummary(result, profile);
-  const previousBase = previousResult ? selectedClientBaseSummary(previousResult, profile, activeBase && activeBase.window) : null;
   const loyalty = result.loyalty;
   const reputation = result.rep || {};
   const manualReputation = result.extras.man6 || {};
@@ -3463,6 +3482,24 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
   const grew = vectorDeltas.filter(value => value > 0).length;
   const fell = vectorDeltas.filter(value => value < 0).length;
   const assessment = overall == null ? "Балл пока не рассчитан" : overall >= 85 ? "Сильный результат" : overall >= 70 ? "Рабочий результат" : overall >= 40 ? "Есть точки роста" : "Требуется внимание";
+  const withHistory = (metric, getValue, mode, formatter, digits = 1, unit = "") => {
+    const history = mobilePublicationMetricHistory(doctorId, monthKey, getValue, mode, formatter, digits, unit);
+    return { ...metric, history, delta: history[0].delta === "н/д" ? "—" : history[0].delta };
+  };
+  // В5/В6 показывают те же сравнения, что карточки личного десктоп-отчёта.
+  const loyaltyHistory = [
+    [rr => rr.loyalty.sched?.pct ?? null, "pp", fmtPct],
+    [rr => rr.loyalty.ownRec?.pct ?? null, "pp", fmtPct],
+    [rr => rr.loyalty.courseWin === loyalty.courseWin ? rr.loyalty.courseIdx : null, "pp", fmtPct],
+    [rr => rr.loyalty.freq12, "absolute", value => fmtNum(value, 2), 2],
+  ];
+  vectors[4].sections[0].metrics = vectors[4].sections[0].metrics.map((metric, index) => withHistory(metric, ...loyaltyHistory[index]));
+  const reputationHistory = [
+    [rr => rr.rep?.avgRating ?? null, "absolute", value => `${fmtNum(value, 2)} ★`, 2, " балла"],
+    [rr => rr.rep?.nps ?? null, "pp", fmtPct],
+    [rr => rr.rep?.reviews ?? null, "absolute", value => `${fmtNum(value)} шт.`, 0, " шт."],
+  ];
+  vectors[5].sections[0].metrics = vectors[5].sections[0].metrics.map((metric, index) => withHistory(metric, ...reputationHistory[index]));
   return {
     id: monthKey,
     label: monthLabel(monthKey),
@@ -3473,11 +3510,11 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
     summary: vectorDeltas.length ? `${grew} вект. выросли, ${fell} снизились, ${vectorDeltas.length - grew - fell} без изменений.` : "Для динамики нужен предыдущий период.",
     updatedAt: new Date().toLocaleDateString("ru-RU"),
     headlineMetrics: [
-      { label: "Пациентов за месяц", value: fmtNum(result.traffic.patients), note: "уникальные пациенты", delta: mobilePublicationDelta(result.traffic.patients, previousResult && previousResult.traffic.patients, 0) },
-      { label: "Загрузка расписания", value: fmtPct(loyalty.sched && loyalty.sched.pct), note: loyalty.sched ? `${minToHours(loyalty.sched.busyMin)} из ${minToHours(loyalty.sched.normaMin)} по графику` : "нет выгрузки", delta: mobilePublicationDelta(loyalty.sched && loyalty.sched.pct, previousResult && previousResult.loyalty.sched && previousResult.loyalty.sched.pct, 1, " п.п.") },
-      { label: "Визитов на пациента за месяц", value: Number.isFinite(result.traffic.freq) ? fmtNum(result.traffic.freq, 2) : "—", note: Number.isFinite(result.traffic.visits) && Number.isFinite(result.traffic.patients) ? `${fmtNum(result.traffic.visits)} визитов / ${fmtNum(result.traffic.patients)} пациентов` : result.traffic.src, delta: mobilePublicationDelta(result.traffic.freq, previousResult && previousResult.traffic.freq, 2) },
-      { label: "Визитов на пациента за 12 мес.", value: Number.isFinite(loyalty.freq12) ? fmtNum(loyalty.freq12, 2) : "—", note: "визиты / уникальные пациенты", delta: mobilePublicationDelta(loyalty.freq12, previousResult && previousResult.loyalty.freq12, 2) },
-      { label: "Активная клиентская база", value: fmtPct(activeBase && activeBase.activeBasePct), note: activeBase ? `${fmtNum(activeBase.seg.active)} из ${fmtNum(activeBase.total)} · окно ${activeBase.window} мес.` : "нет точной выгрузки", delta: mobilePublicationDelta(activeBase && activeBase.activeBasePct, previousBase && previousBase.activeBasePct, 1, " п.п.") },
+      withHistory({ label: "Пациентов за месяц", value: fmtNum(result.traffic.patients), note: "уникальные пациенты" }, rr => rr.traffic.patients, "relative", fmtNum),
+      withHistory({ label: "Загрузка расписания", value: fmtPct(loyalty.sched && loyalty.sched.pct), note: loyalty.sched ? `${minToHours(loyalty.sched.busyMin)} из ${minToHours(loyalty.sched.normaMin)} по графику` : "нет выгрузки" }, rr => rr.loyalty.sched?.pct ?? null, "pp", fmtPct),
+      withHistory({ label: "Визитов на пациента за месяц", value: Number.isFinite(result.traffic.freq) ? fmtNum(result.traffic.freq, 2) : "—", note: Number.isFinite(result.traffic.visits) && Number.isFinite(result.traffic.patients) ? `${fmtNum(result.traffic.visits)} визитов / ${fmtNum(result.traffic.patients)} пациентов` : result.traffic.src }, rr => rr.traffic.freq, "absolute", value => fmtNum(value, 2), 2),
+      withHistory({ label: "Визитов на пациента за 12 мес.", value: Number.isFinite(loyalty.freq12) ? fmtNum(loyalty.freq12, 2) : "—", note: "визиты / уникальные пациенты" }, rr => rr.loyalty.freq12, "absolute", value => fmtNum(value, 2), 2),
+      withHistory({ label: "Активная клиентская база", value: fmtPct(activeBase && activeBase.activeBasePct), note: activeBase ? `${fmtNum(activeBase.seg.active)} из ${fmtNum(activeBase.total)} · окно ${activeBase.window} мес.` : "нет точной выгрузки" }, rr => selectedClientBaseSummary(rr, profile)?.activeBasePct ?? null, "pp", fmtPct),
     ],
     vectors,
     goalsSource: doctorGoalsSource(doctorId),
@@ -3488,7 +3525,8 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
 }
 
 function mobilePublicationMonthKeys(doctorId) {
-  return monthKeysSorted().filter(monthKey => computeMetrics(doctorId, monthKey)).slice(-6).reverse();
+  // Общие выгрузки и ручные оценки не создают личный отчёт: правило Admin/Viewer.
+  return monthKeysSorted().filter(monthKey => doctorHasDashboardData(doctorId, monthKey)).slice(-6).reverse();
 }
 
 async function loadMobilePublicationComments(periodKeys) {
@@ -3505,11 +3543,11 @@ function buildMobilePublication(doctorId, commentsByPeriod = {}) {
   const months = mobilePublicationMonthKeys(doctorId);
   if (!months.length) throw new Error("Для выбранного специалиста нет рассчитанных периодов");
   const results = Object.fromEntries(months.map(monthKey => [monthKey, computeMetrics(doctorId, monthKey)]));
-  const periods = months.map((monthKey, index) => buildMobilePublicationPeriod(
+  const periods = months.map(monthKey => buildMobilePublicationPeriod(
     doctorId,
     monthKey,
     results[monthKey],
-    results[months[index + 1]] || null,
+    doctorHasDashboardData(doctorId, prevMonthKey(monthKey)) ? computeMetrics(doctorId, prevMonthKey(monthKey)) : null,
     commentsByPeriod[monthKey] || [],
   ));
   return {

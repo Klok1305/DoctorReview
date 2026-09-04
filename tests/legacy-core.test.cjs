@@ -6,7 +6,7 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
-const { validateMobilePublication } = require("../desktop/services/mobile-publication-service.cjs");
+const { validateMobilePublication, createMobilePublicationBundle, openMobileReportSession } = require("../desktop/services/mobile-publication-service.cjs");
 
 const build = path.resolve(__dirname, "..", "build");
 
@@ -65,7 +65,8 @@ function loadMobilePublicationRenderer(context) {
   const colorSource = uiSource.slice(uiSource.indexOf("const DEVICE_COLORS"), uiSource.indexOf("/* Зеркальная выручка"))
     + uiSource.match(/const VEC_LINE_COLORS = [^;]+;/)[0];
   const clientBaseSource = uiSource.slice(uiSource.indexOf("function clientBaseGroupLabel"), uiSource.indexOf("function clientBaseProfileDescription"));
-  const publicationSource = colorSource + clientBaseSource + goalSource + scoringSource + uiSource.slice(
+  const historySource = uiSource.slice(uiSource.indexOf("function doctorMetricDynamics"), uiSource.indexOf("function metricTrendMarkup"));
+  const publicationSource = colorSource + clientBaseSource + goalSource + scoringSource + historySource + uiSource.slice(
     uiSource.indexOf("function mobilePublicationText"),
     uiSource.indexOf("function doctorMetricsHeaderHtml"),
   );
@@ -80,6 +81,7 @@ test("Admin builds a valid mobile publication from calculated metrics without pa
   const publication = vm.runInContext(`(() => {
     DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], dept: 'По умолчанию' } };
     DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].vyrabotka.d1 = { items: [] };
     DB.months['2026-01'].manual6.d1 = {
       prodoctorov: 4.9,
       napopravku: 4.8,
@@ -104,9 +106,100 @@ test("Admin builds a valid mobile publication from calculated metrics without pa
   assert.equal(validated.periods[0].headlineMetrics.length, 5);
   assert.equal(validated.periods[0].vectors.length, 6);
   assert.equal(validated.periods[0].goals.length, 15);
-  assert.equal(validated.periods[0].dynamics, null);
+  assert.deepEqual(validated.periods[0].dynamics.columns, ["Январь 2026"]);
   assert.equal(validated.periods[0].comments[0].text, "Сохранённый комментарий Viewer");
   assert.doesNotMatch(serialized, /"(?:patientId|patientName|clientRows|clients)"/);
+});
+
+test("bulk mobile export follows Viewer report eligibility and keeps head-only access without empty reports", async () => {
+  const context = createContext({ desktop: true });
+  loadMobilePublicationRenderer(context);
+  let exported;
+  context.window.desktopAPI.exportMobilePublicationBundle = async payload => { exported = JSON.parse(JSON.stringify(payload)); return { canceled: false, doctors: 3 }; };
+  context.window.desktopAPI.listComments = async ({ periodKey }) => [
+    { scopeType: "doctor", scopeId: "real", periodKey, blockKey: "doctor.overview", status: "published", bodyText: "Комментарий к настоящему отчёту" },
+    { scopeType: "doctor", scopeId: "manual", periodKey, blockKey: "doctor.overview", status: "published", bodyText: "Не создаёт выработку" },
+    { scopeType: "doctor", scopeId: "real", periodKey, blockKey: "doctor.overview", status: "archived", bodyText: "Архивный" },
+  ];
+  const eligible = vm.runInContext(`(() => {
+    DB.doctors = Object.fromEntries(['real', 'zero', 'technical', 'manual', 'head', 'inactive'].map(id => [id,
+      { name: id, dept: 'По умолчанию', aliases: [] }]));
+    DB.months = Object.fromEntries(['2026-01', '2026-02', '2026-03'].map(key => [key, emptyMonth()]));
+    for (const key of Object.keys(DB.months)) DB.months[key].zapis.real = { created: 2, total: 2 };
+    for (const key of ['2026-01', '2026-03']) DB.months[key].vyrabotka.real = { items: [{ n: 'Прием', cat: 'Приемы', q: 2, sOwn: 100, sRef: 0 }] };
+    DB.months['2026-03'].vyrabotka.zero = { items: [] };
+    DB.months['2026-03'].vyrabotka.inactive = { items: [] };
+    DB.months['2026-03'].manual6.manual = { nps: 90, reviews: 5 };
+    clearMetricsCache();
+    return { technicalHasMetrics: Boolean(computeMetrics('technical', '2026-03')),
+      viewer: Object.keys(DB.doctors).filter(id => doctorHasDashboardData(id, '2026-03')),
+      mobile: Object.keys(DB.doctors).filter(id => mobilePublicationMonthKeys(id).length) };
+  })()`, context);
+  assert.equal(eligible.technicalHasMetrics, true, "common records import reproduces empty metrics for a technical account");
+  assert.deepEqual(Array.from(eligible.mobile), Array.from(eligible.viewer));
+  vm.runInContext(`const VIEWER_ACCESS = { doctors: Object.keys(DB.doctors).map(doctorId => ({ doctorId, active: doctorId !== 'inactive' })) };
+    async function refreshViewerPublicationAccess() {}
+    function toast(message, error) { if (error) throw new Error(message); }`, context);
+  await vm.runInContext("exportAllMobilePublications()", context);
+  assert.deepEqual(exported.publications.map(item => item.doctorId), ["real", "zero"]);
+  assert.deepEqual(exported.publications[0].publication.periods.map(period => period.id), ["2026-03", "2026-01"]);
+  assert.deepEqual(exported.publications[0].publication.periods[0].comments.map(item => item.text), ["Комментарий к настоящему отчёту"]);
+  const bundle = createMobilePublicationBundle({ ...exported, credentials: { doctors: exported.recipients.map(item => ({
+    doctorId: item.doctorId, pinCode: "2468", pinVersion: 1,
+    headDepartments: item.doctorId === "head" ? [exported.publications[0].department] : [],
+  })) } });
+  assert.deepEqual(bundle.doctors.map(item => item.doctorId).sort(), ["head", "real", "zero"]);
+  const head = openMobileReportSession(bundle, "head", "2468");
+  assert.equal(head.owner.periods, 0);
+  assert.deepEqual(head.reports.map(item => item.doctorId).sort(), ["real", "zero"]);
+  assert.throws(() => head.readReport("technical"), /Нет доступа/);
+  assert.equal(head.readReport("real").periods[0].comments[0].text, "Комментарий к настоящему отчёту");
+});
+
+test("mobile KPI history matches desktop calendar baselines, units and year-to-date averages", () => {
+  const context = createContext();
+  loadMobilePublicationRenderer(context);
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Тестовый врач', dept: 'По умолчанию', aliases: [] } };
+    DB.months = Object.fromEntries(['2026-01', '2026-02', '2026-03', '2026-04'].map(key => [key, emptyMonth()]));
+    for (const [key, count] of [['2026-01', 2], ['2026-03', 4], ['2026-04', 6]]) {
+      DB.months[key].vyrabotka.d1 = { items: [{ n: 'Прием', cat: 'Приемы', q: count, sOwn: count * 100, sRef: 0 }] };
+      DB.months[key].kb.d1 = { '1': { clients: Array.from({ length: count }, (_, i) => ({ id: 'private-' + i, name: 'PRIVATE PATIENT', v: 2, s: 100, r: 1 })) } };
+      DB.months[key].manual6.d1 = { nps: count * 10, reviews: count };
+    }
+    DB.months['2026-02'].zapis.d1 = { created: 10, total: 10 };
+    clearMetricsCache();
+    return { publication: buildMobilePublication('d1'),
+      canonical: doctorMetricDynamics('d1', '2026-04', rr => rr.traffic.patients) };
+  })()`, context);
+  const { publication, canonical } = JSON.parse(JSON.stringify(result));
+  validateMobilePublication(publication);
+  const [april, march] = publication.periods;
+  assert.equal(canonical.prev, 4);
+  assert.equal(canonical.avg, 4);
+  assert.equal(canonical.count, 3);
+  assert.equal(april.headlineMetrics[0].history[0].delta, "+50%");
+  assert.equal(april.headlineMetrics[0].history[1].delta, "+50%");
+  assert.match(april.headlineMetrics[0].history[1].value, /за 3 мес.: 4/);
+  assert.equal(march.headlineMetrics[0].delta, "—");
+  assert.match(march.headlineMetrics[0].history[0].value, /нет данных за Февраль/);
+  assert.equal(march.overallDelta, null);
+  assert.ok(march.vectors.every(vector => vector.delta === null));
+  assert.equal(april.vectors[5].sections[0].metrics[1].history[0].delta, "+20 п.п.");
+  assert.equal(april.vectors[5].sections[0].metrics[2].history[0].delta, "+2 шт.");
+  assert.equal(april.headlineMetrics[2].history[0].delta, "без изменений");
+  assert.doesNotMatch(JSON.stringify(publication), /private-|PRIVATE PATIENT/);
+
+  const oldest = vm.runInContext(`(() => {
+    for (const key of ['2026-05', '2026-06', '2026-07', '2026-08', '2026-09']) {
+      DB.months[key] = emptyMonth(); DB.months[key].vyrabotka.d1 = { items: [] };
+    }
+    clearMetricsCache();
+    return buildMobilePublication('d1').periods.at(-1);
+  })()`, context);
+  assert.equal(oldest.id, "2026-04");
+  assert.notEqual(oldest.overallDelta, null, "baseline outside the six exported periods is retained");
+  assert.equal(oldest.headlineMetrics[0].delta, "+50%");
 });
 
 test("mobile appointment tree aggregates full paths without double counting and preserves nomenclature", () => {

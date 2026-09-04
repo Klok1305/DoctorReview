@@ -118,6 +118,16 @@ function validateMetric(metric, label) {
   optionalText(item.note, `${label}: пояснение`);
   optionalText(item.target, `${label}: цель`);
   optionalText(item.state, `${label}: состояние`, 30);
+  if (item.history != null) {
+    if (!Array.isArray(item.history) || item.history.length !== 2) fail(`${label}: история`);
+    item.history.forEach(row => {
+      plainObject(row, `${label}: сравнение`);
+      shortText(row.label, `${label}: название сравнения`, 200);
+      shortText(row.value, `${label}: база сравнения`, 300);
+      shortText(row.delta, `${label}: изменение`, 50);
+      if (!["good", "bad", "neutral"].includes(row.state)) fail(`${label}: состояние сравнения`);
+    });
+  }
 }
 
 function validateSection(section, label) {

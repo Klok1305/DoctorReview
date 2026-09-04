@@ -211,6 +211,14 @@ h2 { margin-bottom: 6px; font-size: 21px; line-height: 1.2; letter-spacing: -.01
 .metric-item > b { display: block; margin-top: 4px; overflow-wrap: anywhere; font-size: 17px; line-height: 1.2; }
 .metric-item > small { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.35; }
 .metric-item > em { display: inline-flex; margin-top: 8px; padding: 3px 6px; border-radius: 999px; background: rgba(255,255,255,.8); color: #506078; font-size: 9px; font-style: normal; font-weight: 750; }
+.metric-history { display: grid; gap: 9px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.metric-history-row { display: grid; gap: 3px; min-width: 0; overflow-wrap: anywhere; }
+.metric-history-row > span, .metric-history-row > small { color: var(--muted); font-size: 10px; line-height: 1.4; }
+.metric-history-row > strong { font-size: 12px; font-weight: 500; }
+.metric-history-row > .positive { color: var(--good); }
+.metric-history-row > .negative { color: var(--bad); }
+.metric-history-row > .neutral { color: var(--muted); }
+.headline-card:has(.metric-history) > span { padding-right: 0; }
 .aggregate-table { overflow: hidden; border: 1px solid var(--line); border-radius: 14px; }
 .aggregate-head, .aggregate-row { display: grid; grid-template-columns: minmax(140px, 1.5fr) repeat(var(--data-columns, 3), minmax(76px, 1fr)); }
 .aggregate-head { background: #eef2f7; color: #526075; font-size: 9px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; }

@@ -171,8 +171,8 @@ test("mobile heads can switch only authenticated subordinate grants, including h
   vm.runInNewContext(fs.readFileSync(path.join(root, "mobile-pilot/demo-data.js"), "utf8"), context);
   const demo = JSON.parse(JSON.stringify(context.window.KLINVEKT_MOBILE_DEMO));
   const definitions = [["head", "Заведующий", "A", "1234"], ["a", "Врач А", "A", "2345"],
-    ["b", "Врач Б", "B", "3456"], ["outsider", "Другой врач", "C", "4567"], ["head-only", "Без личного отчёта", "B", "5678"]];
-  const publications = definitions.filter(([id]) => id !== "head-only").map(([doctorId, name, department]) => ({ doctorId, department,
+    ["b", "Врач Б", "B", "3456"], ["outsider", "Другой врач", "C", "4567"], ["head-only", "Без личного отчёта", "B", "5678"], ["technical", "Техническая учётка", "A", "6789"]];
+  const publications = definitions.filter(([id]) => !["head-only", "technical"].includes(id)).map(([doctorId, name, department]) => ({ doctorId, department,
     publication: { format: MOBILE_PUBLICATION_FORMAT, version: 1, security: { patientRegistryIncluded: false, rawExportsIncluded: false },
       doctor: { id: doctorId, name, department: `${department} · Специализация` }, periods: demo.periods } }));
   const recipients = definitions.map(([doctorId, displayName, department]) => ({ doctorId, displayName, department,
@@ -199,6 +199,9 @@ test("mobile heads can switch only authenticated subordinate grants, including h
   assert.equal(bundle.reports.length, 4, "report ciphertext is stored once, not duplicated for heads");
   assert.equal(bundle.doctors.length, 5);
   assert.equal((await publish(bundle)).status, 200);
+  const loginOptions = await (await fetch(`${base}/api/context`, { headers: vibeHeaders() })).json();
+  assert.ok(loginOptions.doctors.some(item => item.doctorId === "head-only"));
+  assert.ok(!loginOptions.doctors.some(item => item.doctorId === "technical"));
   const head = await login("head", "1234");
   assert.equal(head.data.publication.doctor.id, "head");
   assert.deepEqual(head.data.access.reports.map(report => report.doctorId), ["head", "a", "b"]);

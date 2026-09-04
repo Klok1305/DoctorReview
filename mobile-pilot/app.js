@@ -345,13 +345,23 @@
     elements.scoreDelta.classList.toggle("negative", period.overallDelta < 0);
   }
 
+  function renderMetricHistory(metric) {
+    if (!Array.isArray(metric.history) || !metric.history.length) return "";
+    return `<div class="metric-history">${metric.history.map(row => `
+      <div class="metric-history-row">
+        <span>${escapeHtml(row.label)}</span>
+        <strong class="${row.state === "good" ? "positive" : row.state === "bad" ? "negative" : "neutral"}">${escapeHtml(row.delta)}</strong>
+        <small>${escapeHtml(row.value)}</small>
+      </div>`).join("")}</div>`;
+  }
+
   function renderHeadlineMetrics(period) {
     elements.headlineMetrics.innerHTML = period.headlineMetrics.map((metric) => `
       <article class="headline-card">
         <span>${escapeHtml(metric.label)}</span>
         <b>${escapeHtml(metric.value)}</b>
         <small>${escapeHtml(metric.note)}</small>
-        <em class="${String(metric.delta).startsWith("-") ? "negative" : String(metric.delta) === "—" ? "neutral" : "positive"}">${escapeHtml(metric.delta)}</em>
+        ${renderMetricHistory(metric) || `<em class="${String(metric.delta).startsWith("-") ? "negative" : String(metric.delta) === "—" ? "neutral" : "positive"}">${escapeHtml(metric.delta)}</em>`}
       </article>`).join("");
   }
 
@@ -484,6 +494,7 @@
             <b>${escapeHtml(metric.value)}</b>
             ${metric.note ? `<small>${escapeHtml(metric.note)}</small>` : ""}
             ${metric.target ? `<em>${escapeHtml(metric.target)}</em>` : ""}
+            ${renderMetricHistory(metric)}
           </div>`).join("")}</div>`
       : "";
     const tree = section.tree?.length ? section.tree : legacyRevenueTree(section);
