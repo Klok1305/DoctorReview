@@ -586,7 +586,12 @@ function parseProstoy(rows) {
   const hr1 = (rows[hIdx] || []).map(cellStr);
   const hr2 = (rows[hIdx + 1] || []).map(cellStr);
   const cGraf = hr1.findIndex(v => v.includes("Продолжительность по графику"));
-  const cFact = hr1.findIndex(v => v.includes("Время работы с пациентом"));
+  const cPatientTime = hr1.findIndex(v => v.includes("Время работы с пациентом"));
+  const patientTimeEnd = hr1.findIndex((v, c) => c > cPatientTime && v);
+  const cActual = cPatientTime < 0 ? -1 : hr2.findIndex((v, c) => v === "Факт" && c >= cPatientTime && (patientTimeEnd < 0 || c < patientTimeEnd));
+  // Объединённый заголовок начинается с «Нормы»; фактическое время — отдельная подколонка.
+  // Старые выгрузки без подколонок содержат время прямо под основным заголовком.
+  const cFact = cActual >= 0 ? cActual : cPatientTime;
   const cJournal = hr1.findIndex(v => v.includes("Загруженность по журналу"));
   let cZayavki = -1, cSched = -1, cZayavkiNv = -1, cSchedNv = -1;
   for (let c = 0; c < hr2.length; c++) {

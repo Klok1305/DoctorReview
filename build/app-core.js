@@ -937,7 +937,7 @@ function parseRuNumber(v) {
 function parseHoursMin(v) {
   if (v == null || v === "") return null;
   if (typeof v === "number") return Math.round(v * 24 * 60);
-  const s = String(v).trim();
+  const s = String(v).replace(/\s/g, ""); // 1С группирует тысячи часов: «1 234:56».
   const m = s.match(/^(\d+):(\d{1,2})(?::\d{1,2})?$/);
   if (m) return parseInt(m[1]) * 60 + parseInt(m[2]);
   const n = parseRuNumber(s);

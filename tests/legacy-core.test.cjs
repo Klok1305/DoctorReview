@@ -438,6 +438,71 @@ test("long-threshold groups are absent at 12 months and available at 36 months",
   });
 });
 
+test("schedule durations preserve minutes after grouped thousands and Excel time values", () => {
+  const context = createContext();
+  const result = vm.runInContext(`[parseHoursMin('2 345:17'), parseHoursMin('2\\u00a0345:17'),
+    parseHoursMin('2\\u202f345:17'), parseHoursMin('123:45:00'), parseHoursMin(0.5),
+    parseHoursMin('1,5'), parseHoursMin(null)]`, context);
+  assert.deepEqual(Array.from(result), [140717, 140717, 140717, 7425, 720, 90, null]);
+});
+
+test("schedule parser reads actual patient time under the grouped header in both layouts", () => {
+  const context = createContext();
+  for (const graphColumn of [4, 5]) {
+    const rows = [
+      ['Параметры:', null, 'Период: 01.08.2025 - 31.08.2025'],
+      ['Сотрудник', null, null, 'Специализация', null, null, 'Время работы с пациентом', null, null,
+        'Загруженность по данным выработки', null, 'Загруженность по журналу записи'],
+      [null, null, null, null, null, null, 'Норма', 'Факт', 'Факт. время услуг к норме, %',
+        'Нормативная загруженность по выработке, %', 'Фактическая загруженность по выработке, %',
+        'Занято заявками', 'Занятость расписания, %', 'Занято заявками, вкл. не выполненные',
+        'Занятость расписания, вкл. не выполненные, %'],
+      ['Тестов Врач', null, null, 'Терапия', null, null, '75:30', '4:15', null, null, null, '60:00', 60, '65:00', 65],
+      ['Примеров Врач', null, null, '', null, null, '2 345:17', null, null, null, null, '50:00', 50, '55:00', 55],
+      ['Итого', null, null, '', null, null, '2 420:47', '4:15'],
+    ];
+    rows[1][graphColumn] = 'Продолжительность по графику';
+    rows[3][graphColumn] = '100:00';
+    rows[4][graphColumn] = '100:00';
+    context.scheduleRows = rows;
+    const result = vm.runInContext(`(() => {
+      const parsed = parseProstoy(scheduleRows);
+      DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], dept: 'По умолчанию' } };
+      DB.months = { '2025-08': emptyMonth() };
+      DB.months['2025-08'].prostoy.d1 = parsed.perDoc[0];
+      clearMetricsCache();
+      return { type: detectReportType(scheduleRows), month: periodMonthKey(extractHeaderInfo(scheduleRows).period),
+        records: parsed.perDoc, schedule: computeMetrics('d1', '2025-08').loyalty.sched };
+    })()`, context);
+    assert.equal(result.type, 'prostoy');
+    assert.equal(result.month, '2025-08');
+    assert.equal(result.records.length, 2);
+    assert.equal(result.records[0].normaMin, 6000);
+    assert.equal(result.records[0].factMin, 255);
+    assert.equal(result.records[1].factMin, null, 'blank actual time must not become normative time');
+    assert.equal(result.schedule.pct, 60);
+    assert.equal(result.schedule.factPct, 4.25);
+    assert.equal(result.schedule.gapMin, 3345);
+    assert.equal(result.records[0].zayavkiNvMin, 3900);
+    assert.equal(result.records[0].schedNvPct, 65);
+    rows[2][6] = 'Факт';
+    rows[2][7] = 'Норма';
+    assert.equal(vm.runInContext('parseProstoy(scheduleRows).perDoc[1].factMin', context), 140717,
+      'actual time follows the subheading, including grouped hours');
+  }
+});
+
+test("schedule parser keeps legacy patient-time columns without norm/actual subheadings", () => {
+  const context = createContext();
+  const result = vm.runInContext(`parseProstoy([
+    ['Сотрудник', null, null, 'Специализация', null, 'Продолжительность по графику', 'Время работы с пациентом'],
+    [],
+    ['Тестов Врач', null, null, 'Терапия', null, '100:00', '25:00']
+  ])`, context);
+  assert.equal(result.perDoc[0].normaMin, 6000);
+  assert.equal(result.perDoc[0].factMin, 1500);
+});
+
 test("client-base parser preserves patient identity for operational lists", () => {
   const context = createContext();
   const result = vm.runInContext(`parseKB([
