@@ -802,7 +802,7 @@ function doctorScoreLeaderboardHtml(rows, mk, scopeLabel = "") {
         <div class="num"><b>${value == null ? "—" : fmtNum(value, 0)}</b><i>${value == null ? "без балла" : eligible ? `место ${place}` : "предв."}</i></div>
       </div>
       <div class="doctor-score-leader-name">${esc(doctorName(x.id))}</div>
-      ${average ? `<span class="doctor-score-leader-average" title="${esc(averageLabel)}" aria-label="${esc(averageLabel)}">ср. ${fmtNum(average.value, 0)}</span>` : ""}
+      ${average ? `<span class="doctor-score-leader-average" data-average-state="${average.value >= 70 ? "good" : average.value >= 40 ? "warn" : "bad"}" title="${esc(averageLabel)}" aria-label="${esc(averageLabel)}">ср. ${fmtNum(average.value, 0)}</span>` : ""}
     </div>`;
   }).join("");
   return `<section class="card doctor-score-leaderboard" aria-label="Лидерборд врачей">
@@ -2566,6 +2566,62 @@ function dynamicsOutcomeHtml(dyn, blkId, noteKey, narrative, copyBlockId = "") {
   </section>`;
 }
 
+function adminYearMonths(endMk) {
+  return Array.from({ length: Number(endMk.slice(5, 7)) }, (_, i) => `${endMk.slice(0, 4)}-${String(i + 1).padStart(2, "0")}`);
+}
+
+function adminDoctorDynamics(docId, endMk) {
+  return buildDynamics(adminYearMonths(endMk), endMk,
+    key => doctorHasDashboardData(docId, key) ? computeMetrics(docId, key) : null, 12, profileForDoctor(docId));
+}
+
+function adminReferralType(type) {
+  return ["Профильные услуги", "Другие услуги клиники"].includes(type) ? "Услуги" : type;
+}
+
+function adminReferralBuckets(byType) {
+  const result = {};
+  for (const [type, bucket] of Object.entries(byType || {})) {
+    const key = adminReferralType(type);
+    const target = result[key] || (result[key] = { items: {} });
+    for (const [field, value] of Object.entries(bucket)) {
+      if (typeof value === "number") target[field] = (target[field] || 0) + value;
+    }
+    for (const [name, item] of Object.entries(bucket.items || {})) {
+      const old = target.items[name] || (target.items[name] = {});
+      for (const [field, value] of Object.entries(item)) {
+        old[field] = typeof value === "number" ? (old[field] || 0) + value : value;
+      }
+    }
+    target.conv = target.assigned > 0 && validNaznachCounts(target) ? target.resultQ / target.assigned * 100 : null;
+  }
+  return result;
+}
+
+function appointmentItemConversion(item) {
+  return item && validNaznachCounts(item) && item.assigned > 0 ? fmtPct(item.resultQ / item.assigned * 100) : "—";
+}
+
+function expandAppointmentDetails() {
+  const details = document.querySelector('#blkV3 [data-list-key="appointmentDetails"]');
+  if (details) details.open = true;
+  document.querySelectorAll('#tblNaz .grp-head[data-g]').forEach(row => {
+    if (!UI.openGroups[row.dataset.g]) toggleGroup(row.dataset.g);
+  });
+}
+
+function adminClientBaseSeries(docId, endMk, windowMonths) {
+  const months = adminYearMonths(endMk);
+  const bases = months.map(key => kbSummary(docId, key, windowMonths));
+  const defs = [["total", "Общая база", "#2563eb"], ["loyal", "Лояльные", "#059669"],
+    ["active", "Активные", "#7c3aed"], ["newRisk", "Новые, риск", "#d97706"],
+    ["loyalSleep", "Лояльные, спящие", "#64748b"], ["lost", "Потерянные", "#dc2626"]];
+  return { months, datasets: defs.map(([key, label, color]) => ({ label, borderColor: color,
+    backgroundColor: color, fill: false, spanGaps: false, tension: 0, pointRadius: 4,
+    data: bases.map(base => !base ? null : key === "total" ? base.total : base.groupAvailable[key] ? base.seg[key] : null),
+  })) };
+}
+
 function dynamicsHtml(dyn, blkId, title, subtitle, noteKey, detailTailHtml = "", includeOutcome = true) {
   if (!dyn || dyn.months.length < 1) return "";
   const single = dyn.months.length < 2;
@@ -2585,7 +2641,7 @@ function dynamicsHtml(dyn, blkId, title, subtitle, noteKey, detailTailHtml = "",
   const tblId = blkId + "_tbl";
   html += `<h3 class="small muted" style="margin:0 0 6px">ПОКАЗАТЕЛИ ПО МЕСЯЦАМ ${copyBtn("copyTable", tblId)}</h3>
     <p class="small muted" style="margin:0 0 6px">Ячейки: зелёным — лучший месяц, красным — худший. Мини-график: зелёный — последний месяц лучше среднего предыдущих месяцев, красный — хуже, серый — без изменений или нет данных.</p>
-    <table class="data dynamics-table" id="${tblId}"><tr><th>Метрика</th><th title="Цвет сравнивает последний месяц со средним предыдущих месяцев">Тренд</th>${dyn.months.map(k => `<th class="num">${monthLabel(k)}</th>`).join("")}<th class="num" title="Изменение к предыдущему показанному месяцу">Δ к прошлому</th><th class="num" title="Изменение к среднему всех показанных месяцев без последнего">Δ к среднему</th></tr>`;
+    <div class="dynamics-table-scroll"><table class="data dynamics-table" id="${tblId}"><tr><th>Метрика</th><th title="Цвет сравнивает последний месяц со средним предыдущих месяцев">Тренд</th>${dyn.months.map(k => `<th class="num">${monthLabel(k)}</th>`).join("")}<th class="num" title="Изменение к предыдущему показанному месяцу">Δ к прошлому</th><th class="num" title="Изменение к среднему всех показанных месяцев без последнего">Δ к среднему</th></tr>`;
   for (const row of dyn.rows) {
     const nn = row.values.filter(v => v != null);
     const distinct = new Set(nn).size > 1;
@@ -2602,7 +2658,7 @@ function dynamicsHtml(dyn, blkId, title, subtitle, noteKey, detailTailHtml = "",
       <td class="num">${deltaCell(row)}</td>
       <td class="num">${deltaCell(row, "avg")}<div class="small muted">${row.prevAvg != null ? `ср.: ${row.fmt(row.prevAvg)}` : "ср.: —"}</div></td></tr>`;
   }
-  html += "</table>";
+  html += "</table></div>";
   html += detailTailHtml;
   if (includeOutcome) html += dynamicsOutcomeHtml(dyn, blkId, noteKey, narrative);
   return html; // карточку закрывает вызывающий (может добавить график)
@@ -3886,6 +3942,8 @@ function renderDoctor() {
   /* ---- В3 Междисциплинарный ---- */
   const nazCur = scoreNazSlice;
   const nz = nazCur != null ? r.cross.naz[nazCur] : null;
+  const adminReferrals = adminReferralBuckets(r.cross.refByType);
+  const adminAssignments = nz ? adminReferralBuckets(nz.byType) : {};
   const refWorkTotal = r.cross.refByType
     ? Object.values(r.cross.refByType).reduce((sum, item) => sum + (item && item.s ? item.s : 0), 0)
     : null;
@@ -3913,17 +3971,17 @@ function renderDoctor() {
     const hasConvTarget = convTarget != null && convTarget !== "" && !isNaN(convTarget) && Number(convTarget) > 0;
     const hasSourceGrouping = Boolean(nz.sourceGroups && nz.sourceGroups.length);
     html += `<details ${collapsibleListAttrs("appointmentConversionBlock", false)}><summary class="collapsible-list-summary appointment-conversion-summary">
-      <span>КОНВЕРСИЯ НАЗНАЧЕНИЙ <span class="section-detail">· окно ${nazCur} мес. · назначено ${fmtNum(nz.totals.assigned)} · результат ${fmtNum(nz.totals.resultQ)}</span></span>
+      <span>Планы лечения и конверсия в реализацию <span class="section-detail">· окно ${nazCur} мес.</span></span>
       <strong class="appointment-conversion-summary-value ${convState}">${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</strong>
       <span class="collapse-hint"></span>
       </summary><div class="collapsible-list-body appointment-conversion-body">
-      <div class="toolbar no-print appointment-conversion-actions">${copyBtn("copyTable", "tblNaz")}</div>
+      <div class="toolbar no-print appointment-conversion-actions"><button class="btn mini" onclick="expandAppointmentDetails()">Раскрыть все услуги</button>${copyBtn("copyTable", "tblNaz")}</div>
       ${nz.totals.valid === false ? `<div class="notice bad"><b>Конверсия не рассчитана:</b> ${esc(nz.totals.issue)}. Проверьте состав исходной выгрузки.</div>` : ""}
       <div class="tracked-metric ${convState}">
         <div><div class="tracked-title">Конверсия за ${nazCur} мес.</div><div class="tracked-note">Услуги: выполнено + продано; товары: продано · ${fmtNum(nz.totals.resultQ)} из ${fmtNum(nz.totals.assigned)}</div></div>
-        <div class="tracked-side"><div class="tracked-value">${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</div><div class="tracked-goal">${hasConvTarget ? `цель ≥ ${fmtPct(Number(convTarget))}` : "цель не установлена"}</div></div>
+        <div class="tracked-side"><div class="tracked-goal">${hasConvTarget ? `цель ≥ ${fmtPct(Number(convTarget))}` : "цель не установлена"}</div></div>
       </div>
-      <details ${collapsibleListAttrs("appointmentDetails", false)}><summary class="collapsible-list-summary"><span>ДЕТАЛИ НАЗНАЧЕНИЙ <span class="section-detail">· назначено ${fmtNum(nz.totals.assigned)} · результат ${fmtNum(nz.totals.resultQ)} · конверсия ${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</span></span><span class="collapse-hint"></span></summary>
+      <details ${collapsibleListAttrs("appointmentDetails", false)}><summary class="collapsible-list-summary"><span>Детализация по услугам и группам 1С</span><span class="collapse-hint"></span></summary>
       <div class="collapsible-list-body">
       ${hasSourceGrouping ? "" : `<div class="notice warn appointment-source-grouping-warning"><b>Нет группировки из 1С.</b> Эти назначения были загружены старой версией. Повторно обработайте исходные файлы на вкладке «Данные». <button class="btn mini no-print" type="button" onclick="switchTab('data')">Перейти к данным</button></div>`}
       <table class="data" id="tblNaz"><tr><th>${hasSourceGrouping ? "Вид услуги / специализация / номенклатура" : "Тип направления"}</th><th class="num">Назначено, шт</th><th class="num">Выполнено, шт</th><th class="num">Продано, шт</th><th class="num">Конверсия</th></tr>`;
@@ -3977,14 +4035,14 @@ function renderDoctor() {
             const itemAncestors = [...ancestorKeys, gKey];
             const itemVisible = itemAncestors.every(key => Boolean(UI.openGroups[key]));
             html += `<tr class="grp-sub ${gKey}" data-group-ancestors="${itemAncestors.join(" ")}" ${itemVisible ? "" : 'style="display:none"'}><td class="small muted source-nomenclature" style="padding-left:${10 + (depth + 1) * 22}px">${esc(n)}</td>
-              <td class="num small muted">${fmtNum(v.assigned)}</td><td class="num small muted">${fmtNum(v.done)}</td><td class="num small muted">${fmtNum(v.soldQ)}</td><td class="num small muted"></td></tr>`;
+              <td class="num small muted">${fmtNum(v.assigned)}</td><td class="num small muted">${fmtNum(v.done)}</td><td class="num small muted">${fmtNum(v.soldQ)}</td><td class="num small muted">${appointmentItemConversion(v)}</td></tr>`;
           }
         }
       };
       renderSourceNodes(sourceTree);
     } else {
-      for (const t of REF_TYPES) {
-        const b = nz.byType[t];
+      for (const t of ["Товары", "Приемы", "Анализы", "Услуги"]) {
+        const b = adminAssignments[t];
         if (!b || (b.assigned === 0 && b.done === 0 && b.soldQ === 0)) continue;
         const itEntries = Object.entries(b.items || {}).filter(([n, v]) => v.assigned || v.done || v.soldQ).sort((a, bb) => (bb[1].soldSum + bb[1].assigned) - (a[1].soldSum + a[1].assigned));
         const gKey = "nt" + ntIdx++;
@@ -3992,9 +4050,9 @@ function renderDoctor() {
         html += `<tr class="grp-head" data-g="${gKey}" ${itEntries.length ? `onclick="toggleGroup('${gKey}')" style="cursor:pointer"` : ""}>
           <td><span id="tri_${gKey}" class="muted">${itEntries.length ? (open ? "▾" : "▸") : "·"}</span> <b>${esc(t)}</b></td>
           <td class="num"><b>${fmtNum(b.assigned)}</b></td><td class="num"><b>${fmtNum(b.done)}</b></td><td class="num"><b>${fmtNum(b.soldQ)}</b></td><td class="num"><b>${b.conv != null ? fmtPct(b.conv) : "—"}</b></td></tr>`;
-        for (const [n, v] of itEntries.slice(0, 40)) {
-          html += `<tr class="grp-sub ${gKey}" ${open ? "" : 'style="display:none"'}><td class="small muted" style="padding-left:26px">${esc(n.length > 70 ? n.slice(0, 70) + "…" : n)}</td>
-            <td class="num small muted">${fmtNum(v.assigned)}</td><td class="num small muted">${fmtNum(v.done)}</td><td class="num small muted">${fmtNum(v.soldQ)}</td><td class="num small muted"></td></tr>`;
+        for (const [n, v] of itEntries) {
+          html += `<tr class="grp-sub ${gKey}" ${open ? "" : 'style="display:none"'}><td class="small muted" style="padding-left:26px">${esc(n)}</td>
+            <td class="num small muted">${fmtNum(v.assigned)}</td><td class="num small muted">${fmtNum(v.done)}</td><td class="num small muted">${fmtNum(v.soldQ)}</td><td class="num small muted">${appointmentItemConversion(v)}</td></tr>`;
         }
       }
     }
@@ -4007,7 +4065,7 @@ function renderDoctor() {
       const focusAssignedEntries = focusEntries.filter(name => nz.focus.items[name] && nz.focus.items[name].assigned > 0);
       const focusResultEntries = focusEntries.filter(name => nz.focus.items[name] && nz.focus.items[name].resultQ > 0);
       const focusTitle = esc((nz.focus.title || "Фокусы междисциплинарного подхода").toUpperCase());
-      html += `<h3 class="section-title" style="margin:14px 0 6px">${focusTitle}</h3>
+      html += `<h3 class="section-title appointment-focus-title" style="margin:14px 0 6px">${focusTitle}</h3>
         <div class="grid cols-3" style="margin-top:12px">
           <div>${focusAssignedEntries.length ? `<h3 class="small muted" style="margin-bottom:6px">НАЗНАЧЕНО ПО ФОКУСАМ, ШТ. ${copyBtn("copyChart", "chNazFocusAssigned", "PNG")}</h3><div class="chart-box"><canvas id="chNazFocusAssigned"></canvas></div>` : '<p class="muted small">По фокусам пока нет назначений.</p>'}</div>
           <div>${focusResultEntries.length ? `<h3 class="small muted" style="margin-bottom:6px">ВЫПОЛНЕНО + ПРОДАНО ПО ФОКУСАМ, ШТ. ${copyBtn("copyChart", "chNazFocusResult", "PNG")}</h3><div class="chart-box"><canvas id="chNazFocusResult"></canvas></div>` : '<p class="muted small">По фокусам пока нет выполненных или проданных услуг.</p>'}</div>
@@ -4022,29 +4080,24 @@ function renderDoctor() {
     html += '<p class="muted small" style="margin-top:8px">Нет выгрузки «Назначения» за этот месяц — конверсии недоступны.</p>';
   }
   if (r.cross.refByType && Object.keys(r.cross.refByType).length) {
-    if (nz && refWorkTotal != null) {
-      const sourceDiff = nz.totals.soldSum - refWorkTotal;
-      const sourceMatch = Math.abs(sourceDiff) < 0.5;
-      html += `<p class="source-compare">Сверка двух источников: отчёт «Назначения» — ${fmtMoney(nz.totals.soldSum)}, отчёт «Выработка» — ${fmtMoney(refWorkTotal)}${sourceMatch ? ". Суммы совпадают." : `, разница — ${fmtMoney(Math.abs(sourceDiff))}. Это отдельные выгрузки; расхождение теперь показано явно и не скрывается одной итоговой цифрой.`}</p>`;
-    }
-    html += `<div class="tracked-metric ${completedReferralState}" id="completedReferralShare" style="margin:12px 0">
+    html += `<section class="completed-referrals-section"><h3>Выполненные планы лечения и назначения в текущем месяце</h3><p class="small muted">${monthLabel(mk)} · только фактически выполненные позиции из отчёта «Выработка». Окно назначений выше не меняет суммы этого месяца.</p><div class="tracked-metric ${completedReferralState}" id="completedReferralShare" style="margin:12px 0">
       <div><div class="tracked-title">Доля выручки от выполненных направлений</div>
       <div class="tracked-note">Учтено ${fmtMoney(refCreditedTotal)} из ${fmtMoney(refWorkTotal)} выполненных · выручка с перенаправлениями ${fmtMoney(r.econ.revenueWithRef)} · источник: отчёт «Выработка»</div></div>
       <div class="tracked-side"><div class="tracked-value">${fmtPct(r.cross.crossShare)}</div><div class="tracked-goal">${hasCompletedReferralTarget ? `цель ≥ ${fmtPct(Number(completedReferralTarget))}` : "цель не установлена"}</div></div>
     </div>
     <div class="grid cols-2" style="margin-top:12px"><div>
-      <details ${collapsibleListAttrs("completedReferralDetails", false)}><summary class="collapsible-list-summary"><span>ВЫПОЛНЕНИЕ НАПРАВЛЕНИЙ <span class="section-detail">· всего ${fmtMoney(refWorkTotal)} · учтено ${fmtMoney(refCreditedTotal)}</span></span><span class="collapse-hint"></span></summary>
+      <details ${collapsibleListAttrs("completedReferralDetails", false)}><summary class="collapsible-list-summary"><span>Выполненные позиции <span class="section-detail">· всего ${fmtMoney(refWorkTotal)} · учтено ${fmtMoney(refCreditedTotal)}</span></span><span class="collapse-hint"></span></summary>
       <div class="collapsible-list-body"><div class="toolbar no-print">${copyBtn("copyTable", "tblRef")}</div>
       ${hasReferralRevenueFiltering ? `<div class="notice blue"><b>Правило учёта выручки:</b> все выполненные позиции показаны ниже, но ${fmtMoney(refWorkTotal - refCreditedTotal)} не входят в выручку от перенаправлений согласно настройкам профиля.</div>` : ""}
       ${hasCompletedReferralGrouping && completedReferralGrouping.unmatchedItems ? `<div class="notice warn"><b>Не сопоставлено с группами 1С:</b> ${fmtNum(completedReferralGrouping.unmatchedItems)} поз. Они показаны отдельной группой; остальные услуги объединены по структуре отчёта «Назначения».</div>` : ""}
-      <table class="data" id="tblRef"><tr><th>${hasCompletedReferralGrouping ? "Тип / группа 1С / номенклатура" : "Тип"}</th><th class="num">Штук</th><th class="num">Выполнено</th><th class="num">Учтено в перенаправлениях</th></tr>`;
+      <table class="data referral-details-table" id="tblRef"><tr><th>${hasCompletedReferralGrouping ? "Тип / группа 1С / номенклатура" : "Тип"}</th><th class="num">Штук</th><th class="num">Выполнено</th><th class="num">Учтено в перенаправлениях</th></tr>`;
     let rtIdx = 0;
     if (hasCompletedReferralGrouping) {
       const sourceTree = new Map();
       for (const group of completedReferralGrouping.groups) {
         let siblings = sourceTree;
         let target = null;
-        for (const part of [group.type, ...(group.path || [])]) {
+        for (const part of [adminReferralType(group.type), ...(group.path || [])]) {
           if (!siblings.has(part)) siblings.set(part, { name: part, children: new Map(), items: {}, q: 0, s: 0, includedS: 0 });
           target = siblings.get(part);
           target.q += group.q || 0;
@@ -4086,8 +4139,8 @@ function renderDoctor() {
       };
       renderCompletedReferralNodes(sourceTree);
     } else {
-      for (const t of REF_TYPES) {
-        const b = r.cross.refByType[t];
+      for (const t of ["Товары", "Приемы", "Анализы", "Услуги"]) {
+        const b = adminReferrals[t];
         if (!b) continue;
         const itEntries = Object.entries(b.items || {}).sort((a, bb) => bb[1].s - a[1].s);
         const gKey = "rt" + rtIdx++;
@@ -4095,17 +4148,17 @@ function renderDoctor() {
         html += `<tr class="grp-head" data-g="${gKey}" ${itEntries.length ? `onclick="toggleGroup('${gKey}')" style="cursor:pointer"` : ""}>
           <td><span id="tri_${gKey}" class="muted">${itEntries.length ? (open ? "▾" : "▸") : "·"}</span> <b>${esc(t)}</b></td>
           <td class="num"><b>${fmtNum(b.q)}</b></td><td class="num"><b>${fmtMoney(b.s)}</b></td><td class="num"><b>${fmtMoney(b.includedS)}</b></td></tr>`;
-        for (const [n, v] of itEntries.slice(0, 40)) {
+        for (const [n, v] of itEntries) {
           const exclusionBadge = v.excludedS > 0 ? ` <span class="badge warn" title="${esc(v.inclusionReason || "Не учитывается по настройке")}">не учитывается</span>` : "";
-          html += `<tr class="grp-sub ${gKey}" ${open ? "" : 'style="display:none"'}><td class="small muted" style="padding-left:26px">${esc(n.length > 60 ? n.slice(0, 60) + "…" : n)}${exclusionBadge}</td>
+          html += `<tr class="grp-sub ${gKey}" ${open ? "" : 'style="display:none"'}><td class="small muted" style="padding-left:26px">${esc(n)}${exclusionBadge}</td>
             <td class="num small muted">${fmtNum(v.q)}</td><td class="num small muted">${fmtMoney(v.s)}</td><td class="num small muted">${fmtMoney(v.includedS)}</td></tr>`;
         }
       }
     }
     html += `<tr><td><b>Всего выполнено</b></td><td class="num"></td><td class="num"><b>${fmtMoney(refWorkTotal)}</b></td><td class="num"></td></tr>
       <tr><td><b>Учтено в выручке от перенаправлений</b></td><td class="num"></td><td class="num"></td><td class="num"><b>${fmtMoney(refCreditedTotal)}</b></td></tr></table></div></details></div>
-      <div><h3 class="section-title" style="margin:0 0 6px">СТРУКТУРА ВСЕХ НАПРАВЛЕНИЙ ПО ДЕНЬГАМ ${copyBtn("copyChart", "chNazStruct", "PNG")}</h3>
-      <div class="chart-box"><canvas id="chNazStruct"></canvas></div></div></div>`;
+      <div><h3 class="section-title" style="margin:0 0 6px">ВЫРАБОТКА ОТ ПЕРЕНАПРАВЛЕНИЙ ${copyBtn("copyChart", "chNazStruct", "PNG")}</h3>
+      <div class="chart-box"><canvas id="chNazStruct"></canvas></div></div></div></section>`;
   }
   html += "</div>";
 
@@ -4185,8 +4238,8 @@ function renderDoctor() {
         ${kb.groupAvailable.loyalSleep && kb.seg.loyalSleep ? `<button class="btn mini" onclick="openClientSegment('loyalSleep')">Лояльные, спящие · ${fmtNum(kb.seg.loyalSleep)}</button>` : ""}
       </div>
     </div>
-    <div><h3 class="small muted" style="margin-bottom:6px">ГРУППЫ КЛИЕНТСКОЙ БАЗЫ ${copyBtn("copyChart", "chSegments", "PNG")}</h3>
-      <div class="chart-box"><canvas id="chSegments"></canvas></div></div>
+    <div><h3 class="small muted" style="margin-bottom:6px">ДИНАМИКА КЛИЕНТСКОЙ БАЗЫ ПО МЕСЯЦАМ ${copyBtn("copyChart", "chSegments", "PNG")}</h3>
+      <p class="small muted">Линии показывают численность каждой группы за одинаковое окно ${kbWinCur} мес. Группы пересекаются и не складываются; общая база — отдельная линия. Пропуски означают отсутствие сопоставимых данных.</p><div class="chart-box"><canvas id="chSegments"></canvas></div></div>
     <div class="no-print" style="margin-top:12px"><details id="clientSegmentPatients" ${collapsibleListAttrs("clientSegmentPatients", false)}><summary class="collapsible-list-summary"><span>ПАЦИЕНТЫ ДЛЯ РАБОТЫ <span class="badge mut" id="clientSegmentPatientCount">${fmtNum(selectedClients.length)}</span></span><span class="collapse-hint"></span></summary>
       <div class="collapsible-list-body"><div class="vhead"><span class="small muted">Выберите сегмент базы</span>${segToggle("clientSegmentSeg", segmentOptions, UI.clientSegment, "setClientSegment")}</div>
       <div style="overflow-x:auto;margin-top:8px"><table class="data" id="tblClientSegment"><thead><tr><th>Пациент</th><th>Признак</th><th class="num">Визитов</th><th class="num">Дней с визита</th><th class="num">Историческая выручка</th></tr></thead><tbody id="clientSegmentRows">${clientSegmentRowsMarkup(selectedClients)}</tbody>
@@ -4266,7 +4319,7 @@ function renderDoctor() {
   html += `<div class="card" id="blkStack"><div class="vhead"><h3 class="mt0">Собственная выручка по категориям и выручка от перенаправлений</h3><span>${copyBtn("copyChart", "chStack", "PNG")} ${blockBtn("blkStack")}</span></div><div class="chart-box" style="height:${Math.max(200, 60 + monthKeysSorted().length * 44)}px"><canvas id="chStack"></canvas></div></div>`;
 
   /* ---- многомесячная динамика показателей ---- */
-  const docDyn = computeDoctorDynamics(UI.docId, mk);
+  const docDyn = adminDoctorDynamics(UI.docId, mk);
   const docDynamicsNoteKey = `doctor|${mk}|${UI.docId}`;
   if (docDyn && docDyn.months.length) {
     const doctorScoresHtml = DB.settings.showScores && docDyn.months.length >= 2
@@ -4275,7 +4328,7 @@ function renderDoctor() {
         <div class="chart-box score-chart"><canvas id="chScores"></canvas></div></div>`
       : "";
     html += dynamicsHtml(docDyn, "blkDyn", "Динамика показателей по месяцам",
-      `Последние ${docDyn.months.length} мес. по ${monthLabel(mk)}: последний месяц сравнивается с прошлым и со средним предыдущих месяцев; жирным — текущий месяц.`,
+      `С января по ${monthLabel(mk)}: пропуски обозначены точкой; последний месяц сравнивается с прошлым и со средним предыдущих месяцев; жирным — текущий месяц.`,
       docDynamicsNoteKey,
       doctorScoresHtml,
       false);
@@ -4354,8 +4407,8 @@ function renderDoctor() {
   }
   // круговая структуры направлений (В5)
   if (r.cross.refByType && Object.keys(r.cross.refByType).length) {
-    const refEntries = REF_TYPES.map(t => [t, r.cross.refByType[t] ? r.cross.refByType[t].s : 0]).filter(x => x[1] > 0);
-    const refColors = { "Товары": "#db2777", "Приемы": "#d97706", "Анализы": "#0d9488", "Профильные услуги": "#2563eb", "Другие услуги клиники": "#94a3b8" };
+    const refEntries = Object.entries(adminReferrals).map(([type, values]) => [type, values.s]).filter(x => x[1] > 0);
+    const refColors = { "Товары": "#db2777", "Приемы": "#d97706", "Анализы": "#0d9488", "Услуги": "#2563eb" };
     const refTotal = refEntries.reduce((a, x) => a + x[1], 0);
     chart("chNazStruct", {
       type: "doughnut",
@@ -4403,27 +4456,12 @@ function renderDoctor() {
     }
   }
   if (kb) {
-    const applicable = kb.applicable || { sleep: true, lost: kb.sourceWindowComplete };
-    const segData = [
-      ["Общая база", kb.total, "#2563eb"],
-      ["Лояльные", kb.seg.loyal, "#059669"],
-      ["Активные", kb.seg.active, "#16a34a"],
-      ["Новые, риск", kb.seg.newRisk, "#d97706"],
-      ["Лояльные, спящие", kb.seg.loyalSleep, "#94a3b8"],
-      ["Потерянные", kb.seg.lost, "#dc2626"],
-    ].filter(x => x[1] != null);
+    const series = adminClientBaseSeries(UI.docId, mk, kbWinCur);
     chart("chSegments", {
-      type: "bar",
-      data: { labels: segData.map(x => x[0]), datasets: [{ data: segData.map(x => x[1]), backgroundColor: segData.map(x => x[2]) }] },
-      options: {
-        indexAxis: "y",
-        plugins: {
-          legend: { display: false },
-          datalabels: { display: () => UI.showLabels, anchor: "end", align: "end", color: "#334155", font: { weight: "700" }, formatter: value => `${fmtNum(value)} · ${fmtPct(kb.total ? value / kb.total * 100 : null)}` },
-        },
-        scales: { x: { beginAtZero: true, suggestedMax: kb.total } },
-        maintainAspectRatio: false,
-      },
+      type: "line", data: { labels: series.months.map(monthLabel), datasets: series.datasets },
+      options: { maintainAspectRatio: false, plugins: { legend: { position: "bottom" }, datalabels: { display: false },
+        tooltip: { callbacks: { label: c => c.dataset.label + ": " + fmtNum(c.raw) + " чел." } } },
+        scales: { y: { beginAtZero: true, title: { display: true, text: "Пациентов" } } } },
     });
   }
   // стековая по месяцам (группы — из профиля отделения врача + сиротские)
@@ -5959,21 +5997,27 @@ function renderSettings() {
   html += `<details class="card" style="display:block" ${det("crossFocus")}><summary style="cursor:pointer"><b>🤝 Фокусы междисциплинарного подхода (Вектор 3) — «${esc(dn)}»</b></summary>
     <p class="small muted" style="margin-top:8px">Настройте назначения, которые считаются фокусами этого профиля. Они ищутся непосредственно в названиях позиций отчёта «Назначения» и не зависят от категорий выручки.</p>
     <div class="toolbar"><label>Название блока: <input type="text" id="cf_title" value="${esc(crossFocus.title || "")}" style="min-width:280px"></label></div>
-    <p class="small muted">Фокусы — по одному в строке: <code>Название = синоним1, синоним2</code>. Звёздочка в начале строки — отслеживать, но не учитывать в широте фокусов. Штуки и выручка берутся из проданных назначений.</p>
+    <p class="small muted">Фокусы — по одному в строке: <code>Название = синоним1, синоним2</code>. Звёздочка в начале строки — отслеживать, но не учитывать в широте фокусов. Результат фокуса: для услуг выполнено + продано, для товаров — продано. Фокус считается использованным, когда результат больше нуля.</p>
     <textarea id="cf_items" placeholder="Название = синоним1, синоним2" style="min-height:150px">${esc((crossFocus.items || []).map(item => (item.core === false ? "* " : "") + item.name + " = " + (item.syn || []).join(", ")).join("\n"))}</textarea>
     ${fmtEx("УЗИ сердца = эхокардиография, эхо-кг\nХолтер = холтер, суточное мониторирование\n* Анализы = лабораторные исследования")}
     <h3 style="margin:14px 0 6px">Резервная привязка фокусов к подразделению</h3>
-    <p class="small muted">Эта общая настройка применяется ко всем услугам, совпавшим с фокусом. Точную привязку конкретной услуги задайте ниже в «Номенклатуре» — она имеет приоритет. Для врача домашняя услуга попадёт в «Приёмы» или «Профильные услуги», а услуга другого подразделения — в «Другие услуги клиники».</p>
+    <p class="small muted">Эта общая настройка применяется ко всем услугам, совпавшим с фокусом. Точную привязку конкретной услуги задайте ниже в «Номенклатуре» — она имеет приоритет. Подразделение используется общим правилом включения в выручку. В таблице выполнения обычные услуги объединены в «Услуги».</p>
     ${crossFocusHomeRows ? `<div class="scroll-y"><table class="data"><tr><th>Услуга / фокус</th><th>Домашнее подразделение</th></tr>${crossFocusHomeRows}</table></div>` : `<div class="notice blue">Сначала добавьте и сохраните фокусы — после этого для них можно выбрать домашнее подразделение.</div>`}
     <h3 style="margin:18px 0 6px">Привязка групп 1С к подразделениям</h3>
     <p class="small muted">Назначьте подразделение сразу целой группе отчёта «Назначения». Для вложенной номенклатуры применяется самая глубокая настроенная группа; точная привязка конкретной услуги ниже по-прежнему имеет приоритет.</p>
     ${sourceGroupDepartmentRows ? `<div class="scroll-y" style="max-height:360px"><table class="data"><tr><th>Группа 1С</th><th>Подразделение услуги</th></tr>${sourceGroupDepartmentRows}</table></div>${sourceGroupPaths.length > 250 ? '<p class="small muted">Показаны первые 250 групп.</p>' : ""}` : `<div class="notice blue">Группы появятся после импорта отчёта «Назначения» с иерархией 1С.</div>`}
+    <h3 style="margin:18px 0 6px">Как добавить услугу и настроить расчёт</h3>
+    <ol class="small"><li>На вкладке «Данные» импортируйте «Выработку» и «Назначения». Позиции автоматически появятся ниже в «Номенклатуре».</li>
+    <li>В «Номенклатуре» найдите услугу и выберите «Учитывать» или «Исключить». Выбор сохраняется сразу и имеет приоритет над общим правилом для выбранного профиля во всех месяцах.</li>
+    <li>«По общему правилу» возвращает расчёт по режиму и подразделению ниже. Для специализации проверьте наследование правила отделения.</li>
+    <li>Настройка меняет учтённую выручку от перенаправлений, выручку и средний чек с перенаправлениями, долю перенаправлений и соответствующий балл В3. Собственная выручка, количества назначений, их конверсия и широта фокусов от этого выбора не меняются.</li>
+    <li>В блоке выполнения сравните «Выполнено» и «Учтено в перенаправлениях»: исключённая позиция остаётся видимой с отметкой, но не входит в учтённую сумму.</li></ol>
     <h3 style="margin:18px 0 6px">Правила учёта выручки от перенаправлений</h3>
     <p class="small muted">Группировка всегда показывает все выполненные позиции. Эта настройка определяет только сумму, которая входит в итоговую выручку, долю перенаправлений, средний чек и балл Вектора 3.</p>
     ${specializationName ? `<label class="toolbar"><input type="checkbox" id="rrp_inherit" ${inheritsReferralRevenuePolicy ? "checked" : ""} onchange="refreshReferralRevenuePolicyControls()"> наследовать правило отделения «${esc(departmentName)}»</label>` : ""}
     <div class="toolbar"><label>Режим: <select id="rrp_mode" ${inheritsReferralRevenuePolicy ? "disabled" : ""} data-default-department="${esc(departmentName)}" onchange="prepareReferralRevenuePolicyMode(this.value)">
       <option value="all" ${effectiveReferralRevenuePolicy.mode === "all" ? "selected" : ""}>учитывать все выполненные направления</option>
-      <option value="external" ${effectiveReferralRevenuePolicy.mode === "external" ? "selected" : ""}>учитывать только внешние услуги</option>
+      <option value="external" ${effectiveReferralRevenuePolicy.mode === "external" ? "selected" : ""}>учитывать по подразделениям</option>
       <option value="custom" ${effectiveReferralRevenuePolicy.mode === "custom" ? "selected" : ""}>настроить вручную</option>
     </select></label></div>
     <fieldset id="rrp_controls" class="referral-policy-controls" ${referralPolicyControlsDisabled ? "disabled" : ""}>
@@ -5989,12 +6033,12 @@ function renderSettings() {
       </div>
     </fieldset>
     <div class="toolbar"><button class="btn primary" type="button" onclick="saveReferralRevenuePolicy()">💾 Сохранить правило учёта выручки</button></div>
-    <p class="small muted">В балл Вектора 3 добавляются широта фокусов и доля их выручки. Цель по доле выручки задаётся ниже в блоке «Баллы и веса».</p>
+    <p class="small muted">В балл Вектора 3 входят широта реализованных фокусов и доля учтённой выручки от перенаправлений. Цель по доле выручки задаётся ниже в блоке «Баллы и веса».</p>
     <div class="toolbar"><button class="btn primary" onclick="saveCrossFocusSettings()">💾 Сохранить фокусы Вектора 3</button></div>
   </details>`;
 
   /* --- 4. Номенклатура отделения: мама распихивает сама --- */
-  const nomAll = collectDeptItems(dn);
+  const nomAll = collectDeptItems(dn, p);
   const nf = (UI.nomFilter || "").toLowerCase();
   const showUnmappedOnly = !!UI.nomUnmappedOnly;
   let nomItems = nomAll;
@@ -6015,12 +6059,12 @@ function renderSettings() {
     return o;
   };
   html += `<details class="card" style="display:block" ${det("nom")}><summary style="cursor:pointer"><b>🧩 Номенклатура — «${esc(dn)}»</b> <span class="small muted">(${nomAll.length} позиций, неразобрано: ${unmappedCnt})</span></summary>
-    <p class="small muted" style="margin-top:8px">Скрипт разложил всё автоматически — здесь можно поправить руками: вид позиции, категорию, домашнее подразделение услуги и привязку к «${esc(exp.title)}». Домашнее подразделение распределяет обычные услуги из «Выработки» между «Профильными услугами» и «Другими услугами клиники». Товары, приёмы и анализы всегда остаются самостоятельными категориями. Точная привязка номенклатуры имеет приоритет над привязкой фокуса и применяется ко всем месяцам.</p>
+    <p class="small muted" style="margin-top:8px">Скрипт разложил всё автоматически — здесь можно поправить руками: вид позиции, категорию, домашнее подразделение услуги и привязку к «${esc(exp.title)}». Подразделение используется общим правилом учёта выручки; обычные услуги показаны вместе. Товары, приёмы и анализы всегда остаются самостоятельными категориями. Точная привязка номенклатуры имеет приоритет над привязкой фокуса и применяется ко всем месяцам.</p>
     <div class="toolbar">
       <input type="text" id="nomFilter" placeholder="поиск по названию…" value="${esc(UI.nomFilter || "")}">
       <label class="small"><input type="checkbox" id="nomUnm" ${showUnmappedOnly ? "checked" : ""} onchange="UI.nomUnmappedOnly=this.checked;renderSettings()"> только неразобранные</label>
     </div>
-    <div class="scroll-y" id="nomScroll" style="max-height:520px;overflow:auto"><table class="data"><tr><th>Позиция</th><th class="num">Шт / Сумма</th><th>Вид</th><th>Категория</th><th title="Подразделение, которому принадлежит услуга">Подразделение услуги</th><th title="Привязка к отслеживаемой позиции экспертности">${esc(exp.title)}</th><th></th></tr>`;
+    <div class="scroll-y" id="nomScroll" style="max-height:520px;overflow:auto"><table class="data"><tr><th>Позиция</th><th class="num">Шт / Сумма</th><th>Вид</th><th>Категория</th><th>Учёт в выручке от перенаправлений</th><th title="Подразделение, которому принадлежит услуга">Подразделение услуги</th><th title="Привязка к отслеживаемой позиции экспертности">${esc(exp.title)}</th><th></th></tr>`;
   nomItems.slice(0, 300).forEach((u, i) => {
     const ov = u.override || {};
     const autoKind = u.goods ? "товар" : "услуга";
@@ -6042,7 +6086,11 @@ function renderSettings() {
       </select></td>
       <td><select onchange="nomSetCat(${i}, this.value)">${groupSelOptions(catSel)}</select>
         <div class="small muted">сейчас: ${esc(u.cls.group)}${u.cls.sub ? " → " + esc(u.cls.sub) : ""}${u.cls.unmapped ? ' <span class="badge bad">неразобрано</span>' : ""}</div></td>
-      <td>${hasFixedReferralType ? `<span class="small muted">${esc(fixedReferralType)} — отдельная категория</span>` : `<select data-service-name="${esc(u.n)}" onchange="setInterdisciplinaryHomeDepartment(this)">
+      <td><select aria-label="Учёт выручки: ${esc(u.n)}" onchange="nomSetReferralIncluded(${i}, this.value)">
+        <option value="" ${typeof ov.referralIncluded !== "boolean" ? "selected" : ""}>По общему правилу</option>
+        <option value="yes" ${ov.referralIncluded === true ? "selected" : ""}>Учитывать</option>
+        <option value="no" ${ov.referralIncluded === false ? "selected" : ""}>Исключить</option>
+      </select></td><td>${hasFixedReferralType ? `<span class="small muted">${esc(fixedReferralType)} — отдельная категория</span>` : `<select data-service-name="${esc(u.n)}" onchange="setInterdisciplinaryHomeDepartment(this)">
         <option value="">— не задано —</option>
         ${crossFocusDepartments.map(name => `<option value="${esc(name)}" ${homeDepartment === name ? "selected" : ""}>${esc(name)}</option>`).join("")}
       </select>`}</td>
@@ -6053,7 +6101,7 @@ function renderSettings() {
       </select></td>
       <td>${Object.keys(ov).length ? `<button class="btn mini" onclick="nomReset(${i})" title="убрать ручные правки">↺</button>` : ""}</td></tr>`;
   });
-  if (nomItems.length > 300) html += `<tr><td colspan="7" class="small muted">Показаны первые 300 — уточните поиск.</td></tr>`;
+  if (nomItems.length > 300) html += `<tr><td colspan="8" class="small muted">Показаны первые 300 — уточните поиск.</td></tr>`;
   html += `</table></div>
     <details style="margin-top:10px" ${det("rules")}><summary class="small muted" style="cursor:pointer">Расширенное: правила по подстрокам (${(p.rules || []).length})</summary>
       <p class="small muted">Формат строки: <code>подстрока = Группа / Подгруппа / вид</code>. Подгруппу и вид (<i>услуга</i> или <i>товар</i>) можно не писать. Правила проверяются по порядку; ручные правки номенклатуры выше сильнее правил.</p>
@@ -6472,6 +6520,16 @@ function nomOv(i) {
   const key = u.n.toLowerCase();
   if (!p.overrides[key]) p.overrides[key] = {};
   return { p, key, ov: p.overrides[key] };
+}
+function nomSetReferralIncluded(i, val) {
+  const { p, key, ov } = nomOv(i);
+  if (val === "yes" || val === "no") ov.referralIncluded = val === "yes";
+  else delete ov.referralIncluded;
+  if (!Object.keys(ov).length) delete p.overrides[key];
+  clearMetricsCache();
+  saveLocal();
+  renderAll();
+  toast("Правило учёта позиции сохранено для всех месяцев выбранного профиля");
 }
 function nomSetType(i, val) {
   if (val === "__custom__") {

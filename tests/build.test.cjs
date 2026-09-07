@@ -539,7 +539,7 @@ test("unused product positions remain visually emphasized", () => {
   assert.match(css, /table\.data td\.unused-items\s*\{[^}]*background:\s*var\(--bad-soft\);[^}]*color:\s*var\(--bad\);[^}]*font-weight:\s*700;/s);
 });
 
-test("appointment details hide report revenue and render source comparison as plain text", () => {
+test("appointment details keep conversion separate from current performed revenue", () => {
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
   const appointmentTable = ui.match(/id="tblNaz"[\s\S]*?if \(nz\.focus\)/);
@@ -550,7 +550,8 @@ test("appointment details hide report revenue and render source comparison as pl
   assert.doesNotMatch(appointmentTable[0], /Выручка|fmtMoney\(b\.soldSum\)|fmtMoney\(nz\.totals\.soldSum\)/);
   assert.ok(reportTable);
   assert.doesNotMatch(reportTable[0], /<th class="num">Выручка<\/th>|fmtMoney\(b\.soldSum\)|fmtMoney\(nz\.totals\.soldSum\)/);
-  assert.match(ui, /<p class="source-compare">Сверка двух источников:/);
+  assert.doesNotMatch(ui, /<p class="source-compare">Сверка двух источников:/);
+  assert.match(ui, /Выполненные планы лечения и назначения в текущем месяце/);
   assert.ok(sourceCompareCss);
   assert.match(sourceCompareCss[1], /color:\s*var\(--muted\)/);
   assert.doesNotMatch(sourceCompareCss[1], /background|border|padding/);
@@ -638,11 +639,13 @@ test("appointment conversion block starts compact and parent groups hide their w
   assert.match(vector[0], /collapsibleListAttrs\("appointmentConversionBlock", false\)/);
   assert.match(vector[0], /appointment-conversion-summary/);
   assert.match(vector[0], /appointment-conversion-summary-value/);
-  assert.match(vector[0], /КОНВЕРСИЯ НАЗНАЧЕНИЙ[\s\S]*назначено \$\{fmtNum\(nz\.totals\.assigned\)\}[\s\S]*результат \$\{fmtNum\(nz\.totals\.resultQ\)\}/);
+  assert.match(vector[0], /Планы лечения и конверсия в реализацию/);
   assert.match(vector[0], /collapsibleListAttrs\("appointmentDetails", false\)/);
   assert.match(vector[0], /collapsibleListAttrs\("interdisciplinaryFocusPositions", false\)/);
   assert.match(vector[0], /collapsibleListAttrs\("completedReferralDetails", false\)/);
-  assert.match(vector[0], /ДЕТАЛИ НАЗНАЧЕНИЙ[\s\S]*назначено \$\{fmtNum\(nz\.totals\.assigned\)\}[\s\S]*конверсия/);
+  assert.match(vector[0], /Детализация по услугам и группам 1С/);
+  assert.match(vector[0], /appointmentItemConversion\(v\)/);
+  assert.doesNotMatch(vector[0], /itEntries\.slice\(0, 40\)/);
   assert.match(vector[0], /const renderSourceNodes = \(nodes, depth = 0, ancestorKeys = \[\]\)/);
   assert.match(vector[0], /data-group-ancestors="\$\{ancestorKeys\.join\(" "\)\}"/);
   assert.match(vector[0], /renderSourceNodes\(node\.children, depth \+ 1, \[\.\.\.ancestorKeys, gKey\]\)/);
@@ -673,7 +676,7 @@ test("client-base vector keeps 12/24/36 manual and hides unavailable overlapping
   for (const label of ["Лояльные", "Активные", "Новые, риск", "Лояльные, спящие", "Потерянные"]) assert.match(ui, new RegExp(label));
   assert.match(vector[0], /openClientSegment\('newRisk'\)/);
   assert.match(vector[0], /openClientSegment\('loyalSleep'\)/);
-  assert.match(ui, /chart\("chSegments", \{\s*type: "bar"/);
+  assert.match(ui, /chart\("chSegments", \{\s*type: "line"/);
   assert.match(css, /\.kb-summary-card\.key-indicator/);
   assert.match(css, /\.kb-summary-trends > div/);
   assert.doesNotMatch(vector[0], /Потерянная \(минимум\)|"≥" \+ fmtNum\(kb\.seg\.lost\)/);
@@ -1097,7 +1100,7 @@ test("referral revenue inclusion is configurable by profile and 1C group ownersh
   assert.match(core, /interdisciplinaryGroupDepartments:\s*\{\}/);
   assert.match(core, /function interdisciplinaryGroupDepartment\(path\)/);
   assert.match(core, /referralRevenuePolicyV:\s*1/);
-  assert.match(metrics, /function referralRevenueDecision\(profile, referralType, homeDepartment\)/);
+  assert.match(metrics, /function referralRevenueDecision\(profile, referralType, homeDepartment, nomenclatureName = ""\)/);
   assert.match(metrics, /refIncludedSum:\s*0/);
   assert.match(metrics, /refSumAll:\s*refRevenueAll/);
   assert.match(metrics, /function collectInterdisciplinaryGroupPaths\(departmentName, specializationName = ""\)/);

@@ -173,7 +173,13 @@ function interdisciplinaryRefType(cls, focus, docId, nomenclatureName, groupPath
   return "Профильные услуги";
 }
 
-function referralRevenueDecision(profile, referralType, homeDepartment) {
+function referralRevenueDecision(profile, referralType, homeDepartment, nomenclatureName = "") {
+  const override = profile && profile.overrides && profile.overrides[nomenclatureName.toLowerCase()];
+  if (override && typeof override.referralIncluded === "boolean") {
+    return { included: override.referralIncluded, reason: override.referralIncluded
+      ? "учитывается: индивидуальная настройка номенклатуры"
+      : "не учитывается: индивидуальная настройка номенклатуры" };
+  }
   const policy = normalizeReferralRevenuePolicy(profile && profile.referralRevenuePolicy);
   if (policy.mode === "all") return { included: true, reason: "учитывается: все направления" };
   if (REFERRAL_REVENUE_FIXED_TYPES.includes(referralType)) {
@@ -330,7 +336,7 @@ function vyrabotkaSummary(docId, monthKey) {
       const focus = crossFocusMatch(profile, it.n);
       const homeDepartment = resolvedInterdisciplinaryHomeDepartment(it.n, focus, groupPath);
       const t = interdisciplinaryRefType(cls, focus, docId, it.n, groupPath);
-      const decision = referralRevenueDecision(profile, t, homeDepartment);
+      const decision = referralRevenueDecision(profile, t, homeDepartment, it.n);
       if (decision.included) {
         out.refIncludedSum += ref;
         out.refIncludedQty += qRef;
@@ -1011,8 +1017,7 @@ function monthKeysSorted() {
 
 /* Вся номенклатура ОТДЕЛЕНИЯ (по врачам этого отделения за все месяцы):
    основа редактора «распихать номенклатуру» и списков неразобранного */
-function collectDeptItems(deptName) {
-  const profile = deptProfile(deptName);
+function collectDeptItems(deptName, profile = deptProfile(deptName)) {
   const map = new Map();
   for (const m of Object.values(DB.months)) {
     for (const [docId, v] of Object.entries(m.vyrabotka)) {

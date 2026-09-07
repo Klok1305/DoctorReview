@@ -43,6 +43,80 @@ function createContext({ desktop = false } = {}) {
   return context;
 }
 
+test("Admin September feedback preserves referral totals, item conversion, year gaps and unique profiles", () => {
+  const context = createContext();
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  vm.runInContext(ui.slice(ui.indexOf("function adminYearMonths"), ui.indexOf("function dynamicsHtml")), context);
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Тестовый Косметолог', aliases: [], department: 'Косметология', specialization: 'Косметология', structureManual: true } };
+    DB.settings.departmentUsesSpecializations['Косметология'] = true;
+    DB.settings.departments['Косметология'] = ['Косметология', 'Эстетисты'];
+    const p = DB.settings.depts['Косметология'];
+    p.inheritReferralRevenuePolicy = false;
+    p.referralRevenuePolicy = defaultReferralRevenuePolicy();
+    p.overrides = {};
+    DB.months = { '2026-01': emptyMonth(), '2026-12': emptyMonth() };
+    for (const month of Object.values(DB.months)) {
+      month.vyrabotka.d1 = { items: [
+        { n: 'Процедура А', cat: '', sourceForm: 'Сотрудник', q: 1, sOwn: 1000, sRef: 0 },
+        { n: 'Процедура А', cat: '', sourceForm: 'Направление', q: 2, sOwn: 200, sRef: 0 },
+        { n: 'Процедура Б', cat: '', sourceForm: 'Направление', q: 1, sOwn: 300, sRef: 0 }
+      ] };
+      month.naznach.d1 = { '1': { items: [
+        { n: 'Процедура А', a: 4, d: 1, sq: 1, ss: 200 },
+        { n: 'Процедура Б', a: 2, d: 1, sq: 0, ss: 0 }
+      ] } };
+      month.kb.d1 = { '12': { clients: [{ patientId: 'synthetic-1', name: 'Тестовый Пациент', v: 4, r: 20, s: 1000 }] } };
+    }
+    const baseline = computeMetrics('d1', '2026-01');
+    p.overrides['процедура а'] = { referralIncluded: false };
+    normalizeProfiles();
+    clearMetricsCache();
+    const excluded = computeMetrics('d1', '2026-01');
+    const persisted = DB.settings.depts['Косметология'].overrides['процедура а'].referralIncluded;
+    const catalog = collectDeptItems('Косметология', DB.settings.depts['Косметология']);
+    const year = adminDoctorDynamics('d1', '2026-12');
+    const base = adminClientBaseSeries('d1', '2026-12', 12);
+    const buckets = adminReferralBuckets({
+      'Профильные услуги': { s: 200, q: 2, includedS: 0, items: { A: { s: 200, q: 2 } } },
+      'Другие услуги клиники': { s: 300, q: 1, includedS: 300, items: { B: { s: 300, q: 1 } } }
+    });
+    const policy = { referralRevenuePolicy: externalReferralRevenuePolicy(['Косметология']), overrides: { a: { referralIncluded: true } } };
+    const forcedInclude = referralRevenueDecision(policy, 'Профильные услуги', 'Косметология', 'A').included;
+    delete policy.overrides.a.referralIncluded;
+    const resetInclude = referralRevenueDecision(policy, 'Профильные услуги', 'Косметология', 'A').included;
+    return { baseline, excluded, persisted, catalogValue: catalog.find(x => x.n === 'Процедура А').override.referralIncluded,
+      months: year.months, values: year.rows.find(row => row.key === 'sales').values,
+      base: base.datasets.map(x => ({ label: x.label, data: x.data })), missingWindow: adminClientBaseSeries('d1', '2026-12', 24).datasets[0].data,
+      buckets, forcedInclude, resetInclude, specs: departmentSpecializations('Косметология'),
+      conversion: appointmentItemConversion({ assigned: 4, done: 1, soldQ: 1, resultQ: 2 }),
+      noDenominator: appointmentItemConversion({ assigned: 0, done: 1, soldQ: 0, resultQ: 1 }) };
+  })()`, context);
+  const x = JSON.parse(JSON.stringify(result));
+  assert.equal(x.baseline.econ.refRevenue - x.excluded.econ.refRevenue, 200);
+  assert.equal(x.baseline.econ.sales, x.excluded.econ.sales);
+  assert.deepEqual(x.baseline.cross.naz[1].totals, x.excluded.cross.naz[1].totals);
+  assert.equal(x.excluded.cross.refSumAll, 500);
+  assert.equal(x.excluded.cross.refExcludedSum, 200);
+  assert.equal(x.persisted, false);
+  assert.equal(x.catalogValue, false);
+  assert.equal(x.months.length, 12);
+  assert.equal(x.months[0], '2026-01');
+  assert.equal(x.months[11], '2026-12');
+  assert.equal(x.values[1], null);
+  assert.equal(x.base[0].data[0], 1);
+  assert.equal(x.base[0].data[1], null);
+  assert.ok(x.missingWindow.every(value => value === null));
+  assert.deepEqual(Object.keys(x.buckets), ['Услуги']);
+  assert.equal(x.buckets['Услуги'].s, 500);
+  assert.equal(x.buckets['Услуги'].includedS, 300);
+  assert.equal(x.forcedInclude, true);
+  assert.equal(x.resetInclude, false);
+  assert.deepEqual(x.specs, ['Косметология', 'Эстетисты']);
+  assert.equal(x.conversion, '50%');
+  assert.equal(x.noDenominator, '—');
+});
+
 test("core date and doctor-name helpers preserve legacy behavior", () => {
   const context = createContext();
   assert.equal(vm.runInContext("normFio('Иванова Ёлка Петровна..')", context), "иванова елка петровна");

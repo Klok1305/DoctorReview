@@ -670,7 +670,7 @@ function departmentSpecializations(name) {
   const groups = departmentGroups();
   const effective = deptName => {
     const specs = groups[deptName] || [];
-    return departmentUsesSpecializations(deptName) ? [deptName, ...specs] : [deptName];
+    return departmentUsesSpecializations(deptName) ? [...new Set([deptName, ...specs])] : [deptName];
   };
   if (!name || name === "all") return [...new Set(Object.keys(groups).flatMap(effective))];
   return effective(name);

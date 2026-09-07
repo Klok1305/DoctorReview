@@ -766,11 +766,11 @@ function createWindow() {
                 && !appointmentConversionBlock.open;
               const primaryAppointmentCollapseChecks = {
                 initiallyCollapsed: appointmentConversionInitiallyCollapsed,
-                compactSummary: Boolean(appointmentConversionBlock?.querySelector('summary')?.textContent.includes('назначено 4')),
+                compactSummary: Boolean(appointmentConversionBlock?.querySelector('summary')?.textContent.includes('Планы лечения и конверсия в реализацию')),
                 compactValue: Boolean(appointmentConversionBlock?.querySelector('.appointment-conversion-summary-value')?.textContent.includes('75%')),
                 bodyHidden: appointmentConversionCollapsed,
                 detailsInitiallyCollapsed: appointmentDetailsInitiallyCollapsed,
-                detailsSummary: Boolean(appointmentDetails?.querySelector('summary')?.textContent.includes('назначено 4')),
+                detailsSummary: Boolean(appointmentDetails?.querySelector('summary')?.textContent.includes('Детализация по услугам и группам 1С')),
                 hasDescendants: appointmentDescendants.length > 0,
                 expandedShowsChild: appointmentExpandedShowsChild,
                 collapsedHidesDescendants: appointmentDescendants.every(row => row.style.display === 'none')
@@ -782,7 +782,7 @@ function createWindow() {
               const anotherDoctorAppointmentBlock = document.querySelector('#blkV3 [data-list-key="appointmentConversionBlock"]');
               const anotherDoctorAppointmentCollapseValid = Boolean(anotherDoctorAppointmentBlock)
                 && !anotherDoctorAppointmentBlock.open
-                && anotherDoctorAppointmentBlock.querySelector('summary')?.textContent.includes('назначено 5')
+                && anotherDoctorAppointmentBlock.querySelector('summary')?.textContent.includes('Планы лечения и конверсия в реализацию')
                 && anotherDoctorAppointmentBlock.querySelector('.appointment-conversion-summary-value')?.textContent.includes('40%');
               UI.docId = 'd1';
               renderDoctor();
@@ -1145,6 +1145,52 @@ function createWindow() {
           if (!doctorDynamicsTableScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок таблицы динамики врача');
           fs.writeFileSync(doctorDynamicsTableScreenshotPath, Buffer.from(doctorDynamicsTableScreenshot.slice('data:image/png;base64,'.length), 'base64'));
           result.doctorDynamicsTableScreenshot = doctorDynamicsTableScreenshotPath;
+          const adminFeedbackQa = await mainWindow.webContents.executeJavaScript(`(async () => {
+            const previousMonth = UI.docMonth;
+            const previousDecember = DB.months['2026-12'];
+            try {
+              DB.months['2026-12'] = JSON.parse(JSON.stringify(DB.months['2026-02']));
+              clearMetricsCache();
+              UI.docId = 'd1'; UI.docMonth = '2026-12'; switchTab('doctor');
+              setDoctorSemanticSections(true);
+              const conversion = document.querySelector('#blkV3 [data-list-key="appointmentConversionBlock"]');
+              conversion.open = true;
+              expandAppointmentDetails();
+              const completed = document.querySelector('#blkV3 [data-list-key="completedReferralDetails"]');
+              completed.open = true;
+              document.querySelectorAll('#tblRef .grp-head[data-g]').forEach(row => { if (!UI.openGroups[row.dataset.g]) toggleGroup(row.dataset.g); });
+              for (const instance of Object.values(UI.charts)) { instance.stop(); instance.update('none'); }
+              await new Promise(resolve => setTimeout(resolve, 100));
+              const table = document.getElementById('blkDyn_tbl');
+              const leaves = [...document.querySelectorAll('#tblNaz .grp-sub')];
+              if (table.rows[0].cells.length !== 16 || !table.rows[0].cells[2].textContent.includes('Январь') || !table.rows[0].cells[13].textContent.includes('Декабрь')) throw Error('Admin QA: twelve calendar months missing');
+              if (!leaves.length || leaves.some(row => row.style.display === 'none' || !row.cells[4].textContent.trim())) throw Error('Admin QA: item conversion missing');
+              const monthCells = [...table.rows[1].cells].slice(2, 14);
+              if (monthCells.some(cell => cell.getBoundingClientRect().width < 85)) throw Error('Admin QA: month columns too narrow');
+              if (document.querySelector('#tblRef').textContent.includes('Профильные услуги') || document.querySelector('#tblRef').textContent.includes('Другие услуги клиники')) throw Error('Admin QA: legacy service split remains');
+              if (document.querySelector('.completed-referrals-section').textContent.toLowerCase().includes('конверсия')) throw Error('Admin QA: conversion in performed block');
+              if (UI.charts.chSegments.config.type !== 'line' || UI.charts.chSegments.data.labels.length !== 12) throw Error('Admin QA: client-base dynamics missing');
+              const capture = async element => (await html2canvas(element, { backgroundColor: '#ffffff', scale: 1, logging: false, windowWidth: 1400 })).toDataURL('image/png');
+              const yearImage = await capture(table);
+              const v3Image = await capture(document.getElementById('blkV3'));
+              const baseImage = await capture(document.getElementById('chSegments').parentElement.parentElement);
+              UI.departmentFilter = 'Косметология'; UI.departmentMonth = '2026-02';
+              renderDepartment(); renderDepartment();
+              const profileNames = [...document.querySelectorAll('#tblDepartmentSpecs tr')].slice(2).map(row => row.cells[0].textContent.trim());
+              if (new Set(profileNames).size !== profileNames.length) throw Error('Admin QA: duplicate profile after rerender');
+              return { yearImage, v3Image, baseImage, monthWidths: monthCells.map(cell => Math.round(cell.getBoundingClientRect().width)), profileNames, details: leaves.length };
+            } finally {
+              if (previousDecember) DB.months['2026-12'] = previousDecember; else delete DB.months['2026-12'];
+              UI.docMonth = previousMonth;
+              clearMetricsCache(); switchTab('doctor');
+            }
+          })()`);
+          for (const key of ['yearImage', 'v3Image', 'baseImage']) {
+            const imagePath = path.join(artifactRoot, 'admin-feedback-' + key + '.png');
+            fs.writeFileSync(imagePath, Buffer.from(adminFeedbackQa[key].split(',')[1], 'base64'));
+            adminFeedbackQa[key] = imagePath;
+          }
+          result.adminFeedbackQa = adminFeedbackQa;
           const viewerPatientScreenshotPath = path.join(artifactRoot, "viewer-patient-register-smoke.png");
           const viewerPatientScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
             UI.docId = 'd1'; UI.docMonth = '2026-02'; UI.kbWinByDoctor.d1 = 36; switchTab('doctor');
