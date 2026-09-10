@@ -2613,12 +2613,23 @@ function expandAppointmentDetails() {
 function adminClientBaseSeries(docId, endMk, windowMonths) {
   const months = adminYearMonths(endMk);
   const bases = months.map(key => kbSummary(docId, key, windowMonths));
-  const defs = [["total", "Общая база", "#2563eb"], ["loyal", "Лояльные", "#059669"],
-    ["active", "Активные", "#7c3aed"], ["newRisk", "Новые, риск", "#d97706"],
-    ["loyalSleep", "Лояльные, спящие", "#64748b"], ["lost", "Потерянные", "#dc2626"]];
-  return { months, datasets: defs.map(([key, label, color]) => ({ label, borderColor: color,
-    backgroundColor: color, fill: false, spanGaps: false, tension: 0, pointRadius: 4,
-    data: bases.map(base => !base ? null : key === "total" ? base.total : base.groupAvailable[key] ? base.seg[key] : null),
+  const defs = [["active", "Активные", "#afe7e9"], ["loyal", "Остальные лояльные", "#0d9488"],
+    ["newRisk", "Новые, риск", "#fbbf24"], ["loyalSleep", "Лояльные, спящие", "#64748b"],
+    ["lost", "Потерянные", "#a80000"], ["other", "Остальные", "#dbe3eb"]];
+  // Only this chart partitions overlapping groups; KPI definitions stay unchanged.
+  const priority = ["lost", "loyalSleep", "active", "loyal", "newRisk"];
+  const counts = bases.map(base => {
+    if (!base) return null;
+    const result = Object.fromEntries(defs.map(([key]) => [key, 0]));
+    for (const client of base.clientRows) {
+      const key = priority.find(group => client.groups.includes(group)) || "other";
+      result[key]++;
+    }
+    return result;
+  });
+  return { months, totals: bases.map(base => base ? base.total : null), datasets: defs.map(([key, label, color]) => ({ label,
+    backgroundColor: color, stack: "base", borderWidth: 0, maxBarThickness: 32,
+    data: counts.map(values => values ? values[key] : null),
   })) };
 }
 
@@ -4239,7 +4250,9 @@ function renderDoctor() {
       </div>
     </div>
     <div><h3 class="small muted" style="margin-bottom:6px">ДИНАМИКА КЛИЕНТСКОЙ БАЗЫ ПО МЕСЯЦАМ ${copyBtn("copyChart", "chSegments", "PNG")}</h3>
-      <p class="small muted">Линии показывают численность каждой группы за одинаковое окно ${kbWinCur} мес. Группы пересекаются и не складываются; общая база — отдельная линия. Пропуски означают отсутствие сопоставимых данных.</p><div class="chart-box"><canvas id="chSegments"></canvas></div></div>
+      <p class="small muted">Одна полоса — один месяц, вся длина — общая база за окно ${kbWinCur} мес. Числа внутри — пациенты, справа — итого. Если данных нет, полоса отсутствует.</p>
+      <p class="small muted">В этой диаграмме каждый пациент учитывается один раз: сначала потерянные, затем лояльные спящие, активные, остальные лояльные, новые в риске и остальные. При совпадении используется первая подходящая группа. Поэтому части полосы могут отличаться от пересекающихся показателей в карточках выше.</p>
+      <div class="chart-box" style="height:${Math.max(260, adminYearMonths(mk).length * 48 + 85)}px"><canvas id="chSegments"></canvas></div></div>
     <div class="no-print" style="margin-top:12px"><details id="clientSegmentPatients" ${collapsibleListAttrs("clientSegmentPatients", false)}><summary class="collapsible-list-summary"><span>ПАЦИЕНТЫ ДЛЯ РАБОТЫ <span class="badge mut" id="clientSegmentPatientCount">${fmtNum(selectedClients.length)}</span></span><span class="collapse-hint"></span></summary>
       <div class="collapsible-list-body"><div class="vhead"><span class="small muted">Выберите сегмент базы</span>${segToggle("clientSegmentSeg", segmentOptions, UI.clientSegment, "setClientSegment")}</div>
       <div style="overflow-x:auto;margin-top:8px"><table class="data" id="tblClientSegment"><thead><tr><th>Пациент</th><th>Признак</th><th class="num">Визитов</th><th class="num">Дней с визита</th><th class="num">Историческая выручка</th></tr></thead><tbody id="clientSegmentRows">${clientSegmentRowsMarkup(selectedClients)}</tbody>
@@ -4458,10 +4471,24 @@ function renderDoctor() {
   if (kb) {
     const series = adminClientBaseSeries(UI.docId, mk, kbWinCur);
     chart("chSegments", {
-      type: "line", data: { labels: series.months.map(monthLabel), datasets: series.datasets },
-      options: { maintainAspectRatio: false, plugins: { legend: { position: "bottom" }, datalabels: { display: false },
-        tooltip: { callbacks: { label: c => c.dataset.label + ": " + fmtNum(c.raw) + " чел." } } },
-        scales: { y: { beginAtZero: true, title: { display: true, text: "Пациентов" } } } },
+      type: "bar", data: { labels: series.months.map(monthLabel), datasets: series.datasets },
+      options: { indexAxis: "y", maintainAspectRatio: false, layout: { padding: { right: 65 } },
+        plugins: { legend: { position: "bottom", onClick: () => {} },
+          datalabels: {
+            labels: {
+              value: { color: ctx => [0, 2, 5].includes(ctx.datasetIndex) ? "#17212b" : "#ffffff",
+                font: { weight: "600", size: 12 }, anchor: "center", align: "center",
+                display: ctx => { const value = ctx.dataset.data[ctx.dataIndex]; return value > 0 && Math.abs(ctx.chart.scales.x.getPixelForValue(value) - ctx.chart.scales.x.getPixelForValue(0)) >= 34; },
+                formatter: value => fmtNum(value) },
+              total: { color: "#334155", anchor: "end", align: "right", offset: 8, font: { weight: "700", size: 12 },
+                display: ctx => series.totals[ctx.dataIndex] != null && ctx.datasetIndex === series.datasets.length - 1,
+                formatter: (_value, ctx) => fmtNum(series.totals[ctx.dataIndex]) },
+            },
+          },
+          tooltip: { callbacks: { label: c => c.dataset.label + ": " + fmtNum(c.raw) + " чел.",
+            footer: items => items.length ? "Общая база: " + fmtNum(series.totals[items[0].dataIndex]) + " чел." : "" } } },
+        scales: { x: { stacked: true, beginAtZero: true, title: { display: true, text: "Пациентов" }, ticks: { precision: 0 } },
+          y: { stacked: true, grid: { display: false }, ticks: { autoSkip: false } } } },
     });
   }
   // стековая по месяцам (группы — из профиля отделения врача + сиротские)

@@ -1169,7 +1169,7 @@ function createWindow() {
               if (monthCells.some(cell => cell.getBoundingClientRect().width < 85)) throw Error('Admin QA: month columns too narrow');
               if (document.querySelector('#tblRef').textContent.includes('Профильные услуги') || document.querySelector('#tblRef').textContent.includes('Другие услуги клиники')) throw Error('Admin QA: legacy service split remains');
               if (document.querySelector('.completed-referrals-section').textContent.toLowerCase().includes('конверсия')) throw Error('Admin QA: conversion in performed block');
-              if (UI.charts.chSegments.config.type !== 'line' || UI.charts.chSegments.data.labels.length !== 12) throw Error('Admin QA: client-base dynamics missing');
+              if (UI.charts.chSegments.config.type !== 'bar' || UI.charts.chSegments.options.indexAxis !== 'y' || UI.charts.chSegments.data.labels.length !== 12) throw Error('Admin QA: client-base dynamics missing');
               const capture = async element => (await html2canvas(element, { backgroundColor: '#ffffff', scale: 1, logging: false, windowWidth: 1400 })).toDataURL('image/png');
               const yearImage = await capture(table);
               const v3Image = await capture(document.getElementById('blkV3'));

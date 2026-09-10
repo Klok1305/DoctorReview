@@ -117,6 +117,25 @@ test("Admin September feedback preserves referral totals, item conversion, year 
   assert.equal(x.noDenominator, '—');
 });
 
+test("stacked Admin client base assigns overlaps once and preserves missing months", () => {
+  const context = createContext();
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  vm.runInContext(ui.slice(ui.indexOf("function adminYearMonths"), ui.indexOf("function dynamicsHtml")), context);
+  const result = vm.runInContext(`(() => {
+    kbSummary = (_id, month) => month === '2026-02' ? null : ({ total: 5, clientRows: [
+      { groups: ['loyal', 'active'] }, { groups: ['loyal', 'loyalSleep'] },
+      { groups: ['lost', 'newRisk'] }, { groups: ['loyal'] }, { groups: [] }
+    ] });
+    return adminClientBaseSeries('d1', '2026-12', 36);
+  })()`, context);
+  const x = JSON.parse(JSON.stringify(result));
+  assert.deepEqual(x.datasets.map(row => row.data[0]), [1, 1, 0, 1, 1, 1]);
+  assert.equal(x.datasets.reduce((sum, row) => sum + row.data[0], 0), x.totals[0]);
+  assert.ok(x.datasets.every(row => row.data[1] === null));
+  assert.equal(x.totals[1], null);
+  assert.equal(x.months.length, 12);
+});
+
 test("core date and doctor-name helpers preserve legacy behavior", () => {
   const context = createContext();
   assert.equal(vm.runInContext("normFio('Иванова Ёлка Петровна..')", context), "иванова елка петровна");

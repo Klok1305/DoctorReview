@@ -676,7 +676,7 @@ test("client-base vector keeps 12/24/36 manual and hides unavailable overlapping
   for (const label of ["Лояльные", "Активные", "Новые, риск", "Лояльные, спящие", "Потерянные"]) assert.match(ui, new RegExp(label));
   assert.match(vector[0], /openClientSegment\('newRisk'\)/);
   assert.match(vector[0], /openClientSegment\('loyalSleep'\)/);
-  assert.match(ui, /chart\("chSegments", \{\s*type: "line"/);
+  assert.match(ui, /chart\("chSegments", \{\s*type: "bar"/);
   assert.match(css, /\.kb-summary-card\.key-indicator/);
   assert.match(css, /\.kb-summary-trends > div/);
   assert.doesNotMatch(vector[0], /Потерянная \(минимум\)|"≥" \+ fmtNum\(kb\.seg\.lost\)/);
