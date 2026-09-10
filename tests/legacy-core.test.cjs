@@ -43,6 +43,24 @@ function createContext({ desktop = false } = {}) {
   return context;
 }
 
+test("Admin doctor supplemental percentages use assigned quantities and the same client base", () => {
+  const context = createContext();
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  vm.runInContext(ui.slice(ui.indexOf("function adminYearMonths"), ui.indexOf("function dynamicsHtml")), context);
+  const values = vm.runInContext(`(() => {
+    const r = { cross: { naz: { 1: { focus: { assigned: 8, resultQ: 3 } } } },
+      akb: { primary: { total: 40, seg: { active: 10 }, groupAvailable: { active: true } } } };
+    const values = [adminDoctorMetricPercent('nazFocusResult', r, {}), adminDoctorMetricPercent('akb', r, {})];
+    r.cross.naz[1].focus.assigned = 0;
+    r.akb.primary.groupAvailable.active = false;
+    values.push(adminDoctorMetricPercent('nazFocusResult', r, {}), adminDoctorMetricPercent('akb', r, {}), adminDoctorMetricPercent('akb', null, {}));
+    r.cross.naz[1].focus.assigned = 2;
+    values.push(adminDoctorMetricPercent('nazFocusResult', r, {}));
+    return values;
+  })()`, context);
+  assert.deepEqual(Array.from(values), [37.5, 25, null, null, null, 150]);
+});
+
 test("Admin September feedback preserves referral totals, item conversion, year gaps and unique profiles", () => {
   const context = createContext();
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");

@@ -2571,8 +2571,25 @@ function adminYearMonths(endMk) {
 }
 
 function adminDoctorDynamics(docId, endMk) {
-  return buildDynamics(adminYearMonths(endMk), endMk,
-    key => doctorHasDashboardData(docId, key) ? computeMetrics(docId, key) : null, 12, profileForDoctor(docId));
+  const profile = profileForDoctor(docId);
+  const dyn = buildDynamics(adminYearMonths(endMk), endMk,
+    key => doctorHasDashboardData(docId, key) ? computeMetrics(docId, key) : null, 12, profile);
+  for (const row of dyn.rows) {
+    if (!["nazFocusResult", "akb"].includes(row.key)) continue;
+    row.percentLabel = row.key === "akb" ? "Доля от общей базы" : "Конверсия от назначенного";
+    row.percentValues = dyn.months.map(month => adminDoctorMetricPercent(row.key, dyn.results[month], profile));
+  }
+  return dyn;
+}
+
+function adminDoctorMetricPercent(key, result, profile) {
+  if (!result) return null;
+  const focus = result.cross?.naz?.[1]?.focus;
+  const base = selectedClientBaseSummary(result, profile);
+  const numerator = key === "nazFocusResult" ? focus?.resultQ : base?.groupAvailable?.active ? base.seg.active : null;
+  const denominator = key === "nazFocusResult" ? focus?.assigned : base?.total;
+  return Number.isFinite(numerator) && numerator >= 0 && Number.isFinite(denominator) && denominator > 0
+    ? numerator / denominator * 100 : null;
 }
 
 function adminReferralType(type) {
@@ -2654,17 +2671,19 @@ function dynamicsHtml(dyn, blkId, title, subtitle, noteKey, detailTailHtml = "",
     <p class="small muted" style="margin:0 0 6px">Ячейки: зелёным — лучший месяц, красным — худший. Мини-график: зелёный — последний месяц лучше среднего предыдущих месяцев, красный — хуже, серый — без изменений или нет данных.</p>
     <div class="dynamics-table-scroll"><table class="data dynamics-table" id="${tblId}"><tr><th>Метрика</th><th title="Цвет сравнивает последний месяц со средним предыдущих месяцев">Тренд</th>${dyn.months.map(k => `<th class="num">${monthLabel(k)}</th>`).join("")}<th class="num" title="Изменение к предыдущему показанному месяцу">Δ к прошлому</th><th class="num" title="Изменение к среднему всех показанных месяцев без последнего">Δ к среднему</th></tr>`;
   for (const row of dyn.rows) {
+    if (blkId === "blkDyn" && row.key === "visits") continue;
     const nn = row.values.filter(v => v != null);
     const distinct = new Set(nn).size > 1;
     const bestV = distinct ? (row.lower ? Math.min(...nn) : Math.max(...nn)) : null;
     const worstV = distinct ? (row.lower ? Math.max(...nn) : Math.min(...nn)) : null;
-    html += `<tr><td class="mname">${esc(row.name)}${dynamicsTargetBadges(row)}</td>
+    html += `<tr><td class="mname">${esc(row.name)}${dynamicsTargetBadges(row)}${row.percentLabel ? `<div class="small muted">${esc(row.percentLabel)}</div>` : ""}</td>
       <td>${sparkSvg(row)}</td>
       ${row.values.map((v, i) => {
         let st = i === row.values.length - 1 ? "font-weight:700;" : "";
         if (v != null && bestV != null && v === bestV) st += "font-weight:700;color:var(--good);";
         else if (v != null && worstV != null && v === worstV) st += "font-weight:700;color:var(--bad);";
-        return `<td class="num" style="${st}">${v != null ? row.fmt(v) : '<span class="muted">·</span>'}</td>`;
+        const percent = row.percentValues ? `<div class="small metric-percent" title="${esc(row.percentLabel)}" style="color:var(--text);font-weight:400">${row.percentValues[i] != null ? fmtPct(row.percentValues[i]) : "—"}</div>` : "";
+        return `<td class="num" style="${st}">${v != null ? row.fmt(v) : '<span class="muted">·</span>'}${percent}</td>`;
       }).join("")}
       <td class="num">${deltaCell(row)}</td>
       <td class="num">${deltaCell(row, "avg")}<div class="small muted">${row.prevAvg != null ? `ср.: ${row.fmt(row.prevAvg)}` : "ср.: —"}</div></td></tr>`;

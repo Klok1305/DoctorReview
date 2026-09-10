@@ -1162,6 +1162,11 @@ function createWindow() {
               for (const instance of Object.values(UI.charts)) { instance.stop(); instance.update('none'); }
               await new Promise(resolve => setTimeout(resolve, 100));
               const table = document.getElementById('blkDyn_tbl');
+              if ([...table.rows].some(row => row.cells[0].textContent.trim() === 'Визиты')) throw Error('Admin QA: visits row remains');
+              for (const label of ['Конверсия от назначенного', 'Доля от общей базы']) {
+                const row = [...table.rows].find(row => row.cells[0].textContent.includes(label));
+                if (!row || row.querySelectorAll('.metric-percent').length !== 12 || !row.textContent.includes('%')) throw Error('Admin QA: supplemental percentage missing: ' + label);
+              }
               const leaves = [...document.querySelectorAll('#tblNaz .grp-sub')];
               if (table.rows[0].cells.length !== 16 || !table.rows[0].cells[2].textContent.includes('Январь') || !table.rows[0].cells[13].textContent.includes('Декабрь')) throw Error('Admin QA: twelve calendar months missing');
               if (!leaves.length || leaves.some(row => row.style.display === 'none' || !row.cells[4].textContent.trim())) throw Error('Admin QA: item conversion missing');
