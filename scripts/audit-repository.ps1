@@ -29,7 +29,7 @@ $allowedPatterns = @(
   '^mobile-pilot/[^/]+\.(html|css|js|webmanifest)$',
   '^mobile-pilot/icons/app-icon-(192|512)\.png$',
   '^mobile-server/[^/]+\.cjs$',
-  '^docs/[^/]+\.md$',
+  '^docs/[^/]+\.md$', # Includes PROJECT_MAP.md and ARCHITECTURE_REVIEW.md; measurements use synthetic data only.
   '^resources/(app-icon\.(ico|png)|update-config\.json)$',
   '^scripts/[^/]+\.(cjs|ps1|py)$',
   '^tests/[^/]+\.test\.cjs$'

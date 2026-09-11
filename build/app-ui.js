@@ -5956,15 +5956,23 @@ function renderSettings() {
     const partition = clientBasePartitionSettings(p);
     html += `<details class="card" style="display:block" ${det("norm")}><summary style="cursor:pointer"><b>📐 Нормативы специализации: клиентская база, курсовое, первичка — «${esc(specializationName)}»</b></summary>
     <h3 style="margin:12px 0 6px">Четыре группы базы за 3 года</h3>
-    <p class="small muted">Эти настройки управляют четырьмя группами в Векторе 4 врача и его годовой таблице Admin. Общие границы связывают пары групп: пациент не выпадает между условиями и не учитывается дважды. После сохранения пересчитываются все месяцы.</p>
-    <div class="grid cols-3">
-      <label class="fld"><span>Лояльность: минимум визитов за 36 мес.</span><input type="number" id="cb_loyalVisits" min="2" max="50" step="1" value="${partition.loyalVisits}"></label>
-      <label class="fld"><span>Активные / спящие: последний визит, мес.</span><input type="number" id="cb_activeM" min="1" max="36" step="1" value="${partition.activeM}"></label>
-      <label class="fld"><span>Новые в риске / потерянные: последний визит, мес.</span><input type="number" id="cb_lostM" min="1" max="36" step="1" value="${partition.lostM}"></label>
-    </div>
-    <label><input type="checkbox" id="cb_lostAnyVisits" ${partition.lostAnyVisits ? "checked" : ""}> Считать потерянными также лояльных после срока потери</label>
+    <p class="small muted">Для каждой группы задайте число визитов и срок последнего визита. Визиты считаются за все 36 месяцев. Связанные границы в соседних строках меняются вместе: каждый пациент остаётся ровно в одной группе. После сохранения пересчитываются все месяцы.</p>
+    <div class="client-base-settings-scroll"><table class="data wtable" id="clientBasePartitionRules">
+      <thead><tr><th>Группа</th><th>Визиты за 36 мес.</th><th>Последний визит, мес.</th><th>Как считается</th></tr></thead>
+      <tbody>${[
+        { group: "active", visitsId: "cb_loyalVisits", monthsId: "cb_activeM", key: "activeM", offset: 0, visitsLabel: "не менее", periodLabel: "не более" },
+        { group: "loyalSleep", visitsId: "cb_sleepVisits", monthsId: "cb_sleepM", key: "activeM", offset: 0, visitsLabel: "не менее", periodLabel: "более" },
+        { group: "newRisk", visitsId: "cb_newRiskVisits", monthsId: "cb_lostM", key: "lostM", offset: -1, visitsLabel: "от 1 до", periodLabel: "не более" },
+        { group: "lost", visitsId: "cb_lostVisits", monthsId: "cb_lostAfterM", key: "lostM", offset: -1, visitsLabel: "от 1 до", periodLabel: "более" },
+      ].map(row => `<tr>
+        <td><b>${esc(adminClientBaseGroupLabel(row.group))}</b></td>
+        <td><label class="client-base-threshold${row.group === "lost" && partition.lostAnyVisits ? " hidden" : ""}"${row.group === "lost" ? ' id="cb_lostVisitsControl"' : ""}><span>${row.visitsLabel}</span><input type="number" id="${row.visitsId}" aria-label="${esc(adminClientBaseGroupLabel(row.group))}: ${row.visitsLabel} визитов" min="${2 + row.offset}" max="${50 + row.offset}" step="1" value="${partition.loyalVisits + row.offset}" data-cb-key="loyalVisits" data-cb-offset="${row.offset}" oninput="syncClientBasePartitionControls(this)"${row.group === "lost" && partition.lostAnyVisits ? " disabled" : ""}></label>${row.group === "lost" ? `<span id="cb_lostAnyVisitsLabel" class="${partition.lostAnyVisits ? "" : "hidden"}">любое число</span>` : ""}</td>
+        <td><label class="client-base-threshold"><span>${row.periodLabel}</span><input type="number" id="${row.monthsId}" aria-label="${esc(adminClientBaseGroupLabel(row.group))}: последний визит ${row.periodLabel}, месяцев назад" min="1" max="36" step="1" value="${partition[row.key]}" data-cb-key="${row.key}" oninput="syncClientBasePartitionControls(this)"></label></td>
+        <td class="small" data-cb-description="${row.group}">${esc(adminClientBaseGroupDescription(partition, row.group))}</td>
+      </tr>`).join("")}</tbody>
+    </table></div>
+    <label><input type="checkbox" id="cb_lostAnyVisits" ${partition.lostAnyVisits ? "checked" : ""} onchange="syncClientBasePartitionControls()"> Считать потерянными также лояльных после срока потери</label>
     <p class="small muted">Без галочки потерянные — пациенты с числом визитов ниже порога лояльности; давно отсутствующие лояльные остаются спящими. С галочкой срок потери применяется ко всем пациентам и должен быть не меньше срока активности.</p>
-    <table class="data" id="clientBasePartitionRules"><tr><th>Группа</th><th>Действующее правило</th></tr>${["active", "loyalSleep", "newRisk", "lost"].map(group => `<tr><td>${esc(adminClientBaseGroupLabel(group))}</td><td>${esc(adminClientBaseGroupDescription(partition, group))}</td></tr>`).join("")}</table>
     <p class="small muted">На границе срока пациент ещё активный / новый в риске; после неё — спящий / потерянный. При пустой или некорректной давности запись остаётся в рабочей группе с пометкой «проверить данные», без подтверждения активности или потери.</p>
     <div class="toolbar"><button class="btn primary" onclick="saveDeptBasics()">💾 Сохранить нормативы</button></div>
     <details style="margin-top:12px"><summary>Дополнительные нормативы KPI и публикаций</summary>
@@ -6418,6 +6426,32 @@ function removeSpecializationV4() {
   toast(`Специализация «${name}» удалена`);
   renderSettings();
 }
+function syncClientBasePartitionControls(source) {
+  const table = document.getElementById("clientBasePartitionRules");
+  if (!table) return;
+  if (source) {
+    const key = source.dataset.cbKey;
+    const value = source.value === "" ? null : Number(source.value) - Number(source.dataset.cbOffset || 0);
+    for (const input of table.querySelectorAll("[data-cb-key]")) {
+      if (input !== source && input.dataset.cbKey === key) {
+        input.value = value == null ? "" : String(value + Number(input.dataset.cbOffset || 0));
+      }
+    }
+  }
+  const partition = {
+    loyalVisits: Number(document.getElementById("cb_loyalVisits").value),
+    activeM: Number(document.getElementById("cb_activeM").value),
+    lostM: Number(document.getElementById("cb_lostM").value),
+    lostAnyVisits: document.getElementById("cb_lostAnyVisits").checked,
+  };
+  document.getElementById("cb_lostVisits").disabled = partition.lostAnyVisits;
+  document.getElementById("cb_lostVisitsControl").classList.toggle("hidden", partition.lostAnyVisits);
+  document.getElementById("cb_lostAnyVisitsLabel").classList.toggle("hidden", !partition.lostAnyVisits);
+  for (const cell of table.querySelectorAll("[data-cb-description]")) {
+    cell.textContent = adminClientBaseGroupDescription(partition, cell.dataset.cbDescription);
+  }
+}
+
 function saveDeptBasics() {
   if (!curSetSpecialization()) {
     toast("Нормативы настраиваются на уровне специализации", true);

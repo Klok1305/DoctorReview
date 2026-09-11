@@ -1175,10 +1175,23 @@ function createWindow() {
               // Real settings controls must persist, rerender, and leave every patient in the stack.
               UI.setDepartment = 'Косметология'; UI.setSpecialization = 'Косметология'; switchTab('settings');
               const originalPartition = { ...curSetProfile().clientBasePartition };
-              document.getElementById('cb_loyalVisits').value = '4';
-              document.getElementById('cb_activeM').value = '9';
-              document.getElementById('cb_lostM').value = '10';
+              const partitionTable = document.getElementById('clientBasePartitionRules');
+              if (partitionTable.tBodies[0].rows.length !== 4 || partitionTable.querySelectorAll('input[type="number"]').length !== 8) throw Error('Admin QA: expected visits and period for each of four groups');
+              const editThreshold = (id, value) => {
+                const input = document.getElementById(id);
+                input.value = String(value);
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+              };
+              editThreshold('cb_newRiskVisits', 3);
+              editThreshold('cb_sleepM', 9);
+              editThreshold('cb_lostAfterM', 10);
+              if (document.getElementById('cb_loyalVisits').value !== '4' || document.getElementById('cb_sleepVisits').value !== '4' || document.getElementById('cb_lostVisits').value !== '3' || document.getElementById('cb_activeM').value !== '9' || document.getElementById('cb_lostM').value !== '10') throw Error('Admin QA: linked group boundaries diverged');
+              const normCard = partitionTable.closest('details.card');
+              normCard.open = true;
+              const settingsImage = await capture(partitionTable.parentElement);
               document.getElementById('cb_lostAnyVisits').checked = true;
+              document.getElementById('cb_lostAnyVisits').dispatchEvent(new Event('change', { bubbles: true }));
+              if (!document.getElementById('cb_lostVisits').disabled || document.getElementById('cb_lostAnyVisitsLabel').classList.contains('hidden')) throw Error('Admin QA: any-visit loss rule is not shown');
               saveDeptBasics();
               if (JSON.stringify(curSetProfile().clientBasePartition) !== JSON.stringify({ loyalVisits: 4, activeM: 9, lostM: 10, lostAnyVisits: true })) throw Error('Admin QA: partition settings not saved');
               document.getElementById('cb_loyalVisits').value = '0';
@@ -1196,14 +1209,14 @@ function createWindow() {
               renderDepartment(); renderDepartment();
               const profileNames = [...document.querySelectorAll('#tblDepartmentSpecs tr')].slice(2).map(row => row.cells[0].textContent.trim());
               if (new Set(profileNames).size !== profileNames.length) throw Error('Admin QA: duplicate profile after rerender');
-              return { yearImage, v3Image, baseImage, monthWidths: monthCells.map(cell => Math.round(cell.getBoundingClientRect().width)), profileNames, details: leaves.length };
+              return { yearImage, v3Image, baseImage, settingsImage, monthWidths: monthCells.map(cell => Math.round(cell.getBoundingClientRect().width)), profileNames, details: leaves.length };
             } finally {
               if (previousDecember) DB.months['2026-12'] = previousDecember; else delete DB.months['2026-12'];
               UI.docMonth = previousMonth;
               clearMetricsCache(); switchTab('doctor');
             }
           })()`);
-          for (const key of ['yearImage', 'v3Image', 'baseImage']) {
+          for (const key of ['yearImage', 'v3Image', 'baseImage', 'settingsImage']) {
             const imagePath = path.join(artifactRoot, 'admin-feedback-' + key + '.png');
             fs.writeFileSync(imagePath, Buffer.from(adminFeedbackQa[key].split(',')[1], 'base64'));
             adminFeedbackQa[key] = imagePath;

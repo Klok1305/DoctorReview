@@ -65,7 +65,7 @@
 !/mobile-server/*.cjs
 /mobile-server/data/
 
-# Документация, безопасные ресурсы, сценарии и тесты.
+# Документация (включая PROJECT_MAP.md и ARCHITECTURE_REVIEW.md), ресурсы, сценарии и тесты.
 !/docs/
 /docs/*
 !/docs/*.md
