@@ -122,7 +122,7 @@ test("Admin September feedback preserves referral totals, item conversion, year 
   assert.equal(x.months[0], '2026-01');
   assert.equal(x.months[11], '2026-12');
   assert.equal(x.values[1], null);
-  assert.equal(x.base[0].data[0], null);
+  assert.equal(x.base[0].data[0], 1);
   assert.equal(x.base[0].data[1], null);
   assert.ok(x.missingWindow.every(value => value === null));
   assert.deepEqual(Object.keys(x.buckets), ['Услуги']);
@@ -135,20 +135,20 @@ test("Admin September feedback preserves referral totals, item conversion, year 
   assert.equal(x.noDenominator, '—');
 });
 
-test("four-group chart excludes gaps and overlaps and always requests 36 months", () => {
+test("stacked Admin client base assigns every patient once and preserves missing months", () => {
   const context = createContext();
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   vm.runInContext(ui.slice(ui.indexOf("function adminYearMonths"), ui.indexOf("function dynamicsHtml")), context);
   const result = vm.runInContext(`(() => {
-    kbSummary = (_id, month, win) => { if (win !== 36) throw Error('Expected 36 months'); return month === '2026-02' ? null : ({ total: 5, clientRows: [
+    kbSummary = (_id, month, win) => { if (win !== 24) throw Error('Expected selected window'); return month === '2026-02' ? null : ({ total: 5, clientRows: [
       { groups: ['loyal', 'active'] }, { groups: ['loyal', 'loyalSleep'] },
       { groups: ['lost', 'newRisk'] }, { groups: ['loyal'] }, { groups: [] }
     ] }); };
-    return adminClientBaseSeries('d1', '2026-12', 36);
+    return adminClientBaseSeries('d1', '2026-12', 24);
   })()`, context);
   const x = JSON.parse(JSON.stringify(result));
-  assert.deepEqual(x.datasets.map(row => row.data[0]), [1, 1, 0, 0]);
-  assert.equal(x.totals[0], 2); assert.equal(x.summaries[0].overlap, 1); assert.equal(x.summaries[0].unmatched, 2);
+  assert.deepEqual(x.datasets.map(row => row.data[0]), [1, 1, 0, 1, 1, 1]);
+  assert.equal(x.datasets.reduce((sum, row) => sum + row.data[0], 0), x.totals[0]);
   assert.ok(x.datasets.every(row => row.data[1] === null));
   assert.equal(x.totals[1], null);
   assert.equal(x.months.length, 12);

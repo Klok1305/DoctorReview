@@ -2627,35 +2627,41 @@ function expandAppointmentDetails() {
   });
 }
 
-function adminClientBaseSeries(docId, endMk) {
-  const months = adminYearMonths(endMk);
-  const defs = [["active", "Активные лояльные", "#afe7e9"], ["loyalSleep", "Лояльные спящие", "#64748b"],
-    ["newRisk", "Новые в риске", "#fbbf24"], ["lost", "Потерянные", "#a80000"]];
-  const summaries = months.map(month => {
-    const base = kbSummary(docId, month, 36);
-    if (!base) return null;
-    const counts = [0, 0, 0, 0];
-    let unmatched = 0, overlap = 0;
-    for (const client of base.clientRows) {
-      const matches = defs.map(([key], i) => client.groups.includes(key) ? i : -1).filter(i => i >= 0);
-      if (!matches.length) unmatched++;
-      else if (matches.length > 1) overlap++;
-      else counts[matches[0]]++;
-    }
-    return { total: base.total, counts, unmatched, overlap, included: counts.reduce((a, b) => a + b, 0) };
+function adminOtherClients(base) {
+  return (base?.clientRows || []).filter(c => !c.groups.length).map(c => {
+    const visits = c.v <= 0 ? "Нет визитов" : c.v === 1 ? "1 визит" : c.v === 2 ? "2 визита" : "3 и более визитов";
+    const recency = c.r == null ? "давность неизвестна" : c.r <= Math.round(6 * 30.44) ? "последний визит до 6 мес. назад"
+      : c.r <= Math.round(12 * 30.44) ? "последний визит более 6–12 мес. назад" : "последний визит более 12 мес. назад";
+    return { ...c, reason: `${visits}; ${recency}` };
   });
-  return { months, summaries, totals: summaries.map(s => s ? s.included : null),
-    datasets: defs.map(([key, label, color], i) => ({ label, backgroundColor: color, stack: "base", borderWidth: 0,
-      maxBarThickness: 32, data: summaries.map(s => s ? s.counts[i] : null) })) };
 }
 
-function adminClientBaseNotes(series) {
-  return series.months.map((month, i) => {
-    const s = series.summaries[i];
-    if (!s) return `${monthLabel(month)}: нет выгрузки за 36 мес.`;
-    if (!s.unmatched && !s.overlap) return "";
-    return `${monthLabel(month)}: в группах ${fmtNum(s.included)} из ${fmtNum(s.total)}; вне условий — ${fmtNum(s.unmatched)}, пересечения — ${fmtNum(s.overlap)}.`;
-  }).filter(Boolean).join(" ");
+function adminOtherBreakdown(base) {
+  const counts = new Map();
+  for (const c of adminOtherClients(base)) counts.set(c.reason, (counts.get(c.reason) || 0) + 1);
+  return [...counts].map(([reason, count]) => `${reason}: ${fmtNum(count)} чел.`);
+}
+
+function adminClientBaseSeries(docId, endMk, windowMonths) {
+  const months = adminYearMonths(endMk);
+  const bases = months.map(month => kbSummary(docId, month, windowMonths));
+  const defs = [["active", "Активные", "#afe7e9"], ["loyal", "Остальные лояльные", "#0d9488"],
+    ["newRisk", "Новые, риск", "#fbbf24"], ["loyalSleep", "Лояльные, спящие", "#64748b"],
+    ["lost", "Потерянные", "#a80000"], ["other", "Остальные", "#dbe3eb"]];
+  // Для диаграммы каждый пациент попадает ровно в один сегмент; карточки выше сохраняют пересекающиеся определения.
+  const priority = ["lost", "loyalSleep", "active", "loyal", "newRisk"];
+  const counts = bases.map(base => {
+    if (!base) return null;
+    const result = Object.fromEntries(defs.map(([key]) => [key, 0]));
+    for (const client of base.clientRows) {
+      const key = priority.find(group => client.groups.includes(group)) || "other";
+      result[key]++;
+    }
+    return result;
+  });
+  return { months, otherBreakdowns: bases.map(adminOtherBreakdown), totals: bases.map(base => base ? base.total : null),
+    datasets: defs.map(([key, label, color]) => ({ label, backgroundColor: color, stack: "base", borderWidth: 0,
+      maxBarThickness: 32, data: counts.map(values => values ? values[key] : null) })) };
 }
 function dynamicsHtml(dyn, blkId, title, subtitle, noteKey, detailTailHtml = "", includeOutcome = true) {
   if (!dyn || dyn.months.length < 1) return "";
@@ -4276,10 +4282,10 @@ function renderDoctor() {
       </div>
     </div>
     <div><h3 class="small muted" style="margin-bottom:6px">ДИНАМИКА КЛИЕНТСКОЙ БАЗЫ ПО МЕСЯЦАМ ${copyBtn("copyChart", "chSegments", "PNG")}</h3>
-      <p class="small muted">База за 36 месяцев на каждый месяц текущего года. Четыре группы по настройкам активности базы. Визиты считаются за окно выгрузки, срок — по давности последнего визита. Числа внутри — пациенты, справа — сумма четырёх групп.</p>
-      <p class="small muted">Пациенты вне условий или с пересечением групп не распределяются произвольно. Их число указано под графиком для корректировки настроек.</p>
+      <p class="small muted">Одна полоса — один месяц, вся длина — общая база за выбранное окно ${kbWinCur} мес. Числа внутри — пациенты, справа — итого. Если данных нет, полоса отсутствует.</p>
+      <p class="small muted">Каждый пациент учитывается один раз: сначала потерянные, затем лояльные спящие, активные, остальные лояльные, новые в риске и остальные. При совпадении используется первая подходящая группа. Порог каждой группы задаётся в настройках специализации.</p>
       <div class="chart-box" style="height:${Math.max(260, adminYearMonths(mk).length * 48 + 85)}px"><canvas id="chSegments"></canvas></div>
-      <p class="small muted">${esc(adminClientBaseNotes(adminClientBaseSeries(UI.docId, mk)))}</p></div>
+      <p class="small muted">Наведите на «Остальные», чтобы увидеть состав по числу визитов и давности посещения.</p></div>
     <div class="no-print" style="margin-top:12px"><details id="clientSegmentPatients" ${collapsibleListAttrs("clientSegmentPatients", false)}><summary class="collapsible-list-summary"><span>ПАЦИЕНТЫ ДЛЯ РАБОТЫ <span class="badge mut" id="clientSegmentPatientCount">${fmtNum(selectedClients.length)}</span></span><span class="collapse-hint"></span></summary>
       <div class="collapsible-list-body"><div class="vhead"><span class="small muted">Выберите сегмент базы</span>${segToggle("clientSegmentSeg", segmentOptions, UI.clientSegment, "setClientSegment")}</div>
       <div style="overflow-x:auto;margin-top:8px"><table class="data" id="tblClientSegment"><thead><tr><th>Пациент</th><th>Признак</th><th class="num">Визитов</th><th class="num">Дней с визита</th><th class="num">Историческая выручка</th></tr></thead><tbody id="clientSegmentRows">${clientSegmentRowsMarkup(selectedClients)}</tbody>
@@ -4496,14 +4502,14 @@ function renderDoctor() {
     }
   }
   if (kb) {
-    const series = adminClientBaseSeries(UI.docId, mk);
+    const series = adminClientBaseSeries(UI.docId, mk, kbWinCur);
     chart("chSegments", {
       type: "bar", data: { labels: series.months.map(monthLabel), datasets: series.datasets },
       options: { indexAxis: "y", maintainAspectRatio: false, layout: { padding: { right: 65 } },
         plugins: { legend: { position: "bottom", onClick: () => {} },
           datalabels: {
             labels: {
-              value: { color: ctx => [0, 2].includes(ctx.datasetIndex) ? "#17212b" : "#ffffff",
+              value: { color: ctx => [0, 2, 5].includes(ctx.datasetIndex) ? "#17212b" : "#ffffff",
                 font: { weight: "600", size: 12 }, anchor: "center", align: "center",
                 display: ctx => { const value = ctx.dataset.data[ctx.dataIndex]; return value > 0 && Math.abs(ctx.chart.scales.x.getPixelForValue(value) - ctx.chart.scales.x.getPixelForValue(0)) >= 34; },
                 formatter: value => fmtNum(value) },
@@ -4513,11 +4519,12 @@ function renderDoctor() {
             },
           },
           tooltip: { callbacks: { label: c => c.dataset.label + ": " + fmtNum(c.raw) + " чел.",
-            afterLabel: c => { const s = series.summaries[c.dataIndex]; return s ? [`Доля от базы: ${fmtPct(c.raw / s.total * 100)}`, `Вне условий: ${fmtNum(s.unmatched)}; пересечения: ${fmtNum(s.overlap)}`] : []; },
-            footer: items => items.length ? "Общая база: " + fmtNum(series.summaries[items[0].dataIndex].total) + " чел. · 36 мес." : "" } } },
+            afterLabel: c => c.datasetIndex === 5 ? series.otherBreakdowns[c.dataIndex] : [],
+            footer: items => items.length ? "Общая база: " + fmtNum(series.totals[items[0].dataIndex]) + " чел." : "" } } },
         scales: { x: { stacked: true, beginAtZero: true, title: { display: true, text: "Пациентов" }, ticks: { precision: 0 } },
           y: { stacked: true, grid: { display: false }, ticks: { autoSkip: false } } } },
     });
+    UI.charts.chSegments.$clientBaseTotals = series.totals;
   }
   // стековая по месяцам (группы — из профиля отделения врача + сиротские)
   const keys = monthKeysSorted();

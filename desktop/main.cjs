@@ -1163,7 +1163,9 @@ function createWindow() {
               await new Promise(resolve => setTimeout(resolve, 100));
               const table = document.getElementById('blkDyn_tbl');
               const otherChart = UI.charts.chSegments;
-              if (otherChart.data.datasets.length !== 4) throw Error("Admin QA: expected four client groups");
+              if (otherChart.data.datasets.length !== 6 || otherChart.data.datasets[5].label !== 'Остальные') throw Error('Admin QA: expected complete six-group client base');
+              const stackedTotals = otherChart.data.labels.map((_label, index) => otherChart.data.datasets.reduce((sum, dataset) => sum + (dataset.data[index] || 0), 0));
+              if (stackedTotals.some((total, index) => otherChart.$clientBaseTotals[index] != null && total !== otherChart.$clientBaseTotals[index])) throw Error('Admin QA: client-base patients disappeared from stack');
               if ([...table.rows].some(row => row.cells[0].textContent.trim() === 'Визиты')) throw Error('Admin QA: visits row remains');
               for (const label of ['Конверсия от назначенного', 'Доля от общей базы']) {
                 const row = [...table.rows].find(row => row.cells[0].textContent.includes(label));
