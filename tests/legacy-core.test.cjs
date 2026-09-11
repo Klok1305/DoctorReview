@@ -43,32 +43,6 @@ function createContext({ desktop = false } = {}) {
   return context;
 }
 
-test("Other patients retain factual visit breakdown when a group is unavailable", () => {
-  const context = createContext();
-  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
-  vm.runInContext(ui.slice(ui.indexOf("function adminYearMonths"), ui.indexOf("function dynamicsHtml")), context);
-  const result = vm.runInContext(`(() => {
-    const base = { groupAvailable: { active: true, lost: false }, clientRows: [
-      { groups: [], v: 1, r: 20 }, { groups: [], v: 2, r: 200 },
-      { groups: [], v: 4, r: 400 }, { groups: [], v: 1, r: null },
-      { groups: ['active'], v: 3, r: 20 }
-    ] };
-    const before = JSON.stringify(base);
-    const rows = adminOtherClients(base), breakdown = adminOtherBreakdown(base);
-    base.groupAvailable.lost = true;
-    return { rows, breakdown, same: JSON.stringify(rows) === JSON.stringify(adminOtherClients(base)),
-      untouched: before === JSON.stringify({ ...base, groupAvailable: { active: true, lost: false } }) };
-  })()`, context);
-  assert.equal(result.rows.length, 4);
-  assert.equal(result.breakdown.length, 4);
-  assert.match(result.rows[0].reason, /1 визит; последний визит до 6/);
-  assert.match(result.rows[1].reason, /2 визита; последний визит более 6–12/);
-  assert.match(result.rows[2].reason, /3 и более визитов; последний визит более 12/);
-  assert.match(result.rows[3].reason, /давность неизвестна/);
-  assert.equal(result.same, true);
-  assert.equal(result.untouched, true);
-});
-
 test("Admin doctor supplemental percentages use assigned quantities and the same client base", () => {
   const context = createContext();
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
@@ -148,7 +122,7 @@ test("Admin September feedback preserves referral totals, item conversion, year 
   assert.equal(x.months[0], '2026-01');
   assert.equal(x.months[11], '2026-12');
   assert.equal(x.values[1], null);
-  assert.equal(x.base[0].data[0], 1);
+  assert.equal(x.base[0].data[0], null);
   assert.equal(x.base[0].data[1], null);
   assert.ok(x.missingWindow.every(value => value === null));
   assert.deepEqual(Object.keys(x.buckets), ['Услуги']);
@@ -161,23 +135,44 @@ test("Admin September feedback preserves referral totals, item conversion, year 
   assert.equal(x.noDenominator, '—');
 });
 
-test("stacked Admin client base assigns overlaps once and preserves missing months", () => {
+test("four-group chart excludes gaps and overlaps and always requests 36 months", () => {
   const context = createContext();
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   vm.runInContext(ui.slice(ui.indexOf("function adminYearMonths"), ui.indexOf("function dynamicsHtml")), context);
   const result = vm.runInContext(`(() => {
-    kbSummary = (_id, month) => month === '2026-02' ? null : ({ total: 5, clientRows: [
+    kbSummary = (_id, month, win) => { if (win !== 36) throw Error('Expected 36 months'); return month === '2026-02' ? null : ({ total: 5, clientRows: [
       { groups: ['loyal', 'active'] }, { groups: ['loyal', 'loyalSleep'] },
       { groups: ['lost', 'newRisk'] }, { groups: ['loyal'] }, { groups: [] }
-    ] });
+    ] }); };
     return adminClientBaseSeries('d1', '2026-12', 36);
   })()`, context);
   const x = JSON.parse(JSON.stringify(result));
-  assert.deepEqual(x.datasets.map(row => row.data[0]), [1, 1, 0, 1, 1, 1]);
-  assert.equal(x.datasets.reduce((sum, row) => sum + row.data[0], 0), x.totals[0]);
+  assert.deepEqual(x.datasets.map(row => row.data[0]), [1, 1, 0, 0]);
+  assert.equal(x.totals[0], 2); assert.equal(x.summaries[0].overlap, 1); assert.equal(x.summaries[0].unmatched, 2);
   assert.ok(x.datasets.every(row => row.data[1] === null));
   assert.equal(x.totals[1], null);
   assert.equal(x.months.length, 12);
+});
+
+test("new-risk recency setting covers recent patients and preserves the old default", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Тест', department: 'Косметология', specialization: 'Косметология' } };
+    const p = DB.settings.depts['Косметология'];
+    p.newRiskVisits = 2; p.newRiskM = 6;
+    DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].kb.d1 = { 36: { clients: [
+      { name: 'A', v: 1, r: 183, s: 0 }, { name: 'B', v: 2, r: 184, s: 0 }
+    ] } };
+    const old = kbSummary('d1', '2026-01', 36).clientRows.map(c => c.groups.includes('newRisk'));
+    p.newRiskWithin = true;
+    normalizeProfiles();
+    const recent = kbSummary('d1', '2026-01', 36).clientRows.map(c => c.groups.includes('newRisk'));
+    return { old, recent, saved: DB.settings.depts['Косметология'].newRiskWithin };
+  })()`, context);
+  assert.deepEqual(Array.from(result.old), [false, true]);
+  assert.deepEqual(Array.from(result.recent), [true, false]);
+  assert.equal(result.saved, true);
 });
 
 test("core date and doctor-name helpers preserve legacy behavior", () => {

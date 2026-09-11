@@ -549,7 +549,7 @@ function clientBaseThresholds(profile) {
     activeVisits: Math.max(1, Number(p.activeVisits) || 3),
     activeM: Math.max(1, Number(p.activeM) || 6),
     newRiskVisits: Math.max(1, Number(p.newRiskVisits) || 2),
-    newRiskM: Math.max(1, Number(p.newRiskM) || 6),
+    newRiskM: Math.max(1, Number(p.newRiskM) || 6), newRiskWithin: p.newRiskWithin === true,
     sleepVisits: Math.max(1, Number(p.sleepVisits) || Number(p.loyalVisits) || Number(p.minVisits) || 3),
     sleepM: Math.max(1, Number(p.sleepM) || 6),
     lostVisits: Math.max(1, Number(p.lostVisits) || 2),
@@ -616,7 +616,7 @@ function kbSummary(docId, monthKey, win) {
     const groups = [];
     if (loyal) groups.push("loyal");
     if (groupAvailable.active && recency != null && visits >= t.activeVisits && recency <= dActive) groups.push("active");
-    if (groupAvailable.newRisk && recency != null && visits >= 1 && visits <= t.newRiskVisits && recency > dNewRisk) groups.push("newRisk");
+    if (groupAvailable.newRisk && recency != null && visits >= 1 && visits <= t.newRiskVisits && (t.newRiskWithin ? recency <= dNewRisk : recency > dNewRisk)) groups.push("newRisk");
     if (groupAvailable.loyalSleep && recency != null && visits >= t.sleepVisits && recency > dSleep) groups.push("loyalSleep");
     if (groupAvailable.lost && recency != null && visits >= 1 && visits <= t.lostVisits && recency > dLost) groups.push("lost");
     if (recency == null) seg.unknown++;

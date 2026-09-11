@@ -1163,8 +1163,7 @@ function createWindow() {
               await new Promise(resolve => setTimeout(resolve, 100));
               const table = document.getElementById('blkDyn_tbl');
               const otherChart = UI.charts.chSegments;
-              const otherTooltip = otherChart.options.plugins.tooltip.callbacks.afterLabel({ datasetIndex: 5, dataIndex: 0 });
-              if (!Array.isArray(otherTooltip) || otherTooltip.some(line => line.includes('Окно не позволяет'))) throw Error('Admin QA: incorrect other tooltip');
+              if (otherChart.data.datasets.length !== 4) throw Error("Admin QA: expected four client groups");
               if ([...table.rows].some(row => row.cells[0].textContent.trim() === 'Визиты')) throw Error('Admin QA: visits row remains');
               for (const label of ['Конверсия от назначенного', 'Доля от общей базы']) {
                 const row = [...table.rows].find(row => row.cells[0].textContent.includes(label));

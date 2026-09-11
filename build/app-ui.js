@@ -1348,7 +1348,7 @@ function clientBaseGroupDescription(kb, group) {
   return ({
     loyal: `не менее ${fmtNum(t.loyalVisits)} визитов; последний визит был не более ${fmtNum(t.loyalM)} мес. назад`,
     active: `не менее ${fmtNum(t.activeVisits)} визитов за последние ${fmtNum(t.activeM)} мес.`,
-    newRisk: `от 1 до ${fmtNum(t.newRiskVisits)} визитов; последний визит был более ${fmtNum(t.newRiskM)} мес. назад`,
+    newRisk: `от 1 до ${fmtNum(t.newRiskVisits)} визитов; последний визит был ${t.newRiskWithin ? "не более" : "более"} ${fmtNum(t.newRiskM)} мес. назад`,
     loyalSleep: `не менее ${fmtNum(t.sleepVisits)} визитов; последний визит был более ${fmtNum(t.sleepM)} мес. назад`,
     lost: `от 1 до ${fmtNum(t.lostVisits)} визитов; последний визит был более ${fmtNum(t.lostM)} мес. назад`,
   })[group] || "";
@@ -2627,44 +2627,36 @@ function expandAppointmentDetails() {
   });
 }
 
-function adminOtherClients(base) {
-  return (base?.clientRows || []).filter(c => !c.groups.length).map(c => {
-    const visits = c.v <= 0 ? "Нет визитов" : c.v === 1 ? "1 визит" : c.v === 2 ? "2 визита" : "3 и более визитов";
-    const recency = c.r == null ? "давность неизвестна" : c.r <= Math.round(6 * 30.44) ? "последний визит до 6 мес. назад"
-      : c.r <= Math.round(12 * 30.44) ? "последний визит более 6–12 мес. назад" : "последний визит более 12 мес. назад";
-    return { ...c, reason: `${visits}; ${recency}` };
-  });
-}
-
-function adminOtherBreakdown(base) {
-  const counts = new Map();
-  for (const c of adminOtherClients(base)) counts.set(c.reason, (counts.get(c.reason) || 0) + 1);
-  return [...counts].map(([reason, count]) => `${reason}: ${fmtNum(count)} чел.`);
-}
-
-function adminClientBaseSeries(docId, endMk, windowMonths) {
+function adminClientBaseSeries(docId, endMk) {
   const months = adminYearMonths(endMk);
-  const bases = months.map(key => kbSummary(docId, key, windowMonths));
-  const defs = [["active", "Активные", "#afe7e9"], ["loyal", "Остальные лояльные", "#0d9488"],
-    ["newRisk", "Новые, риск", "#fbbf24"], ["loyalSleep", "Лояльные, спящие", "#64748b"],
-    ["lost", "Потерянные", "#a80000"], ["other", "Остальные", "#dbe3eb"]];
-  // Only this chart partitions overlapping groups; KPI definitions stay unchanged.
-  const priority = ["lost", "loyalSleep", "active", "loyal", "newRisk"];
-  const counts = bases.map(base => {
+  const defs = [["active", "Активные лояльные", "#afe7e9"], ["loyalSleep", "Лояльные спящие", "#64748b"],
+    ["newRisk", "Новые в риске", "#fbbf24"], ["lost", "Потерянные", "#a80000"]];
+  const summaries = months.map(month => {
+    const base = kbSummary(docId, month, 36);
     if (!base) return null;
-    const result = Object.fromEntries(defs.map(([key]) => [key, 0]));
+    const counts = [0, 0, 0, 0];
+    let unmatched = 0, overlap = 0;
     for (const client of base.clientRows) {
-      const key = priority.find(group => client.groups.includes(group)) || "other";
-      result[key]++;
+      const matches = defs.map(([key], i) => client.groups.includes(key) ? i : -1).filter(i => i >= 0);
+      if (!matches.length) unmatched++;
+      else if (matches.length > 1) overlap++;
+      else counts[matches[0]]++;
     }
-    return result;
+    return { total: base.total, counts, unmatched, overlap, included: counts.reduce((a, b) => a + b, 0) };
   });
-  return { months, otherBreakdowns: bases.map(adminOtherBreakdown), totals: bases.map(base => base ? base.total : null), datasets: defs.map(([key, label, color]) => ({ label,
-    backgroundColor: color, stack: "base", borderWidth: 0, maxBarThickness: 32,
-    data: counts.map(values => values ? values[key] : null),
-  })) };
+  return { months, summaries, totals: summaries.map(s => s ? s.included : null),
+    datasets: defs.map(([key, label, color], i) => ({ label, backgroundColor: color, stack: "base", borderWidth: 0,
+      maxBarThickness: 32, data: summaries.map(s => s ? s.counts[i] : null) })) };
 }
 
+function adminClientBaseNotes(series) {
+  return series.months.map((month, i) => {
+    const s = series.summaries[i];
+    if (!s) return `${monthLabel(month)}: нет выгрузки за 36 мес.`;
+    if (!s.unmatched && !s.overlap) return "";
+    return `${monthLabel(month)}: в группах ${fmtNum(s.included)} из ${fmtNum(s.total)}; вне условий — ${fmtNum(s.unmatched)}, пересечения — ${fmtNum(s.overlap)}.`;
+  }).filter(Boolean).join(" ");
+}
 function dynamicsHtml(dyn, blkId, title, subtitle, noteKey, detailTailHtml = "", includeOutcome = true) {
   if (!dyn || dyn.months.length < 1) return "";
   const single = dyn.months.length < 2;
@@ -4284,10 +4276,10 @@ function renderDoctor() {
       </div>
     </div>
     <div><h3 class="small muted" style="margin-bottom:6px">ДИНАМИКА КЛИЕНТСКОЙ БАЗЫ ПО МЕСЯЦАМ ${copyBtn("copyChart", "chSegments", "PNG")}</h3>
-      <p class="small muted">Одна полоса — один месяц, вся длина — общая база за окно ${kbWinCur} мес. Числа внутри — пациенты, справа — итого. Если данных нет, полоса отсутствует.</p>
-      <p class="small muted">В этой диаграмме каждый пациент учитывается один раз: сначала потерянные, затем лояльные спящие, активные, остальные лояльные, новые в риске и остальные. При совпадении используется первая подходящая группа. Поэтому части полосы могут отличаться от пересекающихся показателей в карточках выше.</p>
+      <p class="small muted">База за 36 месяцев на каждый месяц текущего года. Четыре группы по настройкам активности базы. Визиты считаются за окно выгрузки, срок — по давности последнего визита. Числа внутри — пациенты, справа — сумма четырёх групп.</p>
+      <p class="small muted">Пациенты вне условий или с пересечением групп не распределяются произвольно. Их число указано под графиком для корректировки настроек.</p>
       <div class="chart-box" style="height:${Math.max(260, adminYearMonths(mk).length * 48 + 85)}px"><canvas id="chSegments"></canvas></div>
-      <p class="small muted">Наведите на «Остальные», чтобы увидеть состав по числу визитов и давности посещения.</p></div>
+      <p class="small muted">${esc(adminClientBaseNotes(adminClientBaseSeries(UI.docId, mk)))}</p></div>
     <div class="no-print" style="margin-top:12px"><details id="clientSegmentPatients" ${collapsibleListAttrs("clientSegmentPatients", false)}><summary class="collapsible-list-summary"><span>ПАЦИЕНТЫ ДЛЯ РАБОТЫ <span class="badge mut" id="clientSegmentPatientCount">${fmtNum(selectedClients.length)}</span></span><span class="collapse-hint"></span></summary>
       <div class="collapsible-list-body"><div class="vhead"><span class="small muted">Выберите сегмент базы</span>${segToggle("clientSegmentSeg", segmentOptions, UI.clientSegment, "setClientSegment")}</div>
       <div style="overflow-x:auto;margin-top:8px"><table class="data" id="tblClientSegment"><thead><tr><th>Пациент</th><th>Признак</th><th class="num">Визитов</th><th class="num">Дней с визита</th><th class="num">Историческая выручка</th></tr></thead><tbody id="clientSegmentRows">${clientSegmentRowsMarkup(selectedClients)}</tbody>
@@ -4504,14 +4496,14 @@ function renderDoctor() {
     }
   }
   if (kb) {
-    const series = adminClientBaseSeries(UI.docId, mk, kbWinCur);
+    const series = adminClientBaseSeries(UI.docId, mk);
     chart("chSegments", {
       type: "bar", data: { labels: series.months.map(monthLabel), datasets: series.datasets },
       options: { indexAxis: "y", maintainAspectRatio: false, layout: { padding: { right: 65 } },
         plugins: { legend: { position: "bottom", onClick: () => {} },
           datalabels: {
             labels: {
-              value: { color: ctx => [0, 2, 5].includes(ctx.datasetIndex) ? "#17212b" : "#ffffff",
+              value: { color: ctx => [0, 2].includes(ctx.datasetIndex) ? "#17212b" : "#ffffff",
                 font: { weight: "600", size: 12 }, anchor: "center", align: "center",
                 display: ctx => { const value = ctx.dataset.data[ctx.dataIndex]; return value > 0 && Math.abs(ctx.chart.scales.x.getPixelForValue(value) - ctx.chart.scales.x.getPixelForValue(0)) >= 34; },
                 formatter: value => fmtNum(value) },
@@ -4521,8 +4513,8 @@ function renderDoctor() {
             },
           },
           tooltip: { callbacks: { label: c => c.dataset.label + ": " + fmtNum(c.raw) + " чел.",
-            afterLabel: c => c.datasetIndex === 5 ? series.otherBreakdowns[c.dataIndex] : [],
-            footer: items => items.length ? "Общая база: " + fmtNum(series.totals[items[0].dataIndex]) + " чел." : "" } } },
+            afterLabel: c => { const s = series.summaries[c.dataIndex]; return s ? [`Доля от базы: ${fmtPct(c.raw / s.total * 100)}`, `Вне условий: ${fmtNum(s.unmatched)}; пересечения: ${fmtNum(s.overlap)}`] : []; },
+            footer: items => items.length ? "Общая база: " + fmtNum(series.summaries[items[0].dataIndex].total) + " чел. · 36 мес." : "" } } },
         scales: { x: { stacked: true, beginAtZero: true, title: { display: true, text: "Пациентов" }, ticks: { precision: 0 } },
           y: { stacked: true, grid: { display: false }, ticks: { autoSkip: false } } } },
     });
@@ -5966,7 +5958,7 @@ function renderSettings() {
     <table class="data wtable"><tr><th>Группа</th><th class="num">Визиты</th><th class="num">Длительность, мес.</th><th>Как считается</th></tr>
       <tr><td><b>B · Лояльные</b></td><td class="num"><input type="number" id="np_loyalVisits" value="${p.loyalVisits}" min="1" max="50"></td><td class="num"><input type="number" id="np_loyalM" value="${p.loyalM}" min="1" max="36"></td><td class="small">не менее B визитов; последний визит не более B1 месяцев назад</td></tr>
       <tr><td><b>C · Активные</b></td><td class="num"><input type="number" id="np_activeVisits" value="${p.activeVisits}" min="1" max="50"></td><td class="num"><input type="number" id="np_activeM" value="${p.activeM}" min="1" max="36"></td><td class="small">не менее C визитов; последний визит не более C1 месяцев назад</td></tr>
-      <tr><td><b>D · Новые, риск</b></td><td class="num"><input type="number" id="np_newRiskVisits" value="${p.newRiskVisits}" min="1" max="50"></td><td class="num"><input type="number" id="np_newRiskM" value="${p.newRiskM}" min="1" max="36"></td><td class="small">от 1 до D визитов; последний визит более D1 месяцев назад</td></tr>
+      <tr><td><b>D · Новые, риск</b></td><td class="num"><input type="number" id="np_newRiskVisits" value="${p.newRiskVisits}" min="1" max="50"></td><td class="num"><input type="number" id="np_newRiskM" value="${p.newRiskM}" min="1" max="36"></td><td class="small">от 1 до D визитов; последний визит <select id="np_newRiskWithin"><option value="false" ${p.newRiskWithin !== true ? "selected" : ""}>более D1 месяцев назад</option><option value="true" ${p.newRiskWithin === true ? "selected" : ""}>в пределах D1 месяцев</option></select></td></tr>
       <tr><td><b>E · Лояльные, спящие</b></td><td class="num"><input type="number" id="np_sleepVisits" value="${p.sleepVisits}" min="1" max="50"></td><td class="num"><input type="number" id="np_sleepM" value="${p.sleepM}" min="1" max="36"></td><td class="small">не менее E визитов; последний визит более E1 месяцев назад</td></tr>
       <tr><td><b>F · Потерянные</b></td><td class="num"><input type="number" id="np_lostVisits" value="${p.lostVisits}" min="1" max="50"></td><td class="num"><input type="number" id="np_lostM" value="${p.lostM}" min="1" max="36"></td><td class="small">от 1 до F визитов; последний визит более F1 месяцев назад</td></tr></table>
     <div class="notice blue" style="margin:8px 0 10px"><b>Окна 12 / 24 / 36 месяцев переключаются вручную.</b> Если длительность группы больше выбранного окна, группа полностью скрывается: ноль и приблизительное значение не показываются.</div>
@@ -6430,6 +6422,7 @@ function saveDeptBasics() {
     return;
   }
   Object.assign(p, values);
+  p.newRiskWithin = document.getElementById("np_newRiskWithin").value === "true";
   p.minVisits = p.loyalVisits;
   p.riskM = p.lostM;
   p.subdivisions = document.getElementById("np_subdivisions").value.split("\n").map(x => x.trim()).filter(Boolean);
