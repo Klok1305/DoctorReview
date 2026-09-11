@@ -2628,27 +2628,18 @@ function expandAppointmentDetails() {
 }
 
 function adminOtherClients(base) {
-  return (base?.clientRows || []).filter(c => !c.groups.length).map(c => ({ ...c,
-    reason: c.r == null ? "Нет давности последнего визита" : c.v <= 0 ? "Нет положительного числа визитов"
-      : Object.values(base.groupAvailable || {}).some(v => !v) ? "Окно не позволяет проверить все группы"
-      : "Число визитов и давность не соответствуют группам" }));
+  return (base?.clientRows || []).filter(c => !c.groups.length).map(c => {
+    const visits = c.v <= 0 ? "Нет визитов" : c.v === 1 ? "1 визит" : c.v === 2 ? "2 визита" : "3 и более визитов";
+    const recency = c.r == null ? "давность неизвестна" : c.r <= Math.round(6 * 30.44) ? "последний визит до 6 мес. назад"
+      : c.r <= Math.round(12 * 30.44) ? "последний визит более 6–12 мес. назад" : "последний визит более 12 мес. назад";
+    return { ...c, reason: `${visits}; ${recency}` };
+  });
 }
 
 function adminOtherBreakdown(base) {
   const counts = new Map();
   for (const c of adminOtherClients(base)) counts.set(c.reason, (counts.get(c.reason) || 0) + 1);
   return [...counts].map(([reason, count]) => `${reason}: ${fmtNum(count)} чел.`);
-}
-
-function showAdminOtherClients(docId, month, win) {
-  const panel = document.getElementById("adminOtherClients");
-  if (!panel) return;
-  const clients = adminOtherClients(kbSummary(docId, month, win));
-  panel.hidden = false;
-  panel.innerHTML = `<div class="vhead"><h3>Остальные · ${esc(monthLabel(month))} · ${fmtNum(clients.length)} чел.</h3><button class="btn mini" onclick="document.getElementById('adminOtherClients').hidden=true">Закрыть</button></div>
-    <p class="small muted">Окно базы: ${fmtNum(win)} мес. Число визитов — за окно выгрузки; давность — на выбранный месяц.</p>
-    <div style="overflow:auto;max-height:420px"><table class="data"><thead><tr><th>Пациент</th><th>Причина</th><th>Визитов</th><th>Дней с визита</th></tr></thead><tbody>${clients.map(c => `<tr><td>${esc(c.name)}</td><td>${esc(c.reason)}</td><td>${fmtNum(c.v)}</td><td>${c.r == null ? "—" : fmtNum(c.r)}</td></tr>`).join("") || '<tr><td colspan="4">Пациентов нет.</td></tr>'}</tbody></table></div>`;
-  panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
 function adminClientBaseSeries(docId, endMk, windowMonths) {
@@ -4296,7 +4287,7 @@ function renderDoctor() {
       <p class="small muted">Одна полоса — один месяц, вся длина — общая база за окно ${kbWinCur} мес. Числа внутри — пациенты, справа — итого. Если данных нет, полоса отсутствует.</p>
       <p class="small muted">В этой диаграмме каждый пациент учитывается один раз: сначала потерянные, затем лояльные спящие, активные, остальные лояльные, новые в риске и остальные. При совпадении используется первая подходящая группа. Поэтому части полосы могут отличаться от пересекающихся показателей в карточках выше.</p>
       <div class="chart-box" style="height:${Math.max(260, adminYearMonths(mk).length * 48 + 85)}px"><canvas id="chSegments"></canvas></div>
-      <p class="small muted">Наведите на «Остальные», чтобы увидеть состав. Нажмите на сегмент, чтобы открыть пациентов этого месяца.</p><div id="adminOtherClients" class="no-print" hidden></div></div>
+      <p class="small muted">Наведите на «Остальные», чтобы увидеть состав по числу визитов и давности посещения.</p></div>
     <div class="no-print" style="margin-top:12px"><details id="clientSegmentPatients" ${collapsibleListAttrs("clientSegmentPatients", false)}><summary class="collapsible-list-summary"><span>ПАЦИЕНТЫ ДЛЯ РАБОТЫ <span class="badge mut" id="clientSegmentPatientCount">${fmtNum(selectedClients.length)}</span></span><span class="collapse-hint"></span></summary>
       <div class="collapsible-list-body"><div class="vhead"><span class="small muted">Выберите сегмент базы</span>${segToggle("clientSegmentSeg", segmentOptions, UI.clientSegment, "setClientSegment")}</div>
       <div style="overflow-x:auto;margin-top:8px"><table class="data" id="tblClientSegment"><thead><tr><th>Пациент</th><th>Признак</th><th class="num">Визитов</th><th class="num">Дней с визита</th><th class="num">Историческая выручка</th></tr></thead><tbody id="clientSegmentRows">${clientSegmentRowsMarkup(selectedClients)}</tbody>
@@ -4517,7 +4508,6 @@ function renderDoctor() {
     chart("chSegments", {
       type: "bar", data: { labels: series.months.map(monthLabel), datasets: series.datasets },
       options: { indexAxis: "y", maintainAspectRatio: false, layout: { padding: { right: 65 } },
-        onClick: (_event, elements) => { const hit = elements.find(item => item.datasetIndex === 5); if (hit) showAdminOtherClients(UI.docId, series.months[hit.index], kbWinCur); },
         plugins: { legend: { position: "bottom", onClick: () => {} },
           datalabels: {
             labels: {
@@ -4531,7 +4521,7 @@ function renderDoctor() {
             },
           },
           tooltip: { callbacks: { label: c => c.dataset.label + ": " + fmtNum(c.raw) + " чел.",
-            afterLabel: c => c.datasetIndex === 5 ? [...series.otherBreakdowns[c.dataIndex], "Нажмите для списка пациентов"] : [],
+            afterLabel: c => c.datasetIndex === 5 ? series.otherBreakdowns[c.dataIndex] : [],
             footer: items => items.length ? "Общая база: " + fmtNum(series.totals[items[0].dataIndex]) + " чел." : "" } } },
         scales: { x: { stacked: true, beginAtZero: true, title: { display: true, text: "Пациентов" }, ticks: { precision: 0 } },
           y: { stacked: true, grid: { display: false }, ticks: { autoSkip: false } } } },

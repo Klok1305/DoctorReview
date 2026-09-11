@@ -43,6 +43,32 @@ function createContext({ desktop = false } = {}) {
   return context;
 }
 
+test("Other patients retain factual visit breakdown when a group is unavailable", () => {
+  const context = createContext();
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  vm.runInContext(ui.slice(ui.indexOf("function adminYearMonths"), ui.indexOf("function dynamicsHtml")), context);
+  const result = vm.runInContext(`(() => {
+    const base = { groupAvailable: { active: true, lost: false }, clientRows: [
+      { groups: [], v: 1, r: 20 }, { groups: [], v: 2, r: 200 },
+      { groups: [], v: 4, r: 400 }, { groups: [], v: 1, r: null },
+      { groups: ['active'], v: 3, r: 20 }
+    ] };
+    const before = JSON.stringify(base);
+    const rows = adminOtherClients(base), breakdown = adminOtherBreakdown(base);
+    base.groupAvailable.lost = true;
+    return { rows, breakdown, same: JSON.stringify(rows) === JSON.stringify(adminOtherClients(base)),
+      untouched: before === JSON.stringify({ ...base, groupAvailable: { active: true, lost: false } }) };
+  })()`, context);
+  assert.equal(result.rows.length, 4);
+  assert.equal(result.breakdown.length, 4);
+  assert.match(result.rows[0].reason, /1 визит; последний визит до 6/);
+  assert.match(result.rows[1].reason, /2 визита; последний визит более 6–12/);
+  assert.match(result.rows[2].reason, /3 и более визитов; последний визит более 12/);
+  assert.match(result.rows[3].reason, /давность неизвестна/);
+  assert.equal(result.same, true);
+  assert.equal(result.untouched, true);
+});
+
 test("Admin doctor supplemental percentages use assigned quantities and the same client base", () => {
   const context = createContext();
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");

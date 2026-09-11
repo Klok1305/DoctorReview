@@ -1164,11 +1164,7 @@ function createWindow() {
               const table = document.getElementById('blkDyn_tbl');
               const otherChart = UI.charts.chSegments;
               const otherTooltip = otherChart.options.plugins.tooltip.callbacks.afterLabel({ datasetIndex: 5, dataIndex: 0 });
-              if (!otherTooltip.includes('Нажмите для списка пациентов')) throw Error('Admin QA: other tooltip missing');
-              otherChart.options.onClick(null, [{ datasetIndex: 5, index: 0 }]);
-              const otherPanel = document.getElementById('adminOtherClients');
-              if (otherPanel.hidden || !otherPanel.textContent.includes('Январь') || !otherPanel.textContent.includes('Причина')) throw Error('Admin QA: other click details missing');
-              otherPanel.hidden = true;
+              if (!Array.isArray(otherTooltip) || otherTooltip.some(line => line.includes('Окно не позволяет'))) throw Error('Admin QA: incorrect other tooltip');
               if ([...table.rows].some(row => row.cells[0].textContent.trim() === 'Визиты')) throw Error('Admin QA: visits row remains');
               for (const label of ['Конверсия от назначенного', 'Доля от общей базы']) {
                 const row = [...table.rows].find(row => row.cells[0].textContent.includes(label));
