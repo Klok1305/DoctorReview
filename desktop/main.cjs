@@ -508,6 +508,7 @@ function createWindow() {
               DB.settings.depts['Косметология'].sleepM = 18;
               DB.settings.depts['Косметология'].lostM = 18;
               DB.settings.depts['Косметология'].riskM = 18;
+              DB.settings.depts['Косметология'].clientBasePartition = { loyalVisits: 3, activeM: 6, lostM: 12, lostAnyVisits: false };
               for (const mk of Object.keys(DB.months)) {
                 DB.months[mk].vyrabotka.d1 = { items: [
                   { form: '', cat: 'Прием', n: 'Прием врача', q: 5, sOwn: mk.endsWith('01') ? 100000 : 120000, sRef: 20000, goods: false },
@@ -535,6 +536,7 @@ function createWindow() {
                     { name: 'Потерянный Пациент', patientId: '3', s: 50000, v: 1, r: 500 }
                   ] },
                   '36': { clients: [
+                    { name: 'Новый Пациент Риска', patientId: 'n1', s: 10000, v: 2, r: 60 },
                     { name: 'Активный Пациент', patientId: '1', s: 90000, v: 5, r: 30 },
                     { name: 'Пациент Риска', patientId: '2', s: 100000, v: 3, r: 210 },
                     { name: 'Потерянный Пациент', patientId: '3', s: 60000, v: 1, r: 500 },
@@ -678,26 +680,13 @@ function createWindow() {
               UI.docMonth = '2026-02';
               switchTab('doctor');
               await new Promise(resolve => setTimeout(resolve, 300));
-              const shortWindowButton = [...document.querySelectorAll('#kbWinSeg button')].find(button => button.dataset.segmentValue === '12');
-              if (shortWindowButton) shortWindowButton.click();
-              await new Promise(resolve => setTimeout(resolve, 100));
-              const shortWindowSelected = document.querySelector('#kbWinSeg button.active')?.dataset.segmentValue === '12';
-              const shortLostHidden = !document.querySelector('#blkV4 [data-client-base-group="lost"]');
-              const mediumWindowButton = [...document.querySelectorAll('#kbWinSeg button')].find(button => button.dataset.segmentValue === '24');
-              if (mediumWindowButton) mediumWindowButton.click();
-              await new Promise(resolve => setTimeout(resolve, 100));
-              const mediumWindowSelected = document.querySelector('#kbWinSeg button.active')?.dataset.segmentValue === '24';
-              const mediumLostVisible = Boolean(document.querySelector('#blkV4 [data-client-base-group="lost"]'));
-              const fullWindowButton = [...document.querySelectorAll('#kbWinSeg button')].find(button => button.dataset.segmentValue === '36');
-              if (fullWindowButton) fullWindowButton.click();
-              await new Promise(resolve => setTimeout(resolve, 100));
-              const fullWindowSelected = document.querySelector('#kbWinSeg button.active')?.dataset.segmentValue === '36';
+              const fixedThreeYearBase = !document.querySelector('#kbWinSeg') && document.getElementById('blkV4').textContent.includes('База за 3 года');
               const clientBaseCards = [...document.querySelectorAll('#blkV4 .kb-summary-card')];
               const clientBaseCard = group => clientBaseCards.find(card => card.dataset.clientBaseGroup === group);
               const activeBaseCard = clientBaseCard('active');
               const lostBaseCard = clientBaseCard('lost');
               const totalBaseCard = clientBaseCard('total');
-              const clientBaseDynamicsValid = clientBaseCards.length >= 6
+              const clientBaseDynamicsValid = clientBaseCards.length === 5
                 && clientBaseCards.every(card => Boolean(card.querySelector('.kb-summary-share'))
                   && card.querySelectorAll('.kb-summary-trends > div').length === 2)
                 && totalBaseCard?.querySelector('.kb-summary-share')?.textContent.trim() === '100%'
@@ -923,7 +912,7 @@ function createWindow() {
                 legacyTableRemoved: !viewerDoctorRoot.querySelector('#tblClientSegment')
               };
               const viewerPatientRegisterValid = viewerPatientRegisterDetails.registers === 3
-                && viewerPatientRegisterDetails.rows === 9
+                && viewerPatientRegisterDetails.rows === 10
                 && viewerPatientRegisterDetails.lostPatient
                 && viewerPatientRegisterDetails.collapsibleAndSearchable
                 && viewerPatientRegisterDetails.kbWindows.join(',') === '12,24,36'
@@ -972,8 +961,7 @@ function createWindow() {
                 doctorHeaderCardRects,
                 doctorHeaderLayoutValid,
                 clientBaseDynamicsValid,
-                clientBaseButtonsValid: Boolean(shortWindowButton && mediumWindowButton && fullWindowButton && riskActionButton)
-                  && shortWindowSelected && mediumWindowSelected && fullWindowSelected && shortLostHidden && mediumLostVisible && clientActionOpened,
+                clientBaseButtonsValid: Boolean(riskActionButton) && fixedThreeYearBase && clientActionOpened,
                 doctorGoalsSummaryValid,
                 doctorGoalCards,
                 appointmentTablesCollapseValid,
@@ -1163,7 +1151,8 @@ function createWindow() {
               await new Promise(resolve => setTimeout(resolve, 100));
               const table = document.getElementById('blkDyn_tbl');
               const otherChart = UI.charts.chSegments;
-              if (otherChart.data.datasets.length !== 6 || otherChart.data.datasets[5].label !== 'Остальные') throw Error('Admin QA: expected complete six-group client base');
+              if (otherChart.data.datasets.map(row => row.label).join('|') !== 'Активные лояльные|Лояльные спящие|Новые в риске|Потерянные') throw Error('Admin QA: expected four client-base groups');
+              if (otherChart.data.datasets.some(row => !(row.data[0] > 0))) throw Error('Admin QA: a known client-base group disappeared');
               const stackedTotals = otherChart.data.labels.map((_label, index) => otherChart.data.datasets.reduce((sum, dataset) => sum + (dataset.data[index] || 0), 0));
               if (stackedTotals.some((total, index) => otherChart.$clientBaseTotals[index] != null && total !== otherChart.$clientBaseTotals[index])) throw Error('Admin QA: client-base patients disappeared from stack');
               if ([...table.rows].some(row => row.cells[0].textContent.trim() === 'Визиты')) throw Error('Admin QA: visits row remains');
@@ -1183,6 +1172,26 @@ function createWindow() {
               const yearImage = await capture(table);
               const v3Image = await capture(document.getElementById('blkV3'));
               const baseImage = await capture(document.getElementById('chSegments').parentElement.parentElement);
+              // Real settings controls must persist, rerender, and leave every patient in the stack.
+              UI.setDepartment = 'Косметология'; UI.setSpecialization = 'Косметология'; switchTab('settings');
+              const originalPartition = { ...curSetProfile().clientBasePartition };
+              document.getElementById('cb_loyalVisits').value = '4';
+              document.getElementById('cb_activeM').value = '9';
+              document.getElementById('cb_lostM').value = '10';
+              document.getElementById('cb_lostAnyVisits').checked = true;
+              saveDeptBasics();
+              if (JSON.stringify(curSetProfile().clientBasePartition) !== JSON.stringify({ loyalVisits: 4, activeM: 9, lostM: 10, lostAnyVisits: true })) throw Error('Admin QA: partition settings not saved');
+              document.getElementById('cb_loyalVisits').value = '0';
+              saveDeptBasics();
+              if (curSetProfile().clientBasePartition.loyalVisits !== 4) throw Error('Admin QA: invalid settings persisted');
+              curSetProfile().clientBasePartition = originalPartition;
+              clearMetricsCache(); switchTab('doctor');
+              const source36 = DB.months['2026-12'].kb.d1['36'];
+              delete DB.months['2026-12'].kb.d1['36'];
+              clearMetricsCache(); renderDoctor();
+              if (UI.charts.chSegments.$clientBaseTotals[11] !== null || UI.charts.chSegments.$clientBaseTotals[0] !== source36.clients.length) throw Error('Admin QA: missing latest 36-month source erases history or uses short window');
+              DB.months['2026-12'].kb.d1['36'] = source36;
+              clearMetricsCache(); renderDoctor();
               UI.departmentFilter = 'Косметология'; UI.departmentMonth = '2026-02';
               renderDepartment(); renderDepartment();
               const profileNames = [...document.querySelectorAll('#tblDepartmentSpecs tr')].slice(2).map(row => row.cells[0].textContent.trim());

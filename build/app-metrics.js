@@ -556,6 +556,58 @@ function clientBaseThresholds(profile) {
     lostM: Math.max(1, Number(p.lostM) || Number(p.riskM) || 12),
   };
 }
+function clientBasePartitionSettings(profile) {
+  const p = profile || {};
+  const t = clientBaseThresholds(p);
+  const saved = p.clientBasePartition || {};
+  const bound = (value, fallback, min, max) => Number.isInteger(Number(value)) && Number(value) >= min && Number(value) <= max ? Number(value) : Math.max(min, Math.min(max, Math.round(fallback)));
+  return {
+    loyalVisits: bound(saved.loyalVisits, t.activeVisits, 2, 50),
+    activeM: Math.min(bound(saved.activeM, t.activeM, 1, 36), saved.lostAnyVisits === true ? bound(saved.lostM, t.lostM, 1, 36) : 36),
+    lostM: bound(saved.lostM, t.lostM, 1, 36),
+    lostAnyVisits: saved.lostAnyVisits === true,
+  };
+}
+
+// Полное разбиение, а не набор независимых фильтров: каждая строка имеет один сегмент.
+function partitionClientBase(base, profile) {
+  if (!base) return null;
+  const t = clientBasePartitionSettings(profile);
+  const seg = { active: 0, loyalSleep: 0, newRisk: 0, lost: 0 };
+  const provisional = { active: 0, loyalSleep: 0, newRisk: 0, lost: 0 };
+  const clientRows = base.clientRows.map(client => {
+    const validVisits = Number.isFinite(client.v) && client.v > 0;
+    const validRecency = Number.isFinite(client.r) && client.r >= 0;
+    const loyal = validVisits && client.v >= t.loyalVisits;
+    let group;
+    if (!validVisits || !validRecency) {
+      // Не выдумываем активность или потерю: оставляем запись для проверки в рабочей группе.
+      group = loyal ? "loyalSleep" : "newRisk";
+      provisional[group]++;
+    } else if (client.r > Math.round(t.lostM * 30.44) && (t.lostAnyVisits || !loyal)) {
+      group = "lost";
+    } else if (loyal) {
+      group = client.r <= Math.round(t.activeM * 30.44) ? "active" : "loyalSleep";
+    } else {
+      group = "newRisk";
+    }
+    seg[group]++;
+    return { ...client, groups: [group], partitioned: true, provisional: !validVisits || !validRecency };
+  });
+  const total = clientRows.length;
+  const share = group => total ? seg[group] / total * 100 : null;
+  const work = clientRows.filter(c => c.groups[0] === "newRisk" || c.groups[0] === "loyalSleep");
+  return { ...base, partition: t, seg, provisional, clientRows, total,
+    groupAvailable: { active: true, loyalSleep: true, newRisk: true, lost: true },
+    activeBasePct: share("active"), loyalSleepPct: share("loyalSleep"), newRiskPct: share("newRisk"), lostPct: share("lost"),
+    reactivationCandidates: work.length, reactivationSum: work.reduce((sum, c) => sum + c.s, 0) };
+}
+
+function adminClientBaseSummary(docId, monthKey) {
+  // Короткое окно не содержит давно отсутствующих пациентов и не заменяет трёхлетнюю базу.
+  return partitionClientBase(kbSummary(docId, monthKey, 36), deptParams(docId));
+}
+
 function clientBaseRequiredWindow(profile) {
   const t = clientBaseThresholds(profile);
   return Math.max(t.loyalM, t.activeM, t.newRiskM, t.sleepM, t.lostM);

@@ -1193,6 +1193,15 @@ function normalizeProfileRecord(raw, inherited) {
     ? Number(source.sleepVisits)
     : p.loyalVisits;
   p.lostVisits = Number(source.lostVisits) >= 1 ? Number(source.lostVisits) : Number(def.lostVisits) || 2;
+  // Отдельные согласованные границы Admin; старые нормативы KPI и публикации сохраняются.
+  const partition = source.clientBasePartition || def.clientBasePartition || {};
+  const partitionNumber = (value, fallback, min, max) => Number.isInteger(Number(value)) && Number(value) >= min && Number(value) <= max ? Number(value) : Math.max(min, Math.min(max, Math.round(fallback)));
+  p.clientBasePartition = {
+    loyalVisits: partitionNumber(partition.loyalVisits, p.activeVisits, 2, 50),
+    activeM: partitionNumber(partition.activeM, p.activeM, 1, 36),
+    lostM: partitionNumber(partition.lostM, p.lostM, 1, 36),
+    lostAnyVisits: partition.lostAnyVisits === true,
+  };
   // Совместимость со старыми сохранениями и внешними проверками: riskM раньше означал срок потери.
   p.riskM = p.lostM;
   // minVisits оставляем только как совместимый псевдоним для старых пользовательских снимков.

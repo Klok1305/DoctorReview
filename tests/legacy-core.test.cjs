@@ -40,6 +40,8 @@ function createContext({ desktop = false } = {}) {
   for (const fileName of ["app-core.js", "app-parsers.js", "app-metrics.js"]) {
     vm.runInContext(fs.readFileSync(path.join(build, fileName), "utf8"), context, { filename: fileName });
   }
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  vm.runInContext(ui.slice(ui.indexOf("function adminClientBaseGroupLabel"), ui.indexOf("function clientBaseProfileDescription")), context);
   return context;
 }
 
@@ -84,7 +86,7 @@ test("Admin September feedback preserves referral totals, item conversion, year 
         { n: 'Процедура А', a: 4, d: 1, sq: 1, ss: 200 },
         { n: 'Процедура Б', a: 2, d: 1, sq: 0, ss: 0 }
       ] } };
-      month.kb.d1 = { '12': { clients: [{ patientId: 'synthetic-1', name: 'Тестовый Пациент', v: 4, r: 20, s: 1000 }] } };
+      month.kb.d1 = { '36': { clients: [{ patientId: 'synthetic-1', name: 'Тестовый Пациент', v: 4, r: 20, s: 1000 }] } };
     }
     const baseline = computeMetrics('d1', '2026-01');
     p.overrides['процедура а'] = { referralIncluded: false };
@@ -94,7 +96,7 @@ test("Admin September feedback preserves referral totals, item conversion, year 
     const persisted = DB.settings.depts['Косметология'].overrides['процедура а'].referralIncluded;
     const catalog = collectDeptItems('Косметология', DB.settings.depts['Косметология']);
     const year = adminDoctorDynamics('d1', '2026-12');
-    const base = adminClientBaseSeries('d1', '2026-12', 12);
+    const base = adminClientBaseSeries('d1', '2026-12');
     const buckets = adminReferralBuckets({
       'Профильные услуги': { s: 200, q: 2, includedS: 0, items: { A: { s: 200, q: 2 } } },
       'Другие услуги клиники': { s: 300, q: 1, includedS: 300, items: { B: { s: 300, q: 1 } } }
@@ -105,7 +107,7 @@ test("Admin September feedback preserves referral totals, item conversion, year 
     const resetInclude = referralRevenueDecision(policy, 'Профильные услуги', 'Косметология', 'A').included;
     return { baseline, excluded, persisted, catalogValue: catalog.find(x => x.n === 'Процедура А').override.referralIncluded,
       months: year.months, values: year.rows.find(row => row.key === 'sales').values,
-      base: base.datasets.map(x => ({ label: x.label, data: x.data })), missingWindow: adminClientBaseSeries('d1', '2026-12', 24).datasets[0].data,
+      base: base.datasets.map(x => ({ label: x.label, data: x.data })),
       buckets, forcedInclude, resetInclude, specs: departmentSpecializations('Косметология'),
       conversion: appointmentItemConversion({ assigned: 4, done: 1, soldQ: 1, resultQ: 2 }),
       noDenominator: appointmentItemConversion({ assigned: 0, done: 1, soldQ: 0, resultQ: 1 }) };
@@ -124,7 +126,6 @@ test("Admin September feedback preserves referral totals, item conversion, year 
   assert.equal(x.values[1], null);
   assert.equal(x.base[0].data[0], 1);
   assert.equal(x.base[0].data[1], null);
-  assert.ok(x.missingWindow.every(value => value === null));
   assert.deepEqual(Object.keys(x.buckets), ['Услуги']);
   assert.equal(x.buckets['Услуги'].s, 500);
   assert.equal(x.buckets['Услуги'].includedS, 300);
@@ -135,23 +136,68 @@ test("Admin September feedback preserves referral totals, item conversion, year 
   assert.equal(x.noDenominator, '—');
 });
 
-test("stacked Admin client base assigns every patient once and preserves missing months", () => {
+test("four-group Admin chart uses 36 months, retains old low-frequency patients and missing months", () => {
   const context = createContext();
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   vm.runInContext(ui.slice(ui.indexOf("function adminYearMonths"), ui.indexOf("function dynamicsHtml")), context);
   const result = vm.runInContext(`(() => {
-    kbSummary = (_id, month, win) => { if (win !== 24) throw Error('Expected selected window'); return month === '2026-02' ? null : ({ total: 5, clientRows: [
-      { groups: ['loyal', 'active'] }, { groups: ['loyal', 'loyalSleep'] },
-      { groups: ['lost', 'newRisk'] }, { groups: ['loyal'] }, { groups: [] }
-    ] }); };
-    return adminClientBaseSeries('d1', '2026-12', 24);
+    DB.doctors = { d1: { name: 'Тест', department: 'Косметология', specialization: 'Косметология' } };
+    DB.settings.depts['Косметология'].clientBasePartition = { loyalVisits: 3, activeM: 6, lostM: 12 };
+    DB.months = { '2026-01': emptyMonth(), '2026-02': emptyMonth() };
+    DB.months['2026-01'].kb.d1 = { 36: { clients: [
+      { name: 'A', v: 3, r: 183 }, { name: 'B', v: 3, r: 184 },
+      { name: 'C', v: 2, r: 365 }, { name: 'D', v: 2, r: 366 }, { name: 'E', v: 1, r: 1000 }
+    ] }, 12: { clients: [{ name: 'Short', v: 3, r: 20 }] } };
+    DB.months['2026-02'].kb.d1 = { 12: { clients: [{ name: 'Short', v: 3, r: 20 }] } };
+    const series = adminClientBaseSeries('d1', '2026-12');
+    return { ...series, settings: clientBasePartitionSettings(DB.settings.depts['Косметология']) };
   })()`, context);
   const x = JSON.parse(JSON.stringify(result));
-  assert.deepEqual(x.datasets.map(row => row.data[0]), [1, 1, 0, 1, 1, 1]);
+  assert.deepEqual(x.datasets.map(row => row.label), ['Активные лояльные', 'Лояльные спящие', 'Новые в риске', 'Потерянные']);
+  assert.deepEqual(x.datasets.map(row => row.data[0]), [1, 1, 1, 2]);
   assert.equal(x.datasets.reduce((sum, row) => sum + row.data[0], 0), x.totals[0]);
   assert.ok(x.datasets.every(row => row.data[1] === null));
   assert.equal(x.totals[1], null);
   assert.equal(x.months.length, 12);
+});
+
+test("four groups cover every visit and recency boundary for all allowed month thresholds", () => {
+  const context = createContext();
+  vm.runInContext(`(() => {
+    for (const loyalVisits of [2, 3, 6, 50]) for (let activeM = 1; activeM <= 36; activeM++) for (let lostM = 1; lostM <= 36; lostM++) for (const lostAnyVisits of [false, true]) {
+      const profile = { clientBasePartition: { loyalVisits, activeM, lostM, lostAnyVisits } };
+      const ages = [0, Math.round(activeM * 30.44), Math.round(activeM * 30.44) + 1, Math.round(lostM * 30.44), Math.round(lostM * 30.44) + 1, 1200, null, -1, Infinity];
+      const clientRows = [0, 1, loyalVisits - 1, loyalVisits, loyalVisits + 1].flatMap(v => ages.map(r => ({ v, r, s: 10 })));
+      const base = partitionClientBase({ clientRows }, profile);
+      if (base.total !== clientRows.length || Object.values(base.seg).reduce((a,b) => a+b,0) !== base.total || base.clientRows.some(c => c.groups.length !== 1)) throw Error('Patient dropped or double counted');
+      if (base.seg.lost < 1) throw Error('Lost patient disappeared');
+      if (base.clientRows.some(c => c.provisional && ['active','lost'].includes(c.groups[0]))) throw Error('Unknown data presented as confirmed activity/loss');
+    }
+  })()`, context);
+});
+
+test("four-group settings survive snapshots, change boundaries and preserve legacy metrics", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    const profile = normalizeProfileRecord({ activeVisits: 4, activeM: 3, lostM: 18 });
+    const original = clientBasePartitionSettings(profile);
+    profile.clientBasePartition = { loyalVisits: 3, activeM: 6, lostM: 12, lostAnyVisits: true };
+    const restored = normalizeProfileRecord(JSON.parse(JSON.stringify(profile)));
+    const input = { clientRows: [{ v: 2, r: 100, s: 0 }, { v: 4, r: 200, s: 0 }, { v: 8, r: 700, s: 0 }, { v: 2, r: null, s: 0 }] };
+    const before = partitionClientBase(input, profile);
+    restored.clientBasePartition.loyalVisits = 2;
+    restored.clientBasePartition.activeM = 9;
+    restored.clientBasePartition.lostM = 24;
+    const after = partitionClientBase(input, restored);
+    return { original, restored: restored.clientBasePartition, before: before.seg, after: after.seg, unknown: before.provisional, legacy: [restored.activeVisits,restored.activeM,restored.lostM] };
+  })()`, context);
+  const x = JSON.parse(JSON.stringify(result));
+  assert.deepEqual(x.original, { loyalVisits: 4, activeM: 3, lostM: 18, lostAnyVisits: false });
+  assert.deepEqual(x.before, { active: 0, loyalSleep: 1, newRisk: 2, lost: 1 });
+  assert.deepEqual(x.after, { active: 2, loyalSleep: 2, newRisk: 0, lost: 0 });
+  assert.equal(x.unknown.newRisk, 1);
+  assert.equal(x.restored.lostAnyVisits, true);
+  assert.deepEqual(x.legacy, [4, 3, 18]);
 });
 
 test("new-risk recency setting covers recent patients and preserves the old default", () => {

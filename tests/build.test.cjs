@@ -654,14 +654,16 @@ test("appointment conversion block starts compact and parent groups hide their w
   assert.match(css, /\.appointment-conversion-body\s*\{/);
 });
 
-test("client-base vector keeps 12/24/36 manual and hides unavailable overlapping groups", () => {
+test("Admin client-base vector has four configurable groups on a full three-year base", () => {
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
   const vector = ui.match(/\/\* ---- В4 Клиентская база ---- \*\/[\s\S]*?\/\* ---- В5 Лояльность ---- \*\//);
 
   assert.ok(vector);
   assert.doesNotMatch(vector[0], /disabled:/);
-  assert.match(vector[0], /const groupOrder = \["loyal", "active", "newRisk", "loyalSleep", "lost"\]/);
+  assert.match(vector[0], /const groupOrder = \["active", "loyalSleep", "newRisk", "lost"\]/);
+  assert.match(vector[0], /adminClientBaseSummary\(UI.docId, mk\)/);
+  assert.doesNotMatch(vector[0], /kbWinSeg|Остальные/);
   assert.match(vector[0], /filter\(group => kb\.groupAvailable\[group\]\)/);
   assert.match(vector[0], /kb-summary-share/);
   assert.match(vector[0], /К предыдущему месяцу/);
@@ -670,7 +672,7 @@ test("client-base vector keeps 12/24/36 manual and hides unavailable overlapping
   assert.match(vector[0], /group === "active" \|\| group === "lost"/);
   assert.match(vector[0], /group === "newRisk" \|\| group === "loyalSleep" \|\| group === "lost"/);
   assert.match(vector[0], /рост доли активных пациентов и снижение доли потерянных/);
-  for (const label of ["Общая база", "Что сделать сейчас", "Группы могут пересекаться", "не показываются"]) {
+  for (const label of ["Общая база", "Что сделать сейчас", "Четыре группы без пересечений", "отсутствие выгрузки не означает ноль пациентов"]) {
     assert.match(vector[0], new RegExp(label));
   }
   for (const label of ["Лояльные", "Активные", "Новые, риск", "Лояльные, спящие", "Потерянные"]) assert.match(ui, new RegExp(label));
