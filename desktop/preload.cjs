@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   exportMobilePublication: payload => invoke("mobile-publication:export", payload),
   exportMobilePublicationBundle: payload => invoke("mobile-publication:export-bundle", payload),
   saveDatabase: json => invoke("database:save", json),
+  saveImport: payload => invoke("database:save-import", payload),
   exportJson: json => invoke("database:export-json", json),
   importJson: json => invoke("database:import-json", json),
 

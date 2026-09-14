@@ -465,7 +465,7 @@ class DatabaseService {
     };
   }
 
-  saveSnapshot(snapshot) {
+  saveSnapshot(snapshot, importRecords = []) {
     if (!snapshot || typeof snapshot !== "object" || !snapshot.settings || !snapshot.months || !snapshot.doctors) {
       throw new Error("Некорректный снимок базы");
     }
@@ -473,6 +473,7 @@ class DatabaseService {
     if (!Number.isInteger(snapshotVersion) || snapshotVersion < MIN_SNAPSHOT_VERSION || snapshotVersion > SNAPSHOT_VERSION) {
       throw new Error(`Неподдерживаемая версия данных: ${snapshot.version}`);
     }
+    if (!Array.isArray(importRecords) || importRecords.length > 100) throw new Error("Некорректные сведения об импорте");
     const now = new Date().toISOString();
     const upsertSettings = this.db.prepare(`
       INSERT INTO app_settings(id, data_json, content_hash, updated_at)
@@ -511,7 +512,7 @@ class DatabaseService {
       WHERE app_meta.content_hash <> excluded.content_hash
     `);
 
-    this.#transaction(() => {
+    const summary = this.#transaction(() => {
       const settingsJson = stableJson(snapshot.settings);
       upsertSettings.run(settingsJson, contentHash(settingsJson), now);
 
@@ -543,8 +544,10 @@ class DatabaseService {
         const json = stableJson(value);
         upsertMeta.run(key, json, contentHash(json), now);
       }
+      for (const record of importRecords) this.#recordImport(record);
+      return this.summary();
     });
-    return this.summary();
+    return summary;
   }
 
   createPortableJson({ appVersion = "" } = {}) {
@@ -1260,46 +1263,48 @@ class DatabaseService {
   }
 
   recordImport({ batchId = null, source = {}, log = {} }) {
+    return this.#transaction(() => this.#recordImport({ batchId, source, log }));
+  }
+
+  #recordImport({ batchId = null, source = {}, log = {} }) {
     const now = new Date().toISOString();
     const sha256 = String(source.sha256 || "").toLowerCase();
     if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error("Некорректная контрольная сумма исходного файла");
     const successful = log.status === "загружено"
-      || log.status === "архив обработан"
-      || (log.status === "пропущено" && log.skipReason === "identical");
-    this.#transaction(() => {
-      this.db.prepare(`
-        INSERT INTO source_files(sha256, original_path, file_name, byte_size, modified_at, first_imported_at, last_imported_at, successful)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(sha256) DO UPDATE SET
-          original_path = COALESCE(excluded.original_path, source_files.original_path),
-          last_imported_at = excluded.last_imported_at,
-          successful = MAX(source_files.successful, excluded.successful)
-      `).run(
-        sha256,
-        source.path || null,
-        String(source.name || log.name || "файл"),
-        Number(source.size) || null,
-        source.modifiedAt || null,
-        now,
-        now,
-        successful ? 1 : 0,
-      );
-      const sourceRow = this.db.prepare("SELECT id FROM source_files WHERE sha256 = ?").get(sha256);
-      this.db.prepare(`
-        INSERT INTO import_events(batch_id, source_file_id, report_type, month_key, doctor_name, status, note, replaced, imported_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        batchId || null,
-        sourceRow.id,
-        log.type || null,
-        log.month || null,
-        log.doctor || null,
-        String(log.status || "ошибка"),
-        log.note || null,
-        log.replaced ? 1 : 0,
-        now,
-      );
-    });
+    || log.status === "архив обработан"
+    || (log.status === "пропущено" && log.skipReason === "identical");
+    this.db.prepare(`
+      INSERT INTO source_files(sha256, original_path, file_name, byte_size, modified_at, first_imported_at, last_imported_at, successful)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(sha256) DO UPDATE SET
+        original_path = COALESCE(excluded.original_path, source_files.original_path),
+        last_imported_at = excluded.last_imported_at,
+        successful = MAX(source_files.successful, excluded.successful)
+    `).run(
+      sha256,
+      source.path || null,
+      String(source.name || log.name || "файл"),
+      Number(source.size) || null,
+      source.modifiedAt || null,
+      now,
+      now,
+      successful ? 1 : 0,
+    );
+    const sourceRow = this.db.prepare("SELECT id FROM source_files WHERE sha256 = ?").get(sha256);
+    this.db.prepare(`
+      INSERT INTO import_events(batch_id, source_file_id, report_type, month_key, doctor_name, status, note, replaced, imported_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      batchId || null,
+      sourceRow.id,
+      log.type || null,
+      log.month || null,
+      log.doctor || null,
+      String(log.status || "ошибка"),
+      log.note || null,
+      log.replaced ? 1 : 0,
+      now,
+    );
   }
 
   finishImportBatch(batchId, counts = {}) {
@@ -1312,7 +1317,7 @@ class DatabaseService {
       Number(counts.loaded) || 0,
       Number(counts.errors) || 0,
       Number(counts.skipped) || 0,
-      Number(counts.errors) ? "completed_with_errors" : "completed",
+      Number(counts.unprocessed) ? "failed" : Number(counts.errors) ? "completed_with_errors" : "completed",
       Number(batchId),
     );
   }

@@ -241,13 +241,11 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /aria-pressed/);
   assert.match(actual, /Что сделать сейчас/);
   assert.match(actual, /openClientSegment/);
-  assert.match(actual, /Окна 12 \/ 24 \/ 36 месяцев переключаются вручную/);
-  for (const field of ["np_loyalVisits", "np_loyalM", "np_activeVisits", "np_activeM", "np_newRiskVisits", "np_newRiskM", "np_sleepVisits", "np_sleepM", "np_lostVisits", "np_lostM"]) assert.match(actual, new RegExp(field));
-  assert.match(actual, /У каждой группы есть два собственных параметра/);
+  for (const field of ["cb_loyalVisits", "cb_activeM", "cb_sleepVisits", "cb_sleepM", "cb_newRiskVisits", "cb_lostM", "cb_lostVisits", "cb_lostAfterM"]) assert.match(actual, new RegExp(field));
+  assert.match(actual, /<th class="num">Визиты<\/th><th class="num">Длительность, мес\.<\/th>/);
+  assert.doesNotMatch(actual, /id="np_(?:loyal|active|newRisk|sleep|lost)(?:Visits|M|Within)"/);
   assert.match(actual, /clientBaseRequiredWindow/);
   assert.match(actual, /kbWinByDoctor/);
-  assert.match(actual, /E · Лояльные, спящие/);
-  assert.match(actual, /F · Потерянные/);
   assert.match(actual, /function reportOverallIndex/);
   assert.match(actual, /Общий индекс/);
   assert.doesNotMatch(actual, /onPrepareClose|confirmCloseSaved|app:prepare-close/);
@@ -485,7 +483,7 @@ test("specialization and department comparisons include aggregate totals with st
   assert.match(compare[0], /<col class="compare-doctor-col">/);
   assert.match(department[0], /department-total-row/);
   assert.match(department[0], /Итого по \$\{UI\.departmentFilter === "all" \? "всем отделениям" : "отделению"\}/);
-  assert.match(metrics, /avgVisit:\s*\(sales != null && visits\) \? sales \/ visits : null/);
+  assert.match(metrics, /avgVisit:\s*ratio\("avgVisit"/);
   assert.match(metrics, /naz:\s*\{\s*1:\s*naz1,\s*3:\s*naz3\s*\}/);
   assert.match(metrics, /churn36:\s*unique36 \? unique36\.lostPct : null/);
   assert.match(css, /\.compare-table\s*\{[^}]*table-layout:\s*fixed/s);

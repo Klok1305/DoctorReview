@@ -9,10 +9,9 @@ const PORTABLE_JSON_FORMAT = "klinvekt-portable-json";
 const DESKTOP_API = window.desktopAPI || null;
 let DESKTOP_STATE = null;
 let DESKTOP_DATABASE_LOADED = false;
-let desktopPendingSnapshot = null;
-let desktopPendingRevision = 0;
-let desktopWrittenRevision = 0;
+const desktopSaveQueue = [];
 let desktopWriterPromise = null;
+let rendererImportMutation = null;
 
 function loadBundledLibrary(id, globalName) {
   if (globalThis[globalName]) return globalThis[globalName];
@@ -1513,20 +1512,23 @@ function applyLoadedDatabase(parsed) {
 }
 
 async function flushDesktopSaveQueue() {
-  if (!DESKTOP_API || !desktopPendingSnapshot) return false;
+  if (!DESKTOP_API || !desktopSaveQueue.length) return false;
+  let job;
   try {
-    while (desktopPendingSnapshot && desktopWrittenRevision < desktopPendingRevision) {
-      const revision = desktopPendingRevision;
-      const snapshot = desktopPendingSnapshot;
-      const summary = await DESKTOP_API.saveDatabase(snapshot);
-      desktopWrittenRevision = revision;
-      if (desktopWrittenRevision >= desktopPendingRevision) desktopPendingSnapshot = null;
+    while ((job = desktopSaveQueue.shift())) {
+      const summary = job.records == null
+        ? await DESKTOP_API.saveDatabase(job.snapshot)
+        : await DESKTOP_API.saveImport({ snapshot: job.snapshot, records: job.records });
       if (DESKTOP_STATE) DESKTOP_STATE.summary = summary;
+      job.waiters.forEach(resolve => resolve(true));
     }
     setAutosaveStatus(`сохранено в SQLite (${autosaveTime()})`);
     updateHeaderStatus();
     return true;
   } catch (error) {
+    if (job) job.waiters.forEach(resolve => resolve(false));
+    // Не записываем более поздний снимок, который может зависеть от отказавшего импорта.
+    for (const pending of desktopSaveQueue.splice(0)) pending.waiters.forEach(resolve => resolve(false));
     console.error("desktop database save failed", error);
     setAutosaveStatus("ошибка сохранения SQLite: " + error.message);
     toast("⚠ Не удалось сохранить рабочую базу: " + error.message, true);
@@ -1534,22 +1536,53 @@ async function flushDesktopSaveQueue() {
   }
 }
 
-function queueDesktopSnapshot(snapshot) {
-  desktopPendingSnapshot = snapshot;
-  desktopPendingRevision++;
-  setAutosaveStatus("сохранение в SQLite…");
+function startDesktopSaveWriter() {
   if (!desktopWriterPromise) {
-    const writer = flushDesktopSaveQueue();
+    const writer = Promise.resolve().then(flushDesktopSaveQueue);
     desktopWriterPromise = writer;
     writer.finally(() => {
       if (desktopWriterPromise === writer) desktopWriterPromise = null;
+      if (desktopSaveQueue.length) startDesktopSaveWriter();
     });
   }
-  return desktopWriterPromise;
 }
 
-function saveLocal() {
+function queueDesktopSnapshot(snapshot, records = null) {
+  const saved = new Promise(resolve => {
+    const tail = desktopSaveQueue[desktopSaveQueue.length - 1];
+    // Обычные ожидающие снимки объединяются; импорт — отдельная атомарная команда.
+    if (records == null && tail && tail.records == null) {
+      tail.snapshot = snapshot;
+      tail.waiters.push(resolve);
+    } else {
+      desktopSaveQueue.push({ snapshot, records, waiters: [resolve] });
+    }
+  });
+  setAutosaveStatus("сохранение в SQLite…");
+  startDesktopSaveWriter();
+  return saved;
+}
+
+async function withImportMutation(action) {
+  if (rendererImportMutation) throw new Error("Изменение импорта уже выполняется");
+  let release;
+  const mutation = { requested: false, promise: new Promise(resolve => { release = resolve; }) };
+  rendererImportMutation = mutation;
+  try {
+    return await action();
+  } finally {
+    rendererImportMutation = null;
+    // После commit или отката сохраняем изменения, сделанные другими контролами.
+    release(mutation.requested ? await saveLocal() : true);
+  }
+}
+
+function saveLocal(importRecords = null) {
   if (typeof clearMetricsCache === "function") clearMetricsCache(); // данные/настройки изменились
+  if (rendererImportMutation && importRecords == null) {
+    rendererImportMutation.requested = true;
+    return rendererImportMutation.promise;
+  }
   let snapshot;
   try {
     snapshot = JSON.stringify(DB);
@@ -1560,7 +1593,7 @@ function saveLocal() {
     return Promise.resolve(false);
   }
   if (DESKTOP_API) {
-    return queueDesktopSnapshot(snapshot);
+    return queueDesktopSnapshot(snapshot, importRecords);
   }
   let localSaved = false;
   try {

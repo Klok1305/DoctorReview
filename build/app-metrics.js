@@ -1213,13 +1213,15 @@ function computeDoctorDynamics(docId, endMk) {
 }
 
 /* Агрегат отделения за месяц — «виртуальный r» с теми же полями, что читают dynMetricDefs */
-function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
+function aggregateDeptMonth(mk, deptFilter, subFilter = "all", doctorIds = null) {
+  const requestedIds = doctorIds ? new Set(doctorIds) : null;
   const requestedSpecs = Array.isArray(deptFilter)
     ? new Set(deptFilter)
     : (deptFilter instanceof Set ? deptFilter : null);
   const ids = doctorsForScopeInMonth(mk, deptFilter !== "all").filter(id =>
     (deptFilter === "all" || (requestedSpecs ? requestedSpecs.has(doctorDept(id)) : doctorDept(id) === deptFilter)) &&
-    (subFilter === "all" || (DB.doctors[id] && DB.doctors[id].subdept) === subFilter)
+    (subFilter === "all" || (DB.doctors[id] && DB.doctors[id].subdept) === subFilter) &&
+    (!requestedIds || requestedIds.has(id))
   );
   if (!ids.length) return null;
   const records = ids.map(id => ({ id, r: computeMetrics(id, mk) })).filter(x => Boolean(x.r));
@@ -1227,6 +1229,16 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
   if (!rs.length) return null;
   const sum = get => { const xs = rs.map(get).filter(v => v != null && !isNaN(v)); return xs.length ? xs.reduce((a, b) => a + b, 0) : null; };
   const avg = get => { const xs = rs.map(get).filter(v => v != null && !isNaN(v)); return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null; };
+  const coverage = {};
+  const completeFor = (key, accepts) => {
+    const missingDoctors = records.filter(({ r }) => !accepts(r)).map(({ id }) => id);
+    coverage[key] = { coveredDoctors: records.length - missingDoctors.length, expectedDoctors: records.length, complete: !missingDoctors.length, missingDoctors };
+    return coverage[key].complete;
+  };
+  const ratio = (key, numeratorFor, denominatorFor, numerator, denominator, scale = 1) => {
+    const complete = completeFor(key, r => Number.isFinite(numeratorFor(r)) && Number.isFinite(denominatorFor(r)));
+    return complete && numerator != null && denominator > 0 ? numerator / denominator * scale : null;
+  };
   const uniqueClientBase = (baseRows, expectedCount = baseRows.length) => {
     const clients = new Map();
     for (const kb of baseRows) {
@@ -1245,7 +1257,8 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
     if (!baseRows.length) return null;
     const groupNames = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
     const allDoctorsCovered = baseRows.length === expectedCount;
-    const groupAvailable = Object.fromEntries(groupNames.map(group => [group, allDoctorsCovered && baseRows.every(kb => kb.groupAvailable && kb.groupAvailable[group])]));
+    const sameWindow = new Set(baseRows.map(kb => kb.window)).size === 1;
+    const groupAvailable = Object.fromEntries(groupNames.map(group => [group, allDoctorsCovered && sameWindow && baseRows.every(kb => kb.groupAvailable && kb.groupAvailable[group])]));
     const seg = { loyal: 0, active: 0, newRisk: 0, loyalSleep: 0, lost: 0, unknown: 0 };
     let visits = 0, totalSum = 0, loyalCount = 0;
     for (const c of clients.values()) {
@@ -1259,7 +1272,7 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
     seg.risk = seg.newRisk;
     seg.sleep = seg.loyalSleep;
     const total = clients.size;
-    const sourceWindowComplete = allDoctorsCovered && baseRows.every(kb => kb.sourceWindowComplete);
+    const sourceWindowComplete = allDoctorsCovered && sameWindow && baseRows.every(kb => kb.sourceWindowComplete);
     const windows = [...new Set(baseRows.map(kb => Number(kb.window)).filter(Number.isFinite))].sort((a, b) => a - b);
     const clientRows = [...clients.values()];
     const atRiskRows = clientRows.filter(c => (c.groups || []).some(group => ["newRisk", "loyalSleep", "lost"].includes(group)));
@@ -1288,8 +1301,8 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
   const sales = sum(r => r.econ.sales);
   const withRef = sum(r => r.econ.revenueWithRef);
   const refSum = sum(r => r.econ.refRevenue);
-  const visits = sum(r => r.traffic.visits);
-  const patients = unique1 ? unique1.total : sum(r => r.traffic.patients);
+  const visits = completeFor("visits", r => Number.isFinite(r.traffic.visits)) ? sum(r => r.traffic.visits) : null;
+  const patients = completeFor("patients", r => Number.isFinite(r.traffic.patients)) && unique1 ? unique1.total : null;
   const visits12 = unique12 ? unique12.visits : null;
   const patients12 = unique12 ? unique12.total : null;
   const expSum = sum(r => r.extras.vy ? r.extras.vy.expertShareSum : null);
@@ -1299,12 +1312,17 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
   for (const pvM of pvMonths) {
     const first = sum(r => r.loyalty.pvSlices[pvM] && r.loyalty.pvSlices[pvM].valid !== false ? r.loyalty.pvSlices[pvM].first : null);
     const ret = sum(r => r.loyalty.pvSlices[pvM] && r.loyalty.pvSlices[pvM].valid !== false ? r.loyalty.pvSlices[pvM].ret : null);
-    if (first != null && first > 0) pvSlices[pvM] = { pct: (ret || 0) / first * 100, first, ret: ret || 0 };
+    const complete = completeFor("pv" + pvM, r => {
+      const pv = r.loyalty.pvSlices[pvM];
+      return pv && pv.valid !== false && Number.isFinite(pv.first) && Number.isFinite(pv.ret);
+    });
+    if (first != null && first > 0) pvSlices[pvM] = { pct: complete && ret != null ? ret / first * 100 : null, first, ret };
   }
   const schedNorm = sum(r => r.loyalty.sched ? r.loyalty.sched.normaMin : null);
   const schedBusy = sum(r => r.loyalty.sched ? r.loyalty.sched.busyMin : null);
   const schedFact = sum(r => r.loyalty.sched ? r.loyalty.sched.factMin : null);
-  const schedAvg = avg(r => r.loyalty.sched ? r.loyalty.sched.pct : null);
+  const scheduleComplete = completeFor("schedLoad", r => r.loyalty.sched && Number.isFinite(r.loyalty.sched.normaMin) && Number.isFinite(r.loyalty.sched.busyMin));
+  const scheduleFactComplete = completeFor("schedFact", r => r.loyalty.sched && Number.isFinite(r.loyalty.sched.normaMin) && Number.isFinite(r.loyalty.sched.factMin));
   const aggregateNazSlice = slice => {
     const values = rs.map(r => r.cross.naz[slice]).filter(nz => nz && nz.totals && nz.totals.valid !== false);
     if (!values.length) return null;
@@ -1317,6 +1335,10 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
     const soldQ = total("soldQ");
     const soldSum = total("soldSum");
     const resultQ = total("resultQ");
+    const conversionComplete = completeFor("naz" + slice, r => {
+      const nz = r.cross.naz[slice];
+      return nz && nz.totals && nz.totals.valid !== false && Number.isFinite(nz.totals.assigned) && Number.isFinite(nz.totals.resultQ);
+    });
     const focusRows = values.map(nz => nz.focus).filter(Boolean);
     const focusSum = key => {
       const known = focusRows.map(focus => focus[key]).filter(v => v != null && !isNaN(v));
@@ -1326,9 +1348,9 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
       slice,
       totals: {
         assigned, done, soldQ, soldSum, resultQ, valid: true,
-        conv: assigned != null && assigned > 0 && resultQ != null ? resultQ / assigned * 100 : null,
+        conv: conversionComplete && assigned > 0 && resultQ != null ? resultQ / assigned * 100 : null,
       },
-      focus: focusRows.length ? {
+      focus: conversionComplete && focusRows.length === rs.length && focusRows.every(row => Number.isFinite(row.assigned) && Number.isFinite(row.resultQ)) ? {
         title: focusRows[0].title,
         assigned: focusSum("assigned"),
         done: focusSum("done"),
@@ -1354,27 +1376,30 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
   return {
     econ: {
       sales, refRevenue: refSum, revenueWithRef: withRef,
-      avgClient: (sales != null && patients) ? sales / patients : null,
-      avgClientRef: (withRef != null && patients) ? withRef / patients : null,
-      avgVisit: (sales != null && visits) ? sales / visits : null,
+      avgClient: ratio("avgClient", r => r.econ.sales, r => r.traffic.patients, sales, patients),
+      avgClientRef: ratio("avgClientRef", r => r.econ.revenueWithRef, r => r.traffic.patients, withRef, patients),
+      avgVisit: ratio("avgVisit", r => r.econ.sales, r => r.traffic.visits, sales, visits),
     },
-    traffic: { visits, patients, freq: (visits != null && patients) ? visits / patients : null },
+    traffic: { visits, patients, freq: ratio("freq", r => r.traffic.visits, r => r.traffic.patients, visits, patients) },
     loyalty: {
-      sched: schedNorm && schedBusy != null
+      sched: scheduleComplete && schedNorm > 0 && schedBusy != null
         ? {
           pct: schedBusy / schedNorm * 100,
-          factPct: schedFact != null ? schedFact / schedNorm * 100 : null,
-          gapPct: schedFact != null ? (schedBusy - schedFact) / schedNorm * 100 : null,
+          factPct: scheduleFactComplete && schedFact != null ? schedFact / schedNorm * 100 : null,
+          gapPct: scheduleFactComplete && schedFact != null ? (schedBusy - schedFact) / schedNorm * 100 : null,
           normaMin: schedNorm, busyMin: schedBusy, factMin: schedFact,
         }
-        : (schedAvg != null ? { pct: schedAvg } : null),
+        : null,
       pvSlices,
-      ownRec: ownRecords != null && visits ? { count: ownRecords, pct: ownRecords / visits * 100 } : null,
-      courseIdx: courseCnt != null && courseBase ? courseCnt / courseBase * 100 : null,
-      freq12: (visits12 != null && patients12) ? visits12 / patients12 : null,
+      ownRec: (() => {
+        const pct = ratio("ownRec", r => r.loyalty.ownRec ? r.loyalty.ownRec.count : null, r => r.traffic.visits, ownRecords, visits, 100);
+        return pct != null ? { count: ownRecords, pct } : null;
+      })(),
+      courseIdx: ratio("courseIdx", r => r.loyalty.courseCnt, r => r.loyalty.courseWin === rs[0].loyalty.courseWin ? r.loyalty.courseBase : null, courseCnt, courseBase, 100),
+      freq12: ratio("freq12", r => r.akb.wins[12] ? r.akb.wins[12].visits : null, r => r.akb.wins[12] ? r.akb.wins[12].total : null, visits12, patients12),
     },
     cross: {
-      crossShare: (withRef && refSum != null) ? refSum / withRef * 100 : null,
+      crossShare: ratio("crossShare", r => r.econ.refRevenue, r => r.econ.revenueWithRef, refSum, withRef, 100),
       naz: { 1: naz1, 3: naz3 },
     },
     akb: {
@@ -1385,7 +1410,7 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
       churn36: unique36 ? unique36.lostPct : null,
     },
     product: (ownSum != null && ownSum > 0) ? {
-      expertShare: (expSum || 0) / ownSum * 100,
+      expertShare: ratio("expertShare", r => r.extras.vy ? r.extras.vy.expertShareSum : null, r => r.extras.vy ? r.extras.vy.ownSum : null, expSum, ownSum, 100),
       devicesUsed: usedExpertNames.size,
       park: productRows.length ? Math.max(...productRows.map(product => Number(product.park) || 0)) : 0,
     } : null,
@@ -1398,6 +1423,7 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all") {
     scores: { total: scoreTotal, rankEligible: scoreTotal != null },
     vecAvg: (() => { const o = {}; for (const vk of ["v1","v2","v3","v4","v5","v6"]) o[vk] = avg(r => r.scores && r.scores.rankEligible ? r.scores.vec[vk] : null); return o; })(),
     doctors: rs.length,
+    coverage,
   };
 }
 

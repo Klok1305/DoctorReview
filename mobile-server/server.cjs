@@ -168,7 +168,8 @@ function createMobileServer(options = {}) {
     }
   }
 
-  function cleanState(now = Date.now()) {
+  function cleanState() {
+    const now = Date.now();
     for (const [token, session] of state.sessions) if (session.expiresAt <= now) state.sessions.delete(token);
     for (const [key, rate] of state.failures) {
       rate.failures = rate.failures.filter(time => now - time <= RATE_WINDOW_MS);
@@ -401,8 +402,13 @@ function createMobileServer(options = {}) {
         return;
       }
       state.failures.delete(key);
-      for (const [token, session] of state.sessions) if (session.userId === identity.userId && session.portalId === identity.portalId) state.sessions.delete(token);
-      if (state.sessions.size >= MAX_SESSIONS) cleanState(Date.now() + SESSION_TTL_MS);
+      cleanState();
+      const previousTokens = [...state.sessions].filter(([, session]) => session.userId === identity.userId && session.portalId === identity.portalId).map(([token]) => token);
+      if (state.sessions.size - previousTokens.length >= MAX_SESSIONS) {
+        sendJson(response, 503, { error: "Достигнут предел активных сессий. Повторите вход позже; действующие подключения сохранены" }, { "Retry-After": "30" });
+        return;
+      }
+      for (const token of previousTokens) state.sessions.delete(token);
       const token = crypto.randomBytes(32).toString("base64url");
       const session = {
         userId: identity.userId,
@@ -548,6 +554,7 @@ if (require.main === module) {
 module.exports = {
   BUNDLE_FILE_NAME,
   MAX_UPLOAD_CHUNK_BYTES,
+  MAX_SESSIONS,
   RATE_MAX_FAILURES,
   SESSION_COOKIE,
   createMobileServer,

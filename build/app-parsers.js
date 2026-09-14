@@ -925,7 +925,7 @@ async function handleFilesBatch(fileList, options = {}) {
     const unique = [];
     for (const file of files) {
       const source = await ensureDesktopFileSource(file);
-      if (!options.forceReimport && !file.__forceReimport && (source.imported || await DESKTOP_API.hasImportedSource(source.sha256))) duplicateSkipped++;
+      if (!options.forceReimport && !file.__forceReimport && await DESKTOP_API.hasImportedSource(source.sha256)) duplicateSkipped++;
       else unique.push(file);
     }
     files = unique;
@@ -935,55 +935,80 @@ async function handleFilesBatch(fileList, options = {}) {
     return;
   }
   let ok = 0, err = 0, skipped = duplicateSkipped;
-  let lastSave = Promise.resolve(false);
   let batchId = null;
   if (DESKTOP_API) {
-    const batch = await DESKTOP_API.beginImport({ totalFiles: files.length });
+    if (!await saveLocal()) throw new Error("Текущая база не сохранена; импорт отменён");
+    const batch = await DESKTOP_API.beginImport({ totalFiles: files.length + duplicateSkipped });
     batchId = batch.batchId;
     toast("Перед импортом создана резервная копия");
   }
-  const processed = [];
-  for (const f of files) {
-    const log = await processFile(f, options);
-    processed.push({ file: f, log });
-    if (log.status === "загружено") ok++;
-    else if (log.status === "пропущено") skipped++;
-    else err++;
-    if (DESKTOP_API && log.skipReason !== "filtered-type") {
-      try {
-        await DESKTOP_API.recordImport({ batchId, source: await ensureDesktopFileSource(f), log });
-      } catch (error) {
-        console.error("import history write failed", error);
-        err++;
-      }
-    }
-    // Не ждём окончания всей пачки: каждый обработанный файл сразу фиксируется локально
-    // и ставится в очередь записи в файл автосохранения.
-    lastSave = saveLocal();
+  const containers = new Map();
+  for (const file of files) {
+    const container = file.__source && file.__source.container;
+    if (!container || !container.sha256) continue;
+    const state = containers.get(container.sha256) || { source: container, remaining: 0, failed: false };
+    state.remaining++;
+    containers.set(container.sha256, state);
   }
-  await lastSave;
-  if (DESKTOP_API) {
-    const containers = new Map();
-    for (const item of processed) {
-      const container = item.file.__source && item.file.__source.container;
-      if (!container || !container.sha256) continue;
-      const state = containers.get(container.sha256) || { source: container, failed: false };
-      if (item.log.status !== 'загружено' && !['identical', 'filtered-type'].includes(item.log.skipReason)) state.failed = true;
-      containers.set(container.sha256, state);
-    }
-    for (const state of containers.values()) {
-      if (!state.failed) {
-        await DESKTOP_API.recordImport({
-          batchId,
-          source: state.source,
+  let unprocessed = 0;
+  for (let index = 0; index < files.length; index++) {
+    const f = files[index];
+    const source = DESKTOP_API ? await ensureDesktopFileSource(f) : null;
+    const saved = await withImportMutation(async () => {
+      const before = JSON.parse(JSON.stringify({ doctors: DB.doctors, months: DB.months, fileLog: DB.fileLog }));
+      const log = await processFile(f, options);
+      if (log.status !== "загружено") {
+        DB.doctors = before.doctors;
+        DB.months = before.months;
+      }
+      const records = [];
+      if (DESKTOP_API && log.skipReason !== "filtered-type") records.push({ batchId, source, log });
+      const container = source && source.container;
+      const state = container && containers.get(container.sha256);
+      if (state) {
+        state.remaining--;
+        if (log.status !== "загружено" && log.skipReason !== "identical") state.failed = true;
+        if (!state.remaining && !state.failed) records.push({
+          batchId, source: state.source,
           log: { name: state.source.name, status: "архив обработан", note: "Все поддерживаемые файлы архива обработаны" },
         });
       }
+      // Фильтр типа не меняет базу и не подтверждает успешную обработку источника.
+      const committed = log.skipReason === "filtered-type" || await saveLocal(records);
+      if (!committed) {
+        DB.doctors = before.doctors;
+        DB.months = before.months;
+        DB.fileLog = before.fileLog;
+        log.status = "ошибка";
+        log.note = "Файл не записан в рабочую базу; изменения отменены. Повторите импорт после устранения ошибки сохранения.";
+        delete log.slot;
+        delete log.replaced;
+        finalizeFileLog(log);
+        err++;
+        if (typeof clearMetricsCache === "function") clearMetricsCache();
+        return false;
+      }
+      if (log.status === "загружено") ok++;
+      else if (log.status === "пропущено") skipped++;
+      else err++;
+      return true;
+    });
+    if (!saved) {
+      unprocessed = files.length - index - 1;
+      break;
     }
-    await DESKTOP_API.finishImport({ batchId, counts: { loaded: ok, errors: err, skipped } });
+  }
+  if (DESKTOP_API) {
+    try {
+      await DESKTOP_API.finishImport({ batchId, counts: { loaded: ok, errors: err, skipped, unprocessed } });
+    } catch (error) {
+      console.error("import batch completion failed", error);
+      err++;
+      toast("Не удалось записать итог импорта: " + error.message, true);
+    }
   }
   renderAll();
-  const summary = `Обработано файлов: ${files.length}. Загружено: ${ok}` + (skipped ? `, пропущено: ${skipped}` : "") + (err ? `, с ошибками: ${err}` : "");
+  const summary = `Обработано файлов: ${files.length - unprocessed}. Загружено: ${ok}` + (skipped ? `, пропущено: ${skipped}` : "") + (err ? `, с ошибками: ${err}` : "") + (unprocessed ? `. Импорт остановлен; осталось файлов: ${unprocessed}` : "");
   toast(options.summaryLabel ? `${options.summaryLabel}. ${summary}` : summary, err > 0);
-  return { files: files.length, loaded: ok, errors: err, skipped };
+  return { files: files.length, loaded: ok, errors: err, skipped, unprocessed };
 }

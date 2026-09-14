@@ -1175,6 +1175,8 @@ function createWindow() {
               // Real settings controls must persist, rerender, and leave every patient in the stack.
               UI.setDepartment = 'Косметология'; UI.setSpecialization = 'Косметология'; switchTab('settings');
               const originalPartition = { ...curSetProfile().clientBasePartition };
+              const legacyFields = ['loyalVisits', 'loyalM', 'activeVisits', 'activeM', 'newRiskVisits', 'newRiskM', 'newRiskWithin', 'sleepVisits', 'sleepM', 'lostVisits', 'lostM', 'minVisits', 'riskM'];
+              const originalLegacy = JSON.stringify(legacyFields.map(key => curSetProfile()[key]));
               const partitionTable = document.getElementById('clientBasePartitionRules');
               if (partitionTable.tBodies[0].rows.length !== 4 || partitionTable.querySelectorAll('input[type="number"]').length !== 8) throw Error('Admin QA: expected visits and period for each of four groups');
               const editThreshold = (id, value) => {
@@ -1188,12 +1190,14 @@ function createWindow() {
               if (document.getElementById('cb_loyalVisits').value !== '4' || document.getElementById('cb_sleepVisits').value !== '4' || document.getElementById('cb_lostVisits').value !== '3' || document.getElementById('cb_activeM').value !== '9' || document.getElementById('cb_lostM').value !== '10') throw Error('Admin QA: linked group boundaries diverged');
               const normCard = partitionTable.closest('details.card');
               normCard.open = true;
-              const settingsImage = await capture(partitionTable.parentElement);
+              if (normCard.querySelectorAll('input[data-cb-key]').length !== 8 || normCard.querySelector('[id^="np_loyal"], [id^="np_active"], [id^="np_newRisk"], [id^="np_sleep"], [id^="np_lost"]')) throw Error('Admin QA: duplicate legacy group settings remain');
+              const settingsImage = await capture(normCard);
               document.getElementById('cb_lostAnyVisits').checked = true;
               document.getElementById('cb_lostAnyVisits').dispatchEvent(new Event('change', { bubbles: true }));
               if (!document.getElementById('cb_lostVisits').disabled || document.getElementById('cb_lostAnyVisitsLabel').classList.contains('hidden')) throw Error('Admin QA: any-visit loss rule is not shown');
               saveDeptBasics();
               if (JSON.stringify(curSetProfile().clientBasePartition) !== JSON.stringify({ loyalVisits: 4, activeM: 9, lostM: 10, lostAnyVisits: true })) throw Error('Admin QA: partition settings not saved');
+              if (JSON.stringify(legacyFields.map(key => curSetProfile()[key])) !== originalLegacy) throw Error('Admin QA: legacy KPI settings changed');
               document.getElementById('cb_loyalVisits').value = '0';
               saveDeptBasics();
               if (curSetProfile().clientBasePartition.loyalVisits !== 4) throw Error('Admin QA: invalid settings persisted');
@@ -1209,14 +1213,29 @@ function createWindow() {
               renderDepartment(); renderDepartment();
               const profileNames = [...document.querySelectorAll('#tblDepartmentSpecs tr')].slice(2).map(row => row.cells[0].textContent.trim());
               if (new Set(profileNames).size !== profileNames.length) throw Error('Admin QA: duplicate profile after rerender');
-              return { yearImage, v3Image, baseImage, settingsImage, monthWidths: monthCells.map(cell => Math.round(cell.getBoundingClientRect().width)), profileNames, details: leaves.length };
+              let coverageImage;
+              try {
+                DB.doctors.coverageQa = { name: 'Synthetic coverage doctor', aliases: [], department: 'Косметология', specialization: 'Косметология', structureManual: true };
+                DB.months['2026-12'].vyrabotka.coverageQa = { items: [{ n: 'Synthetic', q: 1, sOwn: 1000, sRef: 0, goods: false }] };
+                clearMetricsCache(); UI.departmentMonth = '2026-12'; switchTab('department');
+                const partial = aggregateDeptMonth('2026-12', ['Косметология']);
+                const coverageNotice = document.querySelector('#departmentBody [data-aggregate-coverage]');
+                if (partial.econ.avgClient !== null || partial.traffic.patients !== null || partial.coverage.avgClient.coveredDoctors !== 1 || !coverageNotice || !coverageNotice.textContent.includes('1 из ' + partial.doctors + ' врачей')) throw Error('Admin QA: partial department ratios are misleading: ' + JSON.stringify(partial.coverage.avgClient));
+                if (!coverageNotice.getBoundingClientRect().width || !coverageNotice.getBoundingClientRect().height) throw Error('Admin QA: coverage notice is not visible');
+                coverageImage = await capture(coverageNotice);
+              } finally {
+                delete DB.doctors.coverageQa;
+                delete DB.months['2026-12'].vyrabotka.coverageQa;
+                clearMetricsCache(); UI.departmentMonth = '2026-02'; renderDepartment();
+              }
+              return { yearImage, v3Image, baseImage, settingsImage, coverageImage, monthWidths: monthCells.map(cell => Math.round(cell.getBoundingClientRect().width)), profileNames, details: leaves.length };
             } finally {
               if (previousDecember) DB.months['2026-12'] = previousDecember; else delete DB.months['2026-12'];
               UI.docMonth = previousMonth;
               clearMetricsCache(); switchTab('doctor');
             }
           })()`);
-          for (const key of ['yearImage', 'v3Image', 'baseImage', 'settingsImage']) {
+          for (const key of ['yearImage', 'v3Image', 'baseImage', 'settingsImage', 'coverageImage']) {
             const imagePath = path.join(artifactRoot, 'admin-feedback-' + key + '.png');
             fs.writeFileSync(imagePath, Buffer.from(adminFeedbackQa[key].split(',')[1], 'base64'));
             adminFeedbackQa[key] = imagePath;
@@ -1545,6 +1564,14 @@ function registerIpc() {
     if (typeof json !== "string" || json.length > 200 * 1024 * 1024) throw new Error("Некорректный размер снимка базы");
     const snapshot = JSON.parse(json);
     return database.saveSnapshot(snapshot);
+  });
+  ipcMain.handle("database:save-import", (_event, payload) => {
+    localAdminActor();
+    const input = ensureObject(payload, "сохранение импорта");
+    if (typeof input.snapshot !== "string" || input.snapshot.length > 200 * 1024 * 1024) throw new Error("Некорректный размер снимка базы");
+    if (!Array.isArray(input.records) || !input.records.length || input.records.length > 100) throw new Error("Некорректные сведения об импорте");
+    for (const record of input.records) ensureObject(record, "источник импорта");
+    return database.saveSnapshot(JSON.parse(input.snapshot), input.records);
   });
 
   ipcMain.handle("database:export-json", async (_event, json) => {

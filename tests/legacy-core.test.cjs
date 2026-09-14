@@ -5,16 +5,21 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
+const os = require("node:os");
+const { webcrypto } = require("node:crypto");
+const { File } = require("node:buffer");
+const JSZip = require("../build/jszip.min.js");
+const { DatabaseService } = require("../desktop/services/database.cjs");
 
 const { validateMobilePublication, createMobilePublicationBundle, openMobileReportSession } = require("../desktop/services/mobile-publication-service.cjs");
 
 const build = path.resolve(__dirname, "..", "build");
 
-function createContext({ desktop = false } = {}) {
+function createContext({ desktop = false, desktopAPI = null } = {}) {
   const savedSnapshots = [];
   const localSnapshots = [];
-  const window = desktop ? {
-    desktopAPI: {
+  const window = desktop || desktopAPI ? {
+    desktopAPI: desktopAPI || {
       saveDatabase: async json => {
         savedSnapshots.push(json);
         return { months: 1, doctors: 1, imports: 0, schemaVersion: 1 };
@@ -34,6 +39,8 @@ function createContext({ desktop = false } = {}) {
     setTimeout,
     clearTimeout,
     Blob,
+    File,
+    crypto: webcrypto,
     FileReader: class {},
     Intl,
   });
@@ -198,6 +205,60 @@ test("four-group settings survive snapshots, change boundaries and preserve lega
   assert.equal(x.unknown.newRisk, 1);
   assert.equal(x.restored.lostAnyVisits, true);
   assert.deepEqual(x.legacy, [4, 3, 18]);
+});
+
+test("saving four groups without old controls preserves legacy KPI results", () => {
+  const context = createContext();
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  vm.runInContext(ui.slice(ui.indexOf("function saveDeptBasics()"), ui.indexOf("function saveDeptExpertise()")), context);
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Тест', dept: 'По умолчанию' } };
+    const profile = DB.settings.depts['По умолчанию'] = normalizeProfileRecord({ activeVisits: 4, activeM: 3, lostM: 18, newRiskWithin: true });
+    profile.clientBasePartition = { loyalVisits: 3, activeM: 6, lostM: 12, lostAnyVisits: true };
+    DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].kb.d1 = { 36: { clients: [
+      { name: 'A', v: 2, r: 100, s: 100 }, { name: 'B', v: 4, r: 200, s: 200 },
+      { name: 'C', v: 8, r: 700, s: 300 }, { name: 'D', v: 2, r: null, s: 400 }
+    ] } };
+    const legacyBefore = kbSummary('d1', '2026-01', 36);
+    const partitionBefore = partitionClientBase(legacyBefore, profile).seg;
+    const fields = Object.fromEntries(Object.entries({
+      cb_loyalVisits: '2', cb_activeM: '9', cb_lostM: '24',
+      np_courseX: String(profile.courseX), np_courseM: String(profile.courseM),
+      np_corePct: String(profile.corePct), np_pervichkaM: String(profile.pervichkaM),
+      np_subdivisions: '', np_matchers: ''
+    }).map(([id, value]) => [id, { value }]));
+    fields.cb_lostAnyVisits = { checked: false };
+    document.getElementById = id => fields[id] || null;
+    curSetSpecialization = () => 'Тест';
+    curSetProfile = () => profile;
+    curSetProfileKind = () => 'специализации';
+    const saved = [], errors = [];
+    saveLocal = () => saved.push(JSON.parse(JSON.stringify(profile)));
+    toast = (message, error) => { if (error) errors.push(message); };
+    renderAll = () => clearMetricsCache();
+    saveDeptBasics();
+    const legacyAfter = kbSummary('d1', '2026-01', 36);
+    const partitionAfter = partitionClientBase(legacyAfter, profile).seg;
+    fields.cb_loyalVisits.value = '';
+    saveDeptBasics();
+    fields.cb_loyalVisits.value = '2'; fields.cb_lostAnyVisits.checked = true; fields.cb_lostM.value = '8';
+    saveDeptBasics();
+    return { partitionBefore, partitionAfter, saved, errors,
+      legacyBefore: { seg: legacyBefore.seg, thresholds: legacyBefore.thresholds },
+      legacyAfter: { seg: legacyAfter.seg, thresholds: legacyAfter.thresholds },
+      legacyValues: [profile.activeVisits, profile.activeM, profile.lostM, profile.newRiskWithin],
+      partition: profile.clientBasePartition };
+  })()`, context);
+  const x = JSON.parse(JSON.stringify(result));
+  assert.deepEqual(x.partitionBefore, { active: 0, loyalSleep: 1, newRisk: 2, lost: 1 });
+  assert.deepEqual(x.partitionAfter, { active: 2, loyalSleep: 2, newRisk: 0, lost: 0 });
+  assert.deepEqual(x.legacyAfter, x.legacyBefore);
+  assert.deepEqual(x.legacyValues, [4, 3, 18, true]);
+  assert.deepEqual(x.partition, { loyalVisits: 2, activeM: 9, lostM: 24, lostAnyVisits: false });
+  assert.equal(x.saved.length, 1);
+  assert.deepEqual(x.saved[0].clientBasePartition, x.partition);
+  assert.equal(x.errors.length, 2);
 });
 
 test("new-risk recency setting covers recent patients and preserves the old default", () => {
@@ -1495,6 +1556,96 @@ test("department ratios are weighted and patients are deduplicated by stable ide
   assert.equal(result.own, 40);
 });
 
+test("department ratios require comparable data for every included doctor", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Synthetic One', aliases: [], dept: 'По умолчанию' }, d2: { name: 'Synthetic Two', aliases: [], dept: 'По умолчанию' } };
+    Object.assign(DB.settings.depts['По умолчанию'], { courseM: 12, courseX: 2 });
+    DB.months = { '2026-01': emptyMonth() };
+    const month = DB.months['2026-01'];
+    for (const id of ['d1', 'd2']) month.vyrabotka[id] = { items: [{ n: 'Synthetic', q: 1, sOwn: 1000, sRef: 0, goods: false }] };
+    month.kb.d1 = { 1: { clients: [{ name: 'Synthetic patient', patientId: '42', v: 1, s: 1000, r: 1 }] }, 12: { clients: [{ name: 'Synthetic patient', patientId: '42', v: 4, s: 1000, r: 1 }] } };
+    month.prostoy.d1 = { normaMin: 1000, zayavkiMin: 500, factMin: 300 };
+    month.prostoy.d2 = { schedPct: 80 };
+    month.zapis.d1 = { zapis: 1 };
+    month.pervichka[3] = { perDoc: { d1: { first: 10, ret: 5, notRet: 5 } } };
+    month.naznach.d1 = { 1: { items: [{ n: 'Synthetic referral', a: 2, d: 1, sq: 0, ss: 0, goods: false }] } };
+    clearMetricsCache();
+    const incomplete = aggregateDeptMonth('2026-01', 'all');
+    month.kb.d2 = { 1: { clients: [{ name: 'Different name', patientId: '42', v: 3, s: 1000, r: 1 }] }, 12: { clients: [{ name: 'Different name', patientId: '42', v: 1, s: 1000, r: 1 }] } };
+    month.prostoy.d2 = { normaMin: 100, zayavkiMin: 100, factMin: 80 };
+    month.zapis.d2 = { zapis: 1 };
+    month.pervichka[3].perDoc.d2 = { first: 30, ret: 0, notRet: 30 };
+    month.naznach.d2 = { 1: { items: [{ n: 'Synthetic referral', a: 8, d: 2, sq: 0, ss: 0, goods: false }] } };
+    clearMetricsCache();
+    const complete = aggregateDeptMonth('2026-01', 'all');
+    delete month.prostoy.d2.factMin;
+    clearMetricsCache();
+    const missingFact = aggregateDeptMonth('2026-01', 'all');
+    const select = r => ({ sales: r.econ.sales, check: r.econ.avgClient, checkRef: r.econ.avgClientRef, visitCheck: r.econ.avgVisit,
+      patients: r.traffic.patients, freq: r.traffic.freq, freq12: r.loyalty.freq12, schedule: r.loyalty.sched,
+      own: r.loyalty.ownRec?.pct ?? null, course: r.loyalty.courseIdx, primary: r.loyalty.pvSlices[3]?.pct ?? null,
+      conversion: r.cross.naz[1]?.totals.conv ?? null, coverage: r.coverage });
+    return { incomplete: select(incomplete), complete: select(complete), missingFact: select(missingFact) };
+  })()`, context);
+  const x = JSON.parse(JSON.stringify(result));
+  assert.equal(x.incomplete.sales, 2000);
+  for (const key of ['check', 'checkRef', 'visitCheck', 'patients', 'freq', 'freq12', 'own', 'course', 'primary', 'conversion']) assert.equal(x.incomplete[key], null, key);
+  assert.equal(x.incomplete.schedule, null);
+  assert.deepEqual(x.incomplete.coverage.avgClient, { coveredDoctors: 1, expectedDoctors: 2, complete: false, missingDoctors: ['d2'] });
+  assert.equal(x.complete.check, 2000);
+  assert.equal(x.complete.visitCheck, 500);
+  assert.equal(x.complete.patients, 1);
+  assert.equal(x.complete.freq, 4);
+  assert.equal(x.complete.freq12, 5);
+  assert.equal(x.complete.own, 50);
+  assert.equal(x.complete.course, 50);
+  assert.equal(x.complete.primary, 12.5);
+  assert.equal(x.complete.conversion, 30);
+  assert.equal(x.complete.schedule.pct, 600 / 1100 * 100);
+  assert.equal(x.complete.schedule.factPct, 380 / 1100 * 100);
+  assert.equal(x.complete.schedule.gapPct, 220 / 1100 * 100);
+  assert.equal(x.missingFact.schedule.pct, x.complete.schedule.pct);
+  assert.equal(x.missingFact.schedule.factPct, null);
+  assert.equal(x.missingFact.schedule.gapPct, null);
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  vm.runInContext(ui.slice(ui.indexOf("function aggregateCoverageHtml"), ui.indexOf("function renderDepartment()")), context);
+  context.incomplete = result.incomplete;
+  const notice = vm.runInContext("aggregateCoverageHtml({ coverage: incomplete.coverage })", context);
+  assert.match(notice, /средний чек пациента: сопоставимые данные у 1 из 2 врачей/);
+  assert.match(notice, /показаны как «—»/);
+});
+
+test("department patient union uses IDs first, name fallback and overlapping doctor relationships", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Synthetic One', aliases: [], dept: 'По умолчанию' }, d2: { name: 'Synthetic Two', aliases: [], dept: 'По умолчанию' } };
+    Object.assign(DB.settings.depts['По умолчанию'], { activeVisits: 3, activeM: 12, loyalM: 12, lostM: 12, lostVisits: 2 });
+    DB.months = { '2026-01': emptyMonth() };
+    const m = DB.months['2026-01'];
+    m.vyrabotka.d1 = { items: [] }; m.vyrabotka.d2 = { items: [] };
+    m.kb.d1 = { 36: { clients: [
+      { name: 'Same Name', patientId: '1', v: 3, r: 1, s: 10 },
+      { name: 'Other Name', patientId: '2', v: 1, r: 900, s: 10 },
+      { name: 'Name Fallback', v: 1, r: 900, s: 10 }
+    ] } };
+    m.kb.d2 = { 36: { clients: [
+      { name: 'Renamed', patientId: '1', v: 1, r: 900, s: 10 },
+      { name: 'Same Name', patientId: '3', v: 3, r: 1, s: 10 },
+      { name: '  name   fallback ', v: 3, r: 1, s: 10 }
+    ] } };
+    clearMetricsCache();
+    const merged = aggregateDeptMonth('2026-01', 'all').akb.primary;
+    m.kb.d1[12] = m.kb.d1[36]; delete m.kb.d1[36];
+    clearMetricsCache();
+    const mixed = aggregateDeptMonth('2026-01', 'all').akb.primary;
+    return { total: merged.total, active: merged.activeBasePct, lost: merged.lostPct, visits: merged.visits,
+      mixed: { windows: mixed.windows, complete: mixed.sourceWindowComplete, active: mixed.activeBasePct } };
+  })()`, context);
+  const x = JSON.parse(JSON.stringify(result));
+  assert.deepEqual(x, { total: 4, active: 75, lost: 75, visits: 12, mixed: { windows: [12, 36], complete: false, active: null } });
+});
+
 test("legacy v1 database migrates to the current schema", () => {
   const context = createContext();
   const result = vm.runInContext(`migrateDB({
@@ -2039,6 +2190,106 @@ test("dashboards exclude doctors without an individual work report", () => {
   assert.equal(plain.selectedPrimaryReturn.pct, 40);
   assert.equal(plain.allDoctors, 1);
   assert.equal(plain.allPrimaryReturn.pct, 40);
+});
+
+test("ZIP import rolls back a failed file, defers autosave safely and resumes from committed sources", async t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-renderer-import-"));
+  const database = new DatabaseService(path.join(temp, "data.sqlite"));
+  t.after(() => { database.close(); fs.rmSync(temp, { recursive: true, force: true }); });
+  database.db.exec("CREATE TEMP TRIGGER fail_second_file BEFORE INSERT ON import_events WHEN NEW.month_key = '2026-02' BEGIN SELECT RAISE(ABORT, 'synthetic write failure'); END");
+  let reachedFailure, releaseFailure;
+  const started = new Promise(resolve => { reachedFailure = resolve; });
+  const paused = new Promise(resolve => { releaseFailure = resolve; });
+  const handlers = {};
+  const main = fs.readFileSync(path.resolve(build, "..", "desktop", "main.cjs"), "utf8");
+  vm.runInNewContext(main.slice(main.indexOf('  ipcMain.handle("database:save-import"'), main.indexOf('  ipcMain.handle("database:export-json"')), {
+    ipcMain: { handle: (name, handler) => { handlers[name] = handler; } }, database,
+    localAdminActor: () => ({}), ensureObject: value => { if (!value || typeof value !== "object") throw Error("invalid object"); return value; }
+  });
+  const context = createContext({ desktopAPI: {
+    saveDatabase: async json => database.saveSnapshot(JSON.parse(json)),
+    saveImport: async payload => {
+      if (payload.records[0].log.month === "2026-02") { reachedFailure(); await paused; }
+      return handlers["database:save-import"]({}, payload);
+    },
+    hasImportedSource: async hash => database.hasSuccessfulSource(hash),
+    beginImport: async options => ({ batchId: database.beginImportBatch(options) }),
+    finishImport: async ({ batchId, counts }) => database.finishImportBatch(batchId, counts)
+  } });
+  context.JSZip = JSZip;
+  const expectedErrors = [];
+  context.console = { ...console, error: (_message, error) => expectedErrors.push(error.message) };
+  const zip = new JSZip();
+  for (let month = 1; month <= 3; month++) zip.file(month + ".xlsx", "synthetic " + month);
+  context.archive = new File([await zip.generateAsync({ type: "nodebuffer" })], "synthetic.zip");
+  vm.runInContext(`
+    DB.doctors = {}; DB.months = {}; DB.fileLog = []; DB.dynamicNotes = {};
+    renderAll = () => {}; toast = () => {};
+    processFile = async file => {
+      const month = '2026-0' + file.name[0];
+      DB.doctors.d1 = { name: 'Synthetic', aliases: [] };
+      ensureMonth(month).vyrabotka.d1 = { items: [{ n: 'Synthetic', q: 1, sOwn: 100 }] };
+      return finalizeFileLog({ name: file.name, month, type: 'vyrabotka', status: 'загружено', slot: { t: 'vyrabotka', mk: month, doc: 'd1' } });
+    };
+  `, context);
+  const failedImport = vm.runInContext("handleFilesBatch([archive])", context);
+  await started;
+  const deferredSave = vm.runInContext("DB.dynamicNotes.concurrent = 'Synthetic note'; saveLocal()", context);
+  releaseFailure();
+  const failed = JSON.parse(JSON.stringify(await failedImport));
+  assert.equal(await deferredSave, true);
+  assert.deepEqual(failed, { files: 3, loaded: 1, errors: 1, skipped: 0, unprocessed: 1 });
+  assert.deepEqual(Object.keys(database.loadSnapshot().months), ["2026-01"]);
+  assert.equal(database.loadSnapshot().dynamicNotes.concurrent, "Synthetic note");
+  const sources = database.db.prepare("SELECT file_name, successful FROM source_files ORDER BY id").all();
+  assert.deepEqual(sources.map(row => [row.file_name, row.successful]), [["1.xlsx", 1]]);
+  assert.equal(database.db.prepare("SELECT status FROM import_batches").get().status, "failed");
+  assert.deepEqual(expectedErrors, ["synthetic write failure"]);
+  database.db.exec("DROP TRIGGER fail_second_file");
+  vm.runInContext(`const originalExpand = expandZips; expandZips = async files => {
+    const expanded = await originalExpand(files); for (const file of expanded) file.__source.imported = true; return expanded;
+  };`, context);
+  const retried = JSON.parse(JSON.stringify(await vm.runInContext("handleFilesBatch([archive])", context)));
+  assert.deepEqual(retried, { files: 2, loaded: 2, errors: 0, skipped: 1, unprocessed: 0 });
+  assert.deepEqual(Object.keys(database.loadSnapshot().months), ["2026-01", "2026-02", "2026-03"]);
+  assert.deepEqual(database.db.prepare("SELECT file_name, successful FROM source_files ORDER BY id").all().map(row => [row.file_name, row.successful]), [["1.xlsx", 1], ["2.xlsx", 1], ["3.xlsx", 1], ["synthetic.zip", 1]]);
+  assert.equal(database.db.prepare("SELECT COUNT(*) AS n FROM import_events").get().n, 4);
+});
+
+test("save queue coalesces ordinary snapshots but keeps atomic import commands ordered", async () => {
+  let started, release;
+  const ready = new Promise(resolve => { started = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const writes = [];
+  let failImport = false;
+  const context = createContext({ desktopAPI: {
+    saveDatabase: async json => { writes.push([JSON.parse(json).dynamicNotes.revision, null]); if (writes.length === 1) { started(); await gate; } return {}; },
+    saveImport: async payload => { writes.push([JSON.parse(payload.snapshot).dynamicNotes.revision, payload.records[0].source.sha256]); if (failImport) throw Error("synthetic queue failure"); return {}; }
+  } });
+  const first = vm.runInContext("DB.dynamicNotes = { revision: 0 }; saveLocal()", context);
+  await ready;
+  const saves = vm.runInContext(`(() => {
+    DB.dynamicNotes.revision = 1; const one = saveLocal();
+    DB.dynamicNotes.revision = 2; const two = saveLocal();
+    DB.dynamicNotes.revision = 3; const imported = saveLocal([{ source: { sha256: 'a'.repeat(64) }, log: { status: 'загружено' } }]);
+    DB.dynamicNotes.revision = 4; const four = saveLocal();
+    return Promise.all([one, two, imported, four]);
+  })()`, context);
+  release();
+  assert.equal(await first, true);
+  assert.deepEqual(Array.from(await saves), [true, true, true, true]);
+  assert.deepEqual(writes, [[0, null], [2, null], [3, "a".repeat(64)], [4, null]]);
+  context.console = { ...console, error: () => {} };
+  vm.runInContext("toast = () => {}", context);
+  failImport = true;
+  const failed = await vm.runInContext(`(() => {
+    DB.dynamicNotes.revision = 5; const imported = saveLocal([{ source: { sha256: 'b'.repeat(64) }, log: { status: 'загружено' } }]);
+    DB.dynamicNotes.revision = 6; return Promise.all([imported, saveLocal()]);
+  })()`, context);
+  assert.deepEqual(Array.from(failed), [false, false]);
+  assert.deepEqual(writes[writes.length - 1], [5, "b".repeat(64)]);
+  assert.equal(await vm.runInContext("DB.dynamicNotes.revision = 4; saveLocal()", context), true);
+  assert.deepEqual(writes[writes.length - 1], [4, null]);
 });
 
 test("desktop autosave works immediately without an authentication session", async () => {

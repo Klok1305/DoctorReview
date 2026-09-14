@@ -57,6 +57,61 @@ test("SQLite snapshot, import history and verified backup round-trip", async t =
   assert.equal(DatabaseService.inspect(backup).integrity, "ok");
 });
 
+test("import snapshot and source history commit together and roll back together on write failure", t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-app-atomic-import-"));
+  const database = new DatabaseService(path.join(temp, "data.sqlite"));
+  t.after(() => { database.close(); fs.rmSync(temp, { recursive: true, force: true }); });
+  const before = snapshot();
+  database.saveSnapshot(before);
+  const batchId = database.beginImportBatch({ totalFiles: 2 });
+  const source = { sha256: "d".repeat(64), name: "synthetic.xlsx" };
+  const imported = snapshot();
+  imported.months["2026-01"].vyrabotka.d1 = { items: [{ n: "Synthetic", q: 1, sOwn: 1000 }] };
+  const records = [{ batchId, source, log: { status: "загружено", type: "vyrabotka", month: "2026-01" } }];
+  // Fails after source_files was updated: both that write and the snapshot must roll back.
+  database.db.exec("CREATE TEMP TRIGGER fail_import_event BEFORE INSERT ON import_events BEGIN SELECT RAISE(ABORT, 'synthetic disk failure'); END");
+  assert.throws(() => database.saveSnapshot(imported, records), /synthetic disk failure/);
+  assert.deepEqual(database.loadSnapshot(), before);
+  assert.equal(database.hasSuccessfulSource(source.sha256), false);
+  assert.equal(database.db.prepare("SELECT COUNT(*) AS n FROM import_events").get().n, 0);
+  database.db.exec("DROP TRIGGER fail_import_event");
+  database.saveSnapshot(imported, records);
+  assert.deepEqual(database.loadSnapshot(), imported);
+  assert.equal(database.hasSuccessfulSource(source.sha256), true);
+  assert.equal(database.db.prepare("SELECT COUNT(*) AS n FROM import_events").get().n, 1);
+  const invalid = structuredClone(imported);
+  invalid.months["invalid"] = {};
+  const otherSource = { sha256: "e".repeat(64), name: "other.xlsx" };
+  assert.throws(() => database.saveSnapshot(invalid, [{ ...records[0], source: otherSource }]), /Некорректный месяц/);
+  assert.equal(database.hasSuccessfulSource(otherSource.sha256), false);
+  assert.deepEqual(database.loadSnapshot(), imported);
+  assert.equal(database.summary().schemaVersion, 5);
+});
+
+test("atomic import preserves old SQLite data and accepts snapshot versions one through four", t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-old-atomic-import-"));
+  const file = path.join(temp, "legacy.sqlite");
+  let database = new DatabaseService(file);
+  t.after(() => { database.close(); fs.rmSync(temp, { recursive: true, force: true }); });
+  const original = snapshot();
+  original.version = 1;
+  database.saveSnapshot(original);
+  database.db.exec("DROP TABLE viewer_department_heads; ALTER TABLE viewer_doctor_access ADD COLUMN windows_account TEXT NOT NULL DEFAULT ''; DELETE FROM schema_migrations WHERE version > 3");
+  database.close();
+  database = new DatabaseService(file);
+  assert.deepEqual(database.loadSnapshot(), original);
+  for (let version = 1; version <= 4; version++) {
+    const next = structuredClone(original);
+    next.version = version;
+    next.dynamicNotes.synthetic = String(version);
+    const source = { sha256: String(version).repeat(64), name: "synthetic.xlsx" };
+    database.saveSnapshot(next, [{ source, log: { status: "загружено", month: "2026-01" } }]);
+    assert.deepEqual(database.loadSnapshot(), next);
+    assert.equal(database.hasSuccessfulSource(source.sha256), true);
+  }
+  assert.equal(database.summary().schemaVersion, 5);
+});
+
 test("full JSON round-trip preserves comments, publications, Viewer access and department heads", t => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-app-json-"));
   const source = new DatabaseService(path.join(temp, "source.sqlite"));

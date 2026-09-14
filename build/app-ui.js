@@ -642,6 +642,19 @@ function renderDepartmentCharts(history, defs) {
   });
 }
 
+function aggregateCoverageHtml(result) {
+  if (!result) return "";
+  const labels = { patients: "пациенты за месяц", visits: "визиты за месяц", avgClient: "средний чек пациента", avgClientRef: "чек с перенаправлениями", avgVisit: "средний чек визита", freq: "частота визитов", freq12: "частота за 12 месяцев", schedLoad: "загрузка расписания", schedFact: "фактическая загрузка", ownRec: "собственная запись", courseIdx: "курсовое лечение", crossShare: "доля перенаправлений", expertShare: "доля экспертных услуг" };
+  const issues = Object.entries(result.coverage || {}).filter(([, c]) => !c.complete && c.coveredDoctors > 0).map(([key, c]) => {
+    const label = labels[key] || (key.startsWith("pv") ? `первичка за ${key.slice(2)} мес.` : key.startsWith("naz") ? `конверсия за ${key.slice(3)} мес.` : key);
+    return `${label}: сопоставимые данные у ${c.coveredDoctors} из ${c.expectedDoctors} врачей`;
+  });
+  const base = result.akb && result.akb.primary;
+  if (base && base.coveredDoctors < base.expectedDoctors) issues.push(`клиентская база: данные у ${base.coveredDoctors} из ${base.expectedDoctors} врачей`);
+  if (base && base.windows.length > 1) issues.push("клиентские базы имеют разные окна; групповые доли не рассчитаны");
+  return issues.length ? `<div class="notice" data-aggregate-coverage><b>Неполные сводные данные.</b> ${issues.map(esc).join("; ")}. Несопоставимые показатели не рассчитываются и показаны как «—».</div>` : "";
+}
+
 function renderDepartment() {
   const months = monthKeysSorted();
   const monthSelect = document.getElementById("departmentMonth");
@@ -686,6 +699,7 @@ function renderDepartment() {
 
   const scoreRows = departmentDoctorRows(mk, UI.departmentFilter);
   let html = `<div class="notice blue"><b>${esc(scope)}</b>: расчетные профили — ${specs.map(esc).join(", ") || "не настроены"}. Стрелки сравнивают месяц с предыдущим календарным месяцем и со средним значением прошлых месяцев ${year} года.${goalProfile ? " Итоговое значение зелёное, если цель отделения выполнена, красное — если не выполнена; без сопоставимой цели цвет нейтральный." : " Для сводной по всем отделениям единая цель не применяется."}</div>`;
+  html += aggregateCoverageHtml(current);
   html += doctorScoreLeaderboardHtml(scoreRows, mk, scope);
   html += '<div class="grid cols-4">' + defs.map(def => {
     const cur = def.get(current);
@@ -700,7 +714,7 @@ function renderDepartment() {
 
   const specRows = specs.map(spec => ({ spec, r: aggregateDeptMonth(mk, [spec]) })).filter(row => row.r);
   html += `<div class="card"><h2>Итоги профилей внутри отделения за ${monthLabel(mk)} <span class="spacer"></span>${copyBtn("copyTable", "tblDepartmentSpecs")}</h2>
-    <p class="small muted" style="margin-top:0">Группы клиентской базы могут пересекаться. Пустая ячейка означает, что временной порог группы больше окна выбранной выгрузки; ноль в таком случае не подставляется.</p>
+    <p class="small muted" style="margin-top:0">Пациенты объединяются по ID, а при его отсутствии — по нормализованному ФИО. Группы отражают отношения пациента с врачами и могут пересекаться. Пустая ячейка означает неполные данные, разные окна баз или временной порог больше окна выгрузки; ноль не подставляется.</p>
     <div class="department-profiles-scroll"><table class="data department-profiles-table" id="tblDepartmentSpecs"><colgroup><col class="department-profile-name-col">${Array.from({ length: 13 }, () => '<col class="department-profile-value-col">').join("")}</colgroup><tr><th>Профиль</th><th class="num">Врачей</th><th class="num">Выручка</th><th class="num">С перенаправлениями</th><th class="num">Доля перенапр.</th><th class="num">Первичка 3 мес.</th><th class="num">Первичка 6 мес.</th><th class="num">Общая база</th><th class="num">Лояльные</th><th class="num">Активные</th><th class="num">Новые, риск</th><th class="num">Лояльные, спящие</th><th class="num">Потерянные</th><th class="num">Загрузка</th></tr>`;
   const currentKb = current && current.akb.primary;
   html += `<tr class="department-total-row"><td><b>Итого по ${UI.departmentFilter === "all" ? "всем отделениям" : "отделению"}</b></td><td class="num"><b>${fmtNum(current.doctors)}</b></td><td class="num"><b>${fmtMoney(current.econ.sales)}</b></td><td class="num"><b>${fmtMoney(current.econ.revenueWithRef)}</b></td><td class="num"><b>${fmtPct(current.cross.crossShare)}</b></td><td class="num"><b>${current.loyalty.pvSlices[3] ? fmtPct(current.loyalty.pvSlices[3].pct) : "—"}</b></td><td class="num"><b>${current.loyalty.pvSlices[6] ? fmtPct(current.loyalty.pvSlices[6].pct) : "—"}</b></td><td class="num"><b>${currentKb ? fmtNum(currentKb.total) : "—"}</b></td><td class="num"><b>${currentKb ? clientBaseCountPctMarkup(currentKb, "loyal") : ""}</b></td><td class="num"><b>${currentKb ? clientBaseCountPctMarkup(currentKb, "active") : ""}</b></td><td class="num"><b>${currentKb ? clientBaseCountPctMarkup(currentKb, "newRisk") : ""}</b></td><td class="num"><b>${currentKb ? clientBaseCountPctMarkup(currentKb, "loyalSleep") : ""}</b></td><td class="num"><b>${currentKb ? clientBaseCountPctMarkup(currentKb, "lost") : ""}</b></td><td class="num"><b>${current.loyalty.sched ? fmtPct(current.loyalty.sched.pct) : "—"}</b></td></tr>`;
@@ -993,6 +1007,7 @@ function renderDept() {
 
   const scoreScope = UI.deptFilter === "all" ? "Все специализации" : UI.subFilter !== "all" ? `${UI.deptFilter} · ${UI.subFilter}` : UI.deptFilter;
   let html = doctorScoreLeaderboardHtml(rows, mk, scoreScope);
+  html += aggregateCoverageHtml(deptCurrent);
   html += `<div class="grid cols-5">
     <div class="kpi"><div class="lbl">Пациенты за месяц</div><div class="val">${fmtNum(currentPatients)} ${deptKpiTrend(currentPatients, avgPatientsYtd, "pct")}</div><div class="sub">среднее за ${year}: ${fmtNum(avgPatientsYtd)}</div></div>
     <div class="kpi"><div class="lbl">Доля активных</div><div class="val">${fmtPct(currentActiveBasePct)} ${deptKpiTrend(currentActiveBasePct, avgActiveBasePctYtd, "pp")}</div><div class="sub">среднее за ${year}: ${fmtPct(avgActiveBasePctYtd)}</div></div>
@@ -4808,12 +4823,14 @@ function reportContextFromScope(scope, periodKey) {
 function buildDepartmentReport(mk, departmentName) {
   const rows = departmentDoctorRows(mk, departmentName);
   if (!rows.length) return '<div class="card"><p class="muted">Нет данных отделения за выбранный месяц.</p></div>';
-  const sales = rows.reduce((sum, item) => sum + (item.r.econ.sales || 0), 0);
-  const revenueWithRef = rows.reduce((sum, item) => sum + (item.r.econ.revenueWithRef || 0), 0);
-  const patients = rows.reduce((sum, item) => sum + (item.r.traffic.patients || 0), 0);
+  const aggregate = aggregateDeptMonth(mk, "all", "all", rows.map(item => item.id));
+  const sales = aggregate.econ.sales;
+  const revenueWithRef = aggregate.econ.revenueWithRef;
+  const patients = aggregate.traffic.patients;
   const scored = rows.map(item => item.r.scores && item.r.scores.total).filter(value => value != null);
   const specializations = [...new Set(rows.map(item => resolvedSpecializationName(item.id)).filter(Boolean))];
   let html = `<div class="card slide" data-analytics-block-key="overview"><h2>${esc(departmentName)} <span class="muted small">· ${monthLabel(mk)}</span></h2>
+    ${aggregateCoverageHtml(aggregate)}
     <div class="grid cols-4">
       <div class="kpi"><div class="lbl">Врачей с данными</div><div class="val">${fmtNum(rows.length)}</div></div>
       <div class="kpi"><div class="lbl">Собственная выручка</div><div class="val">${fmtMoney(sales)}</div></div>
@@ -4825,7 +4842,8 @@ function buildDepartmentReport(mk, departmentName) {
   html += `<div class="card slide" data-analytics-block-key="specializations"><h2>Специализации отделения</h2><table class="data"><tr><th>Специализация</th><th class="num">Врачей</th><th class="num">Выручка</th><th class="num">Пациентов</th></tr>
     ${specializations.map(name => {
       const group = rows.filter(item => resolvedSpecializationName(item.id) === name);
-      return `<tr><td><b>${esc(name)}</b></td><td class="num">${fmtNum(group.length)}</td><td class="num">${fmtMoney(group.reduce((sum, item) => sum + (item.r.econ.sales || 0), 0))}</td><td class="num">${fmtNum(group.reduce((sum, item) => sum + (item.r.traffic.patients || 0), 0))}</td></tr>`;
+      const totals = aggregateDeptMonth(mk, "all", "all", group.map(item => item.id));
+      return `<tr><td><b>${esc(name)}</b></td><td class="num">${fmtNum(group.length)}</td><td class="num">${fmtMoney(totals.econ.sales)}</td><td class="num">${fmtNum(totals.traffic.patients)}</td></tr>`;
     }).join("")}
   </table></div>`;
   html += `<div class="card slide" data-analytics-block-key="performance"><h2>Результативность врачей отделения</h2>${doctorScoreLeaderboardHtml(rows, mk, departmentName) || '<p class="muted">Баллы недоступны.</p>'}</div>`;
@@ -5327,6 +5345,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
 
   /* Слайд 1: итоги + сводная */
   let html = `<div class="card slide" data-analytics-block-key="overview">${reportHeader("Отчёт по специализации", sub)}
+    ${aggregateCoverageHtml(aggregateDeptMonth(mk, deptFilter, subFilter))}
     ${doctorScoreLeaderboardHtml(rows, mk, deptFilter !== "all" ? deptFilter : "Все специализации")}
     ${reportOverallIndex(scAvg, "Общий индекс", scAvgPreliminary ? "предварительный: полнота данных ниже 80%" : `среднее по ${eligibleScores.length || allScores.length} специалистам`)}
     <div class="grid cols-4">
@@ -5958,7 +5977,7 @@ function renderSettings() {
     <h3 style="margin:12px 0 6px">Четыре группы базы за 3 года</h3>
     <p class="small muted">Для каждой группы задайте число визитов и срок последнего визита. Визиты считаются за все 36 месяцев. Связанные границы в соседних строках меняются вместе: каждый пациент остаётся ровно в одной группе. После сохранения пересчитываются все месяцы.</p>
     <div class="client-base-settings-scroll"><table class="data wtable" id="clientBasePartitionRules">
-      <thead><tr><th>Группа</th><th>Визиты за 36 мес.</th><th>Последний визит, мес.</th><th>Как считается</th></tr></thead>
+      <thead><tr><th>Группа</th><th class="num">Визиты</th><th class="num">Длительность, мес.</th><th>Как считается</th></tr></thead>
       <tbody>${[
         { group: "active", visitsId: "cb_loyalVisits", monthsId: "cb_activeM", key: "activeM", offset: 0, visitsLabel: "не менее", periodLabel: "не более" },
         { group: "loyalSleep", visitsId: "cb_sleepVisits", monthsId: "cb_sleepM", key: "activeM", offset: 0, visitsLabel: "не менее", periodLabel: "более" },
@@ -5966,26 +5985,15 @@ function renderSettings() {
         { group: "lost", visitsId: "cb_lostVisits", monthsId: "cb_lostAfterM", key: "lostM", offset: -1, visitsLabel: "от 1 до", periodLabel: "более" },
       ].map(row => `<tr>
         <td><b>${esc(adminClientBaseGroupLabel(row.group))}</b></td>
-        <td><label class="client-base-threshold${row.group === "lost" && partition.lostAnyVisits ? " hidden" : ""}"${row.group === "lost" ? ' id="cb_lostVisitsControl"' : ""}><span>${row.visitsLabel}</span><input type="number" id="${row.visitsId}" aria-label="${esc(adminClientBaseGroupLabel(row.group))}: ${row.visitsLabel} визитов" min="${2 + row.offset}" max="${50 + row.offset}" step="1" value="${partition.loyalVisits + row.offset}" data-cb-key="loyalVisits" data-cb-offset="${row.offset}" oninput="syncClientBasePartitionControls(this)"${row.group === "lost" && partition.lostAnyVisits ? " disabled" : ""}></label>${row.group === "lost" ? `<span id="cb_lostAnyVisitsLabel" class="${partition.lostAnyVisits ? "" : "hidden"}">любое число</span>` : ""}</td>
-        <td><label class="client-base-threshold"><span>${row.periodLabel}</span><input type="number" id="${row.monthsId}" aria-label="${esc(adminClientBaseGroupLabel(row.group))}: последний визит ${row.periodLabel}, месяцев назад" min="1" max="36" step="1" value="${partition[row.key]}" data-cb-key="${row.key}" oninput="syncClientBasePartitionControls(this)"></label></td>
+        <td class="num"><span class="${row.group === "lost" && partition.lostAnyVisits ? "hidden" : ""}"${row.group === "lost" ? ' id="cb_lostVisitsControl"' : ""}><input type="number" id="${row.visitsId}" aria-label="${esc(adminClientBaseGroupLabel(row.group))}: ${row.visitsLabel} визитов за 36 месяцев" min="${2 + row.offset}" max="${50 + row.offset}" step="1" value="${partition.loyalVisits + row.offset}" data-cb-key="loyalVisits" data-cb-offset="${row.offset}" oninput="syncClientBasePartitionControls(this)"${row.group === "lost" && partition.lostAnyVisits ? " disabled" : ""}></span>${row.group === "lost" ? `<span id="cb_lostAnyVisitsLabel" class="${partition.lostAnyVisits ? "" : "hidden"}">любое число</span>` : ""}</td>
+        <td class="num"><input type="number" id="${row.monthsId}" aria-label="${esc(adminClientBaseGroupLabel(row.group))}: последний визит ${row.periodLabel}, месяцев назад" min="1" max="36" step="1" value="${partition[row.key]}" data-cb-key="${row.key}" oninput="syncClientBasePartitionControls(this)"></td>
         <td class="small" data-cb-description="${row.group}">${esc(adminClientBaseGroupDescription(partition, row.group))}</td>
       </tr>`).join("")}</tbody>
     </table></div>
     <label><input type="checkbox" id="cb_lostAnyVisits" ${partition.lostAnyVisits ? "checked" : ""} onchange="syncClientBasePartitionControls()"> Считать потерянными также лояльных после срока потери</label>
     <p class="small muted">Без галочки потерянные — пациенты с числом визитов ниже порога лояльности; давно отсутствующие лояльные остаются спящими. С галочкой срок потери применяется ко всем пациентам и должен быть не меньше срока активности.</p>
     <p class="small muted">На границе срока пациент ещё активный / новый в риске; после неё — спящий / потерянный. При пустой или некорректной давности запись остаётся в рабочей группе с пометкой «проверить данные», без подтверждения активности или потери.</p>
-    <div class="toolbar"><button class="btn primary" onclick="saveDeptBasics()">💾 Сохранить нормативы</button></div>
-    <details style="margin-top:12px"><summary>Дополнительные нормативы KPI и публикаций</summary>
-    <h3 style="margin:12px 0 6px">Клиентская база · значения B–F</h3>
-    <p class="small muted" style="margin-top:0">Общая база не настраивается: это фактическое количество уникальных пациентов в выбранной выгрузке. У каждой группы есть два собственных параметра — визиты и длительность; все проценты считаются от общей клиентской базы.</p>
-    <table class="data wtable"><tr><th>Группа</th><th class="num">Визиты</th><th class="num">Длительность, мес.</th><th>Как считается</th></tr>
-      <tr><td><b>B · Лояльные</b></td><td class="num"><input type="number" id="np_loyalVisits" value="${p.loyalVisits}" min="1" max="50"></td><td class="num"><input type="number" id="np_loyalM" value="${p.loyalM}" min="1" max="36"></td><td class="small">не менее B визитов; последний визит не более B1 месяцев назад</td></tr>
-      <tr><td><b>C · Активные</b></td><td class="num"><input type="number" id="np_activeVisits" value="${p.activeVisits}" min="1" max="50"></td><td class="num"><input type="number" id="np_activeM" value="${p.activeM}" min="1" max="36"></td><td class="small">не менее C визитов; последний визит не более C1 месяцев назад</td></tr>
-      <tr><td><b>D · Новые, риск</b></td><td class="num"><input type="number" id="np_newRiskVisits" value="${p.newRiskVisits}" min="1" max="50"></td><td class="num"><input type="number" id="np_newRiskM" value="${p.newRiskM}" min="1" max="36"></td><td class="small">от 1 до D визитов; последний визит <select id="np_newRiskWithin"><option value="false" ${p.newRiskWithin !== true ? "selected" : ""}>более D1 месяцев назад</option><option value="true" ${p.newRiskWithin === true ? "selected" : ""}>в пределах D1 месяцев</option></select></td></tr>
-      <tr><td><b>E · Лояльные, спящие</b></td><td class="num"><input type="number" id="np_sleepVisits" value="${p.sleepVisits}" min="1" max="50"></td><td class="num"><input type="number" id="np_sleepM" value="${p.sleepM}" min="1" max="36"></td><td class="small">не менее E визитов; последний визит более E1 месяцев назад</td></tr>
-      <tr><td><b>F · Потерянные</b></td><td class="num"><input type="number" id="np_lostVisits" value="${p.lostVisits}" min="1" max="50"></td><td class="num"><input type="number" id="np_lostM" value="${p.lostM}" min="1" max="36"></td><td class="small">от 1 до F визитов; последний визит более F1 месяцев назад</td></tr></table>
-    <div class="notice blue" style="margin:8px 0 10px"><b>Окна 12 / 24 / 36 месяцев переключаются вручную.</b> Если длительность группы больше выбранного окна, группа полностью скрывается: ноль и приблизительное значение не показываются.</div>
-    </details><h3 style="margin:12px 0 6px">Остальные нормативы</h3>
+    <h3 style="margin:12px 0 6px">Остальные нормативы</h3>
     <table class="data wtable"><tr>
       <th class="num" title="Курсовое лечение: минимум визитов…">Курсовое: от, виз.</th>
       <th class="num" title="…за последние сколько месяцев">Курсовое: за, мес</th>
@@ -6473,22 +6481,16 @@ function saveDeptBasics() {
     return;
   }
   const values = {};
-  for (const k of ["loyalVisits", "loyalM", "activeVisits", "activeM", "newRiskVisits", "newRiskM", "sleepVisits", "sleepM", "lostVisits", "lostM", "courseX", "courseM", "corePct", "pervichkaM"]) {
+  for (const k of ["courseX", "courseM", "corePct", "pervichkaM"]) {
     const el = document.getElementById("np_" + k);
     if (el) {
       const v = parseInt(el.value);
       if (!isNaN(v)) values[k] = v;
     }
   }
-  if (!["loyalVisits", "loyalM", "activeVisits", "activeM", "newRiskVisits", "newRiskM", "sleepVisits", "sleepM", "lostVisits", "lostM"].every(key => values[key] > 0)) {
-    toast("Заполните визиты и длительность для всех групп B–F положительными числами", true);
-    return;
-  }
   Object.assign(p, values);
   p.clientBasePartition = partition;
-  p.newRiskWithin = document.getElementById("np_newRiskWithin").value === "true";
-  p.minVisits = p.loyalVisits;
-  p.riskM = p.lostM;
+  // Старые нормативы KPI и публикаций сохраняются в профиле без изменения.
   p.subdivisions = document.getElementById("np_subdivisions").value.split("\n").map(x => x.trim()).filter(Boolean);
   p.matchers = document.getElementById("np_matchers").value.split(",").map(x => x.trim()).filter(Boolean);
   saveLocal();

@@ -12,7 +12,7 @@ const {
   createMobilePublicationBundle,
   encryptMobilePublication,
 } = require("../desktop/services/mobile-publication-service.cjs");
-const { createMobileServer, MAX_UPLOAD_CHUNK_BYTES } = require("../mobile-server/server.cjs");
+const { createMobileServer, MAX_UPLOAD_CHUNK_BYTES, MAX_SESSIONS } = require("../mobile-server/server.cjs");
 const crypto = require("node:crypto");
 
 const root = path.resolve(__dirname, "..");
@@ -45,6 +45,60 @@ function vibeHeaders({ userId = "user-1", role = "user" } = {}) {
     "X-Vibe-Portal-Id": "portal-1",
   };
 }
+
+test("session capacity rejects a new login without expiring active sessions or uploads and recovers after restart", async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "klinvekt-session-capacity-"));
+  const servers = [];
+  const start = async () => {
+    const server = createMobileServer({ dataDir, staticRoot: path.join(root, "mobile-pilot") });
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    servers.push(server);
+    return server;
+  };
+  t.after(async () => { for (const server of servers) if (server.listening) await new Promise(resolve => server.close(resolve)); fs.rmSync(dataDir, { recursive: true, force: true }); });
+  const server = await start();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const publish = await fetch(`${base}/api/admin/publications`, { method: "POST", headers: { ...vibeHeaders({ role: "portal_admin" }), "Content-Type": "application/json" }, body: JSON.stringify(testBundle()) });
+  assert.equal(publish.status, 200);
+  const login = (url, userId) => fetch(`${url}/api/login`, { method: "POST", headers: { ...vibeHeaders({ userId }), "Content-Type": "application/json" }, body: JSON.stringify({ doctorId: "doctor-1", pin: "2468" }) });
+  const initial = await login(base, "existing-user");
+  assert.equal(initial.status, 200);
+  const state = server.klinvekt.state;
+  const session = [...state.sessions.values()][0];
+  for (let index = 1; index < MAX_SESSIONS; index++) state.sessions.set("synthetic-" + index, { ...session, userId: "synthetic-" + index });
+  const activeUpload = path.join(dataDir, ".synthetic-active.tmp");
+  const expiredUpload = path.join(dataDir, ".synthetic-expired.tmp");
+  fs.writeFileSync(activeUpload, "synthetic"); fs.writeFileSync(expiredUpload, "synthetic");
+  state.uploads.set("active", { temporaryPath: activeUpload, expiresAt: Date.now() + 60000 });
+  state.uploads.set("expired", { temporaryPath: expiredUpload, expiresAt: Date.now() - 1 });
+  let response = await login(base, "new-user");
+  assert.equal(response.status, 503);
+  assert.match((await response.json()).error, /предел.*сессий/i);
+  assert.equal(response.headers.get("set-cookie"), null);
+  assert.ok(response.headers.get("retry-after"));
+  assert.equal(state.sessions.size, MAX_SESSIONS);
+  assert.equal(state.uploads.has("active"), true);
+  assert.equal(fs.existsSync(activeUpload), true);
+  assert.equal(state.uploads.has("expired"), false);
+  assert.equal(fs.existsSync(expiredUpload), false);
+  response = await login(base, "existing-user");
+  assert.equal(response.status, 200, "same account replaces only its own session at capacity");
+  const cookie = response.headers.get("set-cookie").split(";")[0];
+  assert.equal(state.sessions.size, MAX_SESSIONS);
+  assert.equal(state.uploads.has("active"), true);
+  assert.equal((await fetch(`${base}/api/report`, { headers: { ...vibeHeaders({ userId: "existing-user" }), Cookie: cookie } })).status, 200);
+  state.sessions.get("synthetic-1").expiresAt = Date.now() - 1;
+  response = await login(base, "new-user");
+  assert.equal(response.status, 200);
+  assert.equal(state.sessions.size, MAX_SESSIONS);
+  assert.equal(state.sessions.has("synthetic-1"), false);
+  await new Promise(resolve => server.close(resolve));
+  const restarted = await start();
+  const restartedBase = `http://127.0.0.1:${restarted.address().port}`;
+  assert.equal(restarted.klinvekt.state.sessions.size, 0);
+  assert.equal((await fetch(`${restartedBase}/api/report`, { headers: { ...vibeHeaders({ userId: "existing-user" }), Cookie: cookie } })).status, 401);
+  assert.equal((await login(restartedBase, "existing-user")).status, 200, "saved publication opens after fresh login on restart");
+});
 
 test("Black Hole server gates access by Bitrix account, admin role and doctor PIN", async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "klinvekt-mobile-server-"));
