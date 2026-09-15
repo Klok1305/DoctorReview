@@ -205,6 +205,50 @@ async function gunzip(bytes) {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
+async function decryptSharedStandalonePage(record, pageKey, reportRevision) {
+  if (!record || record.format !== "pulse-clinic-viewer-shared-page" || Number(record.formatVersion) !== 1
+    || record.packageId !== BUNDLE.packageId || record.reportRevision !== reportRevision) {
+    throw new Error("Нарушена целостность общей страницы публикации.");
+  }
+  const encryption = record.encryption || {};
+  if (encryption.algorithm !== "aes-256-gcm" || encryption.compression !== "gzip") {
+    throw new Error("Формат общей страницы не поддерживается.");
+  }
+  const key = await crypto.subtle.importKey("raw", base64Bytes(pageKey), { name: "AES-GCM" }, false, ["decrypt"]);
+  const encrypted = joinBytes(base64Bytes(record.ciphertext), base64Bytes(encryption.tag));
+  const compressed = new Uint8Array(await crypto.subtle.decrypt({
+    name: "AES-GCM", iv: base64Bytes(encryption.iv), tagLength: 128,
+  }, key, encrypted));
+  const page = JSON.parse(new TextDecoder().decode(await gunzip(compressed)));
+  if (page.packageId !== record.packageId || page.reportRevision !== reportRevision
+    || page.pageId !== record.pageId || page.periodKey !== record.periodKey || page.pageType !== record.pageType) {
+    throw new Error("Нарушена целостность общей страницы публикации.");
+  }
+  return page;
+}
+
+async function reportsFromSharedPages(payload) {
+  const records = new Map((BUNDLE.sharedPages || []).map(record => [String(record.pageId), record]));
+  const decrypted = new Map();
+  const reports = [];
+  for (const binding of payload.bindings) {
+    const pageId = String(binding.pageId || "");
+    const record = records.get(pageId);
+    const pageKey = payload.pageKeys && payload.pageKeys[pageId];
+    if (!record || !pageKey) throw new Error("Для отчёта отсутствует общая страница или ключ доступа.");
+    let page = decrypted.get(pageId);
+    if (!page) {
+      page = await decryptSharedStandalonePage(record, pageKey, payload.reportRevision);
+      decrypted.set(pageId, page);
+    }
+    if (page.periodKey !== binding.periodKey || page.pageType !== binding.pageType) {
+      throw new Error("Привязка отчёта не соответствует общей странице.");
+    }
+    reports.push({ ...page, doctorId: String(binding.doctorId) });
+  }
+  return reports;
+}
+
 async function decryptStandaloneAccess(access, pin, { role = "doctor", doctorId = access && access.doctorId } = {}) {
   if (!window.crypto || !window.crypto.subtle) {
     throw new Error("Браузер не поддерживает локальное расшифрование. Откройте файл в актуальной версии Chrome, Edge, Firefox или Safari.");
@@ -232,12 +276,16 @@ async function decryptStandaloneAccess(access, pin, { role = "doctor", doctorId 
   const roleMatches = role === "admin"
     ? formatVersion >= 3 && payload.accessRole === "admin"
     : (!payload.accessRole || payload.accessRole === "doctor") && String(payload.doctorId) === String(doctorId);
-  if (payload.format !== "pulse-clinic-standalone-viewer" || ![2, 3].includes(formatVersion)
+  const contentMatches = formatVersion >= 4
+    ? payload.reportRevision === BUNDLE.reportRevision && Array.isArray(payload.bindings)
+      && payload.pageKeys && typeof payload.pageKeys === "object" && Array.isArray(BUNDLE.sharedPages)
+    : Array.isArray(payload.reports);
+  if (payload.format !== "pulse-clinic-standalone-viewer" || ![2, 3, 4].includes(formatVersion)
     || payload.packageId !== BUNDLE.packageId || !roleMatches
-    || !Array.isArray(payload.subjects) || !Array.isArray(payload.reports)) {
+    || !Array.isArray(payload.subjects) || !contentMatches) {
     throw new Error("Нарушена целостность автономной публикации.");
   }
-  return payload;
+  return formatVersion >= 4 ? { ...payload, reports: await reportsFromSharedPages(payload) } : payload;
 }
 
 function decryptDoctor(doctor, pin) {
@@ -491,7 +539,8 @@ function logoutDoctor() {
 }
 
 function initialize() {
-  if (BUNDLE.format !== "pulse-clinic-standalone-viewer" || ![2, 3].includes(Number(BUNDLE.formatVersion)) || !Array.isArray(BUNDLE.doctors)) {
+  if (BUNDLE.format !== "pulse-clinic-standalone-viewer" || ![2, 3, 4].includes(Number(BUNDLE.formatVersion)) || !Array.isArray(BUNDLE.doctors)
+    || (Number(BUNDLE.formatVersion) >= 4 && !Array.isArray(BUNDLE.sharedPages))) {
     showLoginError("Формат автономного Viewer не поддерживается.");
     document.getElementById("btnDoctorLogin").disabled = true;
     return;

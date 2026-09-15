@@ -903,6 +903,9 @@ function createWindow() {
                 kbWindows: viewerKbButtons.map(button => button.dataset.viewerKbWindow),
                 nazWindows: viewerNazButtons.map(button => button.dataset.viewerNazWindow),
                 metricNazWindows: computeMetrics('d1', '2026-02').cross.nazSlices,
+                clientBaseMethodology: viewerDoctorRoot.querySelector('[data-vector-key="v4"][data-client-base-methodology="partition-v1-36m"]') !== null,
+                clientBaseGroups: [...viewerDoctorRoot.querySelectorAll('[data-vector-key="v4"] [data-client-base-group]')]
+                  .map(card => card.dataset.clientBaseGroup),
                 directInterdisciplinaryMarkup: viewerInterdisciplinarySwitcherHtml(
                   { tab: 'doctor', doctorId: 'd1' }, '2026-02'
                 ).includes('data-viewer-interdisciplinary'),
@@ -911,11 +914,13 @@ function createWindow() {
                 sourcePeriod: viewerDoctorRoot.textContent.includes('Источник данных:'),
                 legacyTableRemoved: !viewerDoctorRoot.querySelector('#tblClientSegment')
               };
-              const viewerPatientRegisterValid = viewerPatientRegisterDetails.registers === 3
-                && viewerPatientRegisterDetails.rows === 10
+              const viewerPatientRegisterValid = viewerPatientRegisterDetails.registers === 1
+                && viewerPatientRegisterDetails.rows > 0
                 && viewerPatientRegisterDetails.lostPatient
                 && viewerPatientRegisterDetails.collapsibleAndSearchable
-                && viewerPatientRegisterDetails.kbWindows.join(',') === '12,24,36'
+                && viewerPatientRegisterDetails.kbWindows.length === 0
+                && viewerPatientRegisterDetails.clientBaseMethodology
+                && ['total', 'active', 'loyalSleep', 'newRisk', 'lost'].every(group => viewerPatientRegisterDetails.clientBaseGroups.includes(group))
                 && viewerPatientRegisterDetails.nazWindows.length >= 2
                 && viewerPatientRegisterDetails.sourcePeriod
                 && viewerPatientRegisterDetails.legacyTableRemoved;
@@ -1255,7 +1260,7 @@ function createWindow() {
             stage.style.cssText = 'position:fixed;inset:0;z-index:10000;overflow:auto;background:#f4f6fa;padding:24px';
             stage.innerHTML = html;
             document.body.appendChild(stage);
-            const element = stage.querySelector('[data-viewer-kb-panel]:not([hidden]) [data-viewer-patient-register]');
+            const element = stage.querySelector('[data-viewer-client-base] [data-viewer-patient-register]');
             if (!element) { stage.remove(); return ''; }
             element.open = true;
             const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.25, logging: false, windowWidth: 1400 });
@@ -1404,7 +1409,8 @@ function registerIpc() {
   ipcMain.handle("viewer-publication:export", async (_event, payload) => {
     const session = localAdminActor();
     const input = ensureObject(payload, "публикация Viewer");
-    if (!Array.isArray(input.doctors) || !Array.isArray(input.periods) || !Array.isArray(input.pages)) {
+    if (!Array.isArray(input.doctors) || !Array.isArray(input.periods)
+      || (!Array.isArray(input.pages) && (!input.reportModel || typeof input.reportModel !== "object"))) {
       throw new Error("Некорректное содержимое публикации Viewer");
     }
     const snapshot = database.loadSnapshot() || {};
@@ -1426,7 +1432,8 @@ function registerIpc() {
       doctors: input.doctors,
       subjects,
       periods: input.periods,
-      pages: input.pages,
+      pages: Array.isArray(input.pages) ? input.pages : undefined,
+      reportModel: input.reportModel && typeof input.reportModel === "object" ? input.reportModel : undefined,
       credentials,
     };
     const created = format === "html"
@@ -1449,7 +1456,17 @@ function registerIpc() {
       manifest: created.manifest,
       createdBy: session.userId,
     });
-    return { canceled: false, format, path: selected.filePath, ...recorded, doctors: doctorIds.length, periods: input.periods.length };
+    return {
+      canceled: false,
+      format,
+      path: selected.filePath,
+      ...recorded,
+      doctors: doctorIds.length,
+      periods: input.periods.length,
+      reportRevision: created.manifest.reportRevision || null,
+      estimatedBytes: created.estimate ? created.estimate.estimatedBytes : null,
+      uniquePages: created.estimate ? created.estimate.uniquePages : null,
+    };
   });
   ipcMain.handle("viewer-publication:export-pins", async (_event, payload) => {
     const session = localAdminActor();

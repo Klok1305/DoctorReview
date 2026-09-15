@@ -1130,6 +1130,8 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
 .viewer-export-dialog .viewer-doctor-list { flex: 1 1 320px; min-height: 220px; max-height: none; }
 .viewer-export-dialog .pdf-export-dialog-actions { flex: 0 0 auto; flex-wrap: wrap; }
 .viewer-export-dialog #viewerExportStatus { margin-right: auto; }
+.viewer-export-full-preset { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.viewer-export-full-preset .btn { margin-left: auto; }
 .viewer-export-admin-access { display: flex; align-items: end; gap: 14px; flex-wrap: wrap; }
 .viewer-export-admin-access > b { align-self: center; }
 .viewer-export-admin-access .fld { margin: 0 0 0 auto; min-width: min(280px, 100%); }

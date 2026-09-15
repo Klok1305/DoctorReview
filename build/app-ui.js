@@ -1422,7 +1422,9 @@ function clientSegmentLimitMarkup(clients) {
 }
 
 function viewerPatientRowsHtml(kb) {
-  const groups = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+  const partitioned = Boolean(kb.partition);
+  const groups = partitioned ? ["active", "loyalSleep", "newRisk", "lost"] : ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+  const groupLabel = group => partitioned ? adminClientBaseGroupLabel(group) : clientBaseGroupLabel(group);
   const rows = [...(kb.clientRows || [])].sort((a, b) =>
     Number(b.s || 0) - Number(a.s || 0)
     || String(a.name || "").localeCompare(String(b.name || ""), "ru", { sensitivity: "base" }));
@@ -1433,13 +1435,13 @@ function viewerPatientRowsHtml(kb) {
     `<option value="all">Все пациенты · ${fmtNum(rows.length)}</option>`,
     `<option value="work">Для работы · ${fmtNum(workCount)}</option>`,
     ...groups.filter(group => kb.groupAvailable && kb.groupAvailable[group]).map(group =>
-      `<option value="${group}">${esc(clientBaseGroupLabel(group))} · ${fmtNum(rows.filter(patient => (patient.groups || []).includes(group)).length)}</option>`),
+      `<option value="${group}">${esc(groupLabel(group))} · ${fmtNum(rows.filter(patient => (patient.groups || []).includes(group)).length)}</option>`),
     `<option value="ungrouped">Без сегмента · ${fmtNum(ungroupedCount)}</option>`,
   ];
   const body = rows.length ? rows.map(patient => {
     const patientGroups = (patient.groups || []).filter(group => groups.includes(group));
     const badges = patientGroups.length
-      ? patientGroups.map(group => `<span class="badge ${group === "active" || group === "loyal" ? "ok" : group === "lost" ? "bad" : "warn"}">${esc(clientBaseGroupLabel(group))}</span>`).join(" ")
+      ? patientGroups.map(group => `<span class="badge ${group === "active" || group === "loyal" ? "ok" : group === "lost" ? "bad" : "warn"}">${esc(groupLabel(group))}</span>`).join(" ")
       : '<span class="muted">Без сегмента</span>';
     const searchText = `${patient.name || ""} ${patient.patientId || ""}`.trim();
     return `<tr data-viewer-patient-row data-patient-search="${esc(searchText)}" data-patient-groups="${esc(patientGroups.join(" "))}">
@@ -1466,45 +1468,15 @@ function viewerPatientRowsHtml(kb) {
   </details>`;
 }
 
-function viewerClientBasePanelHtml(kb, windowMonths, periodKey) {
-  if (!kb) {
-    return `<div class="notice blue"><b>${fmtNum(windowMonths)} мес.</b> — нет выгрузки «Давность посещений» ровно за этот период. Другой период автоматически не подставляется.</div>`;
-  }
-  const groups = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
-  const groupCards = groups.filter(group => kb.groupAvailable && kb.groupAvailable[group]).map(group => {
-    const cls = group === "active" || group === "loyal" ? "good" : group === "lost" ? "bad" : "warn";
-    return `<div class="kb-summary-card ${cls}">
-      <div class="kb-summary-label">${esc(clientBaseGroupLabel(group))}</div>
-      <div class="kb-summary-value-line"><div class="kb-summary-value">${fmtNum(kb.seg[group])} чел.</div><div class="kb-summary-share">${fmtPct(clientBaseGroupPct(kb, group))}</div></div>
-      <div class="kb-summary-meta">${esc(clientBaseGroupDescription(kb, group))}</div>
-    </div>`;
-  }).join("");
-  const groupRules = groups.filter(group => kb.groupAvailable && kb.groupAvailable[group])
-    .map(group => `<li><b>${esc(clientBaseGroupLabel(group))}:</b> ${esc(clientBaseGroupDescription(kb, group))}.</li>`).join("");
-  return `<p class="kb-source"><b>Источник данных:</b> отчёт за ${esc(monthLabel(periodKey))} · период выгрузки ${esc(periodStr(kb.period))} · окно анализа ${fmtNum(kb.window)} мес.</p>
-    <div class="kb-summary-grid">
-      <div class="kb-summary-card"><div class="kb-summary-label">Общая база</div><div class="kb-summary-value-line"><div class="kb-summary-value">${fmtNum(kb.total)} чел.</div><div class="kb-summary-share">100%</div></div><div class="kb-summary-meta">уникальные пациенты · ${fmtNum(kb.visits)} визитов</div></div>
-      ${groupCards}
-    </div>
-    <div class="kb-group-rules"><b>Правила сегментов для этого периода:</b><ul>${groupRules}</ul><p class="small muted">Проценты рассчитаны от общей базы. Группы могут пересекаться.</p></div>
-    ${viewerPatientRowsHtml(kb)}`;
-}
-
 function viewerClientBaseHtml(target, periodKey) {
   if (!target || target.tab !== "doctor" || !target.doctorId) return "";
   const doctorId = String(target.doctorId);
-  const result = computeMetrics(doctorId, periodKey);
-  const available = result && result.akb && Array.isArray(result.akb.availableWins) ? result.akb.availableWins.map(Number).filter(Number.isFinite) : [];
-  const windows = [12, 24, 36];
-  const requested = Object.prototype.hasOwnProperty.call(UI.kbWinByDoctor, doctorId) ? UI.kbWinByDoctor[doctorId] : UI.kbWin;
-  const preferred = recommendedClientBaseWindow(available, profileForDoctor(doctorId), requested);
-  const selected = windows.includes(preferred) ? preferred : (windows.find(windowMonths => available.includes(windowMonths)) || windows[0]);
-  const buttons = windows.map(windowMonths => `<button type="button" data-viewer-kb-window="${windowMonths}" aria-pressed="${windowMonths === selected ? "true" : "false"}" class="${windowMonths === selected ? "active" : ""}">${windowMonths === 12 ? "12 мес." : windowMonths === 24 ? "24 мес." : windowMonths === 36 ? "36 мес." : `${windowMonths} мес.`}</button>`).join("");
-  const panels = windows.map(windowMonths => `<div data-viewer-kb-panel="${windowMonths}" ${windowMonths === selected ? "" : "hidden"}>${viewerClientBasePanelHtml(result && result.akb ? result.akb.wins[windowMonths] : null, windowMonths, periodKey)}</div>`).join("");
-  return `<section class="card vector-card viewer-client-base-card" data-vector-key="v4" data-viewer-client-base style="border-top-color:${VECTOR_META.v4.color}">
-    <div class="vhead"><div><h3 class="mt0">Вектор 4. Работа с клиентской базой <span class="badge ${VECTOR_META.v4.cls}">${VECTOR_META.v4.tag}</span></h3><p class="small muted">${esc(doctorName(doctorId))} · выберите окно анализа; период исходной выгрузки указан внутри.</p></div><span class="seg no-print">${buttons}</span></div>
-    ${panels}
-  </section>`;
+  const kb = adminClientBaseSummary(doctorId, periodKey);
+  if (!kb) return "";
+  return `<div class="viewer-client-base-register" data-viewer-client-base data-client-base-methodology="partition-v1-36m">
+    <p class="kb-source"><b>Источник данных:</b> отчёт за ${esc(monthLabel(periodKey))} · период выгрузки ${esc(periodStr(kb.period))} · единая с Admin методика четырёх непересекающихся групп за 36 мес.</p>
+    ${viewerPatientRowsHtml(kb)}
+  </div>`;
 }
 
 function viewerAppointmentRowsHtml(nz) {
@@ -1817,7 +1789,79 @@ async function buildPdfFromSlides(slides, onProgress) {
   return pdf;
 }
 
-function printablePdfDocument(stage, target, monthKey) {
+const REPORT_MODEL_FORMAT = "klinvekt-report-model";
+const REPORT_MODEL_VERSION = 1;
+
+function freezeReportModel(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  Object.values(value).forEach(freezeReportModel);
+  return Object.freeze(value);
+}
+
+async function reportModelSha256(value) {
+  if (!window.crypto || !window.crypto.subtle) throw new Error("Браузер не поддерживает фиксацию ревизии отчёта");
+  const bytes = new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value));
+  const digest = await window.crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function createImmutableReportModel(periods, legacyPages) {
+  const normalizedPeriods = [...new Set((periods || []).map(String))].sort();
+  const pages = new Map();
+  const bindings = [];
+  const bindingKeys = new Set();
+  for (const legacyPage of legacyPages || []) {
+    const content = {
+      periodKey: String(legacyPage.periodKey || ""),
+      pageType: String(legacyPage.pageType || ""),
+      scopeId: String(legacyPage.scopeId || "").slice(0, 240),
+      title: String(legacyPage.title || "Отчёт").slice(0, 300),
+      html: String(legacyPage.html || ""),
+    };
+    const pageId = await reportModelSha256(content);
+    if (!pages.has(pageId)) pages.set(pageId, { pageId, ...content });
+    const doctorId = String(legacyPage.doctorId || "");
+    const bindingKey = `${doctorId}\u0000${content.periodKey}\u0000${content.pageType}`;
+    const previous = bindings.find(binding => `${binding.doctorId}\u0000${binding.periodKey}\u0000${binding.pageType}` === bindingKey);
+    if (previous && previous.pageId !== pageId) throw new Error("Для одной страницы врача сформированы разные версии");
+    if (!bindingKeys.has(bindingKey)) {
+      bindingKeys.add(bindingKey);
+      bindings.push({ doctorId, periodKey: content.periodKey, pageType: content.pageType, pageId });
+    }
+  }
+  const model = {
+    format: REPORT_MODEL_FORMAT,
+    formatVersion: REPORT_MODEL_VERSION,
+    revision: "",
+    periods: normalizedPeriods,
+    pages: [...pages.values()].sort((a, b) => a.pageId.localeCompare(b.pageId)),
+    bindings: bindings.sort((a, b) => `${a.doctorId}\u0000${a.periodKey}\u0000${a.pageType}`.localeCompare(`${b.doctorId}\u0000${b.periodKey}\u0000${b.pageType}`)),
+  };
+  model.revision = await reportModelSha256({
+    format: model.format,
+    formatVersion: model.formatVersion,
+    periods: model.periods,
+    pages: model.pages,
+    bindings: model.bindings,
+  });
+  return freezeReportModel(model);
+}
+
+function reportModelJsonAdapter(model) {
+  return JSON.parse(JSON.stringify(model));
+}
+
+function reportModelHtmlAdapter(model, pageId) {
+  const page = model.pages.find(item => item.pageId === pageId);
+  if (!page) throw new Error("Страница отсутствует в зафиксированной модели отчёта");
+  return page.html;
+}
+
+function reportModelPdfAdapter(model, pageId, target, monthKey) {
+  return printablePdfDocument(reportModelHtmlAdapter(model, pageId), target, monthKey);
+}
+
+function printablePdfDocument(reportHtml, target, monthKey) {
   const styles = [...document.querySelectorAll("style")].map(style => style.textContent || "").join("\n");
   const title = `${target.kind}: ${target.name} — ${monthLabel(monthKey)}`;
   return `<!doctype html>
@@ -1846,7 +1890,7 @@ function printablePdfDocument(stage, target, monthKey) {
     .pdf-print-document input[type="checkbox"], .pdf-print-document button { display: none !important; }
   </style>
 </head>
-<body><main class="pdf-print-document">${stage.innerHTML}</main></body>
+<body><main class="pdf-print-document">${reportHtml}</main></body>
 </html>`;
 }
 
@@ -2194,7 +2238,17 @@ async function exportAllReportsToFolder(targets) {
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         const fileName = uniquePdfFileName(target.fileBase, usedNames, target.relativePath);
         if (useChromiumPdf) {
-          const printHtml = printablePdfDocument(stage, target, mk);
+          const pdfPageType = target.tab === "department" ? "department" : target.tab === "dept" ? "specialization" : "doctor";
+          const pdfSubjectId = String(target.doctorId || target.specializationName || target.departmentName || target.name);
+          const pdfModel = await createImmutableReportModel([mk], [{
+            doctorId: pdfSubjectId,
+            periodKey: mk,
+            pageType: pdfPageType,
+            scopeId: pdfSubjectId,
+            title: `${target.kind}: ${target.name} — ${monthLabel(mk)}`,
+            html: stage.innerHTML,
+          }]);
+          const printHtml = reportModelPdfAdapter(pdfModel, pdfModel.pages[0].pageId, target, mk);
           const bytes = new Uint8Array(await DESKTOP_API.renderPdf({ html: printHtml }));
           await DESKTOP_API.writeExportFile({ token: exportBatch.token, relativePath: target.relativePath, fileName, bytes });
         } else {
@@ -4222,7 +4276,7 @@ function renderDoctor() {
   /* ---- В4 Клиентская база ---- */
   const kb = adminClientBaseSummary(UI.docId, mk);
   const kbSeries = adminClientBaseSeries(UI.docId, mk);
-  html += `<div class="card vector-card" id="blkV4" data-vector-key="v4" style="border-top-color:${VECTOR_META.v4.color}">
+  html += `<div class="card vector-card" id="blkV4" data-vector-key="v4" data-client-base-methodology="partition-v1-36m" style="border-top-color:${VECTOR_META.v4.color}">
     <div class="vhead"><h3 class="mt0">Вектор 4. Работа с клиентской базой <span class="badge ${VECTOR_META.v4.cls}">${VECTOR_META.v4.tag}</span></h3>
     <span>${vecBadge("v4", r, docProfile)} ${blockBtn("blkV4")} <span class="badge mut">База за 3 года</span></span></div>`;
   if (!kb) {
@@ -5066,8 +5120,7 @@ async function composeViewerDashboardHtml(target, periodKey, context, comments) 
   const clientBase = viewerClientBaseHtml(target, periodKey);
   if (clientBase) {
     const originalClientBase = root.querySelector('[data-vector-key="v4"]');
-    if (originalClientBase) originalClientBase.outerHTML = clientBase;
-    else root.insertAdjacentHTML("beforeend", clientBase);
+    if (originalClientBase) originalClientBase.insertAdjacentHTML("beforeend", clientBase);
   }
   return `<div class="viewer-dashboard-snapshot" data-source-tab="${esc(target.tab)}">${root.innerHTML}</div>`;
 }
@@ -5077,13 +5130,30 @@ function closeViewerExportDialog() {
   if (dialog && dialog.open) dialog.close();
 }
 
+function viewerManagedDepartments(doctorId) {
+  const id = String(doctorId || "");
+  return Object.entries(VIEWER_ACCESS.departmentHeads || {})
+    .filter(([, headDoctorId]) => String(headDoctorId) === id)
+    .map(([department]) => department);
+}
+
+function viewerRecipientHasDashboardData(doctorId, periodKeys, includeManagedDepartments = false) {
+  if (periodKeys.some(periodKey => doctorHasDashboardData(doctorId, periodKey))) return true;
+  if (!includeManagedDepartments) return false;
+  const departments = new Set(viewerManagedDepartments(doctorId));
+  return departments.size > 0 && Object.keys(DB.doctors).some(subjectDoctorId =>
+    departments.has(resolvedDepartmentName(subjectDoctorId) || "")
+      && periodKeys.some(periodKey => doctorHasDashboardData(subjectDoctorId, periodKey))
+  );
+}
+
 function viewerExportDoctorRows() {
   const months = monthKeysSorted();
   return (VIEWER_ACCESS.doctors || [])
     .filter(item =>
       item.active
       && DB.doctors[item.doctorId]
-      && months.some(monthKey => doctorHasDashboardData(item.doctorId, monthKey))
+      && viewerRecipientHasDashboardData(item.doctorId, months, true)
     )
     .sort(compareViewerDoctorsAlphabetically);
 }
@@ -5109,6 +5179,23 @@ function filterViewerExportDoctors(selectMatching) {
     if (selectMatching && matches) row.querySelector("input").checked = true;
   });
   updateViewerExportStatus();
+}
+
+function selectFullViewerExport() {
+  document.querySelectorAll("#viewerExportPeriods input, #viewerExportPageTypes input").forEach(input => {
+    input.checked = true;
+  });
+  document.querySelectorAll('#viewerExportDoctors input[data-viewer-export-doctor]').forEach(input => {
+    input.checked = true;
+  });
+  document.getElementById("viewerExportDepartmentFilter").value = "";
+  document.getElementById("viewerExportSpecializationFilter").value = "";
+  const departmentScope = document.querySelector('input[name="viewerExportHeadScope"][value="department"]');
+  if (departmentScope) departmentScope.checked = true;
+  filterViewerExportDoctors(false);
+  const error = document.getElementById("viewerExportError");
+  error.textContent = "";
+  error.classList.add("hidden");
 }
 
 async function openViewerExportDialog() {
@@ -5175,10 +5262,10 @@ async function exportViewerPackage(format = "html") {
     return;
   }
   const eligibleDoctorIds = doctorIds.filter(doctorId =>
-    periodKeys.some(periodKey => doctorHasDashboardData(doctorId, periodKey))
+    viewerRecipientHasDashboardData(doctorId, periodKeys, includeManagedDepartmentDoctors)
   );
   if (!eligibleDoctorIds.length) {
-    errorBox.textContent = "У выбранных врачей нет отчёта «Выработка» ни за один выбранный период.";
+    errorBox.textContent = "У выбранных врачей и управляемых ими отделений нет отчёта «Выработка» ни за один выбранный период.";
     errorBox.classList.remove("hidden");
     return;
   }
@@ -5285,8 +5372,11 @@ async function exportViewerPackage(format = "html") {
         if (completed % 4 === 0) await new Promise(resolve => requestAnimationFrame(resolve));
       }
     }
+    const reportModel = await createImmutableReportModel(publicationPeriodKeys, pages);
+    const avoided = Math.max(0, reportModel.bindings.length - reportModel.pages.length);
+    document.getElementById("viewerExportStatus").textContent = `Модель зафиксирована · ревизия ${reportModel.revision.slice(0, 12)}… · общих страниц ${reportModel.pages.length}${avoided ? ` · исключено копий ${avoided}` : ""}`;
     const result = await DESKTOP_API.exportViewerPackage({
-      format, doctors, subjects, periods: publicationPeriodKeys, pages,
+      format, doctors, subjects, periods: publicationPeriodKeys, reportModel: reportModelJsonAdapter(reportModel),
       ...(format === "html" ? { adminPin } : {}),
     });
     if (result.canceled) {
@@ -5295,7 +5385,7 @@ async function exportViewerPackage(format = "html") {
     }
     closeViewerExportDialog();
     const label = result.format === "html" ? "Автономный HTML создан" : "ZIP создан";
-    const skippedSuffix = skippedDoctors ? ` Исключено без «Выработки»: ${skippedDoctors}.` : "";
+    const skippedSuffix = skippedDoctors ? ` Исключено без доступных страниц: ${skippedDoctors}.` : "";
     toast(`${label}: врачей — ${result.doctors}, периодов — ${result.periods}.${skippedSuffix} SHA-256: ${result.sha256.slice(0, 12)}…`);
   } catch (error) {
     errorBox.textContent = "Публикация не выполнена: " + error.message;
@@ -6964,6 +7054,7 @@ async function initApp() {
   document.getElementById("viewerExportZip").addEventListener("click", () => exportViewerPackage("zip"));
   document.getElementById("viewerExportDepartmentFilter").addEventListener("change", () => filterViewerExportDoctors(false));
   document.getElementById("viewerExportSpecializationFilter").addEventListener("change", () => filterViewerExportDoctors(false));
+  document.getElementById("viewerExportSelectAll").addEventListener("click", selectFullViewerExport);
   document.getElementById("viewerExportSelectFiltered").addEventListener("click", () => filterViewerExportDoctors(true));
   document.getElementById("viewerExportClearDoctors").addEventListener("click", () => {
     document.querySelectorAll('#viewerExportDoctors input[data-viewer-export-doctor]').forEach(input => { input.checked = false; });

@@ -1,6 +1,6 @@
 # Карта проекта
 
-Проверено: **2026-09-14**. Версия приложения: **2.6.15** (источник — `package.json`).
+Проверено: **2026-09-15**. Версия приложения: **2.6.16** (источник — `package.json`).
 Репозиторий: `Klok1305/DoctorReview`. Desktop: Windows / Electron 37. Node.js ≥22, pnpm 11.
 
 ## Самое важное: релиз запускаем и не ждём
@@ -32,7 +32,8 @@
                           импорт: database:save-import (снимок + источники)
                                   → одна транзакция SQLite → успех либо откат renderer
 
-UI → готовые HTML-страницы → viewer-package-service → Viewer ZIP / автономный HTML
+UI → неизменяемая ReportModel v1 с SHA-256-ревизией
+   → HTML/PDF/JSON-адаптеры → Viewer ZIP v4 / автономный HTML v4 / PDF
 UI → buildMobilePublication → mobile-publication-service → .kvmobilebundle
    → мобильный сервер → API готового отчёта → mobile-pilot/app.js
 ```
@@ -53,9 +54,9 @@ Renderer Admin — четыре скрипта в общем глобально�
 | SQLite, JSON-копия, комментарии, назначения заведующих | `desktop/services/database.cjs`: `DatabaseService`, `saveSnapshot`, `createPortableJson`, `restorePortableJson`, `viewerExportCredentials` | `tests/database.test.cjs`, `tests/auth-publication.test.cjs` |
 | Рабочая папка и файлы | `desktop/services/config-store.cjs`, `desktop/services/file-service.cjs` | `tests/desktop-services.test.cjs` |
 | Backup и обновление Admin | `desktop/services/backup-service.cjs`, `desktop/services/update-service.cjs` | `tests/desktop-services.test.cjs`, `tests/database.test.cjs` |
-| PDF и Excel | `build/app-ui.js`: `pdfTargetSource`, экспорт; `desktop/main.cjs`: `renderHtmlToPdf`; print CSS | `tests/build.test.cjs`, PDF-smoke и визуальная проверка |
-| Подготовка Viewer | `build/app-ui.js`: `composeViewerDashboardHtml`, `exportViewerPackage`; `desktop/services/viewer-package-service.cjs` | `tests/viewer-publication.test.cjs`, `tests/auth-publication.test.cjs`, smoke |
-| Установленный Viewer | `viewer/main.cjs`, `viewer/preload.cjs`, `viewer/storage-service.cjs`, `viewer/app.js`, `viewer/index.html`, `viewer/viewer.css` | `tests/viewer-publication.test.cjs` |
+| PDF и Excel | `build/app-ui.js`: `createImmutableReportModel`, `reportModelPdfAdapter`, `pdfTargetSource`, экспорт; `desktop/main.cjs`: `renderHtmlToPdf`; print CSS | `tests/build.test.cjs`, PDF-smoke и визуальная проверка |
+| Подготовка Viewer | `build/app-ui.js`: `composeViewerDashboardHtml`, `createImmutableReportModel`, `exportViewerPackage`; `desktop/services/viewer-package-service.cjs`: нормализация ReportModel, оценка размера, общие страницы и адаптеры | `tests/viewer-publication.test.cjs`, `tests/auth-publication.test.cjs`, smoke |
+| Установленный Viewer | `viewer/main.cjs`, `viewer/preload.cjs`, `viewer/storage-service.cjs`: поколения каталога и общий пул страниц; `viewer/app.js`, `viewer/index.html`, `viewer/viewer.css` | `tests/viewer-publication.test.cjs` |
 | Автономный Viewer | `viewer/standalone.html`, `viewer/standalone-app.js`, `desktop/services/viewer-package-service.cjs` | `tests/viewer-publication.test.cjs`, smoke |
 | Данные мобильного отчёта | `build/app-ui.js`: `buildMobilePublication`, `exportAllMobilePublications`; `desktop/services/mobile-publication-service.cjs` | `tests/legacy-core.test.cjs`, `tests/mobile-pilot.test.cjs` |
 | Мобильный интерфейс | `mobile-pilot/app.js`, `app.css`, `index.html`, `demo-data.js`, `manifest.webmanifest`, `service-worker.js`, `icons/` | `tests/mobile-pilot.test.cjs`, браузерная проверка |
@@ -69,7 +70,9 @@ Renderer Admin — четыре скрипта в общем глобально�
 - Аналитика хранится JSON-записями в `app_settings`, `app_meta`, `doctors`, `months`. Импорты, комментарии и версии, публикации и страницы, настройки Viewer и заведующие хранятся в отдельных таблицах того же сервиса. `saveSnapshot(snapshot, importRecords)` атомарно сохраняет аналитику и происхождение импорта без изменения схемы.
 - Импорт фиксируется по одному файлу через `desktopAPI.saveImport` → `database:save-import`. Успех и счётчики обновляются после commit; отказ откатывает врачей/месяцы renderer и останавливает оставшуюся пачку. Обычное автосохранение во время изменения импорта откладывается до commit или отката. Ожидающие обычные снимки объединяются; команды импорта сохраняют порядок и происхождение. ZIP подтверждается в транзакции последнего поддерживаемого файла; при ошибке архива подтверждения нет. Повтор пропускает только источники, успешно записанные в SQLite, без доверия устаревшему `source.imported`.
 - Полная JSON-копия: `klinvekt-portable-json` v1, включает снимок и служебные таблицы. Фактические заведующие берутся из `viewer_department_heads`, а не из устаревшего renderer-снимка. Старый JSON остаётся импортом только аналитики. Восстановление имеет страховочную копию и откат. `.ovbackup` — копия SQLite.
-- Viewer ZIP и автономный HTML создаются сервисом публикации в формате 3; ZIP формата 2 также читается, выпущенные автономные HTML формата 2 самодостаточны. Совместимость сохранять.
+- Viewer ZIP и автономный HTML создаются в формате **4** из неизменяемой `klinvekt-report-model` v1. Модель содержит уникальные страницы, привязки к врачам и SHA-256-ревизию; одинаковая сводная страница хранится и шифруется один раз, а получателю через его PIN выдаются только ключи разрешённых страниц. До PBKDF2/scrypt и сборки результата сервис рассчитывает верхнюю оценку размера и отклоняет заведомо слишком большую публикацию. ZIP форматов 2 и 3 импортируются новым Viewer; ранее выпущенные автономные HTML форматов 2 и 3 самодостаточны, а код нового автономного Viewer также сохраняет их контракт чтения.
+- Установленный Viewer хранит неизменяемые страницы/выпуски отдельно от метаданных. Новый каталог полностью собирается в `_viewer/generations/<generationId>`, затем одним атомарным обновлением `_viewer/current.json` становится активным; при отказе до переключения читается прежнее поколение. Старый корневой каталог без указателя остаётся читаемым. По решению пользователя автоматическое удаление прежних выпусков и поколений не выполняется.
+- Пресет полной публикации выбирает все доступные периоды, все три типа страниц, всех включённых получателей и полный состав управляемых отделений; включённый заведующий может не иметь собственной выработки, если у его отделения есть отчёты. Действующие PIN врачей берутся из SQLite без изменения; администраторский PIN для автономного HTML вводится повторно, потому что открытым текстом не хранится. Совместимость сохранять.
 - `.kvmobile` — публикация v1; `.kvmobilebundle` — пакет v2, сервер также читает v1. В v2 каждый отчёт хранится один раз; получатель получает разрешения на свой отчёт и отчёты управляемых отделений. Назначения и PIN берутся из SQLite. Заведующий может не иметь собственной выработки.
 - Мобильный экспорт включает до шести последних периодов с персональной «Выработкой». Необязательные деревья, графики, история KPI и комментарии совместимы со старыми публикациями. Пропуски не заменять нулями.
 
@@ -79,8 +82,8 @@ Renderer Admin — четыре скрипта в общем глобально�
 - Сводные отношения `aggregateDeptMonth` рассчитываются только при сопоставимых данных всех включённых врачей. `coverage[metric]` содержит `coveredDoctors`, `expectedDoctors`, `complete`, `missingDoctors`; неполные отношения и месячные пациенты/визиты остаются `null`, UI и новые отчёты показывают пояснение. Расписание суммирует минуты; среднее отдельных процентов без минут не подставляется. Курсовое требует одинакового окна; групповые доли первичной базы требуют одинаковых окон у всех врачей. Персональные формулы не изменены.
 - Сводная база объединяет пациентов по ID, при отсутствии ID — по нормализованному ФИО; строки без идентификатора и имени остаются отдельными. Разные ID не объединяются по совпавшему имени. Визиты и выручка складываются как отношения пациент–врач, группы объединяются и могут пересекаться; сводка не выдаётся за непересекающееся разбиение единой базы. Отчёт отделения использует тот же агрегат с точным списком своих врачей.
 - Выручка выполненных перенаправлений берётся из «Выработки». «Назначения» дают количества и конверсию. Индивидуальное `overrides[name].referralIncluded` имеет приоритет над общим правилом учёта выручки.
-- Admin В4: `adminClientBaseSummary → partitionClientBase`, только точное окно **36 месяцев**, четыре непересекающиеся группы. Настройки `clientBasePartition`: `loyalVisits`, `activeM`, `lostM`, `lostAnyVisits`. В настройках четыре строки с визитами и сроком; `syncClientBasePartitionControls` связывает общие границы. Порог лояльности общий; максимум визитов новых/потерянных на единицу меньше. Интерфейс не вводит независимых алгоритмов для строк.
-- `kbSummary` и прежние нормативы B–F по-прежнему управляют KPI, баллами, сводками, Viewer и мобильными публикациями. Их группы могут пересекаться. Прежняя таблица пяти групп убрана из настроек; сохранённые параметры B–F не изменяются при сохранении четырёх групп. Не заменять их новым разбиением без отдельного решения о формулах и совместимости.
+- Admin В4 и новые публикации Viewer: `adminClientBaseSummary → partitionClientBase`, только точное окно **36 месяцев**, четыре непересекающиеся группы. Viewer сохраняет тот же блок, диаграмму и пороги Admin, добавляя PIN-защищённый реестр пациентов; методика помечена `partition-v1-36m`. Настройки `clientBasePartition`: `loyalVisits`, `activeM`, `lostM`, `lostAnyVisits`. В настройках четыре строки с визитами и сроком; `syncClientBasePartitionControls` связывает общие границы. Порог лояльности общий; максимум визитов новых/потерянных на единицу меньше. Интерфейс не вводит независимых алгоритмов для строк.
+- `kbSummary` и прежние нормативы B–F по-прежнему управляют KPI, баллами, сводками и мобильными публикациями; прежние Viewer-пакеты самодостаточны и сохраняют старое представление. Эти группы могут пересекаться. Прежняя таблица пяти групп убрана из настроек; сохранённые параметры B–F не изменяются при сохранении четырёх групп. Не заменять формулы KPI и мобильной публикации новым разбиением без отдельного решения о формулах и совместимости.
 - Admin `adminDoctorDynamics` показывает январь–выбранный месяц; `computeDoctorDynamics` используется другими потребителями для шестимесячной динамики. История карточек — `doctorMetricDynamics`. Эти пути пока не полностью унифицированы: известные расхождения описаны в обзоре архитектуры.
 - `parseProstoy` читает фактическое время из подколонки «Факт», а не «Норма». `parseHoursMin` сохраняет минуты; месяц импорта определяется периодом внутри файла.
 

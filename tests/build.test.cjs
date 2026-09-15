@@ -283,7 +283,8 @@ test("desktop PDF export prints prepared HTML through Chromium and keeps a reada
   assert.match(main, /printWindow\.webContents\.printToPDF\(/);
   assert.match(main, /ipcMain\.handle\("export:render-pdf"/);
   assert.match(ui, /const useChromiumPdf = Boolean\(useDesktopExport && typeof DESKTOP_API\.renderPdf === "function"\)/);
-  assert.match(ui, /printablePdfDocument\(stage, target, mk\)/);
+  assert.match(ui, /reportModelPdfAdapter\(pdfModel, pdfModel\.pages\[0\]\.pageId, target, mk\)/);
+  assert.match(ui, /async function createImmutableReportModel\(periods, legacyPages\)/);
   assert.match(ui, /function readableCanvasSliceEnd\(canvas, startY, idealEnd\)/);
   assert.doesNotMatch(ui, /fitScale = maxImgH \/ scaledHeight/);
 });
@@ -918,8 +919,13 @@ test("Viewer access is name plus PIN with encrypted pages and no Windows or NTFS
   assert.match(viewerIndex, /Постоянный PIN/);
   assert.match(storage, /DOCTOR_LOCK_MS = 15 \* 60 \* 1000/);
   assert.match(storage, /decryptViewerPage/);
+  assert.match(storage, /decryptSharedPage/);
+  assert.match(storage, /pulse-clinic-viewer-generation-pointer/);
   assert.match(packages, /aes-256-gcm/);
-  assert.match(packages, /FORMAT_VERSION = 3/);
+  assert.match(packages, /FORMAT_VERSION = 4/);
+  assert.match(packages, /REPORT_MODEL_FORMAT = "klinvekt-report-model"/);
+  assert.match(packages, /function estimateViewerPublication\(/);
+  assert.match(packages, /duplicatedPagesAvoided/);
   assert.match(adminTemplate, /Один автономный HTML/);
   assert.match(adminTemplate, /ZIP для установленного Viewer/);
   assert.match(adminUi, /exportViewerPackage\("html"\)/);
@@ -963,8 +969,60 @@ test("Viewer export dialog uses the shared sorted month helper", () => {
   assert.notEqual(end, -1);
   const handler = adminUi.slice(start, end);
   assert.match(handler, /const months = monthKeysSorted\(\);/);
-  assert.match(adminUi, /doctorHasDashboardData\(item\.doctorId, monthKey\)/);
+  assert.match(adminUi, /viewerRecipientHasDashboardData\(item\.doctorId, months, true\)/);
   assert.doesNotMatch(handler, /sortedMonths\(\)/);
+});
+
+test("Viewer export dialog has a full standalone HTML preset without changing saved PINs", () => {
+  const vm = require("node:vm");
+  const template = fs.readFileSync(path.join(build, "index.template.html"), "utf8");
+  const adminUi = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const start = adminUi.indexOf("function selectFullViewerExport()");
+  const end = adminUi.indexOf("async function openViewerExportDialog()", start);
+  assert.match(template, /id="viewerExportSelectAll">Выбрать всё<\/button>/);
+  assert.match(template, /Назначенные врачам PIN не изменяются/);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const handler = adminUi.slice(start, end);
+  assert.match(handler, /#viewerExportPeriods input, #viewerExportPageTypes input/);
+  assert.match(handler, /#viewerExportDoctors input\[data-viewer-export-doctor\]/);
+  assert.match(handler, /viewerExportHeadScope.*value="department"/);
+  assert.match(adminUi, /viewerExportSelectAll"\)\.addEventListener\("click", selectFullViewerExport\)/);
+  assert.doesNotMatch(handler, /updateViewerDoctorAccess|pinVersion|\.pin\s*=/);
+
+  const periods = [{ checked: false }, { checked: false }];
+  const pageTypes = [{ checked: false }, { checked: false }, { checked: false }];
+  const doctors = [{ checked: false }, { checked: false }];
+  const departmentScope = { checked: false };
+  const departmentFilter = { value: "Терапия" };
+  const specializationFilter = { value: "Кардиология" };
+  const error = { textContent: "Ошибка", classList: { add(value) { this.value = value; } } };
+  let filtered = null;
+  const context = vm.createContext({
+    document: {
+      querySelectorAll(selector) {
+        if (selector === "#viewerExportPeriods input, #viewerExportPageTypes input") return [...periods, ...pageTypes];
+        if (selector === "#viewerExportDoctors input[data-viewer-export-doctor]") return doctors;
+        return [];
+      },
+      querySelector(selector) {
+        return selector === 'input[name="viewerExportHeadScope"][value="department"]' ? departmentScope : null;
+      },
+      getElementById(id) {
+        return { viewerExportDepartmentFilter: departmentFilter, viewerExportSpecializationFilter: specializationFilter,
+          viewerExportError: error }[id];
+      },
+    },
+    filterViewerExportDoctors(value) { filtered = value; },
+  });
+  vm.runInContext(`${handler}\nselectFullViewerExport();`, context);
+  assert.ok([...periods, ...pageTypes, ...doctors].every(input => input.checked));
+  assert.equal(departmentScope.checked, true);
+  assert.equal(departmentFilter.value, "");
+  assert.equal(specializationFilter.value, "");
+  assert.equal(filtered, false);
+  assert.equal(error.textContent, "");
+  assert.equal(error.classList.value, "hidden");
 });
 
 test("Admin exports a patient-free mobile publication for the selected doctor", () => {
@@ -1030,7 +1088,7 @@ test("portable JSON uses the authoritative SQLite data and restores auxiliary ta
   assert.match(database, /snapshot\.settings\.departmentHeadDoctorIds = departmentHeads/);
 });
 
-test("Viewer doctor HTML keeps safe period switchers, patient search and read-only platform ratings", () => {
+test("Viewer doctor HTML mirrors the Admin client-base methodology and keeps protected patient tools", () => {
   const adminUi = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const appCss = fs.readFileSync(path.join(build, "app.css"), "utf8");
   const viewerApp = fs.readFileSync(path.join(root, "viewer", "app.js"), "utf8");
@@ -1038,10 +1096,12 @@ test("Viewer doctor HTML keeps safe period switchers, patient search and read-on
 
   assert.match(adminUi, /function viewerClientBaseHtml\(target, periodKey\)/);
   assert.match(adminUi, /target\.tab !== "doctor"/);
-  assert.match(adminUi, /const windows = \[12, 24, 36\]/);
-  assert.match(adminUi, /data-viewer-kb-window/);
-  assert.match(adminUi, /data-viewer-kb-panel/);
+  assert.match(adminUi, /const kb = adminClientBaseSummary\(doctorId, periodKey\)/);
+  assert.match(adminUi, /data-client-base-methodology="partition-v1-36m"/);
+  assert.match(adminUi, /единая с Admin методика четырёх непересекающихся групп за 36 мес\./);
+  assert.match(adminUi, /originalClientBase\.insertAdjacentHTML\("beforeend", clientBase\)/);
   assert.match(adminUi, /Источник данных:[\s\S]*periodStr\(kb\.period\)/);
+  assert.match(adminUi, /const groups = partitioned \? \["active", "loyalSleep", "newRisk", "lost"\]/);
   assert.match(adminUi, /data-viewer-patient-row/);
   assert.match(adminUi, /data-viewer-patient-search/);
   assert.match(adminUi, /data-viewer-patient-segment/);
@@ -1135,17 +1195,33 @@ test("doctor dropdowns are sorted alphabetically in Admin and both Viewer modes"
 });
 
 test("dashboard participation requires an individual work report", () => {
+  const vm = require("node:vm");
   const metrics = fs.readFileSync(path.join(build, "app-metrics.js"), "utf8");
   const adminUi = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   assert.match(metrics, /function doctorHasDashboardData\(docId, monthKey\)/);
   assert.match(metrics, /Object\.prototype\.hasOwnProperty\.call\(m\.vyrabotka, id\)/);
   assert.match(metrics, /function doctorsInMonth\(monthKey\)[\s\S]*Object\.keys\(m\.vyrabotka \|\| \{\}\)/);
-  assert.match(adminUi, /const eligibleDoctorIds = doctorIds\.filter\(doctorId =>[\s\S]*doctorHasDashboardData\(doctorId, periodKey\)/);
+  assert.match(adminUi, /function viewerRecipientHasDashboardData\(doctorId, periodKeys, includeManagedDepartments = false\)/);
+  assert.match(adminUi, /const eligibleDoctorIds = doctorIds\.filter\(doctorId =>[\s\S]*viewerRecipientHasDashboardData\(doctorId, periodKeys, includeManagedDepartmentDoctors\)/);
+  assert.match(adminUi, /viewerExportDoctorRows\(\)[\s\S]*viewerRecipientHasDashboardData\(item\.doctorId, months, true\)/);
   assert.match(adminUi, /const periodSubjectIds = \[\.\.\.subjectIds\]\.filter\(doctorId => doctorHasDashboardData\(doctorId, periodKey\)\)/);
   assert.match(adminUi, /periods: publicationPeriodKeys/);
+
+  const start = adminUi.indexOf("function viewerManagedDepartments(doctorId)");
+  const end = adminUi.indexOf("function viewerExportDoctorRows()", start);
+  const context = vm.createContext({
+    VIEWER_ACCESS: { departmentHeads: { Терапия: "head" } },
+    DB: { doctors: { head: {}, doctor: {} } },
+    resolvedDepartmentName(doctorId) { return doctorId === "doctor" ? "Терапия" : "Администрация"; },
+    doctorHasDashboardData(doctorId, periodKey) { return doctorId === "doctor" && periodKey === "2026-01"; },
+  });
+  vm.runInContext(`${adminUi.slice(start, end)}\n;globalThis.__recipientHasData = viewerRecipientHasDashboardData;`, context);
+  assert.equal(context.__recipientHasData("head", ["2026-01"], false), false);
+  assert.equal(context.__recipientHasData("head", ["2026-01"], true), true);
+  assert.equal(context.__recipientHasData("doctor", ["2026-01"], false), true);
 });
 
-test("Viewer publication snapshots the canonical dashboards instead of separate report builders", () => {
+test("Viewer publication freezes canonical dashboard snapshots in one revisioned ReportModel", () => {
   const adminUi = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const start = adminUi.indexOf("async function exportViewerPackage");
   const end = adminUi.indexOf("function reportHeader", start);
@@ -1158,5 +1234,7 @@ test("Viewer publication snapshots the canonical dashboards instead of separate 
   assert.match(handler, /tab: "dept"/);
   assert.match(handler, /tab: "doctor"/);
   assert.doesNotMatch(handler, /buildDepartmentReport|buildDeptReport|buildDoctorReport/);
+  assert.match(handler, /createImmutableReportModel\(publicationPeriodKeys, pages\)/);
+  assert.match(handler, /reportModelJsonAdapter\(reportModel\)/);
   assert.match(adminUi, /cloneDashboardSnapshot\(source, \{ chartMimeType: "image\/webp", chartQuality: 0\.9 \}\)/);
 });

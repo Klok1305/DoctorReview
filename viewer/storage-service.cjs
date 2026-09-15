@@ -3,7 +3,12 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
-const { decryptViewerPage, inspectViewerPackage } = require("../desktop/services/viewer-package-service.cjs");
+const {
+  decryptSharedPage,
+  decryptViewerGrant,
+  decryptViewerPage,
+  inspectViewerPackage,
+} = require("../desktop/services/viewer-package-service.cjs");
 const DOCTOR_LOCK_MS = 15 * 60 * 1000;
 
 function readJson(filePath, fallback = null) {
@@ -40,7 +45,9 @@ function atomicWriteJson(filePath, value) {
   try {
     if (fs.existsSync(filePath)) fs.renameSync(filePath, previous);
     fs.renameSync(temporary, filePath);
-    if (fs.existsSync(previous)) fs.rmSync(previous, { force: true });
+    if (fs.existsSync(previous)) {
+      try { fs.rmSync(previous, { force: true }); } catch (_) { /* новый файл уже опубликован атомарно */ }
+    }
   } catch (error) {
     if (fs.existsSync(temporary)) fs.rmSync(temporary, { force: true });
     if (fs.existsSync(previous) && !fs.existsSync(filePath)) fs.renameSync(previous, filePath);
@@ -67,6 +74,11 @@ function normalizeDoctorSubjects(index, doctor) {
     specialization: String(doctor.specialization || ""),
     publications: index && Array.isArray(index.publications) ? index.publications : [],
   }];
+}
+
+function writeJson(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf8");
 }
 
 class ViewerStorageService {
@@ -100,8 +112,27 @@ class ViewerStorageService {
     return this.root;
   }
 
-  adminPath() { return path.join(this.requireRoot(), "_viewer", "admin.json"); }
-  catalogPath() { return path.join(this.requireRoot(), "catalog.json"); }
+  activeStateRoot(root = this.requireRoot()) {
+    const pointer = readJson(path.join(root, "_viewer", "current.json"), null);
+    if (pointer && pointer.format === "pulse-clinic-viewer-generation-pointer" && Number(pointer.formatVersion) === 1) {
+      const generationId = safeSegment(pointer.generationId, "поколение каталога");
+      const generationRoot = path.join(root, "_viewer", "generations", generationId);
+      if (fs.existsSync(path.join(generationRoot, "catalog.json")) && fs.existsSync(path.join(generationRoot, "admin.json"))) {
+        return generationRoot;
+      }
+    }
+    return root;
+  }
+
+  stateAdminPath(stateRoot, root = this.requireRoot()) {
+    return stateRoot === root ? path.join(root, "_viewer", "admin.json") : path.join(stateRoot, "admin.json");
+  }
+
+  adminPath() {
+    const root = this.requireRoot();
+    return this.stateAdminPath(this.activeStateRoot(root), root);
+  }
+  catalogPath() { return path.join(this.activeStateRoot(), "catalog.json"); }
 
   status() {
     let online = false;
@@ -111,8 +142,9 @@ class ViewerStorageService {
       try {
         online = fs.existsSync(this.root) && fs.statSync(this.root).isDirectory();
         if (online) {
-          catalog = readJson(path.join(this.root, "catalog.json"), catalog);
-          initialized = fs.existsSync(path.join(this.root, "_viewer", "admin.json"));
+          const stateRoot = this.activeStateRoot(this.root);
+          catalog = readJson(path.join(stateRoot, "catalog.json"), catalog);
+          initialized = fs.existsSync(this.stateAdminPath(stateRoot, this.root));
         }
       } catch (_) { online = false; }
     }
@@ -149,7 +181,8 @@ class ViewerStorageService {
     fs.accessSync(root, fs.constants.R_OK | fs.constants.W_OK);
     const buffer = fs.readFileSync(filePath);
     const { manifest, preview, zip } = await inspectViewerPackage(buffer, { includeZip: true });
-    const currentAdmin = readJson(path.join(root, "_viewer", "admin.json"), null);
+    const currentStateRoot = this.activeStateRoot(root);
+    const currentAdmin = readJson(this.stateAdminPath(currentStateRoot, root), null);
     if (!currentAdmin) {
       if (!verifyPin(bootstrapPin, manifest.adminAccess || {})) throw new Error("Неверный администраторский PIN из программы администратора");
     } else {
@@ -171,7 +204,7 @@ class ViewerStorageService {
     }
     if (!selectedDoctors.size || !selectedPeriods.size) throw new Error("Не выбраны врачи или периоды для импорта");
 
-    const previousCatalog = readJson(path.join(root, "catalog.json"), { doctors: [] });
+    const previousCatalog = readJson(path.join(currentStateRoot, "catalog.json"), { doctors: [] });
     const catalogMap = new Map((previousCatalog.doctors || []).map(item => [String(item.doctorId), {
       doctorId: String(item.doctorId),
       folderId: String(item.folderId || ""),
@@ -181,16 +214,22 @@ class ViewerStorageService {
       managedDepartments: Array.isArray(item.managedDepartments) ? item.managedDepartments.map(String) : [],
     }]));
     const subjectMap = new Map((preview.subjects || preview.doctors).map(item => [String(item.doctorId), item]));
+    const modelPages = new Map(preview.formatVersion >= 4 && preview.reportModel
+      ? preview.reportModel.pages.map(page => [String(page.pageId), page]) : []);
+    const modelBindings = preview.formatVersion >= 4 && preview.reportModel && Array.isArray(preview.reportModel.bindings)
+      ? preview.reportModel.bindings : [];
+    const sharedPageFiles = new Map();
     const staged = [];
     for (const doctor of preview.doctors.filter(item => selectedDoctors.has(item.doctorId))) {
       const folderId = safeSegment(doctor.folderId, "папка врача");
       const doctorRoot = path.join(root, "doctors", folderId);
+      const currentDoctorRoot = path.join(currentStateRoot, "doctors", folderId);
       const profileEntry = zip.file(`doctors/${folderId}/profile.json`);
       const accessEntry = zip.file(`doctors/${folderId}/access.json`);
       if (!profileEntry || !accessEntry) throw new Error(`В ZIP неполные данные врача ${doctor.displayName}`);
       const profile = JSON.parse(await profileEntry.async("string"));
       const incomingAccess = JSON.parse(await accessEntry.async("string"));
-      const currentAccess = readJson(path.join(doctorRoot, "access.json"), null);
+      const currentAccess = readJson(path.join(currentDoctorRoot, "access.json"), null);
       if (currentAccess) {
         if (Number(incomingAccess.pinVersion) < Number(currentAccess.pinVersion)) throw new Error(`В ZIP устаревший PIN врача ${doctor.displayName}`);
         if (Number(incomingAccess.pinVersion) === Number(currentAccess.pinVersion)
@@ -206,25 +245,49 @@ class ViewerStorageService {
       const importedPages = [];
       try {
         const visibleDoctorIds = preview.formatVersion >= 3 ? doctor.visibleDoctorIds : [doctor.doctorId];
-        for (const subjectDoctorId of visibleDoctorIds) {
-          const subject = subjectMap.get(String(subjectDoctorId));
-          if (!subject) throw new Error(`В ZIP отсутствует профиль врача ${subjectDoctorId}`);
-          for (const periodKey of selectedPeriods) {
-            for (const pageType of ["department", "specialization", "doctor"]) {
-              const archivePath = preview.formatVersion >= 3
-                ? `doctors/${folderId}/subjects/${subject.folderId}/reports/${periodKey}/${pageType}.json`
-                : `doctors/${folderId}/reports/${periodKey}/${pageType}.json`;
-              const entry = zip.file(archivePath);
-              if (!entry) continue;
-              const report = JSON.parse(await entry.async("string"));
-              const relativePath = preview.formatVersion >= 3
-                ? path.join("subjects", subject.folderId, "reports", periodKey, `${pageType}.json`)
-                : path.join("reports", periodKey, `${pageType}.json`);
-              const targetPath = path.join(stagingRoot, relativePath);
-              fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-              fs.writeFileSync(targetPath, JSON.stringify(report), "utf8");
-              importedPages.push({ doctorId: String(subjectDoctorId), periodKey, pageType, title: report.title,
-                relativePath: relativePath.replace(/\\/g, "/") });
+        if (preview.formatVersion >= 4) {
+          const grantEntry = zip.file(`doctors/${folderId}/grant.json`);
+          if (!grantEntry) throw new Error(`В ZIP отсутствуют ключи страниц врача ${doctor.displayName}`);
+          fs.writeFileSync(path.join(stagingRoot, "grant.json"), await grantEntry.async("nodebuffer"));
+          const visible = new Set(visibleDoctorIds.map(String));
+          for (const binding of modelBindings) {
+            const subjectDoctorId = String(binding.doctorId || "");
+            if (!visible.has(subjectDoctorId) || !selectedPeriods.has(String(binding.periodKey))) continue;
+            const pageId = safeSegment(binding.pageId, "идентификатор страницы");
+            const page = modelPages.get(pageId);
+            if (!page) throw new Error(`В ZIP отсутствует описание страницы ${pageId}`);
+            const pageEntry = zip.file(`pages/${pageId}.json`);
+            if (!pageEntry) throw new Error(`В ZIP отсутствует общая страница ${pageId}`);
+            if (!sharedPageFiles.has(pageId)) sharedPageFiles.set(pageId, await pageEntry.async("nodebuffer"));
+            importedPages.push({
+              doctorId: subjectDoctorId,
+              periodKey: String(binding.periodKey),
+              pageType: String(binding.pageType),
+              title: String(page.title || "Отчёт"),
+              sharedPageId: pageId,
+            });
+          }
+        } else {
+          for (const subjectDoctorId of visibleDoctorIds) {
+            const subject = subjectMap.get(String(subjectDoctorId));
+            if (!subject) throw new Error(`В ZIP отсутствует профиль врача ${subjectDoctorId}`);
+            for (const periodKey of selectedPeriods) {
+              for (const pageType of ["department", "specialization", "doctor"]) {
+                const archivePath = preview.formatVersion >= 3
+                  ? `doctors/${folderId}/subjects/${subject.folderId}/reports/${periodKey}/${pageType}.json`
+                  : `doctors/${folderId}/reports/${periodKey}/${pageType}.json`;
+                const entry = zip.file(archivePath);
+                if (!entry) continue;
+                const report = JSON.parse(await entry.async("string"));
+                const relativePath = preview.formatVersion >= 3
+                  ? path.join("subjects", subject.folderId, "reports", periodKey, `${pageType}.json`)
+                  : path.join("reports", periodKey, `${pageType}.json`);
+                const targetPath = path.join(stagingRoot, relativePath);
+                fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+                fs.writeFileSync(targetPath, JSON.stringify(report), "utf8");
+                importedPages.push({ doctorId: String(subjectDoctorId), periodKey, pageType, title: report.title,
+                  relativePath: relativePath.replace(/\\/g, "/") });
+              }
             }
           }
         }
@@ -238,9 +301,31 @@ class ViewerStorageService {
       staged.push({ doctor, doctorRoot, profile, incomingAccess, releaseId, importedPages });
     }
 
+    for (const [pageId, bytes] of sharedPageFiles) {
+      const targetPath = path.join(root, "_viewer", "pages", safeSegment(manifest.packageId, "пакет"), `${pageId}.json`);
+      if (fs.existsSync(targetPath)) {
+        if (!fs.readFileSync(targetPath).equals(bytes)) throw new Error(`Общая страница ${pageId} конфликтует с уже импортированной`);
+        continue;
+      }
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      const temporaryPath = `${targetPath}.tmp-${crypto.randomUUID()}`;
+      fs.writeFileSync(temporaryPath, bytes);
+      fs.renameSync(temporaryPath, targetPath);
+    }
+
+    const nextDoctorMetadata = new Map();
+    for (const doctor of catalogMap.values()) {
+      const folderId = safeSegment(doctor.folderId, "папка врача");
+      const metadataRoot = path.join(currentStateRoot, "doctors", folderId);
+      const profile = readJson(path.join(metadataRoot, "profile.json"), null);
+      const access = readJson(path.join(metadataRoot, "access.json"), null);
+      const index = readJson(path.join(metadataRoot, "index.json"), null);
+      if (profile && access && index) nextDoctorMetadata.set(String(doctor.doctorId), { profile, access, index });
+    }
+
     for (const item of staged) {
-      fs.mkdirSync(item.doctorRoot, { recursive: true });
-      const previousIndex = readJson(path.join(item.doctorRoot, "index.json"), { publications: [] });
+      const previousMetadata = nextDoctorMetadata.get(String(item.doctor.doctorId));
+      const previousIndex = previousMetadata ? previousMetadata.index : { publications: [] };
       const previousSubjects = new Map(normalizeDoctorSubjects(previousIndex, item.doctor).map(subject => [subject.doctorId, subject]));
       const visibleDoctorIds = preview.formatVersion >= 3 ? item.doctor.visibleDoctorIds : [item.doctor.doctorId];
       const nextSubjects = new Map(visibleDoctorIds.map(doctorId => {
@@ -260,7 +345,15 @@ class ViewerStorageService {
         if (!subject) continue;
         const periodsMap = new Map((subject.publications || []).map(publication => [publication.periodKey, publication]));
         const publication = periodsMap.get(page.periodKey) || { periodKey: page.periodKey, pages: {}, updatedAt: null };
-        publication.pages[page.pageType] = {
+        publication.pages[page.pageType] = preview.formatVersion >= 4 ? {
+          releaseId: item.releaseId,
+          grantRelativePath: "grant.json",
+          sharedPageId: page.sharedPageId,
+          title: page.title,
+          packageId: manifest.packageId,
+          reportRevision: preview.reportRevision,
+          createdAt: manifest.createdAt,
+        } : {
           releaseId: item.releaseId,
           relativePath: page.relativePath,
           title: page.title,
@@ -271,12 +364,14 @@ class ViewerStorageService {
         periodsMap.set(page.periodKey, publication);
         subject.publications = [...periodsMap.values()].sort((a, b) => b.periodKey.localeCompare(a.periodKey));
       }
-      atomicWriteJson(path.join(item.doctorRoot, "profile.json"), item.profile);
-      atomicWriteJson(path.join(item.doctorRoot, "access.json"), item.incomingAccess);
-      atomicWriteJson(path.join(item.doctorRoot, "index.json"), {
-        doctorId: item.doctor.doctorId,
-        subjects: [...nextSubjects.values()],
-        updatedAt: new Date().toISOString(),
+      nextDoctorMetadata.set(String(item.doctor.doctorId), {
+        profile: item.profile,
+        access: item.incomingAccess,
+        index: {
+          doctorId: item.doctor.doctorId,
+          subjects: [...nextSubjects.values()],
+          updatedAt: new Date().toISOString(),
+        },
       });
       catalogMap.set(item.doctor.doctorId, {
         doctorId: item.doctor.doctorId,
@@ -289,14 +384,47 @@ class ViewerStorageService {
     }
 
     const now = new Date().toISOString();
-    atomicWriteJson(path.join(root, "_viewer", "admin.json"), manifest.adminAccess);
-    atomicWriteJson(path.join(root, "catalog.json"), {
+    const generationId = safeSegment(`${manifest.packageId}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`, "поколение каталога");
+    const generationRoot = path.join(root, "_viewer", "generations", generationId);
+    const generationStagingRoot = `${generationRoot}.staging-${crypto.randomUUID()}`;
+    const nextCatalog = {
       format: "pulse-clinic-viewer-catalog",
       updatedAt: now,
       doctors: [...catalogMap.values()].sort((a, b) => a.displayName.localeCompare(b.displayName, "ru")),
+    };
+    try {
+      writeJson(path.join(generationStagingRoot, "admin.json"), manifest.adminAccess);
+      writeJson(path.join(generationStagingRoot, "catalog.json"), nextCatalog);
+      for (const doctor of nextCatalog.doctors) {
+        const metadata = nextDoctorMetadata.get(String(doctor.doctorId));
+        if (!metadata) throw new Error(`Не удалось перенести метаданные врача ${doctor.displayName}`);
+        const metadataRoot = path.join(generationStagingRoot, "doctors", safeSegment(doctor.folderId, "папка врача"));
+        writeJson(path.join(metadataRoot, "profile.json"), metadata.profile);
+        writeJson(path.join(metadataRoot, "access.json"), metadata.access);
+        writeJson(path.join(metadataRoot, "index.json"), metadata.index);
+      }
+      fs.mkdirSync(path.dirname(generationRoot), { recursive: true });
+      fs.renameSync(generationStagingRoot, generationRoot);
+    } catch (error) {
+      if (fs.existsSync(generationStagingRoot)) fs.rmSync(generationStagingRoot, { recursive: true, force: true });
+      throw error;
+    }
+    atomicWriteJson(path.join(root, "_viewer", "current.json"), {
+      format: "pulse-clinic-viewer-generation-pointer",
+      formatVersion: 1,
+      generationId,
+      updatedAt: now,
     });
     fs.rmSync(path.join(root, "_viewer", "acl-mapping.csv"), { force: true });
-    return { packageId: manifest.packageId, doctors: staged.length, periods: selectedPeriods.size, sha256: preview.sha256, importedAt: now };
+    return {
+      packageId: manifest.packageId,
+      reportRevision: preview.reportRevision || null,
+      generationId,
+      doctors: staged.length,
+      periods: selectedPeriods.size,
+      sha256: preview.sha256,
+      importedAt: now,
+    };
   }
 
   doctorLogin({ doctorId, pin }) {
@@ -308,8 +436,11 @@ class ViewerStorageService {
       throw new Error("Вход врача временно заблокирован после пяти неверных PIN");
     }
     const folderId = safeSegment(doctor.folderId, "папка врача");
-    const doctorRoot = path.join(this.requireRoot(), "doctors", folderId);
-    const access = readJson(path.join(doctorRoot, "access.json"), null);
+    const root = this.requireRoot();
+    const doctorRoot = path.join(root, "doctors", folderId);
+    const stateRoot = this.activeStateRoot();
+    const metadataDoctorRoot = path.join(stateRoot, "doctors", folderId);
+    const access = readJson(path.join(metadataDoctorRoot, "access.json"), null);
     if (!access || !verifyPin(pin, access)) {
       const failures = Number(this.doctorFailures.get(key) || 0) + 1;
       if (failures >= 5) {
@@ -322,9 +453,9 @@ class ViewerStorageService {
     }
     this.doctorFailures.delete(key);
     this.doctorLockedUntil.delete(key);
-    const index = readJson(path.join(doctorRoot, "index.json"), { publications: [] });
+    const index = readJson(path.join(metadataDoctorRoot, "index.json"), { publications: [] });
     const subjects = normalizeDoctorSubjects(index, doctor);
-    return { doctor, doctorRoot, index, subjects, pin: String(pin) };
+    return { doctor, doctorRoot, metadataDoctorRoot, index, subjects, pin: String(pin), grants: new Map() };
   }
 
   readReport(session, { subjectDoctorId, periodKey, pageType }) {
@@ -337,6 +468,42 @@ class ViewerStorageService {
     const page = publication && publication.pages ? publication.pages[String(pageType)] : null;
     if (!page) return null;
     const releaseId = safeSegment(page.releaseId, "версия отчёта");
+    if (page.sharedPageId) {
+      const packageId = safeSegment(page.packageId, "пакет отчёта");
+      const pageId = safeSegment(page.sharedPageId, "идентификатор страницы");
+      const cacheKey = `${releaseId}\u0000${packageId}`;
+      let grant = session.grants && session.grants.get(cacheKey);
+      if (!grant) {
+        const relativeGrant = String(page.grantRelativePath || "grant.json").replace(/\//g, path.sep);
+        const grantPath = path.resolve(session.doctorRoot, "releases", releaseId, relativeGrant);
+        const releaseRoot = path.resolve(session.doctorRoot, "releases", releaseId) + path.sep;
+        if (!grantPath.startsWith(releaseRoot)) throw new Error("Некорректный путь ключей отчёта");
+        const encryptedGrant = readJson(grantPath, null);
+        if (!encryptedGrant) throw new Error("Ключи страниц отчёта не найдены");
+        grant = decryptViewerGrant(encryptedGrant, session.pin);
+        if (grant.packageId !== packageId || (page.reportRevision && grant.reportRevision !== page.reportRevision)) {
+          throw new Error("Ключи не соответствуют выбранному выпуску отчёта");
+        }
+        if (session.grants) session.grants.set(cacheKey, grant);
+      }
+      const pageKey = grant.pageKeys && grant.pageKeys[pageId];
+      const permitted = Array.isArray(grant.bindings) && grant.bindings.some(binding =>
+        String(binding.doctorId) === subjectId
+          && String(binding.periodKey) === String(periodKey)
+          && String(binding.pageType) === String(pageType)
+          && String(binding.pageId) === pageId);
+      if (!pageKey || !permitted) throw new Error("Нет доступа к выбранной странице отчёта");
+      const sharedPath = path.resolve(this.requireRoot(), "_viewer", "pages", packageId, `${pageId}.json`);
+      const sharedRoot = path.resolve(this.requireRoot(), "_viewer", "pages", packageId) + path.sep;
+      if (!sharedPath.startsWith(sharedRoot)) throw new Error("Некорректный путь общей страницы");
+      const encryptedSharedPage = readJson(sharedPath, null);
+      if (!encryptedSharedPage) throw new Error("Общая страница отчёта не найдена");
+      const report = decryptSharedPage(encryptedSharedPage, pageKey);
+      if (report.periodKey !== String(periodKey) || report.pageType !== String(pageType)) {
+        throw new Error("Общая страница не соответствует запросу");
+      }
+      return { ...report, doctorId: subjectId };
+    }
     const relative = String(page.relativePath || "").replace(/\//g, path.sep);
     const reportPath = path.resolve(session.doctorRoot, "releases", releaseId, relative);
     const releaseRoot = path.resolve(session.doctorRoot, "releases", releaseId) + path.sep;
