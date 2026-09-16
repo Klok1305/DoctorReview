@@ -1241,5 +1241,5 @@ test("Viewer publication freezes canonical dashboard snapshots in one revisioned
   assert.doesNotMatch(handler, /buildDepartmentReport|buildDeptReport|buildDoctorReport/);
   assert.match(handler, /createImmutableReportModel\(publicationPeriodKeys, pages\)/);
   assert.match(handler, /reportModelJsonAdapter\(reportModel\)/);
-  assert.match(adminUi, /cloneDashboardSnapshot\(source, \{ chartMimeType: "image\/webp", chartQuality: 0\.9 \}\)/);
+  assert.match(adminUi, /cloneDashboardSnapshot\(source, \{ chartMimeType: "image\/webp", chartQuality: 0\.9, waitForPaint: false \}\)/);
 });

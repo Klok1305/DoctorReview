@@ -875,14 +875,21 @@ function createWindow() {
                 && interdisciplinaryFocusDetails.used === 1
                 && interdisciplinaryFocusDetails.park === 2
                 && interdisciplinaryFocusDetails.score === 100;
+              const viewerSnapshotStarted = performance.now();
               const viewerDoctorHtml = await composeViewerDashboardHtml(
                 { tab: 'doctor', doctorId: 'd1', departmentName: 'Косметология', specializationName: 'Косметология' },
                 '2026-02',
                 { scopeType: 'doctor', scopeId: 'd1', periodKey: '2026-02', pageType: 'doctor' },
                 []
               );
+              const viewerSnapshotMs = Math.round(performance.now() - viewerSnapshotStarted);
               const viewerDoctorRoot = document.createElement('div');
               viewerDoctorRoot.innerHTML = viewerDoctorHtml;
+              const viewerChartImages = [...viewerDoctorRoot.querySelectorAll('img[data-pdf-chart]')];
+              await Promise.all(viewerChartImages.map(image => image.decode()));
+              const viewerChartsValid = viewerChartImages.length > 0
+                && viewerChartImages.every(image => image.src.startsWith('data:image/webp;base64,')
+                  && image.naturalWidth > 0 && image.naturalHeight > 0);
               const viewerPatientRegisters = [...viewerDoctorRoot.querySelectorAll('[data-viewer-patient-register]')];
               const viewerPatientRows = [...viewerDoctorRoot.querySelectorAll('[data-viewer-patient-row]')];
               const viewerKbButtons = [...viewerDoctorRoot.querySelectorAll('[data-viewer-kb-window]')];
@@ -983,6 +990,9 @@ function createWindow() {
                 interdisciplinaryFocusDetails,
                 viewerPatientRegisterValid,
                 viewerPatientRegisterDetails,
+                viewerChartsValid,
+                viewerChartImages: viewerChartImages.length,
+                viewerSnapshotMs,
                 viewerRatingsValid,
                 doctorMetricSettings,
                 xlsx: typeof XLSX !== 'undefined',
@@ -1307,7 +1317,7 @@ function createWindow() {
         result.rendererErrors = smokeRendererErrors.slice();
         const passed = result.dataPage && result.optionalLibrariesDeferred && result.xlsx && result.chart && result.desktop
           && result.rendererErrors.length === 0
-          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.specializationFocusBlockValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.viewerPatientRegisterValid && result.viewerRatingsValid && result.doctorMetricSettings && result.commentWorkflowValid))
+          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.specializationFocusBlockValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.viewerPatientRegisterValid && result.viewerChartsValid && result.viewerRatingsValid && result.doctorMetricSettings && result.commentWorkflowValid))
           && (!PDF_SMOKE_TEST || (result.pdfSelectionDialogValid && result.pdfExport && result.pdfExport.saved === 1
             && result.pdfExport.chartImages >= 1 && result.pdfFiles.length === 1));
         result.status = passed ? "passed" : "failed";

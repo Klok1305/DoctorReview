@@ -8320,9 +8320,9 @@ function pdfTargetSource(target, monthKey) {
   return document.getElementById("doctorBody");
 }
 
-async function settlePdfCharts(source) {
+async function settlePdfCharts(source, { waitForPaint = true } = {}) {
   if (document.fonts && document.fonts.ready) await document.fonts.ready;
-  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  if (waitForPaint) await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   for (const canvas of source.querySelectorAll("canvas")) {
     const instance = typeof Chart !== "undefined" && typeof Chart.getChart === "function" ? Chart.getChart(canvas) : null;
     if (!instance) continue;
@@ -8330,11 +8330,11 @@ async function settlePdfCharts(source) {
     instance.resize();
     instance.update("none");
   }
-  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  if (waitForPaint) await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 }
 
-async function cloneDashboardSnapshot(source, { chartMimeType = "image/png", chartQuality } = {}) {
-  await settlePdfCharts(source);
+async function cloneDashboardSnapshot(source, { chartMimeType = "image/png", chartQuality, waitForPaint = true } = {}) {
+  await settlePdfCharts(source, { waitForPaint });
   const clone = source.cloneNode(true);
   const sourceCanvases = [...source.querySelectorAll("canvas")];
   const cloneCanvases = [...clone.querySelectorAll("canvas")];
@@ -8361,7 +8361,7 @@ async function cloneDashboardSnapshot(source, { chartMimeType = "image/png", cha
   });
   clone.querySelectorAll("script, iframe, object, embed").forEach(element => element.remove());
   for (const details of clone.querySelectorAll("details:not(.no-print)")) details.open = true;
-  await Promise.all([...clone.querySelectorAll("img")].map(image => image.complete ? Promise.resolve() : new Promise(resolve => {
+  if (waitForPaint) await Promise.all([...clone.querySelectorAll("img")].map(image => image.complete ? Promise.resolve() : new Promise(resolve => {
     image.onload = image.onerror = resolve;
   })));
   return { clone, chartImages };
@@ -8372,7 +8372,7 @@ async function cloneDashboardForPdf(source) {
 }
 
 async function cloneDashboardForViewer(source) {
-  return cloneDashboardSnapshot(source, { chartMimeType: "image/webp", chartQuality: 0.9 });
+  return cloneDashboardSnapshot(source, { chartMimeType: "image/webp", chartQuality: 0.9, waitForPaint: false });
 }
 
 function splitDynamicPdfSection(section) {
