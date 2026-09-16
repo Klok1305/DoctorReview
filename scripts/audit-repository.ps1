@@ -23,6 +23,7 @@ $allowedPatterns = @(
   '^pnpm-lock\.yaml$',
   '^pnpm-workspace\.yaml$',
   '^build/[^/]+\.(js|css|html|ps1)$',
+  '^build/viewer-html-sanitizer\.js$',
   '^desktop/[^/]+\.cjs$',
   '^desktop/services/[^/]+\.cjs$',
   '^viewer/[^/]+\.(cjs|js|css|html|json)$',

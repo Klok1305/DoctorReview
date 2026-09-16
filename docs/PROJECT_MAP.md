@@ -1,6 +1,6 @@
 # Карта проекта
 
-Проверено: **2026-09-15**. Версия приложения: **2.6.16** (источник — `package.json`).
+Проверено: **2026-09-16**. Версия приложения: **2.6.17** (источник — `package.json`).
 Репозиторий: `Klok1305/DoctorReview`. Desktop: Windows / Electron 37. Node.js ≥22, pnpm 11.
 
 ## Самое важное: релиз запускаем и не ждём
@@ -33,12 +33,13 @@
                                   → одна транзакция SQLite → успех либо откат renderer
 
 UI → неизменяемая ReportModel v1 с SHA-256-ревизией
+   → общая очистка HTML в renderer до хеширования и повторная проверка в сервисе
    → HTML/PDF/JSON-адаптеры → Viewer ZIP v4 / автономный HTML v4 / PDF
 UI → buildMobilePublication → mobile-publication-service → .kvmobilebundle
    → мобильный сервер → API готового отчёта → mobile-pilot/app.js
 ```
 
-Renderer Admin — четыре скрипта в общем глобальном контексте: `core → parsers → metrics → ui`. ES-модулей и bundler нет. Большая часть расчётов выполняется в renderer. SQLite и локальные сервисы работают в main-процессе Electron; основной драйвер — `DatabaseSync`.
+Renderer Admin — общая очистка Viewer HTML и четыре скрипта в общем глобальном контексте: `viewer-html-sanitizer → core → parsers → metrics → ui`. ES-модулей и bundler нет. Большая часть расчётов выполняется в renderer. SQLite и локальные сервисы работают в main-процессе Electron; основной драйвер — `DatabaseSync`.
 
 ## Куда идти за изменением
 
@@ -55,7 +56,7 @@ Renderer Admin — четыре скрипта в общем глобально�
 | Рабочая папка и файлы | `desktop/services/config-store.cjs`, `desktop/services/file-service.cjs` | `tests/desktop-services.test.cjs` |
 | Backup и обновление Admin | `desktop/services/backup-service.cjs`, `desktop/services/update-service.cjs` | `tests/desktop-services.test.cjs`, `tests/database.test.cjs` |
 | PDF и Excel | `build/app-ui.js`: `createImmutableReportModel`, `reportModelPdfAdapter`, `pdfTargetSource`, экспорт; `desktop/main.cjs`: `renderHtmlToPdf`; print CSS | `tests/build.test.cjs`, PDF-smoke и визуальная проверка |
-| Подготовка Viewer | `build/app-ui.js`: `composeViewerDashboardHtml`, `createImmutableReportModel`, `exportViewerPackage`; `desktop/services/viewer-package-service.cjs`: нормализация ReportModel, оценка размера, общие страницы и адаптеры | `tests/viewer-publication.test.cjs`, `tests/auth-publication.test.cjs`, smoke |
+| Подготовка Viewer | `build/app-ui.js`: `composeViewerDashboardHtml`, `createImmutableReportModel`, `exportViewerPackage`; `build/viewer-html-sanitizer.js`: общая очистка HTML до хеширования и в сервисе; `desktop/services/viewer-package-service.cjs`: нормализация ReportModel, оценка размера, общие страницы и адаптеры | `tests/viewer-publication.test.cjs`, `tests/auth-publication.test.cjs`, smoke |
 | Установленный Viewer | `viewer/main.cjs`, `viewer/preload.cjs`, `viewer/storage-service.cjs`: поколения каталога и общий пул страниц; `viewer/app.js`, `viewer/index.html`, `viewer/viewer.css` | `tests/viewer-publication.test.cjs` |
 | Автономный Viewer | `viewer/standalone.html`, `viewer/standalone-app.js`, `desktop/services/viewer-package-service.cjs` | `tests/viewer-publication.test.cjs`, smoke |
 | Данные мобильного отчёта | `build/app-ui.js`: `buildMobilePublication`, `exportAllMobilePublications`; `desktop/services/mobile-publication-service.cjs` | `tests/legacy-core.test.cjs`, `tests/mobile-pilot.test.cjs` |
@@ -70,7 +71,7 @@ Renderer Admin — четыре скрипта в общем глобально�
 - Аналитика хранится JSON-записями в `app_settings`, `app_meta`, `doctors`, `months`. Импорты, комментарии и версии, публикации и страницы, настройки Viewer и заведующие хранятся в отдельных таблицах того же сервиса. `saveSnapshot(snapshot, importRecords)` атомарно сохраняет аналитику и происхождение импорта без изменения схемы.
 - Импорт фиксируется по одному файлу через `desktopAPI.saveImport` → `database:save-import`. Успех и счётчики обновляются после commit; отказ откатывает врачей/месяцы renderer и останавливает оставшуюся пачку. Обычное автосохранение во время изменения импорта откладывается до commit или отката. Ожидающие обычные снимки объединяются; команды импорта сохраняют порядок и происхождение. ZIP подтверждается в транзакции последнего поддерживаемого файла; при ошибке архива подтверждения нет. Повтор пропускает только источники, успешно записанные в SQLite, без доверия устаревшему `source.imported`.
 - Полная JSON-копия: `klinvekt-portable-json` v1, включает снимок и служебные таблицы. Фактические заведующие берутся из `viewer_department_heads`, а не из устаревшего renderer-снимка. Старый JSON остаётся импортом только аналитики. Восстановление имеет страховочную копию и откат. `.ovbackup` — копия SQLite.
-- Viewer ZIP и автономный HTML создаются в формате **4** из неизменяемой `klinvekt-report-model` v1. Модель содержит уникальные страницы, привязки к врачам и SHA-256-ревизию; одинаковая сводная страница хранится и шифруется один раз, а получателю через его PIN выдаются только ключи разрешённых страниц. До PBKDF2/scrypt и сборки результата сервис рассчитывает верхнюю оценку размера и отклоняет заведомо слишком большую публикацию. ZIP форматов 2 и 3 импортируются новым Viewer; ранее выпущенные автономные HTML форматов 2 и 3 самодостаточны, а код нового автономного Viewer также сохраняет их контракт чтения.
+- Viewer ZIP и автономный HTML создаются в формате **4** из неизменяемой `klinvekt-report-model` v1. Перед вычислением идентификаторов страниц renderer очищает HTML тем же модулем `build/viewer-html-sanitizer.js`, который сервис повторно применяет при проверке. Модель содержит уникальные страницы, привязки к врачам и SHA-256-ревизию; одинаковая сводная страница хранится и шифруется один раз, а получателю через его PIN выдаются только ключи разрешённых страниц. До PBKDF2/scrypt и сборки результата сервис рассчитывает верхнюю оценку размера и отклоняет заведомо слишком большую публикацию. ZIP форматов 2 и 3 импортируются новым Viewer; ранее выпущенные автономные HTML форматов 2 и 3 самодостаточны, а код нового автономного Viewer также сохраняет их контракт чтения.
 - Установленный Viewer хранит неизменяемые страницы/выпуски отдельно от метаданных. Новый каталог полностью собирается в `_viewer/generations/<generationId>`, затем одним атомарным обновлением `_viewer/current.json` становится активным; при отказе до переключения читается прежнее поколение. Старый корневой каталог без указателя остаётся читаемым. По решению пользователя автоматическое удаление прежних выпусков и поколений не выполняется.
 - Пресет полной публикации выбирает все доступные периоды, все три типа страниц, всех включённых получателей и полный состав управляемых отделений; включённый заведующий может не иметь собственной выработки, если у его отделения есть отчёты. Действующие PIN врачей берутся из SQLite без изменения; администраторский PIN для автономного HTML вводится повторно, потому что открытым текстом не хранится. Совместимость сохранять.
 - `.kvmobile` — публикация v1; `.kvmobilebundle` — пакет v2, сервер также читает v1. В v2 каждый отчёт хранится один раз; получатель получает разрешения на свой отчёт и отчёты управляемых отделений. Назначения и PIN берутся из SQLite. Заведующий может не иметь собственной выработки.
@@ -97,7 +98,7 @@ Renderer Admin — четыре скрипта в общем глобально�
 
 ## Сборка и проверки
 
-`index.html` — отслеживаемый результат `pnpm run assemble`. **Не редактировать вручную.** После правок `build/*` пересобрать и включить его в изменение. Библиотеки XLSX, JSZip, Chart.js, html2canvas и jsPDF встроены из локальных файлов.
+`index.html` — отслеживаемый результат `pnpm run assemble`. **Не редактировать вручную.** После правок `build/*` пересобрать и включить его в изменение. Библиотеки XLSX, JSZip, Chart.js, html2canvas и jsPDF, а также общая очистка Viewer HTML встроены из локальных файлов.
 
 | Команда | Когда нужна |
 |---|---|

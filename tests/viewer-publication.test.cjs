@@ -295,6 +295,33 @@ test("ReportModel is immutable, revisioned and deduplicates shared pages before 
   assert.equal(estimate.withinLimit, true);
 });
 
+test("renderer sanitizes Viewer HTML before hashing pages and the service verifies the same model", async () => {
+  const sanitizerSource = fs.readFileSync(path.join(__dirname, "..", "build", "viewer-html-sanitizer.js"), "utf8");
+  const uiSource = fs.readFileSync(path.join(__dirname, "..", "build", "app-ui.js"), "utf8");
+  const modelSource = uiSource.slice(uiSource.indexOf("const REPORT_MODEL_FORMAT ="), uiSource.indexOf("function reportModelJsonAdapter"));
+  const context = vm.createContext({ window: { crypto: crypto.webcrypto }, TextEncoder });
+  vm.runInContext(sanitizerSource, context);
+  vm.runInContext(modelSource, context);
+  const createModel = vm.runInContext("createImmutableReportModel", context);
+  const model = await createModel(["2026-01"], [{
+    doctorId: "d1", periodKey: "2026-01", pageType: "doctor", scopeId: "d1", title: "Отчёт",
+    html: '<div>Отчёт <a href="#" onclick="switchTab(\'settings\')">Настройки</a><img src="data:image/png;base64,AA==" onerror="alert(1)"><script>alert(1)</script></div>',
+  }]);
+  assert.match(model.pages[0].html, /href="#"/);
+  assert.match(model.pages[0].html, /data:image\/png/);
+  assert.doesNotMatch(model.pages[0].html, /onclick|onerror|<script/);
+  const doctor = { doctorId: "d1", displayName: "Врач", department: "Терапия", specialization: "Общая" };
+  const credentials = {
+    doctors: [{ doctorId: "d1", pinCode: "1357", pinVersion: 1, pinHash: "a", pinSalt: "b", pinParams: "{}", headDepartments: [] }],
+    admin: { pinVersion: 1, pinHash: "c", pinSalt: "d", pinParams: "{}" },
+  };
+  assert.equal(estimateViewerPublication({ doctors: [doctor], subjects: [doctor], periods: ["2026-01"], reportModel: model, credentials }, "zip").uniquePages, 1);
+  const altered = reportModelJsonAdapter(model);
+  altered.pages[0].html += "<div>Подмена</div>";
+  assert.throws(() => estimateViewerPublication({ doctors: [doctor], subjects: [doctor], periods: ["2026-01"], reportModel: altered, credentials }, "zip"),
+    /Содержимое страницы не соответствует её идентификатору/);
+});
+
 test("Viewer imports legacy format 3 into an atomic catalog generation", async t => {
   const { root, database } = fixture(t);
   database.setViewerAdminPin("654321");

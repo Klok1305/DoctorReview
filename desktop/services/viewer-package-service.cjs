@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const zlib = require("node:zlib");
 const JSZip = require("../../build/jszip.min.js");
+const { sanitizeReportHtml } = require("../../build/viewer-html-sanitizer.js");
 
 const FORMAT = "pulse-clinic-viewer-package";
 const FORMAT_VERSION = 4;
@@ -26,7 +27,6 @@ const CONTENT_KDF_PARAMS = Object.freeze({ N: 32768, r: 8, p: 1, keylen: 32 });
 const STANDALONE_KDF_PARAMS = Object.freeze({ iterations: 600000, hash: "sha256", keylen: 32 });
 const MAX_PACKAGE_BYTES = 300 * 1024 * 1024;
 const MAX_STANDALONE_BYTES = 400 * 1024 * 1024;
-const MAX_PAGE_BYTES = 8 * 1024 * 1024;
 const PAGE_TYPES = new Set(["department", "specialization", "doctor"]);
 
 function sha256(value) {
@@ -39,16 +39,6 @@ function safeSegment(value, label) {
     throw new Error(`Некорректный ${label}`);
   }
   return result;
-}
-
-function sanitizeReportHtml(value) {
-  let html = String(value || "");
-  if (Buffer.byteLength(html, "utf8") > MAX_PAGE_BYTES) throw new Error("Одна страница отчёта превышает 8 МБ");
-  html = html.replace(/<\s*(script|iframe|object|embed|form|meta|link|base)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, "");
-  html = html.replace(/<\s*(script|iframe|object|embed|form|meta|link|base)\b[^>]*\/?\s*>/gi, "");
-  html = html.replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "");
-  html = html.replace(/\s(?:href|src)\s*=\s*(?:"\s*(?:javascript:|file:|https?:)[^"]*"|'\s*(?:javascript:|file:|https?:)[^']*'|(?:javascript:|file:|https?:)[^\s>]*)/gi, "");
-  return html;
 }
 
 function jsonBytes(value) {

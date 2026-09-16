@@ -1816,7 +1816,7 @@ async function createImmutableReportModel(periods, legacyPages) {
       pageType: String(legacyPage.pageType || ""),
       scopeId: String(legacyPage.scopeId || "").slice(0, 240),
       title: String(legacyPage.title || "Отчёт").slice(0, 300),
-      html: String(legacyPage.html || ""),
+      html: viewerHtmlSanitizer.sanitizeReportHtml(legacyPage.html),
     };
     const pageId = await reportModelSha256(content);
     if (!pages.has(pageId)) pages.set(pageId, { pageId, ...content });
@@ -5198,6 +5198,11 @@ function selectFullViewerExport() {
   error.classList.add("hidden");
 }
 
+function exportFullViewerPackage() {
+  selectFullViewerExport();
+  return exportViewerPackage("html");
+}
+
 async function openViewerExportDialog() {
   try {
     await refreshViewerPublicationAccess();
@@ -5244,12 +5249,13 @@ async function openViewerExportDialog() {
   document.getElementById("viewerExportAdminPin").value = "";
   document.getElementById("viewerExportStart").disabled = !VIEWER_ACCESS.adminPinConfigured;
   document.getElementById("viewerExportZip").disabled = !VIEWER_ACCESS.adminPinConfigured;
+  document.getElementById("viewerExportFullHtml").disabled = !VIEWER_ACCESS.adminPinConfigured;
   document.getElementById("viewerExportDialog").showModal();
   updateViewerExportStatus();
 }
 
 async function exportViewerPackage(format = "html") {
-  const buttons = [document.getElementById("viewerExportStart"), document.getElementById("viewerExportZip")];
+  const buttons = [document.getElementById("viewerExportStart"), document.getElementById("viewerExportZip"), document.getElementById("viewerExportFullHtml")];
   const errorBox = document.getElementById("viewerExportError");
   const periodKeys = [...document.querySelectorAll("#viewerExportPeriods input:checked")].map(input => input.value);
   const pageTypes = new Set([...document.querySelectorAll("#viewerExportPageTypes input:checked")].map(input => input.value));
@@ -5396,6 +5402,7 @@ async function exportViewerPackage(format = "html") {
     switchTab(previousUi.tab);
     document.getElementById("viewerExportStart").disabled = !VIEWER_ACCESS.adminPinConfigured;
     document.getElementById("viewerExportZip").disabled = !VIEWER_ACCESS.adminPinConfigured;
+    document.getElementById("viewerExportFullHtml").disabled = !VIEWER_ACCESS.adminPinConfigured;
   }
 }
 
@@ -7055,6 +7062,7 @@ async function initApp() {
   document.getElementById("viewerExportDepartmentFilter").addEventListener("change", () => filterViewerExportDoctors(false));
   document.getElementById("viewerExportSpecializationFilter").addEventListener("change", () => filterViewerExportDoctors(false));
   document.getElementById("viewerExportSelectAll").addEventListener("click", selectFullViewerExport);
+  document.getElementById("viewerExportFullHtml").addEventListener("click", exportFullViewerPackage);
   document.getElementById("viewerExportSelectFiltered").addEventListener("click", () => filterViewerExportDoctors(true));
   document.getElementById("viewerExportClearDoctors").addEventListener("click", () => {
     document.querySelectorAll('#viewerExportDoctors input[data-viewer-export-doctor]').forEach(input => { input.checked = false; });

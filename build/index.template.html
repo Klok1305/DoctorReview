@@ -148,7 +148,7 @@
     </div>
     <div class="viewer-export-dialog-body">
       <div class="viewer-export-grid">
-        <section><h3>Периоды</h3><div id="viewerExportPeriods" class="viewer-choice-list"></div></section>
+        <section><h3>Периоды</h3><div id="viewerExportPeriods" class="viewer-choice-list"></div><p class="small muted viewer-export-period-hint">В новый файл войдут только отмеченные месяцы. При импорте ZIP ранее загруженные месяцы для тех же врачей сохранятся.</p></section>
         <section><h3>Состав отчёта</h3><div id="viewerExportPageTypes" class="viewer-choice-list"></div></section>
         <section class="viewer-export-head-scope"><h3>Заведующие отделениями</h3><div id="viewerExportHeadScope" class="viewer-choice-list viewer-head-scope-list">
           <label><input type="radio" name="viewerExportHeadScope" value="selected" checked> Только выбранные врачи и их сводные</label>
@@ -157,6 +157,7 @@
       </div>
       <div class="notice blue viewer-export-full-preset"><b>Полная публикация:</b> все доступные периоды, все виды страниц и все включённые получатели войдут в один автономный HTML. Назначенные врачам PIN не изменяются.
         <button class="btn mini" type="button" id="viewerExportSelectAll">Выбрать всё</button>
+        <button class="btn primary" type="button" id="viewerExportFullHtml">Выгрузить всё в один HTML</button>
       </div>
       <div class="toolbar">
         <label>Отделение: <select id="viewerExportDepartmentFilter"></select></label>
@@ -215,6 +216,9 @@
 </script>
 <script type="text/plain" id="lib-jspdf">
 /*__JSPDF__*/
+</script>
+<script>
+/*__VIEWER_HTML_SANITIZER__*/
 </script>
 <script>
 /*__CORE__*/

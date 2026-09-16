@@ -67,6 +67,7 @@ const replacements = {
   "/*__DATALABELS__*/": "chartjs-plugin-datalabels.min.js",
   "/*__HTML2CANVAS__*/": "html2canvas.min.js",
   "/*__JSPDF__*/": "jspdf.umd.min.js",
+  "/*__VIEWER_HTML_SANITIZER__*/": "viewer-html-sanitizer.js",
   "/*__CORE__*/": "app-core.js",
   "/*__PARSERS__*/": "app-parsers.js",
   "/*__METRICS__*/": "app-metrics.js",
@@ -980,6 +981,8 @@ test("Viewer export dialog has a full standalone HTML preset without changing sa
   const start = adminUi.indexOf("function selectFullViewerExport()");
   const end = adminUi.indexOf("async function openViewerExportDialog()", start);
   assert.match(template, /id="viewerExportSelectAll">Выбрать всё<\/button>/);
+  assert.match(template, /id="viewerExportFullHtml">Выгрузить всё в один HTML<\/button>/);
+  assert.match(template, /В новый файл войдут только отмеченные месяцы/);
   assert.match(template, /Назначенные врачам PIN не изменяются/);
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
@@ -988,6 +991,8 @@ test("Viewer export dialog has a full standalone HTML preset without changing sa
   assert.match(handler, /#viewerExportDoctors input\[data-viewer-export-doctor\]/);
   assert.match(handler, /viewerExportHeadScope.*value="department"/);
   assert.match(adminUi, /viewerExportSelectAll"\)\.addEventListener\("click", selectFullViewerExport\)/);
+  assert.match(adminUi, /viewerExportFullHtml"\)\.addEventListener\("click", exportFullViewerPackage\)/);
+  assert.match(adminUi, /function exportFullViewerPackage\(\)\s*\{\s*selectFullViewerExport\(\);\s*return exportViewerPackage\("html"\);/);
   assert.doesNotMatch(handler, /updateViewerDoctorAccess|pinVersion|\.pin\s*=/);
 
   const periods = [{ checked: false }, { checked: false }];

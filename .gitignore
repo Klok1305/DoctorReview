@@ -26,6 +26,7 @@
 !/build/
 /build/*
 !/build/*.js
+!/build/viewer-html-sanitizer.js
 !/build/*.css
 !/build/*.html
 !/build/*.ps1
