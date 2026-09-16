@@ -24,6 +24,8 @@ const {
   inspectViewerPackage,
   reportModelFromLegacyPages,
   reportModelJsonAdapter,
+  reportDoctorIdsInSnapshot,
+  validateFullViewerExportSelection,
 } = require("../desktop/services/viewer-package-service.cjs");
 const { ViewerStorageService } = require("../viewer/storage-service.cjs");
 
@@ -135,6 +137,50 @@ test("doctor PINs are unique, persistent and independent from Windows accounts",
     [afterReopen.pinCode, afterReopen.pinVersion, afterReopen.pinHash, afterReopen.pinSalt, afterReopen.pinParams],
     [beforeReopen.pinCode, beforeReopen.pinVersion, beforeReopen.pinHash, beforeReopen.pinSalt, beforeReopen.pinParams],
   );
+});
+
+test("full HTML gives every doctor with a work report their own existing PIN without enabling ordinary access", async t => {
+  const { database } = fixture(t);
+  const state = snapshot();
+  state.months["2026-01"].vyrabotka = { d1: {}, d2: {} };
+  database.saveSnapshot(state);
+  database.setViewerAdminPin("654321");
+  const access = database.viewerAccessSnapshot().doctors;
+  const pinById = Object.fromEntries(access.map(item => [item.doctorId, item.pin]));
+  database.updateViewerDoctorAccess({ doctorId: "d1", active: true, pin: pinById.d1 });
+  assert.deepEqual(reportDoctorIdsInSnapshot(state), ["d1", "d2"]);
+  const fullSelection = { doctors: [{ doctorId: "d1" }, { doctorId: "d2" }], periods: ["2026-01"],
+    reportModel: { bindings: [{ doctorId: "d1", periodKey: "2026-01", pageType: "doctor" },
+      { doctorId: "d2", periodKey: "2026-01", pageType: "doctor" }] } };
+  assert.deepEqual(validateFullViewerExportSelection(state, fullSelection, "html"), ["d1", "d2"]);
+  assert.throws(() => validateFullViewerExportSelection(state, { ...fullSelection, doctors: [{ doctorId: "d1" }] }, "html"),
+    /не все врачи/);
+  assert.throws(() => validateFullViewerExportSelection(state, { ...fullSelection, reportModel: { bindings: fullSelection.reportModel.bindings.slice(0, 1) } }, "html"),
+    /отсутствует личный отчёт/);
+  assert.throws(() => validateFullViewerExportSelection(state, fullSelection, "zip"), /только для HTML/);
+  assert.throws(() => database.viewerExportCredentials(["d1", "d2"], { adminPin: "654321" }), /Доступ врача d2 не включён/);
+  const credentials = database.viewerExportCredentials(["d1", "d2"], {
+    adminPin: "654321", allowInactiveDoctorIds: reportDoctorIdsInSnapshot(state),
+  });
+  assert.deepEqual(credentials.doctors.map(item => item.pinCode), [pinById.d1, pinById.d2]);
+  const doctors = [
+    { doctorId: "d1", displayName: "Первый Врач", department: "Терапия", specialization: "Кардиология" },
+    { doctorId: "d2", displayName: "Второй Врач", department: "Терапия", specialization: "Неврология" },
+  ];
+  const created = await createStandaloneViewerHtml({
+    appVersion: "2.6.19", credentials, doctors, subjects: doctors, periods: ["2026-01"],
+    pages: doctors.map(doctor => ({ doctorId: doctor.doctorId, periodKey: "2026-01", pageType: "doctor",
+      scopeId: doctor.doctorId, title: "Личный отчёт", html: `<div>${doctor.displayName}</div>` })),
+  });
+  const embedded = created.buffer.toString("utf8").match(/<script id="standaloneViewerData" type="application\/json">([\s\S]*?)<\/script>/);
+  assert.ok(embedded);
+  const bundle = JSON.parse(embedded[1]);
+  assert.equal(bundle.doctors.length, 2);
+  const inactiveDoctor = bundle.doctors.find(doctor => doctor.doctorId === "d2");
+  const grant = decryptStandaloneRecord(inactiveDoctor, pinById.d2);
+  assert.deepEqual(grant.subjects.map(subject => subject.doctorId), ["d2"]);
+  assert.match(reportsFromStandaloneBundle(bundle, grant)[0].html, /Второй Врач/);
+  assert.equal(database.viewerAccessSnapshot().doctors.find(item => item.doctorId === "d2").active, false);
 });
 
 test("department head assignment persists, enables the head and reaches export credentials", t => {

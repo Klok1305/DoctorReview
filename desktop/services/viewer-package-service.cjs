@@ -29,6 +29,36 @@ const MAX_PACKAGE_BYTES = 300 * 1024 * 1024;
 const MAX_STANDALONE_BYTES = 400 * 1024 * 1024;
 const PAGE_TYPES = new Set(["department", "specialization", "doctor"]);
 
+function reportDoctorIdsInSnapshot(snapshot, periods = Object.keys(snapshot && snapshot.months || {})) {
+  const known = new Set(Object.keys(snapshot && snapshot.doctors || {}));
+  return [...new Set(periods.flatMap(periodKey =>
+    Object.keys(snapshot && snapshot.months && snapshot.months[periodKey]?.vyrabotka || {})
+  ))].filter(doctorId => known.has(doctorId));
+}
+
+function validateFullViewerExportSelection(snapshot, input, format) {
+  const reportDoctorIds = reportDoctorIdsInSnapshot(snapshot);
+  if (format !== "html" || !reportDoctorIds.length || !input.reportModel || !Array.isArray(input.reportModel.bindings)) {
+    throw new Error("Полная публикация доступна только для HTML со всеми личными отчётами");
+  }
+  const selectedIds = new Set(input.doctors.map(doctor => String(doctor.doctorId || "")));
+  if (reportDoctorIds.some(id => !selectedIds.has(id))) {
+    throw new Error("В полной публикации выбраны не все врачи с отчётами");
+  }
+  const selectedPeriods = new Set(input.periods.map(String));
+  const personalBindings = new Set(input.reportModel.bindings
+    .filter(binding => binding.pageType === "doctor")
+    .map(binding => `${binding.doctorId}\u0000${binding.periodKey}`));
+  for (const periodKey of Object.keys(snapshot.months || {})) {
+    for (const id of reportDoctorIdsInSnapshot(snapshot, [periodKey])) {
+      if (!selectedPeriods.has(periodKey) || !personalBindings.has(`${id}\u0000${periodKey}`)) {
+        throw new Error("В полной публикации отсутствует личный отчёт врача или период");
+      }
+    }
+  }
+  return reportDoctorIds;
+}
+
 function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
@@ -848,6 +878,8 @@ module.exports = {
   normalizeReportModel,
   reportModelFromLegacyPages,
   reportModelJsonAdapter,
+  reportDoctorIdsInSnapshot,
+  validateFullViewerExportSelection,
   sanitizeReportHtml,
   sha256,
 };

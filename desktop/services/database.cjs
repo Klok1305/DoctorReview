@@ -1081,8 +1081,9 @@ class DatabaseService {
     return this.viewerAccessSnapshot();
   }
 
-  viewerExportCredentials(doctorIds, { requireAdmin = true, adminPin = null } = {}) {
+  viewerExportCredentials(doctorIds, { requireAdmin = true, adminPin = null, allowInactiveDoctorIds = [] } = {}) {
     const ids = [...new Set((doctorIds || []).map(String))];
+    const inactiveAllowed = new Set(allowInactiveDoctorIds.map(String));
     const settings = this.db.prepare("SELECT * FROM viewer_settings WHERE id = 1").get();
     if (requireAdmin && (!settings || !settings.admin_pin_hash)) throw new Error("Сначала задайте администраторский PIN Viewer");
     const requestedAdminPin = adminPin == null ? null : String(adminPin);
@@ -1103,7 +1104,7 @@ class DatabaseService {
     }
     const doctors = ids.map(id => {
       const row = this.db.prepare("SELECT * FROM viewer_doctor_access WHERE doctor_id = ?").get(id);
-      if (!row || !row.active) throw new Error(`Доступ врача ${id} не включён`);
+      if (!row || (!row.active && !inactiveAllowed.has(id))) throw new Error(`Доступ врача ${id} не включён`);
       return {
         doctorId: id,
         pinCode: row.pin_code,

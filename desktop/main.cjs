@@ -14,7 +14,7 @@ const { DatabaseService } = require("./services/database.cjs");
 const { BackupService } = require("./services/backup-service.cjs");
 const { FileService } = require("./services/file-service.cjs");
 const { UpdateService } = require("./services/update-service.cjs");
-const { createStandaloneViewerHtml, createViewerPackage } = require("./services/viewer-package-service.cjs");
+const { createStandaloneViewerHtml, createViewerPackage, validateFullViewerExportSelection } = require("./services/viewer-package-service.cjs");
 const {
   MOBILE_BUNDLE_EXTENSION,
   MOBILE_PUBLICATION_EXTENSION,
@@ -1432,11 +1432,15 @@ function registerIpc() {
     if (subjectIds.some(id => !knownDoctors.has(id))) throw new Error("В публикации указан неизвестный врач отделения");
     const format = String(input.format || "html");
     if (format !== "html" && format !== "zip") throw new Error("Неизвестный формат публикации Viewer");
+    const allReportDoctors = input.allReportDoctors === true;
+    const reportDoctorIds = allReportDoctors ? validateFullViewerExportSelection(snapshot, input, format) : [];
     const adminPin = format === "html" ? String(input.adminPin || "") : null;
     if (format === "html" && !/^\d{6,12}$/.test(adminPin)) {
       throw new Error("Для автономного HTML введите администраторский PIN Viewer (6–12 цифр)");
     }
-    const credentials = database.viewerExportCredentials(doctorIds, { requireAdmin: true, adminPin });
+    const credentials = database.viewerExportCredentials(doctorIds, {
+      requireAdmin: true, adminPin, allowInactiveDoctorIds: reportDoctorIds,
+    });
     const publication = {
       appVersion: app.getVersion(),
       doctors: input.doctors,

@@ -155,10 +155,11 @@
           <label><input type="radio" name="viewerExportHeadScope" value="department"> Добавить всех врачей управляемых отделений</label>
         </div></section>
       </div>
-      <div class="notice blue viewer-export-full-preset"><b>Полная публикация:</b> все доступные периоды, все виды страниц и все включённые получатели войдут в один автономный HTML. Назначенные врачам PIN не изменяются.
+      <div class="notice blue viewer-export-full-preset"><b>Полная публикация:</b> <span id="viewerExportFullSummary"></span> Будут выбраны все доступные периоды и все виды страниц.
         <button class="btn mini" type="button" id="viewerExportSelectAll">Выбрать всё</button>
-        <button class="btn primary" type="button" id="viewerExportFullHtml">Выгрузить всё в один HTML</button>
+        <button class="btn primary" type="button" id="viewerExportFullHtml">Выгрузить всех врачей в один HTML</button>
       </div>
+      <p class="small muted">Список ниже — для ручной выгрузки: в нём только врачи с включённым доступом Viewer. Кнопка полной публикации включает и остальных врачей с отчётами, не меняя настройки доступа.</p>
       <div class="toolbar">
         <label>Отделение: <select id="viewerExportDepartmentFilter"></select></label>
         <label>Специализация: <select id="viewerExportSpecializationFilter"></select></label>

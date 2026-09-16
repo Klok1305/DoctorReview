@@ -955,7 +955,7 @@ test("Viewer access is name plus PIN with encrypted pages and no Windows or NTFS
   assert.match(adminUi, /padStart\(4, "0"\)/);
   assert.match(adminPreload, /exportViewerPins: payload => invoke\("viewer-publication:export-pins", payload\)/);
   const adminMain = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
-  assert.match(adminMain, /viewerExportCredentials\(doctorIds, \{ requireAdmin: true, adminPin \}\)/);
+  assert.match(adminMain, /viewerExportCredentials\(doctorIds, \{[\s\S]*allowInactiveDoctorIds: reportDoctorIds/);
   assert.match(adminMain, /ipcMain\.handle\("viewer-publication:export-pins"/);
   assert.match(adminMain, /viewer-pins\.exported/);
   assert.match(adminUi, /subjects/);
@@ -981,9 +981,10 @@ test("Viewer export dialog has a full standalone HTML preset without changing sa
   const start = adminUi.indexOf("function selectFullViewerExport()");
   const end = adminUi.indexOf("async function openViewerExportDialog()", start);
   assert.match(template, /id="viewerExportSelectAll">Выбрать всё<\/button>/);
-  assert.match(template, /id="viewerExportFullHtml">Выгрузить всё в один HTML<\/button>/);
+  assert.match(template, /id="viewerExportFullHtml">Выгрузить всех врачей в один HTML<\/button>/);
+  assert.match(template, /id="viewerExportFullSummary"/);
   assert.match(template, /В новый файл войдут только отмеченные месяцы/);
-  assert.match(template, /Назначенные врачам PIN не изменяются/);
+  assert.match(adminUi, /Сохранённые PIN не меняются/);
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
   const handler = adminUi.slice(start, end);
@@ -992,7 +993,7 @@ test("Viewer export dialog has a full standalone HTML preset without changing sa
   assert.match(handler, /viewerExportHeadScope.*value="department"/);
   assert.match(adminUi, /viewerExportSelectAll"\)\.addEventListener\("click", selectFullViewerExport\)/);
   assert.match(adminUi, /viewerExportFullHtml"\)\.addEventListener\("click", exportFullViewerPackage\)/);
-  assert.match(adminUi, /function exportFullViewerPackage\(\)\s*\{\s*selectFullViewerExport\(\);\s*return exportViewerPackage\("html"\);/);
+  assert.match(adminUi, /function exportFullViewerPackage\(\)\s*\{\s*selectFullViewerExport\(\);\s*return exportViewerPackage\("html", \{ allReportDoctors: true \}\);/);
   assert.doesNotMatch(handler, /updateViewerDoctorAccess|pinVersion|\.pin\s*=/);
 
   const periods = [{ checked: false }, { checked: false }];
@@ -1028,6 +1029,26 @@ test("Viewer export dialog has a full standalone HTML preset without changing sa
   assert.equal(filtered, false);
   assert.equal(error.textContent, "");
   assert.equal(error.classList.value, "hidden");
+});
+
+test("full Viewer HTML includes doctors with work reports even when ordinary access is off", () => {
+  const vm = require("node:vm");
+  const adminUi = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  const start = adminUi.indexOf("function viewerFullExportDoctorIds(periodKeys)");
+  const end = adminUi.indexOf("function updateViewerExportStatus()", start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const context = vm.createContext({
+    DB: { doctors: { head: {}, active: {}, inactive: {}, empty: {} } },
+    viewerExportDoctorRows: () => [{ doctorId: "head" }, { doctorId: "active" }],
+    viewerRecipientHasDashboardData: doctorId => doctorId === "head" || doctorId === "active",
+    doctorHasDashboardData: doctorId => doctorId === "active" || doctorId === "inactive",
+    sortDoctorIdsAlphabetically: ids => [...ids].sort(),
+  });
+  vm.runInContext(`${adminUi.slice(start, end)}\n;globalThis.fullIds = viewerFullExportDoctorIds(["2026-08"]);`, context);
+  assert.deepEqual([...context.fullIds], ["active", "head", "inactive"]);
+  assert.match(adminUi, /allReportDoctors\s*\? viewerFullExportDoctorIds\(periodKeys\)/);
+  assert.match(adminUi, /allReportDoctors,\s*\.\.\.\(format === "html"/);
 });
 
 test("Admin exports a patient-free mobile publication for the selected doctor", () => {

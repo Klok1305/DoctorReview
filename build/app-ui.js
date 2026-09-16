@@ -5158,6 +5158,16 @@ function viewerExportDoctorRows() {
     .sort(compareViewerDoctorsAlphabetically);
 }
 
+function viewerFullExportDoctorIds(periodKeys) {
+  const withOwnReport = Object.keys(DB.doctors).filter(doctorId =>
+    periodKeys.some(periodKey => doctorHasDashboardData(doctorId, periodKey))
+  );
+  const activeHeads = viewerExportDoctorRows()
+    .filter(item => viewerRecipientHasDashboardData(item.doctorId, periodKeys, true))
+    .map(item => String(item.doctorId));
+  return sortDoctorIdsAlphabetically(new Set([...withOwnReport, ...activeHeads]));
+}
+
 function updateViewerExportStatus() {
   const status = document.getElementById("viewerExportStatus");
   if (!status) return;
@@ -5200,7 +5210,7 @@ function selectFullViewerExport() {
 
 function exportFullViewerPackage() {
   selectFullViewerExport();
-  return exportViewerPackage("html");
+  return exportViewerPackage("html", { allReportDoctors: true });
 }
 
 async function openViewerExportDialog() {
@@ -5210,13 +5220,16 @@ async function openViewerExportDialog() {
     toast("Не удалось загрузить настройки Viewer: " + error.message, true);
     return;
   }
+  const months = monthKeysSorted();
   const doctors = viewerExportDoctorRows();
-  if (!doctors.length) {
-    toast("Нет включённых врачей с загруженным отчётом «Выработка»", true);
+  const fullDoctorIds = viewerFullExportDoctorIds(months);
+  if (!fullDoctorIds.length) {
+    toast("Нет врачей с загруженным отчётом «Выработка»", true);
     switchTab("settings");
     return;
   }
-  const months = monthKeysSorted();
+  document.getElementById("viewerExportFullSummary").textContent =
+    `Получателей: ${fullDoctorIds.length} — все врачи с личной «Выработкой» и включённые заведующие с отчётами отделений. Войдут и врачи с выключенным обычным доступом Viewer. Сохранённые PIN не меняются.`;
   const current = UI.repMonth && DB.months[UI.repMonth] ? UI.repMonth : months[months.length - 1];
   document.getElementById("viewerExportPeriods").innerHTML = months.slice().reverse().map(periodKey =>
     `<label><input type="checkbox" value="${esc(periodKey)}" ${periodKey === current ? "checked" : ""}> ${esc(monthLabel(periodKey))}</label>`
@@ -5242,24 +5255,26 @@ async function openViewerExportDialog() {
       <input type="checkbox" data-viewer-export-doctor value="${esc(item.doctorId)}" checked>
       <b>${esc(item.displayName)}</b><span class="small muted">${esc(item.department || "Без отделения")}</span>
       <span class="small muted">${esc(item.specialization || "Без специализации")}</span></label>`
-  ).join("");
+  ).join("") || '<p class="small muted">Включённых врачей нет. Используйте полную выгрузку или включите доступ в настройках Viewer.</p>';
   const error = document.getElementById("viewerExportError");
   error.textContent = "";
   error.classList.add("hidden");
   document.getElementById("viewerExportAdminPin").value = "";
-  document.getElementById("viewerExportStart").disabled = !VIEWER_ACCESS.adminPinConfigured;
-  document.getElementById("viewerExportZip").disabled = !VIEWER_ACCESS.adminPinConfigured;
+  document.getElementById("viewerExportStart").disabled = !VIEWER_ACCESS.adminPinConfigured || !doctors.length;
+  document.getElementById("viewerExportZip").disabled = !VIEWER_ACCESS.adminPinConfigured || !doctors.length;
   document.getElementById("viewerExportFullHtml").disabled = !VIEWER_ACCESS.adminPinConfigured;
   document.getElementById("viewerExportDialog").showModal();
   updateViewerExportStatus();
 }
 
-async function exportViewerPackage(format = "html") {
+async function exportViewerPackage(format = "html", { allReportDoctors = false } = {}) {
   const buttons = [document.getElementById("viewerExportStart"), document.getElementById("viewerExportZip"), document.getElementById("viewerExportFullHtml")];
   const errorBox = document.getElementById("viewerExportError");
   const periodKeys = [...document.querySelectorAll("#viewerExportPeriods input:checked")].map(input => input.value);
   const pageTypes = new Set([...document.querySelectorAll("#viewerExportPageTypes input:checked")].map(input => input.value));
-  const doctorIds = [...document.querySelectorAll("#viewerExportDoctors input[data-viewer-export-doctor]:checked")].map(input => input.value);
+  const doctorIds = allReportDoctors
+    ? viewerFullExportDoctorIds(periodKeys)
+    : [...document.querySelectorAll("#viewerExportDoctors input[data-viewer-export-doctor]:checked")].map(input => input.value);
   const includeManagedDepartmentDoctors = document.querySelector('input[name="viewerExportHeadScope"]:checked')?.value === "department";
   const adminPin = format === "html" ? document.getElementById("viewerExportAdminPin").value.trim() : "";
   if (!periodKeys.length || !pageTypes.size || !doctorIds.length) {
@@ -5383,6 +5398,7 @@ async function exportViewerPackage(format = "html") {
     document.getElementById("viewerExportStatus").textContent = `Модель зафиксирована · ревизия ${reportModel.revision.slice(0, 12)}… · общих страниц ${reportModel.pages.length}${avoided ? ` · исключено копий ${avoided}` : ""}`;
     const result = await DESKTOP_API.exportViewerPackage({
       format, doctors, subjects, periods: publicationPeriodKeys, reportModel: reportModelJsonAdapter(reportModel),
+      allReportDoctors,
       ...(format === "html" ? { adminPin } : {}),
     });
     if (result.canceled) {
@@ -5400,8 +5416,8 @@ async function exportViewerPackage(format = "html") {
     document.getElementById("viewerExportAdminPin").value = "";
     Object.assign(UI, previousUi);
     switchTab(previousUi.tab);
-    document.getElementById("viewerExportStart").disabled = !VIEWER_ACCESS.adminPinConfigured;
-    document.getElementById("viewerExportZip").disabled = !VIEWER_ACCESS.adminPinConfigured;
+    document.getElementById("viewerExportStart").disabled = !VIEWER_ACCESS.adminPinConfigured || !viewerExportDoctorRows().length;
+    document.getElementById("viewerExportZip").disabled = !VIEWER_ACCESS.adminPinConfigured || !viewerExportDoctorRows().length;
     document.getElementById("viewerExportFullHtml").disabled = !VIEWER_ACCESS.adminPinConfigured;
   }
 }
