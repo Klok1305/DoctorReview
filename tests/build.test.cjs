@@ -1132,9 +1132,8 @@ test("Viewer doctor HTML mirrors the Admin client-base methodology and keeps pro
   assert.match(adminUi, /data-viewer-patient-search/);
   assert.match(adminUi, /data-viewer-patient-segment/);
   assert.match(adminUi, /collapsible-list viewer-patient-register-card/);
-  assert.match(adminUi, /function viewerInterdisciplinarySwitcherHtml\(target, periodKey\)/);
-  assert.match(adminUi, /data-viewer-naz-window/);
-  assert.match(adminUi, /data-viewer-naz-panel/);
+  assert.doesNotMatch(adminUi, /originalAppointmentDetails\.outerHTML\s*=/);
+  assert.match(adminUi, /const \{ clone \} = await cloneDashboardForViewer\(source\)/);
   assert.match(adminUi, /РЕЙТИНГИ ПО ПЛОЩАДКАМ/);
   assert.match(adminUi, /rating-platform-grid/);
   assert.match(adminUi, /\["specialization", "Отчёт специализации", true\]/);
@@ -1143,6 +1142,8 @@ test("Viewer doctor HTML mirrors the Admin client-base methodology and keeps pro
     assert.match(source, /function initializePatientRegisters\(root\)/);
     assert.match(source, /function initializeReportWindowSwitchers\(root\)/);
     assert.match(source, /data-viewer-interdisciplinary/);
+    assert.match(source, /function initializeAppointmentGroups\(root\)/);
+    assert.match(source, /initializeAppointmentGroups\(root\)/);
     assert.match(source, /data-viewer-client-base/);
     assert.match(source, /\["newRisk", "loyalSleep", "lost"\]/);
     assert.match(source, /initializePatientRegisters\(reportBody\)/);

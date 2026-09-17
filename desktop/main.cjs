@@ -893,7 +893,16 @@ function createWindow() {
               const viewerPatientRegisters = [...viewerDoctorRoot.querySelectorAll('[data-viewer-patient-register]')];
               const viewerPatientRows = [...viewerDoctorRoot.querySelectorAll('[data-viewer-patient-row]')];
               const viewerKbButtons = [...viewerDoctorRoot.querySelectorAll('[data-viewer-kb-window]')];
-              const viewerNazButtons = [...viewerDoctorRoot.querySelectorAll('[data-viewer-naz-window]')];
+              const adminAppointmentTable = document.querySelector('#blkV3 #tblNaz');
+              const viewerAppointmentTable = viewerDoctorRoot.querySelector('[data-vector-key="v3"] table.data');
+              const adminAppointmentRows = [...(adminAppointmentTable?.querySelectorAll('tr') || [])];
+              const viewerAppointmentRows = [...(viewerAppointmentTable?.querySelectorAll('tr') || [])];
+              const adminAppointmentParity = Boolean(adminAppointmentTable && viewerAppointmentTable)
+                && adminAppointmentRows.length === viewerAppointmentRows.length
+                && adminAppointmentRows.every((row, index) => row.textContent.trim() === viewerAppointmentRows[index].textContent.trim())
+                && viewerDoctorRoot.querySelectorAll('[data-vector-key="v3"] .source-group-head[data-g]').length > 0
+                && viewerDoctorRoot.querySelectorAll('[data-vector-key="v3"] img[data-pdf-chart]').length >= 2
+                && viewerDoctorRoot.querySelector('[data-vector-key="v3"] .appointment-conversion-summary') !== null;
               const viewerPlatformRatings = [...viewerDoctorRoot.querySelectorAll('.rating-platform-card')];
               const viewerRatingsValid = viewerPlatformRatings.length === 4
                 && viewerPlatformRatings.some(card => card.textContent.includes('ПроДокторов'))
@@ -908,15 +917,10 @@ function createWindow() {
                   && register.querySelector('[data-viewer-patient-search]')
                   && register.querySelector('[data-viewer-patient-segment]')),
                 kbWindows: viewerKbButtons.map(button => button.dataset.viewerKbWindow),
-                nazWindows: viewerNazButtons.map(button => button.dataset.viewerNazWindow),
-                metricNazWindows: computeMetrics('d1', '2026-02').cross.nazSlices,
+                adminAppointmentParity,
                 clientBaseMethodology: viewerDoctorRoot.querySelector('[data-vector-key="v4"][data-client-base-methodology="partition-v1-36m"]') !== null,
                 clientBaseGroups: [...viewerDoctorRoot.querySelectorAll('[data-vector-key="v4"] [data-client-base-group]')]
                   .map(card => card.dataset.clientBaseGroup),
-                directInterdisciplinaryMarkup: viewerInterdisciplinarySwitcherHtml(
-                  { tab: 'doctor', doctorId: 'd1' }, '2026-02'
-                ).includes('data-viewer-interdisciplinary'),
-                interdisciplinaryMarkup: viewerDoctorHtml.includes('data-viewer-interdisciplinary'),
                 originalInterdisciplinaryBlock: viewerDoctorRoot.querySelectorAll('[data-vector-key="v3"]').length,
                 sourcePeriod: viewerDoctorRoot.textContent.includes('Источник данных:'),
                 legacyTableRemoved: !viewerDoctorRoot.querySelector('#tblClientSegment')
@@ -928,7 +932,7 @@ function createWindow() {
                 && viewerPatientRegisterDetails.kbWindows.length === 0
                 && viewerPatientRegisterDetails.clientBaseMethodology
                 && ['total', 'active', 'loyalSleep', 'newRisk', 'lost'].every(group => viewerPatientRegisterDetails.clientBaseGroups.includes(group))
-                && viewerPatientRegisterDetails.nazWindows.length >= 2
+                && viewerPatientRegisterDetails.adminAppointmentParity
                 && viewerPatientRegisterDetails.sourcePeriod
                 && viewerPatientRegisterDetails.legacyTableRemoved;
               UI.setDoctor = 'd1';

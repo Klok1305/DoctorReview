@@ -676,6 +676,51 @@ test("installed and standalone Viewer keep switching windows from legacy exporte
   }
 });
 
+test("installed and standalone Viewer expand the same nested 1C rows as Admin", () => {
+  for (const file of ["app.js", "standalone-app.js"]) {
+    const source = fs.readFileSync(path.join(__dirname, "..", "viewer", file), "utf8");
+    const context = vm.createContext({ window: { viewerAPI: {} }, document: {
+      addEventListener() {},
+      getElementById() { return { textContent: JSON.stringify({ format: "pulse-clinic-standalone-viewer", formatVersion: 2, doctors: [], periods: [] }) }; },
+    } });
+    vm.runInContext(`${source.replace(/\ninitialize\(\);\s*$/, "")}\n;globalThis.bindGroups = initializeAppointmentGroups;`, context);
+    const head = (group, markerText, ancestors = "") => {
+      const marker = { textContent: markerText };
+      return {
+        dataset: { g: group, groupAncestors: ancestors }, style: {}, listeners: {}, attributes: {}, tabIndex: -1,
+        querySelector: () => marker,
+        setAttribute(name, value) { this.attributes[name] = value; },
+        addEventListener(name, listener) { this.listeners[name] = listener; },
+        marker,
+      };
+    };
+    const parent = head("nsg0", "▸");
+    const child = head("nsg1", "▸", "nsg0");
+    const leaf = { dataset: { groupAncestors: "nsg0 nsg1" }, style: {} };
+    const table = {
+      dataset: {},
+      querySelectorAll(selector) {
+        if (selector === "tr.grp-head[data-g]") return [parent, child];
+        if (selector === "tr[data-group-ancestors]") return [child, leaf];
+        return [];
+      },
+    };
+    const root = { querySelectorAll: () => [table] };
+    context.bindGroups(root);
+    assert.equal(child.style.display, "none");
+    assert.equal(leaf.style.display, "none");
+    parent.listeners.click();
+    assert.equal(child.style.display, "");
+    assert.equal(leaf.style.display, "none");
+    child.listeners.click();
+    assert.equal(leaf.style.display, "");
+    assert.equal(child.attributes["aria-expanded"], "true");
+    parent.listeners.click();
+    assert.equal(child.style.display, "none");
+    assert.equal(leaf.style.display, "none");
+  }
+});
+
 test("department head sees every doctor in the department while a regular doctor stays personal", async t => {
   const { root, database } = fixture(t);
   database.setViewerAdminPin("654321");

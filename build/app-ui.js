@@ -1479,49 +1479,6 @@ function viewerClientBaseHtml(target, periodKey) {
   </div>`;
 }
 
-function viewerAppointmentRowsHtml(nz) {
-  const rows = [];
-  if (Array.isArray(nz.sourceGroups) && nz.sourceGroups.length) {
-    for (const group of nz.sourceGroups) {
-      const label = (group.path || []).join(" → ") || "Без группы";
-      const conv = validNaznachCounts(group) && group.assigned > 0 ? group.resultQ / group.assigned * 100 : null;
-      rows.push(`<tr><td><b>${esc(label)}</b></td><td class="num"><b>${fmtNum(group.assigned)}</b></td><td class="num"><b>${fmtNum(group.done)}</b></td><td class="num"><b>${fmtNum(group.soldQ)}</b></td><td class="num"><b>${conv != null ? fmtPct(conv) : "—"}</b></td></tr>`);
-      for (const [name, values] of Object.entries(group.items || {})) {
-        if (!(values.assigned || values.done || values.soldQ)) continue;
-        rows.push(`<tr><td class="small muted" style="padding-left:26px">${esc(name)}</td><td class="num small muted">${fmtNum(values.assigned)}</td><td class="num small muted">${fmtNum(values.done)}</td><td class="num small muted">${fmtNum(values.soldQ)}</td><td></td></tr>`);
-      }
-    }
-  } else {
-    for (const type of REF_TYPES) {
-      const item = nz.byType && nz.byType[type];
-      if (!item || !(item.assigned || item.done || item.soldQ)) continue;
-      rows.push(`<tr><td><b>${esc(type)}</b></td><td class="num">${fmtNum(item.assigned)}</td><td class="num">${fmtNum(item.done)}</td><td class="num">${fmtNum(item.soldQ)}</td><td class="num">${item.conv != null ? fmtPct(item.conv) : "—"}</td></tr>`);
-    }
-  }
-  return rows.join("") || '<tr><td colspan="5" class="muted">Назначений за это окно нет.</td></tr>';
-}
-
-function viewerInterdisciplinarySwitcherHtml(target, periodKey) {
-  if (!target || target.tab !== "doctor" || !target.doctorId) return "";
-  const result = computeMetrics(String(target.doctorId), periodKey);
-  const slices = result && result.cross && Array.isArray(result.cross.nazSlices) ? result.cross.nazSlices.map(Number).filter(Number.isFinite) : [];
-  if (!slices.length) return "";
-  const selected = slices.includes(Number(UI.nazSlice)) ? Number(UI.nazSlice) : slices[0];
-  const buttons = slices.map(windowMonths => `<button type="button" data-viewer-naz-window="${windowMonths}" aria-pressed="${windowMonths === selected ? "true" : "false"}" class="${windowMonths === selected ? "active" : ""}">${windowMonths} мес.</button>`).join("");
-  const panels = slices.map(windowMonths => {
-    const nz = result.cross.naz[windowMonths];
-    const focusRows = nz && nz.focus ? Object.entries(nz.focus.items || {}).filter(([, item]) => item.assigned || item.resultQ)
-      .map(([name, item]) => `<tr><td>${esc(name)}</td><td class="num">${fmtNum(item.assigned)}</td><td class="num">${fmtNum(item.resultQ)}</td></tr>`).join("") : "";
-    return `<div data-viewer-naz-panel="${windowMonths}" ${windowMonths === selected ? "" : "hidden"}>
-      <div class="tracked-metric ${trackedMetricState(nz.totals.conv, null)}"><div><div class="tracked-title">Конверсия назначений за ${windowMonths} мес.</div><div class="tracked-note">Услуги: выполнено + продано; товары: продано · ${fmtNum(nz.totals.resultQ)} из ${fmtNum(nz.totals.assigned)}</div></div><div class="tracked-side"><div class="tracked-value">${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</div></div></div>
-      ${nz.totals.valid === false ? `<div class="notice bad"><b>Конверсия не рассчитана:</b> ${esc(nz.totals.issue)}</div>` : ""}
-      <details class="collapsible-list"><summary class="collapsible-list-summary"><span>ДЕТАЛИ НАЗНАЧЕНИЙ · назначено ${fmtNum(nz.totals.assigned)} · результат ${fmtNum(nz.totals.resultQ)}</span><span class="collapse-hint"></span></summary><div class="collapsible-list-body"><div class="viewer-patient-table-wrap"><table class="data"><thead><tr><th>Вид услуги / специализация / номенклатура</th><th class="num">Назначено</th><th class="num">Выполнено</th><th class="num">Продано</th><th class="num">Конверсия</th></tr></thead><tbody>${viewerAppointmentRowsHtml(nz)}<tr><td><b>Итого</b></td><td class="num"><b>${fmtNum(nz.totals.assigned)}</b></td><td class="num"><b>${fmtNum(nz.totals.done)}</b></td><td class="num"><b>${fmtNum(nz.totals.soldQ)}</b></td><td class="num"><b>${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</b></td></tr></tbody></table></div></div></details>
-      ${focusRows ? `<details class="collapsible-list"><summary class="collapsible-list-summary"><span>${esc(String(nz.focus.title || "Фокусы междисциплинарного подхода").toUpperCase())}</span><span class="collapse-hint"></span></summary><div class="collapsible-list-body"><table class="data"><thead><tr><th>Фокус</th><th class="num">Назначено</th><th class="num">Выполнено + продано</th></tr></thead><tbody>${focusRows}</tbody></table></div></details>` : ""}
-    </div>`;
-  }).join("");
-  return `<div class="viewer-interdisciplinary-switcher" data-viewer-interdisciplinary><div class="vhead"><b>Назначения: окно анализа</b><span class="seg no-print">${buttons}</span></div>${panels}</div>`;
-}
-
 function setClientSegment(v) {
   const segment = String(v);
   const allowed = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
@@ -1880,8 +1837,9 @@ function printablePdfDocument(reportHtml, target, monthKey) {
     .pdf-print-document h1, .pdf-print-document h2, .pdf-print-document h3,
     .pdf-print-document .doctor-semantic-summary { break-after: avoid-page; page-break-after: avoid; }
     .pdf-print-document .card { padding: 12px 14px !important; margin-bottom: 10px !important; border: 1px solid var(--line) !important; border-radius: 10px; overflow: visible !important; box-shadow: none !important; }
-    .pdf-print-document .pdf-chart-image { display: block; width: 100%; height: auto !important; max-height: none; object-fit: contain; }
-    .pdf-print-document .chart-box, .pdf-print-document .grid, .pdf-print-document table, .pdf-print-document tr,
+    .pdf-print-document .pdf-chart-image { display: block; max-width: 100%; width: auto; height: auto !important; max-height: 155mm; margin-inline: auto; object-fit: contain; }
+    .pdf-print-document table, .pdf-print-document .grid { break-inside: auto; page-break-inside: auto; }
+    .pdf-print-document .chart-box, .pdf-print-document tr,
     .pdf-print-document .kpi, .pdf-print-document .doctor-score-leader,
     .pdf-print-document .dynamic-report-outcome, .pdf-print-document .analytic-comment-rail {
       break-inside: avoid-page; page-break-inside: avoid;
@@ -5108,15 +5066,9 @@ async function composeViewerDashboardHtml(target, periodKey, context, comments) 
   const { clone } = await cloneDashboardForViewer(source);
   const root = document.createElement("div");
   root.innerHTML = composeViewerReportHtml(clone.innerHTML, context, comments);
-  const interdisciplinarySwitcher = viewerInterdisciplinarySwitcherHtml(target, periodKey);
-  if (interdisciplinarySwitcher) {
-    const interdisciplinaryBlock = root.querySelector('[data-vector-key="v3"]');
-    const originalAppointmentDetails = interdisciplinaryBlock && interdisciplinaryBlock.querySelector("details");
-    const emptyOriginalSwitcher = interdisciplinaryBlock && interdisciplinaryBlock.querySelector(".vhead .seg");
-    if (emptyOriginalSwitcher) emptyOriginalSwitcher.remove();
-    if (originalAppointmentDetails) originalAppointmentDetails.outerHTML = interdisciplinarySwitcher;
-    else if (interdisciplinaryBlock) interdisciplinaryBlock.insertAdjacentHTML("beforeend", interdisciplinarySwitcher);
-  }
+  // Keep the Admin V3 snapshot: its nested 1C hierarchy, goals, focus charts and
+  // referral sections all belong to the same selected appointment window.
+  // The Viewer binds the retained data-g rows without inline event handlers.
   const clientBase = viewerClientBaseHtml(target, periodKey);
   if (clientBase) {
     const originalClientBase = root.querySelector('[data-vector-key="v4"]');

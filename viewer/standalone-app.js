@@ -438,8 +438,45 @@ function initializeReportWindowSwitchers(root) {
   bind("[data-viewer-client-base]", "data-viewer-kb-window", "data-viewer-kb-panel");
 }
 
+function initializeAppointmentGroups(root) {
+  for (const table of root.querySelectorAll(".viewer-dashboard-snapshot table.data")) {
+    const heads = [...table.querySelectorAll("tr.grp-head[data-g]")];
+    if (!heads.length || table.dataset.viewerGroupsReady === "true") continue;
+    table.dataset.viewerGroupsReady = "true";
+    const isOpen = new Map(heads.map(row => [row.dataset.g, row.querySelector("td span")?.textContent.trim() === "▾"]));
+    const refresh = () => {
+      for (const row of table.querySelectorAll("tr[data-group-ancestors]")) {
+        const ancestors = String(row.dataset.groupAncestors || "").split(/\s+/).filter(Boolean);
+        row.style.display = ancestors.every(key => isOpen.get(key)) ? "" : "none";
+      }
+      for (const row of table.querySelectorAll("tr.grp-sub:not([data-group-ancestors])")) {
+        const group = [...row.classList].find(name => isOpen.has(name));
+        if (group) row.style.display = isOpen.get(group) ? "" : "none";
+      }
+      for (const row of heads) {
+        const marker = row.querySelector("td span");
+        if (marker) marker.textContent = isOpen.get(row.dataset.g) ? "▾" : "▸";
+        row.setAttribute("aria-expanded", isOpen.get(row.dataset.g) ? "true" : "false");
+      }
+    };
+    for (const row of heads) {
+      row.tabIndex = 0;
+      row.setAttribute("role", "button");
+      const toggle = () => { isOpen.set(row.dataset.g, !isOpen.get(row.dataset.g)); refresh(); };
+      row.addEventListener("click", toggle);
+      row.addEventListener("keydown", event => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        toggle();
+      });
+    }
+    refresh();
+  }
+}
+
 function initializePatientRegisters(root) {
   initializeReportWindowSwitchers(root);
+  initializeAppointmentGroups(root);
   for (const register of root.querySelectorAll("[data-viewer-patient-register]")) {
     if (register.dataset.viewerPatientReady === "true") continue;
     register.dataset.viewerPatientReady = "true";
