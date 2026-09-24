@@ -888,6 +888,21 @@ function filesFromDataTransfer(dt) {
 }
 
 let fileImportInProgress = false;
+let fileImportCancelRequested = false;
+
+function cancelFileImport() {
+  if (!fileImportInProgress) return;
+  fileImportCancelRequested = true;
+  const progress = document.getElementById("importProgress");
+  if (progress) progress.textContent = "Останавливаем после текущего файла…";
+}
+
+function yieldImportEvents() {
+  return new Promise(resolve => {
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => resolve());
+    else setTimeout(resolve, 0);
+  });
+}
 
 async function handleFiles(fileList, options = {}) {
   if (fileImportInProgress) {
@@ -895,12 +910,17 @@ async function handleFiles(fileList, options = {}) {
     return null;
   }
   fileImportInProgress = true;
+  fileImportCancelRequested = false;
   const controlIds = ["btnPickFiles", "btnPickDir", "btnScanInput", "btnReprocessAppointments"];
   const controls = controlIds.map(id => document.getElementById(id)).filter(Boolean);
   const previousDisabled = controls.map(control => control.disabled);
   controls.forEach(control => { control.disabled = true; });
   const dropzone = document.getElementById("dropzone");
+  const cancelButton = document.getElementById("btnCancelImport");
+  const progress = document.getElementById("importProgress");
   if (dropzone) dropzone.setAttribute("aria-busy", "true");
+  if (cancelButton) cancelButton.classList.remove("hidden");
+  if (progress) progress.textContent = "Подготавливаем файлы…";
   try {
     return await handleFilesBatch(fileList, options);
   } catch (error) {
@@ -910,7 +930,10 @@ async function handleFiles(fileList, options = {}) {
   } finally {
     controls.forEach((control, index) => { control.disabled = previousDisabled[index]; });
     if (dropzone) dropzone.removeAttribute("aria-busy");
+    if (cancelButton) cancelButton.classList.add("hidden");
+    if (progress) progress.textContent = "";
     fileImportInProgress = false;
+    fileImportCancelRequested = false;
   }
 }
 
@@ -952,7 +975,14 @@ async function handleFilesBatch(fileList, options = {}) {
   }
   let unprocessed = 0;
   for (let index = 0; index < files.length; index++) {
+    if (fileImportCancelRequested) {
+      unprocessed = files.length - index;
+      break;
+    }
     const f = files[index];
+    const progress = document.getElementById("importProgress");
+    if (progress) progress.textContent = `Обрабатываем ${index + 1} из ${files.length}: ${f.name}`;
+    await yieldImportEvents();
     const source = DESKTOP_API ? await ensureDesktopFileSource(f) : null;
     const saved = await withImportMutation(async () => {
       const before = JSON.parse(JSON.stringify({ doctors: DB.doctors, months: DB.months, fileLog: DB.fileLog }));
@@ -997,6 +1027,7 @@ async function handleFilesBatch(fileList, options = {}) {
       unprocessed = files.length - index - 1;
       break;
     }
+    await yieldImportEvents();
   }
   if (DESKTOP_API) {
     try {

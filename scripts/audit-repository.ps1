@@ -32,6 +32,7 @@ $allowedPatterns = @(
   '^mobile-server/[^/]+\.cjs$',
   '^docs/[^/]+\.md$', # Includes PROJECT_MAP.md and ARCHITECTURE_REVIEW.md; measurements use synthetic data only.
   '^resources/(app-icon\.(ico|png)|update-config\.json)$',
+  '^scripts/benchmark-architecture\.cjs$', # Reproducible synthetic-only architecture benchmark.
   '^scripts/[^/]+\.(cjs|ps1|py)$',
   '^tests/[^/]+\.test\.cjs$'
 )

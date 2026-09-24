@@ -17,7 +17,7 @@ function loadPublicationService() {
 
 const {
   MAX_BUNDLE_BYTES,
-  openMobileReportSession,
+  openMobileReportSessionAsync,
   serializeMobilePublicationBundle,
   validateMobilePublicationBundle,
 } = loadPublicationService();
@@ -155,7 +155,22 @@ function createMobileServer(options = {}) {
     sessions: new Map(),
     failures: new Map(),
     uploads: new Map(),
+    completedUploads: new Map(),
   };
+  const kdfQueue = [];
+  let activeKdf = 0;
+  const runKdf = task => new Promise((resolve, reject) => {
+    const run = () => {
+      activeKdf++;
+      Promise.resolve().then(task).then(resolve, reject).finally(() => {
+        activeKdf--;
+        const next = kdfQueue.shift();
+        if (next) next();
+      });
+    };
+    if (activeKdf < 2) run();
+    else kdfQueue.push(run);
+  });
 
   function discardUpload(uploadId) {
     const upload = state.uploads.get(uploadId);
@@ -176,6 +191,7 @@ function createMobileServer(options = {}) {
       if ((!rate.lockedUntil || rate.lockedUntil <= now) && !rate.failures.length) state.failures.delete(key);
     }
     for (const [uploadId, upload] of state.uploads) if (upload.expiresAt <= now) discardUpload(uploadId);
+    for (const [uploadId, completed] of state.completedUploads) if (completed.expiresAt <= now) state.completedUploads.delete(uploadId);
   }
 
   function requireAdmin(identity) {
@@ -233,8 +249,22 @@ function createMobileServer(options = {}) {
     state.bundle = bundle;
   }
 
-  function reportResponse(session) {
-    return { publication: session.publication, access: {
+  function reportResponse(session, periodId = null) {
+    const availablePeriods = session.publication.periods.map(period => ({
+      id: period.id,
+      label: period.label,
+      shortLabel: period.shortLabel,
+      overall: period.overall,
+      coverage: period.coverage == null ? null : period.coverage,
+      preliminary: period.preliminary === true,
+      assessment: period.assessment,
+      updatedAt: period.updatedAt || "",
+    }));
+    const selectedPeriod = periodId == null
+      ? session.publication.periods[0]
+      : session.publication.periods.find(period => period.id === periodId);
+    if (!selectedPeriod) throw Object.assign(new Error("Период отчёта не найден"), { statusCode: 404 });
+    return { publication: { ...session.publication, periods: [selectedPeriod] }, availablePeriods, access: {
       owner: session.access.owner,
       managedDepartments: session.access.managedDepartments,
       reports: session.access.reports,
@@ -286,7 +316,19 @@ function createMobileServer(options = {}) {
         throw Object.assign(new Error("Не удалось проверить целостность мобильного пакета"), { statusCode: 400 });
       }
       for (const [uploadId, upload] of state.uploads) {
-        if (upload.userId === identity.userId && upload.portalId === identity.portalId) discardUpload(uploadId);
+        if (upload.userId !== identity.userId || upload.portalId !== identity.portalId) continue;
+        if (upload.expectedBytes === expectedBytes && upload.expectedSha256 === expectedSha256) {
+          upload.expiresAt = Date.now() + UPLOAD_TTL_MS;
+          sendJson(response, 200, {
+            uploadId,
+            chunkBytes: MAX_UPLOAD_CHUNK_BYTES,
+            chunks: upload.chunks,
+            nextIndex: upload.nextIndex,
+            resumed: true,
+          });
+          return;
+        }
+        discardUpload(uploadId);
       }
       if (state.uploads.size >= MAX_ACTIVE_UPLOADS) {
         throw Object.assign(new Error("Сервер уже принимает другой пакет. Повторите через несколько минут"), { statusCode: 429 });
@@ -304,9 +346,10 @@ function createMobileServer(options = {}) {
         chunks,
         nextIndex: 0,
         receivedBytes: 0,
+        chunkHashes: [],
         expiresAt: Date.now() + UPLOAD_TTL_MS,
       });
-      sendJson(response, 201, { uploadId, chunkBytes: MAX_UPLOAD_CHUNK_BYTES, chunks });
+      sendJson(response, 201, { uploadId, chunkBytes: MAX_UPLOAD_CHUNK_BYTES, chunks, nextIndex: 0, resumed: false });
       return;
     }
 
@@ -315,7 +358,7 @@ function createMobileServer(options = {}) {
       requireAdmin(identity);
       const upload = ownedUpload(chunkMatch[1], identity);
       const index = Number(chunkMatch[2]);
-      if (index !== upload.nextIndex || index < 0 || index >= upload.chunks) {
+      if (index < 0 || index >= upload.chunks || index > upload.nextIndex) {
         throw Object.assign(new Error("Части файла получены не по порядку. Выберите файл заново"), { statusCode: 409 });
       }
       if (!String(request.headers["content-type"] || "").toLowerCase().startsWith("application/octet-stream")) {
@@ -326,7 +369,21 @@ function createMobileServer(options = {}) {
       if (chunk.length !== expectedChunkBytes) {
         throw Object.assign(new Error("Часть файла передана не полностью. Выберите файл заново"), { statusCode: 400 });
       }
+      const chunkSha256 = crypto.createHash("sha256").update(chunk).digest("hex");
+      const declaredChunkSha256 = String(request.headers["x-chunk-sha256"] || "").toLowerCase();
+      if (declaredChunkSha256 && (!/^[a-f0-9]{64}$/.test(declaredChunkSha256) || declaredChunkSha256 !== chunkSha256)) {
+        throw Object.assign(new Error("Проверка целостности части файла не пройдена"), { statusCode: 400 });
+      }
+      if (index < upload.nextIndex) {
+        if (upload.chunkHashes[index] !== chunkSha256) {
+          throw Object.assign(new Error("Повторная часть файла отличается от уже принятой"), { statusCode: 409 });
+        }
+        upload.expiresAt = Date.now() + UPLOAD_TTL_MS;
+        sendJson(response, 200, { ok: true, received: upload.nextIndex, chunks: upload.chunks, duplicate: true });
+        return;
+      }
       fs.appendFileSync(upload.temporaryPath, chunk);
+      upload.chunkHashes[index] = chunkSha256;
       upload.nextIndex += 1;
       upload.receivedBytes += chunk.length;
       upload.expiresAt = Date.now() + UPLOAD_TTL_MS;
@@ -335,6 +392,19 @@ function createMobileServer(options = {}) {
     }
 
     const uploadMatch = url.pathname.match(/^\/api\/admin\/publications\/uploads\/([a-f0-9]{36})(\/complete)?$/);
+    if (request.method === "GET" && uploadMatch && !uploadMatch[2]) {
+      requireAdmin(identity);
+      const upload = ownedUpload(uploadMatch[1], identity);
+      upload.expiresAt = Date.now() + UPLOAD_TTL_MS;
+      sendJson(response, 200, {
+        uploadId: uploadMatch[1],
+        chunkBytes: MAX_UPLOAD_CHUNK_BYTES,
+        chunks: upload.chunks,
+        nextIndex: upload.nextIndex,
+        receivedBytes: upload.receivedBytes,
+      });
+      return;
+    }
     if (request.method === "DELETE" && uploadMatch && !uploadMatch[2]) {
       requireAdmin(identity);
       ownedUpload(uploadMatch[1], identity);
@@ -346,6 +416,11 @@ function createMobileServer(options = {}) {
     if (request.method === "POST" && uploadMatch && uploadMatch[2]) {
       requireAdmin(identity);
       const uploadId = uploadMatch[1];
+      const completed = state.completedUploads.get(uploadId);
+      if (completed && completed.userId === identity.userId && completed.portalId === identity.portalId) {
+        sendJson(response, 200, { ...completed.result, repeated: true });
+        return;
+      }
       const upload = ownedUpload(uploadId, identity);
       try {
         if (upload.nextIndex !== upload.chunks || upload.receivedBytes !== upload.expectedBytes) {
@@ -365,7 +440,14 @@ function createMobileServer(options = {}) {
         const bundle = validateMobilePublicationBundle(parsed);
         saveBundle(bundle);
         state.sessions.clear();
-        sendJson(response, 200, { ok: true, doctors: bundle.doctors.length, createdAt: bundle.createdAt });
+        const result = { ok: true, doctors: bundle.doctors.length, createdAt: bundle.createdAt };
+        state.completedUploads.set(uploadId, {
+          userId: identity.userId,
+          portalId: identity.portalId,
+          result,
+          expiresAt: Date.now() + UPLOAD_TTL_MS,
+        });
+        sendJson(response, 200, result);
       } finally {
         discardUpload(uploadId);
       }
@@ -393,7 +475,7 @@ function createMobileServer(options = {}) {
       }
       let publication, access, selectedDoctorId;
       try {
-        access = openMobileReportSession(state.bundle, doctorId, pin);
+        access = await runKdf(() => openMobileReportSessionAsync(state.bundle, doctorId, pin));
         selectedDoctorId = access.reports.some(report => report.doctorId === doctorId) ? doctorId : access.reports[0].doctorId;
         publication = access.readReport(selectedDoctorId);
       } catch (_) {
@@ -434,6 +516,7 @@ function createMobileServer(options = {}) {
       }
       const session = activeSession.session;
       const selectedDoctorId = url.searchParams.has("doctorId") ? url.searchParams.get("doctorId") : session.selectedDoctorId;
+      const requestedPeriodId = url.searchParams.has("periodId") ? url.searchParams.get("periodId") : null;
       if (!session.access.reports.some(report => report.doctorId === selectedDoctorId)) {
         sendJson(response, 403, { error: "Нет доступа к отчёту этого врача" });
         return;
@@ -448,7 +531,7 @@ function createMobileServer(options = {}) {
           return;
         }
       }
-      sendJson(response, 200, reportResponse(session));
+      sendJson(response, 200, reportResponse(session, requestedPeriodId));
       return;
     }
 

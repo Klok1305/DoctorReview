@@ -9,9 +9,11 @@ const {
   MOBILE_PUBLICATION_FORMAT,
   MOBILE_PUBLICATION_VERSION,
   createMobilePublicationBundle,
+  createMobilePublicationBundleAsync,
   decryptMobilePublication,
   encryptMobilePublication,
   openMobileReportSession,
+  openMobileReportSessionAsync,
   serializeMobilePublication,
   serializeMobilePublicationBundle,
   validateMobilePublication,
@@ -81,6 +83,33 @@ test("installation help closes explicitly without form submission and restores f
   assert.equal(focused.preventScroll, true);
 });
 
+test("mobile API retries transient failures and aborts a stalled request by timeout", async () => {
+  const app = read("mobile-pilot/app.js");
+  const source = app.slice(app.indexOf("  async function apiRequest("), app.indexOf("  function renderServerContext("));
+  let attempts = 0;
+  const response = { ok: true, status: 200, headers: { get: name => name === "content-type" ? "application/json" : null }, json: async () => ({ ok: true }) };
+  const context = vm.createContext({
+    AbortController,
+    DOMException,
+    setTimeout,
+    clearTimeout,
+    fetch: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new TypeError("temporary network error");
+      return response;
+    },
+  });
+  vm.runInContext(source, context);
+  assert.deepEqual(await context.apiRequest("/api/context", { retries: 1, timeoutMs: 100 }), { ok: true });
+  assert.equal(attempts, 2);
+  context.fetch = (_path, options) => new Promise((_resolve, reject) => options.signal.addEventListener("abort", () => {
+    const error = new Error("aborted");
+    error.name = "AbortError";
+    reject(error);
+  }, { once: true }));
+  await assert.rejects(context.apiRequest("/api/context", { retries: 0, timeoutMs: 5 }), /не ответил вовремя/i);
+});
+
 test("mobile pilot contains a complete installable static app shell", () => {
   const required = [
     "index.html",
@@ -111,7 +140,7 @@ test("mobile pilot scripts parse and use only bundled relative assets", () => {
   const html = read("mobile-pilot/index.html");
   assert.match(html, /rel="manifest" href="\.\/manifest\.webmanifest"/);
   assert.match(html, /src="\.\/demo-data\.js\?v=10"/);
-  assert.match(html, /src="\.\/app\.js\?v=13"/);
+  assert.match(html, /src="\.\/app\.js\?v=16"/);
   assert.match(html, /href="\.\/app\.css\?v=14"/);
   assert.doesNotMatch(html, /https?:\/\//i);
 
@@ -190,7 +219,19 @@ test("mobile publication format validates aggregates and rejects patient-bearing
   };
 
   assert.equal(validateMobilePublication(publication), publication);
+  assert.equal(Object.prototype.hasOwnProperty.call(publication.periods[0], "coverage"), false, "legacy v1 periods remain valid without coverage fields");
   assert.match(serializeMobilePublication(publication), /"klinvekt-mobile-publication"/);
+
+  const withCoverage = structuredClone(publication);
+  withCoverage.periods[0].coverage = 47.4;
+  withCoverage.periods[0].preliminary = true;
+  withCoverage.periods[0].missing = ["давность 3 года"];
+  withCoverage.periods[0].vectors[0].coverage = 50;
+  withCoverage.periods[0].vectors[0].preliminary = true;
+  withCoverage.periods[0].goals[0].hasTarget = false;
+  assert.equal(validateMobilePublication(withCoverage), withCoverage);
+  withCoverage.periods[0].coverage = 101;
+  assert.throws(() => validateMobilePublication(withCoverage), /полнота оценки/);
 
   publication.periods[0].comments = [{
     blockKey: "doctor.dynamics",
@@ -219,6 +260,33 @@ test("mobile publication format validates aggregates and rejects patient-bearing
   const raw = JSON.parse(JSON.stringify(publication));
   raw.security.rawExportsIncluded = true;
   assert.throws(() => validateMobilePublication(raw), /отсутствие реестра пациентов/);
+});
+
+test("mobile UI labels preliminary scores and does not turn an unset goal into zero", () => {
+  const source = read("mobile-pilot/app.js");
+  const summarySource = source.slice(source.indexOf("  function renderSummary("), source.indexOf("  function renderMetricHistory("));
+  const elements = {
+    overallScore: {},
+    scoreRing: { style: { setProperty(name, value) { this[name] = value; } } },
+    scoreAssessment: {}, scoreSummary: {},
+    scoreDelta: { classList: { toggle() {} } },
+  };
+  const context = vm.createContext({ elements, Number, signed: value => String(value) });
+  vm.runInContext(`${summarySource}\nrenderSummary({ overall: 23, overallDelta: null, assessment: "Требуется внимание", summary: "Динамики пока нет.", coverage: 47.4, preliminary: true, missing: ["назначения", "давность 3 года"] });`, context);
+  assert.equal(elements.scoreAssessment.textContent, "Предварительная оценка · Требуется внимание");
+  assert.match(elements.scoreSummary.textContent, /Полнота данных 47\.4%/);
+  assert.match(elements.scoreSummary.textContent, /Не хватает: назначения, давность 3 года/);
+
+  const goalSource = source.slice(source.indexOf("  function renderGoals("), source.indexOf("  function setTab("));
+  const goalElements = { goalsSource: {}, goalsList: {}, commentsList: {} };
+  const goalContext = vm.createContext({ elements: goalElements, escapeHtml: String, formatCommentDate: String });
+  vm.runInContext(`${goalSource}\nrenderGoals({ goalsSource: "Цели врача", goals: [
+    { title: "Выручка", fact: "100 ₽", target: "не задана", hasTarget: false, progress: 0, state: "neutral" },
+    { title: "Отзывы", fact: "5 шт.", target: "≥ 4 шт.", hasTarget: true, progress: 100, state: "good" }
+  ], comments: [] });`, goalContext);
+  assert.match(goalElements.goalsList.innerHTML, /Цель не задана — показатель не оценивается/);
+  assert.doesNotMatch(goalElements.goalsList.innerHTML, /Цель: <b>не задана<\/b>/);
+  assert.equal((goalElements.goalsList.innerHTML.match(/progress-track/g) || []).length, 1);
 });
 
 test("mobile renders calendar comparisons safely and still opens metrics from old publications", () => {
@@ -320,7 +388,7 @@ test("mobile chart typography excludes icon strokes and keeps moderate font weig
     assert.match(rule(selector), /font-weight:\s*500/);
   }
   assert.match(rule(".report-chart h5"), /font-weight:\s*600/);
-  assert.match(read("mobile-pilot/service-worker.js"), /klinvekt-mobile-pilot-v15/);
+  assert.match(read("mobile-pilot/service-worker.js"), /klinvekt-mobile-pilot-v18/);
   assert.match(read("mobile-pilot/service-worker.js"), /app\.css\?v=14/);
 });
 
@@ -422,6 +490,32 @@ test("one mobile bundle encrypts every doctor publication with the existing PIN"
   const malformed = clone();
   malformed.doctors[0].encryption.params.N = 2 ** 28;
   assert.throws(() => validateMobilePublicationBundle(malformed), /параметры PIN/);
+});
+
+test("async mobile KDF keeps the event loop responsive and preserves the encrypted format", async () => {
+  const context = { window: {} };
+  vm.runInNewContext(read("mobile-pilot/demo-data.js"), context);
+  const demo = JSON.parse(JSON.stringify(context.window.KLINVEKT_MOBILE_DEMO));
+  const publication = {
+    format: MOBILE_PUBLICATION_FORMAT,
+    version: MOBILE_PUBLICATION_VERSION,
+    createdAt: new Date(0).toISOString(),
+    security: { patientRegistryIncluded: false, rawExportsIncluded: false },
+    doctor: { id: "async-doctor", ...demo.doctor },
+    periods: demo.periods,
+  };
+  let timerTicks = 0;
+  const timer = setInterval(() => { timerTicks += 1; }, 1);
+  const bundle = await createMobilePublicationBundleAsync({
+    publications: [{ doctorId: "async-doctor", publication }],
+    credentials: { doctors: [{ doctorId: "async-doctor", pinCode: "2468", pinVersion: 1 }] },
+    appVersion: "test",
+  });
+  const access = await openMobileReportSessionAsync(bundle, "async-doctor", "2468");
+  clearInterval(timer);
+  assert.ok(timerTicks > 0, "scrypt must not block all event-loop ticks");
+  assert.equal(validateMobilePublicationBundle(bundle), bundle);
+  assert.equal(access.readReport("async-doctor").doctor.id, "async-doctor");
 });
 
 test("mobile vectors advertise an action and head report controls start hidden", () => {

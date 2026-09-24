@@ -34,6 +34,7 @@
       id: window.id,
       label: window.label,
       period: `${config.periods[window.id]} · точное окно ${window.label}`,
+      methodologyId: "legacy-overlap-v1",
       sections: [
         {
           title: "Объём базы",
@@ -153,6 +154,9 @@
       },
     ];
 
+    base[3].methodologyId = "legacy-overlap-v1";
+    base[3].scoreMethodologyId = "legacy-overlap-v1";
+    base[3].methodologyLabel = "Совместимая методика: пять групп могут пересекаться; окно выбирается отдельно. Это не новое разбиение Admin/Viewer partition-v1-36m.";
     base[3].windows = clientBaseWindows(config.clientBase);
 
     base[4].sections = [
@@ -331,6 +335,7 @@
 
   window.KLINVEKT_MOBILE_DEMO = Object.freeze({
     demo: true,
+    methodologies: { score: "score-v1", clientBase: "legacy-overlap-v1", adminViewerClientBase: "partition-v1-36m" },
     doctor: { name: "Тестовый врач", department: "Демонстрационное отделение" },
     periods,
   });

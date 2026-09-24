@@ -38,7 +38,9 @@
     <div class="flex" style="justify-content:center">
       <button class="btn" id="btnPickFiles">📄 Выбрать файлы</button>
       <button class="btn" id="btnPickDir">📁 Выбрать папку</button>
+      <button class="btn danger hidden" id="btnCancelImport" type="button">Остановить импорт</button>
     </div>
+    <div class="small muted" id="importProgress" role="status" aria-live="polite"></div>
   </div>
   <input type="file" id="fileInput" multiple accept=".xls,.xlsx,.json,.zip" class="hidden">
   <input type="file" id="dirInput" webkitdirectory class="hidden">

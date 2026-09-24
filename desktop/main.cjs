@@ -18,7 +18,7 @@ const { createStandaloneViewerHtml, createViewerPackage, validateFullViewerExpor
 const {
   MOBILE_BUNDLE_EXTENSION,
   MOBILE_PUBLICATION_EXTENSION,
-  createMobilePublicationBundle,
+  createMobilePublicationBundleAsync,
   serializeMobilePublication,
   serializeMobilePublicationBundle,
 } = require("./services/mobile-publication-service.cjs");
@@ -1353,10 +1353,16 @@ function registerIpc() {
     return {
       app: { name: APP_NAME, version: app.getVersion(), packaged: app.isPackaged, smokeTest: SMOKE_TEST },
       config: configStore.publicConfig(),
-      snapshot: database.loadSnapshot(),
+      snapshot: database.loadSnapshotSelection({ monthKeys: [] }),
       summary: database.summary(),
       update: updateService.getStatus(),
     };
+  });
+  ipcMain.handle("database:load-months", (_event, payload) => {
+    const input = ensureObject(payload, "список месяцев");
+    if (!Array.isArray(input.monthKeys) || input.monthKeys.length > 24) throw new Error("Некорректный список месяцев");
+    const selection = database.loadSnapshotSelection({ monthKeys: input.monthKeys });
+    return { months: selection ? selection.months : {}, dataRevision: database.summary().dataRevision };
   });
   ipcMain.handle("comments:list", (_event, payload) => {
     localAdminActor();
@@ -1561,7 +1567,7 @@ function registerIpc() {
       || doctorIds.some(id => !recipientIds.includes(id))) throw new Error("Некорректные получатели мобильного пакета");
     // PIN and managed departments come only from SQLite, never from renderer-supplied roles.
     const credentials = database.viewerExportCredentials(recipientIds, { requireAdmin: false });
-    const bundle = createMobilePublicationBundle({
+    const bundle = await createMobilePublicationBundleAsync({
       publications: input.publications,
       recipients,
       credentials,
@@ -1600,12 +1606,23 @@ function registerIpc() {
     const snapshot = JSON.parse(json);
     return database.saveSnapshot(snapshot);
   });
+  ipcMain.handle("database:save-mutation", (_event, payload) => {
+    localAdminActor();
+    const mutation = ensureObject(payload, "команда изменения базы");
+    if (JSON.stringify(mutation).length > 100 * 1024 * 1024) throw new Error("Некорректный размер изменения базы");
+    return database.saveMutation(mutation);
+  });
   ipcMain.handle("database:save-import", (_event, payload) => {
     localAdminActor();
     const input = ensureObject(payload, "сохранение импорта");
-    if (typeof input.snapshot !== "string" || input.snapshot.length > 200 * 1024 * 1024) throw new Error("Некорректный размер снимка базы");
     if (!Array.isArray(input.records) || !input.records.length || input.records.length > 100) throw new Error("Некорректные сведения об импорте");
     for (const record of input.records) ensureObject(record, "источник импорта");
+    if (input.mutation != null) {
+      const mutation = ensureObject(input.mutation, "изменение импорта");
+      if (JSON.stringify(mutation).length > 100 * 1024 * 1024) throw new Error("Некорректный размер изменения импорта");
+      return database.saveMutation(mutation, input.records);
+    }
+    if (typeof input.snapshot !== "string" || input.snapshot.length > 200 * 1024 * 1024) throw new Error("Некорректный размер снимка базы");
     return database.saveSnapshot(JSON.parse(input.snapshot), input.records);
   });
 

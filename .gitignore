@@ -79,6 +79,8 @@
 /scripts/*
 !/scripts/*.ps1
 !/scripts/*.py
+# Синтетический нагрузочный сценарий включён в исходники и CI.
+!/scripts/benchmark-architecture.cjs
 !/scripts/*.cjs
 !/tests/
 /tests/*

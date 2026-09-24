@@ -79,6 +79,8 @@
     serverContext: null,
     reportAccess: null,
     reportRequestId: 0,
+    uploadController: null,
+    serverPeriods: [],
   };
 
   const escapeHtml = (value) => String(value)
@@ -89,7 +91,11 @@
     .replaceAll("'", "&#039;");
 
   const signed = (value) => Number.isFinite(value) ? `${value > 0 ? "+" : ""}${value}` : "—";
-  const currentPeriod = () => reportData.periods[state.periodIndex];
+  const periodCatalog = () => state.serverMode && state.serverPeriods.length ? state.serverPeriods : reportData.periods;
+  const currentPeriod = () => {
+    const entry = periodCatalog()[state.periodIndex];
+    return entry ? reportData.periods.find(period => period.id === entry.id) || null : null;
+  };
 
   function scrollReportTo(target = null) {
     const scroller = elements.reportScroller;
@@ -165,21 +171,50 @@
     if (!value.security || value.security.patientRegistryIncluded !== false || value.security.rawExportsIncluded !== false) {
       throw new Error("Файл не подтверждает отсутствие списка пациентов и исходных выгрузок");
     }
+    if (value.methodologies != null && (!value.methodologies || typeof value.methodologies !== "object" || Array.isArray(value.methodologies)
+      || Object.values(value.methodologies).some(item => item != null && (typeof item !== "string" || item.length > 100)))) {
+      throw new Error("Некорректное описание методик отчёта");
+    }
     const forbiddenKey = findForbiddenPublicationKey(value);
     if (forbiddenKey) throw new Error(`В файле найдено запрещённое поле: ${forbiddenKey}`);
     if (!value.doctor || typeof value.doctor.name !== "string" || typeof value.doctor.department !== "string") throw new Error("В файле нет профиля врача");
     if (!Array.isArray(value.periods) || !value.periods.length || value.periods.length > 24) throw new Error("В файле нет периодов отчёта");
     for (const period of value.periods) {
       if (!period || !Array.isArray(period.headlineMetrics) || period.headlineMetrics.length !== 5) throw new Error("Неполный набор ключевых показателей");
+      if (period.coverage != null && (!Number.isFinite(period.coverage) || period.coverage < 0 || period.coverage > 100)) throw new Error("Некорректная полнота оценки");
+      if (period.preliminary != null && typeof period.preliminary !== "boolean") throw new Error("Некорректный статус оценки");
+      if (period.missing != null && (!Array.isArray(period.missing) || period.missing.length > 30
+        || period.missing.some(item => typeof item !== "string" || !item.trim() || item.length > 500))) throw new Error("Некорректный список пропусков");
+      if (period.numbers != null) {
+        if (!period.numbers || period.numbers.version !== 1 || !Array.isArray(period.numbers.metrics)
+          || !period.numbers.metrics.length || period.numbers.metrics.length > 100) throw new Error("Некорректный числовой контракт");
+        const ids = new Set();
+        for (const metric of period.numbers.metrics) {
+          if (!metric || typeof metric.id !== "string" || !metric.id || ids.has(metric.id)
+            || (metric.value != null && (!Number.isFinite(metric.value) || Math.abs(metric.value) > 1e15))
+            || !["score", "percent", "count", "ratio", "rub", "minutes", "days"].includes(metric.unit)) {
+            throw new Error("Некорректное числовое значение отчёта");
+          }
+          ids.add(metric.id);
+        }
+      }
       if (!Array.isArray(period.vectors) || period.vectors.map((vector) => vector && vector.id).join(",") !== "v1,v2,v3,v4,v5,v6") {
         throw new Error("Неполный набор векторов В1–В6");
       }
       for (const vector of period.vectors) {
+        if (vector.coverage != null && (!Number.isFinite(vector.coverage) || vector.coverage < 0 || vector.coverage > 100)) throw new Error(`Некорректная полнота ${vector.id}`);
+        if (vector.preliminary != null && typeof vector.preliminary !== "boolean") throw new Error(`Некорректный статус ${vector.id}`);
+        for (const key of ["methodologyId", "scoreMethodologyId", "methodologyLabel"]) {
+          if (vector[key] != null && (typeof vector[key] !== "string" || !vector[key].trim() || vector[key].length > (key === "methodologyLabel" ? 1000 : 100))) {
+            throw new Error(`Некорректная методика ${vector.id}`);
+          }
+        }
         const collections = Array.isArray(vector.windows) ? vector.windows.map((item) => item.sections) : [vector.sections];
         if (collections.some((sections) => !Array.isArray(sections) || !sections.length)) throw new Error(`Нет расшифровки ${vector.id}`);
         collections.forEach(sections => validateVisualData(sections));
       }
       if (!Array.isArray(period.goals) || period.goals.length > 20) throw new Error("Некорректный набор целей");
+      if (period.goals.some(goal => goal && goal.hasTarget != null && typeof goal.hasTarget !== "boolean")) throw new Error("Некорректный статус цели");
       if (period.comments != null && (!Array.isArray(period.comments) || period.comments.length > 50)) throw new Error("Некорректный набор комментариев");
       if (period.dynamics != null) {
         if (!period.dynamics || !Array.isArray(period.dynamics.columns) || !Array.isArray(period.dynamics.rows)) {
@@ -201,12 +236,45 @@
 
   function usePublication(publication) {
     reportData = validatePublication(publication);
+    state.serverPeriods = [];
     resetReportState();
   }
 
   function useServerReport(result) {
-    usePublication(result.publication);
+    reportData = validatePublication(result.publication);
+    state.serverPeriods = Array.isArray(result.availablePeriods) && result.availablePeriods.length
+      ? result.availablePeriods
+      : reportData.periods.map(period => ({ id: period.id, label: period.label, shortLabel: period.shortLabel, overall: period.overall }));
+    resetReportState();
+    const loadedId = reportData.periods[0] && reportData.periods[0].id;
+    const loadedIndex = state.serverPeriods.findIndex(period => period.id === loadedId);
+    if (loadedIndex >= 0) state.periodIndex = loadedIndex;
     state.reportAccess = result.access || null;
+  }
+
+  async function selectPeriodIndex(index) {
+    const catalog = periodCatalog();
+    if (!Number.isInteger(index) || index < 0 || index >= catalog.length) return;
+    const periodId = catalog[index].id;
+    if (state.serverMode && !reportData.periods.some(period => period.id === periodId)) {
+      elements.periodSelect.disabled = true;
+      try {
+        const doctorId = state.reportAccess && state.reportAccess.selectedDoctorId;
+        const query = new URLSearchParams({ periodId });
+        if (doctorId) query.set("doctorId", doctorId);
+        const result = await apiRequest(`/api/report?${query.toString()}`);
+        const publication = validatePublication(result.publication);
+        reportData = { ...reportData, doctor: publication.doctor, periods: [...reportData.periods, ...publication.periods.filter(period => !reportData.periods.some(old => old.id === period.id))] };
+        state.reportAccess = result.access || state.reportAccess;
+        if (Array.isArray(result.availablePeriods) && result.availablePeriods.length) state.serverPeriods = result.availablePeriods;
+      } finally {
+        elements.periodSelect.disabled = false;
+      }
+    }
+    state.periodIndex = index;
+    state.vectorId = "v1";
+    state.windowSelections = {};
+    render();
   }
 
   function renderReportAccess() {
@@ -240,10 +308,11 @@
     elements.teamReportStatus.classList.remove("error");
     elements.teamReportStatus.textContent = "Открываем отчёт…";
     try {
-      const result = await apiRequest(`/api/report?doctorId=${encodeURIComponent(doctorId)}`);
+      const reportUrl = `/api/report?doctorId=${encodeURIComponent(doctorId)}${periodId ? `&periodId=${encodeURIComponent(periodId)}` : ""}`;
+      const result = await apiRequest(reportUrl);
       if (requestId !== state.reportRequestId) return;
       useServerReport(result);
-      const index = reportData.periods.findIndex(period => period.id === periodId);
+      const index = periodCatalog().findIndex(period => period.id === periodId);
       if (index >= 0) state.periodIndex = index;
       elements.teamReportStatus.textContent = "";
       showReport();
@@ -309,6 +378,7 @@
     // Clear a server report from hidden DOM as well as memory; keep local imports reusable.
     if (state.serverMode) {
       reportData = bundledDemo;
+      state.serverPeriods = [];
       resetReportState();
       elements.doctorName.textContent = reportData.doctor.name;
       elements.doctorDepartment.textContent = reportData.doctor.department;
@@ -328,10 +398,11 @@
   }
 
   function renderPeriodOptions() {
-    elements.periodSelect.innerHTML = reportData.periods
+    const periods = periodCatalog();
+    elements.periodSelect.innerHTML = periods
       .map((period, index) => `<option value="${index}"${index === state.periodIndex ? " selected" : ""}>${escapeHtml(period.label)}</option>`)
       .join("");
-    elements.previousPeriod.disabled = state.periodIndex >= reportData.periods.length - 1;
+    elements.previousPeriod.disabled = state.periodIndex >= periods.length - 1;
     elements.nextPeriod.disabled = state.periodIndex <= 0;
   }
 
@@ -339,8 +410,11 @@
     const score = Number.isFinite(period.overall) ? period.overall : 0;
     elements.overallScore.textContent = Number.isFinite(period.overall) ? String(period.overall) : "—";
     elements.scoreRing.style.setProperty("--score", `${score}%`);
-    elements.scoreAssessment.textContent = period.assessment;
-    elements.scoreSummary.textContent = period.summary;
+    elements.scoreAssessment.textContent = period.preliminary ? `Предварительная оценка · ${period.assessment}` : period.assessment;
+    const completeness = [];
+    if (Number.isFinite(period.coverage) && (period.preliminary || period.coverage < 100)) completeness.push(`Полнота данных ${period.coverage}%`);
+    if (Array.isArray(period.missing) && period.missing.length) completeness.push(`Не хватает: ${period.missing.join(", ")}`);
+    elements.scoreSummary.textContent = [period.summary, completeness.join(". ")].filter(Boolean).join(" ");
     elements.scoreDelta.textContent = Number.isFinite(period.overallDelta) ? `${signed(period.overallDelta)} к прошлому периоду` : "Нет предыдущего периода";
     elements.scoreDelta.classList.toggle("negative", period.overallDelta < 0);
   }
@@ -527,11 +601,15 @@
       </div>
       <p class="window-period">${escapeHtml(selectedWindow.period || "")}</p>` : "";
     const shownScore = Number.isFinite(vector.score) ? vector.score : "—";
+    const scoreLabel = vector.preliminary ? `${shownScore} · предв.` : shownScore;
+    const coverageNote = vector.preliminary && Number.isFinite(vector.coverage) ? ` Полнота данных — ${vector.coverage}%.` : "";
+    const methodologyNote = vector.methodologyLabel ? `<p class="window-period"><b>Методика:</b> ${escapeHtml(vector.methodologyLabel)}</p>` : "";
 
     elements.vectorDetail.innerHTML = `
       <button class="vector-back" type="button" data-vector-back>↑ К векторам</button>
-      <header><div><span class="eyebrow">Вектор ${vector.number}</span><h3>${escapeHtml(vector.title)}</h3></div><span class="vector-score">${shownScore}</span></header>
-      <p class="vector-summary">${escapeHtml(vector.detail)}</p>
+      <header><div><span class="eyebrow">Вектор ${vector.number}</span><h3>${escapeHtml(vector.title)}</h3></div><span class="vector-score">${escapeHtml(scoreLabel)}</span></header>
+      <p class="vector-summary">${escapeHtml(vector.detail + coverageNote)}</p>
+      ${methodologyNote}
       ${windowPicker}
       <div class="metric-sections">${sections.map(renderSection).join("")}</div>`;
 
@@ -559,12 +637,13 @@
     elements.vectorGrid.innerHTML = period.vectors.map((vector) => {
       const score = Number.isFinite(vector.score) ? vector.score : 0;
       const shownScore = Number.isFinite(vector.score) ? vector.score : "—";
+      const scoreLabel = vector.preliminary ? `${shownScore} · предв.` : shownScore;
       return `
       <button class="vector-card${vector.id === state.vectorId ? " active" : ""}" type="button" data-vector="${escapeHtml(vector.id)}" aria-controls="vectorDetail" aria-pressed="${vector.id === state.vectorId}">
-        <span class="vector-card-head"><span class="vector-number">Вектор ${vector.number}</span><span class="vector-score">${shownScore}</span></span>
+        <span class="vector-card-head"><span class="vector-number">Вектор ${vector.number}</span><span class="vector-score">${escapeHtml(scoreLabel)}</span></span>
         <h3>${escapeHtml(vector.title)}</h3>
         <span class="progress-track" aria-hidden="true"><span style="width:${Math.max(0, Math.min(100, score))}%"></span></span>
-        <span class="vector-foot"><span>из 100</span><span class="delta ${vector.delta < 0 ? "negative" : "positive"}">${signed(vector.delta)}</span></span>
+        <span class="vector-foot"><span>${vector.preliminary && Number.isFinite(vector.coverage) ? `полнота ${escapeHtml(vector.coverage)}%` : "из 100"}</span><span class="delta ${vector.delta < 0 ? "negative" : "positive"}">${signed(vector.delta)}</span></span>
         <span class="vector-action"><span>${vector.id === state.vectorId ? "Показатели открыты" : "Открыть показатели"}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>
       </button>`;
     }).join("");
@@ -583,7 +662,8 @@
   }
 
   function renderTrend() {
-    const chronological = reportData.periods.filter(period => period.id <= currentPeriod().id).sort((a, b) => a.id.localeCompare(b.id)).filter((period) => Number.isFinite(period.overall));
+    const catalog = typeof periodCatalog === "function" ? periodCatalog() : reportData.periods;
+    const chronological = catalog.filter(period => period.id <= currentPeriod().id).sort((a, b) => a.id.localeCompare(b.id)).filter((period) => Number.isFinite(period.overall));
     if (!chronological.length) {
       elements.trendChart.innerHTML = "";
       elements.trendLabels.innerHTML = "";
@@ -630,7 +710,7 @@
     if (dynamics && Array.isArray(dynamics.rows) && dynamics.rows.length) {
       elements.comparisonList.innerHTML = `<h3>Детализация по месяцам</h3>
         <div class="viewer-dynamics-table"><table>
-          <thead><tr><th>Метрика</th>${dynamics.columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}<th>Δ к прошлому</th><th>Δ к среднему</th></tr></thead>
+          <thead><tr><th>Метрика</th>${dynamics.columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}<th title="Предыдущий календарный месяц">Δ к прошлому</th><th title="Среднее предыдущих месяцев с данными">Δ к среднему</th></tr></thead>
           <tbody>${dynamics.rows.map((row) => `<tr><td><b>${escapeHtml(row.label)}</b>${row.target ? `<small>Цель ${escapeHtml(row.target)}</small>` : ""}</td>${row.values.map((value) => `<td>${escapeHtml(value)}</td>`).join("")}<td><span class="delta ${row.state === "bad" ? "negative" : row.state === "good" ? "positive" : "neutral"}">${escapeHtml(row.delta)}</span></td><td>${escapeHtml(row.averageDelta || "—")}</td></tr>`).join("")}</tbody>
         </table></div>`;
       const insightColumn = (title, items, className) => `<section class="insight-card ${className}"><h3>${title}</h3>${items.length ? `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : "<p>Выраженных изменений нет.</p>"}</section>`;
@@ -648,12 +728,15 @@
 
   function renderGoals(period) {
     elements.goalsSource.textContent = period.goalsSource || "Цели из Viewer";
-    elements.goalsList.innerHTML = period.goals.length ? period.goals.map((goal) => `
+    elements.goalsList.innerHTML = period.goals.length ? period.goals.map((goal) => {
+      const unset = goal.hasTarget === false;
+      return `
       <article class="goal-card ${escapeHtml(goal.state || "neutral")}">
         <div class="goal-heading"><h3>${goal.vector ? `<small>В${escapeHtml(String(goal.vector).replace("v", ""))}</small>` : ""}${escapeHtml(goal.title)}</h3><span>${escapeHtml(goal.fact || `${goal.progress}%`)}</span></div>
-        <p>${goal.target ? `Цель: <b>${escapeHtml(goal.target)}</b>` : escapeHtml(goal.description)}</p>
-        <div class="progress-track" aria-label="Выполнение ${goal.progress}%"><span style="width:${Math.max(0, Math.min(100, goal.progress))}%"></span></div>
-      </article>`).join("") : '<article class="goal-card"><p>Цели появятся после расчёта баллов.</p></article>';
+        <p>${unset ? "Цель не задана — показатель не оценивается." : goal.target ? `Цель: <b>${escapeHtml(goal.target)}</b>` : escapeHtml(goal.description)}</p>
+        ${unset ? "" : `<div class="progress-track" aria-label="Выполнение ${goal.progress}%"><span style="width:${Math.max(0, Math.min(100, goal.progress))}%"></span></div>`}
+      </article>`;
+    }).join("") : '<article class="goal-card"><p>Цели появятся после расчёта баллов.</p></article>';
     const comments = Array.isArray(period.comments) && period.comments.length
       ? period.comments
       : period.comment ? [{ title: "Комментарий", text: period.comment, author: "Администратор", updatedAt: period.updatedAt }] : [];
@@ -703,15 +786,45 @@
   }
 
   async function apiRequest(path, options = {}) {
-    const response = await fetch(path, { credentials: "same-origin", cache: "no-store", ...options });
-    const contentType = String(response.headers.get("content-type") || "");
-    const payload = contentType.includes("application/json") ? await response.json() : null;
-    if (!response.ok) {
-      const error = new Error(payload && payload.error || "Сервер временно недоступен");
-      error.status = response.status;
-      throw error;
+    const { timeoutMs = 15000, retries: requestedRetries, signal: externalSignal, ...fetchOptions } = options;
+    const method = String(fetchOptions.method || "GET").toUpperCase();
+    const retries = requestedRetries == null ? (method === "GET" ? 2 : 0) : Math.max(0, Number(requestedRetries) || 0);
+    for (let attempt = 0; ; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(new DOMException("timeout", "TimeoutError")), timeoutMs);
+      const abort = () => controller.abort(externalSignal.reason);
+      if (externalSignal) {
+        if (externalSignal.aborted) abort();
+        else externalSignal.addEventListener("abort", abort, { once: true });
+      }
+      try {
+        const response = await fetch(path, { credentials: "same-origin", cache: "no-store", ...fetchOptions, signal: controller.signal });
+        const contentType = String(response.headers.get("content-type") || "");
+        const payload = contentType.includes("application/json") ? await response.json() : null;
+        if (!response.ok) {
+          const error = new Error(payload && payload.error || "Сервер временно недоступен");
+          error.status = response.status;
+          error.retryAfter = response.headers.get("retry-after");
+          throw error;
+        }
+        return payload;
+      } catch (error) {
+        if (externalSignal?.aborted) throw new Error("Операция отменена");
+        const transient = error.name === "AbortError" || error.name === "TimeoutError" || !error.status || error.status === 408 || error.status === 429 || error.status >= 500;
+        if (!transient || attempt >= retries) {
+          if (error.name === "AbortError" || error.name === "TimeoutError") throw new Error("Сервер не ответил вовремя. Проверьте сеть и повторите");
+          throw error;
+        }
+        const retrySeconds = Math.min(3, Math.max(0.2, Number(error.retryAfter) || (0.35 * (attempt + 1))));
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(resolve, retrySeconds * 1000);
+          if (externalSignal) externalSignal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("Операция отменена")); }, { once: true });
+        });
+      } finally {
+        clearTimeout(timeout);
+        if (externalSignal) externalSignal.removeEventListener("abort", abort);
+      }
     }
-    return payload;
   }
 
   function renderServerContext(context) {
@@ -822,20 +935,37 @@
     elements.serverPublicationStatus.textContent = "Проверяем файл…";
     const digest = await window.crypto.subtle.digest("SHA-256", await file.arrayBuffer());
     const sha256 = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    if (state.uploadController) state.uploadController.abort();
+    const uploadController = new AbortController();
+    state.uploadController = uploadController;
     const upload = await apiRequest("/api/admin/publications/uploads", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ bytes: file.size, sha256 }),
+      retries: 2,
+      signal: uploadController.signal,
     });
     let completed = false;
     try {
-      for (let index = 0; index < upload.chunks; index += 1) {
+      let nextIndex = Number(upload.nextIndex) || 0;
+      const status = await apiRequest(`/api/admin/publications/uploads/${upload.uploadId}`, {
+        retries: 2,
+        signal: uploadController.signal,
+      });
+      nextIndex = Math.max(nextIndex, Number(status.nextIndex) || 0);
+      for (let index = nextIndex; index < upload.chunks; index += 1) {
         elements.serverPublicationStatus.textContent = `Загружаем: ${index + 1} из ${upload.chunks}`;
         const start = index * upload.chunkBytes;
+        const chunk = file.slice(start, Math.min(file.size, start + upload.chunkBytes));
+        const chunkDigest = await window.crypto.subtle.digest("SHA-256", await chunk.arrayBuffer());
+        const chunkSha256 = Array.from(new Uint8Array(chunkDigest), byte => byte.toString(16).padStart(2, "0")).join("");
         await apiRequest(`/api/admin/publications/uploads/${upload.uploadId}/chunks/${index}`, {
           method: "PUT",
-          headers: { "Content-Type": "application/octet-stream" },
-          body: file.slice(start, Math.min(file.size, start + upload.chunkBytes)),
+          headers: { "Content-Type": "application/octet-stream", "X-Chunk-SHA256": chunkSha256 },
+          body: chunk,
+          retries: 3,
+          timeoutMs: 30000,
+          signal: uploadController.signal,
         });
       }
       elements.serverPublicationStatus.textContent = "Проверяем и применяем…";
@@ -843,16 +973,19 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: "{}",
+        retries: 2,
+        timeoutMs: 60000,
+        signal: uploadController.signal,
       });
       completed = true;
       elements.serverPublicationStatus.textContent = `Обновлено: ${result.doctors} врачей`;
       elements.serverPublicationStatus.classList.remove("error");
     } finally {
       if (!completed) {
-        try {
-          await apiRequest(`/api/admin/publications/uploads/${upload.uploadId}`, { method: "DELETE" });
-        } catch (_) { /* временная загрузка сама удалится по таймауту */ }
+        // Сервер хранит принятую позицию ограниченное время: повторный выбор того же файла продолжит загрузку.
+        elements.serverPublicationStatus.textContent = "Загрузка прервана. Выберите тот же файл — отправка продолжится с принятой части.";
       }
+      if (state.uploadController === uploadController) state.uploadController = null;
     }
     await refreshServerContext();
   }
@@ -889,6 +1022,7 @@
   });
   elements.logoutButton.addEventListener("click", async () => {
     state.reportRequestId += 1;
+    if (state.uploadController) state.uploadController.abort();
     if (state.serverMode) {
       try {
         await apiRequest("/api/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
@@ -896,9 +1030,9 @@
     }
     showLogin();
   });
-  elements.periodSelect.addEventListener("change", () => { state.periodIndex = Number(elements.periodSelect.value); state.vectorId = "v1"; state.windowSelections = {}; render(); });
-  elements.previousPeriod.addEventListener("click", () => { if (state.periodIndex < reportData.periods.length - 1) { state.periodIndex += 1; state.vectorId = "v1"; state.windowSelections = {}; render(); } });
-  elements.nextPeriod.addEventListener("click", () => { if (state.periodIndex > 0) { state.periodIndex -= 1; state.vectorId = "v1"; state.windowSelections = {}; render(); } });
+  elements.periodSelect.addEventListener("change", () => { selectPeriodIndex(Number(elements.periodSelect.value)).catch(error => { elements.connectionStatus.textContent = error.message || "Не удалось загрузить период"; }); });
+  elements.previousPeriod.addEventListener("click", () => { if (state.periodIndex < periodCatalog().length - 1) selectPeriodIndex(state.periodIndex + 1).catch(error => { elements.connectionStatus.textContent = error.message || "Не удалось загрузить период"; }); });
+  elements.nextPeriod.addEventListener("click", () => { if (state.periodIndex > 0) selectPeriodIndex(state.periodIndex - 1).catch(error => { elements.connectionStatus.textContent = error.message || "Не удалось загрузить период"; }); });
   document.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", () => {
     setTab(button.dataset.tab);
     scrollReportTo(document.querySelector(".tab-list"));

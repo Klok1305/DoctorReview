@@ -163,12 +163,33 @@ test("Black Hole server gates access by Bitrix account, admin role and doctor PI
   assert.ok(upload.chunks > 1);
   for (let index = 0; index < upload.chunks; index += 1) {
     const start = index * upload.chunkBytes;
+    const chunk = chunkedBytes.subarray(start, Math.min(chunkedBytes.length, start + upload.chunkBytes));
     response = await fetch(`${base}/api/admin/publications/uploads/${upload.uploadId}/chunks/${index}`, {
       method: "PUT",
-      headers: { ...vibeHeaders({ userId: "admin-1", role: "portal_admin" }), "Content-Type": "application/octet-stream" },
-      body: chunkedBytes.subarray(start, Math.min(chunkedBytes.length, start + upload.chunkBytes)),
+      headers: { ...vibeHeaders({ userId: "admin-1", role: "portal_admin" }), "Content-Type": "application/octet-stream", "X-Chunk-SHA256": crypto.createHash("sha256").update(chunk).digest("hex") },
+      body: chunk,
     });
     assert.equal(response.status, 200);
+    if (index === 0) {
+      response = await fetch(`${base}/api/admin/publications/uploads`, {
+        method: "POST",
+        headers: { ...vibeHeaders({ userId: "admin-1", role: "portal_admin" }), "Content-Type": "application/json" },
+        body: JSON.stringify({ bytes: chunkedBytes.length, sha256: crypto.createHash("sha256").update(chunkedBytes).digest("hex") }),
+      });
+      assert.equal(response.status, 200);
+      const resumed = await response.json();
+      assert.equal(resumed.uploadId, upload.uploadId);
+      assert.equal(resumed.nextIndex, 1);
+      response = await fetch(`${base}/api/admin/publications/uploads/${upload.uploadId}/chunks/0`, {
+        method: "PUT",
+        headers: { ...vibeHeaders({ userId: "admin-1", role: "portal_admin" }), "Content-Type": "application/octet-stream", "X-Chunk-SHA256": crypto.createHash("sha256").update(chunk).digest("hex") },
+        body: chunk,
+      });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).duplicate, true);
+      response = await fetch(`${base}/api/admin/publications/uploads/${upload.uploadId}`, { headers: vibeHeaders({ userId: "admin-1", role: "portal_admin" }) });
+      assert.equal((await response.json()).nextIndex, 1);
+    }
   }
   response = await fetch(`${base}/api/admin/publications/uploads/${upload.uploadId}/complete`, {
     method: "POST",
@@ -177,6 +198,13 @@ test("Black Hole server gates access by Bitrix account, admin role and doctor PI
   });
   assert.equal(response.status, 200);
   assert.equal((await response.json()).doctors, 1);
+  response = await fetch(`${base}/api/admin/publications/uploads/${upload.uploadId}/complete`, {
+    method: "POST",
+    headers: { ...vibeHeaders({ userId: "admin-1", role: "portal_admin" }), "Content-Type": "application/json" },
+    body: "{}",
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).repeated, true);
 
   response = await fetch(`${base}/api/context`, { headers: vibeHeaders() });
   const context = await response.json();
@@ -195,11 +223,18 @@ test("Black Hole server gates access by Bitrix account, admin role and doctor PI
   const setCookie = response.headers.get("set-cookie");
   assert.match(setCookie, /HttpOnly; SameSite=None; Secure; Partitioned/);
   const cookie = setCookie.split(";", 1)[0];
-  assert.equal((await response.json()).publication.doctor.name, "Иванов Иван");
+  const loginResult = await response.json();
+  assert.equal(loginResult.publication.doctor.name, "Иванов Иван");
+  assert.equal(loginResult.publication.periods.length, 1, "login transfers only the current period");
+  assert.equal(loginResult.availablePeriods.length, 3);
 
-  response = await fetch(`${base}/api/report`, { headers: { ...vibeHeaders(), Cookie: cookie } });
+  const requestedPeriod = loginResult.availablePeriods[1].id;
+  response = await fetch(`${base}/api/report?periodId=${encodeURIComponent(requestedPeriod)}`, { headers: { ...vibeHeaders(), Cookie: cookie } });
   assert.equal(response.status, 200);
-  assert.equal((await response.json()).publication.doctor.id, "doctor-1");
+  const periodResult = await response.json();
+  assert.equal(periodResult.publication.doctor.id, "doctor-1");
+  assert.deepEqual(periodResult.publication.periods.map(period => period.id), [requestedPeriod]);
+  assert.equal(periodResult.availablePeriods.length, 3);
 
   response = await fetch(`${base}/api/report`, { headers: { ...vibeHeaders({ userId: "other-user" }), Cookie: cookie } });
   assert.equal(response.status, 401);

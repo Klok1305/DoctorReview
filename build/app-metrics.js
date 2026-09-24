@@ -605,7 +605,12 @@ function partitionClientBase(base, profile) {
 
 function adminClientBaseSummary(docId, monthKey) {
   // Короткое окно не содержит давно отсутствующих пациентов и не заменяет трёхлетнюю базу.
-  return partitionClientBase(kbSummary(docId, monthKey, 36), deptParams(docId));
+  const profile = deptParams(docId);
+  const cacheKey = JSON.stringify([String(docId), String(monthKey), clientBasePartitionSettings(profile)]);
+  const cached = metricsCacheGet(_adminBaseCache, cacheKey, "adminBase");
+  if (cached !== undefined) return cached;
+  return metricsCacheSet(_adminBaseCache, cacheKey,
+    partitionClientBase(kbSummary(docId, monthKey, 36), profile), METRICS_CACHE_LIMITS.adminBase);
 }
 
 function clientBaseRequiredWindow(profile) {
@@ -640,7 +645,60 @@ function selectedClientBaseSummary(result, profile, requestedWin = null) {
   const win = recommendedClientBaseWindow(result.akb.availableWins, profile, requestedWin);
   return win == null ? null : (result.akb.wins[win] || null);
 }
+function classifyKbClient(client, profile, groupAvailable, thresholds) {
+  const visits = Number(client.v) || 0;
+  const recency = client.r == null || isNaN(client.r) ? null : Number(client.r);
+  const loyal = groupAvailable.loyal && recency != null && visits >= profile.loyalVisits && recency <= thresholds.loyalDays;
+  const groups = [];
+  if (loyal) groups.push("loyal");
+  if (groupAvailable.active && recency != null && visits >= profile.activeVisits && recency <= thresholds.activeDays) groups.push("active");
+  if (groupAvailable.newRisk && recency != null && visits >= 1 && visits <= profile.newRiskVisits && (profile.newRiskWithin ? recency <= thresholds.newRiskDays : recency > thresholds.newRiskDays)) groups.push("newRisk");
+  if (groupAvailable.loyalSleep && recency != null && visits >= profile.sleepVisits && recency > thresholds.sleepDays) groups.push("loyalSleep");
+  if (groupAvailable.lost && recency != null && visits >= 1 && visits <= profile.lostVisits && recency > thresholds.lostDays) groups.push("lost");
+  return { visits, recency, loyal, groups };
+}
+
+function kbClientRows(docId, monthKey, win, summary) {
+  const cacheKey = JSON.stringify([String(docId), String(monthKey), Number(win), summary.thresholds]);
+  const cached = metricsCacheGet(_kbDetailsCache, cacheKey, "kbDetails");
+  if (cached !== undefined) return cached;
+  const kb = kbWindow(docId, monthKey, win);
+  if (!kb) return [];
+  const rows = kb.clients.map((client, index) => {
+    const classified = classifyKbClient(client, summary.thresholds, summary.groupAvailable, summary.thresholds);
+    const normalizedName = normFio(client.name || "");
+    const normalizedId = String(client.patientId || "").trim().toLowerCase();
+    return {
+      key: normalizedId ? "id:" + normalizedId : (normalizedName ? "name:" + normalizedName : `doctor:${docId}:row:${index}`),
+      patientId: client.patientId || null,
+      name: client.name || `Пациент ${index + 1}`,
+      s: Number(client.s) || 0,
+      v: classified.visits,
+      r: classified.recency,
+      loyal: classified.loyal,
+      groups: classified.groups,
+    };
+  });
+  metricsCacheSet(_kbDetailsCache, cacheKey, rows, METRICS_CACHE_LIMITS.kbDetails);
+  return rows;
+}
+
 function kbSummary(docId, monthKey, win) {
+  const profile = deptParams(docId);
+  const profileKey = {
+    ...clientBaseThresholds(profile),
+    corePct: Number(profile.corePct) || 0,
+    courseX: Number(profile.courseX) || 0,
+  };
+  const cacheKey = JSON.stringify([String(docId), String(monthKey), Number(win), profileKey]);
+  const cached = metricsCacheGet(_kbSummaryCache, cacheKey, "kbSummary");
+  if (cached !== undefined) return cached;
+  const summary = computeKbSummary(docId, monthKey, win);
+  metricsCacheSet(_kbSummaryCache, cacheKey, summary, METRICS_CACHE_LIMITS.kbSummary);
+  return summary;
+}
+
+function computeKbSummary(docId, monthKey, win) {
   const kb = kbWindow(docId, monthKey, win);
   if (!kb) return null;
   const p = deptParams(docId);
@@ -658,35 +716,26 @@ function kbSummary(docId, monthKey, win) {
   };
   const groupSums = { loyal: 0, active: 0, newRisk: 0, loyalSleep: 0, lost: 0 };
   let totalSum = 0, totalVisits = 0, loyalCount = 0;
-  const clientRows = kb.clients.map((c, index) => {
+  const thresholds = { ...t, loyalDays: dLoyal, activeDays: dActive, newRiskDays: dNewRisk, sleepDays: dSleep, lostDays: dLost };
+  let reactivationCandidates = 0, reactivationSum = 0, revenueAtRisk = 0, sleepRiskCount = 0;
+  for (const c of kb.clients) {
     const sum = Number(c.s) || 0;
-    const visits = Number(c.v) || 0;
+    const classified = classifyKbClient(c, t, groupAvailable, thresholds);
+    const { visits, recency, loyal, groups } = classified;
     totalSum += sum;
     totalVisits += visits;
-    const recency = c.r == null || isNaN(c.r) ? null : Number(c.r);
-    const loyal = groupAvailable.loyal && recency != null && visits >= t.loyalVisits && recency <= dLoyal;
-    const groups = [];
-    if (loyal) groups.push("loyal");
-    if (groupAvailable.active && recency != null && visits >= t.activeVisits && recency <= dActive) groups.push("active");
-    if (groupAvailable.newRisk && recency != null && visits >= 1 && visits <= t.newRiskVisits && (t.newRiskWithin ? recency <= dNewRisk : recency > dNewRisk)) groups.push("newRisk");
-    if (groupAvailable.loyalSleep && recency != null && visits >= t.sleepVisits && recency > dSleep) groups.push("loyalSleep");
-    if (groupAvailable.lost && recency != null && visits >= 1 && visits <= t.lostVisits && recency > dLost) groups.push("lost");
     if (recency == null) seg.unknown++;
     for (const group of groups) {
       seg[group]++;
       groupSums[group] += sum;
     }
     if (loyal) loyalCount++;
-    const normalizedName = normFio(c.name || "");
-    const normalizedId = String(c.patientId || "").trim().toLowerCase();
-    return {
-      key: normalizedId ? "id:" + normalizedId : (normalizedName ? "name:" + normalizedName : `doctor:${docId}:row:${index}`),
-      patientId: c.patientId || null,
-      name: c.name || `Пациент ${index + 1}`,
-      s: sum, v: visits, r: recency,
-      loyal, groups,
-    };
-  });
+    const reactivation = groups.includes("newRisk") || groups.includes("loyalSleep");
+    const atRisk = reactivation || groups.includes("lost");
+    if (reactivation) { reactivationCandidates++; reactivationSum += sum; }
+    if (atRisk) revenueAtRisk += sum;
+    if (reactivation) sleepRiskCount++;
+  }
   for (const group of ["active", "newRisk", "loyalSleep", "lost"]) {
     if (!groupAvailable[group]) seg[group] = null;
   }
@@ -702,20 +751,17 @@ function kbSummary(docId, monthKey, win) {
     acc += c.s; core++;
   }
   const courseCnt = kb.clients.filter(c => c.v >= p.courseX).length;
-  const availableReactivationRows = clientRows.filter(c => c.groups.includes("newRisk") || c.groups.includes("loyalSleep"));
-  const availableRiskRows = clientRows.filter(c => c.groups.includes("newRisk") || c.groups.includes("loyalSleep") || c.groups.includes("lost"));
-  return {
+  const summary = {
     window: Number(win), period: kb.period, params: p, sourceWindowComplete, requiredWindowM, groupAvailable,
-    thresholds: { ...t, loyalDays: dLoyal, activeDays: dActive, newRiskDays: dNewRisk, sleepDays: dSleep, lostDays: dLost },
+    thresholds,
     total, known: total - seg.unknown, seg, totalSum, totalVisits,
     activeSum: groupAvailable.active ? groupSums.active : null,
     riskSum: groupAvailable.newRisk ? groupSums.newRisk : null,
     sleepSum: groupAvailable.loyalSleep ? groupSums.loyalSleep : null,
     lostSum: groupAvailable.lost ? groupSums.lost : null,
-    revenueAtRisk: availableRiskRows.reduce((sum, c) => sum + c.s, 0),
-    reactivationCandidates: availableReactivationRows.length,
-    reactivationSum: availableReactivationRows.reduce((sum, c) => sum + c.s, 0),
-    clientRows,
+    revenueAtRisk,
+    reactivationCandidates,
+    reactivationSum,
     visits: totalVisits, patients: total,
     freq: total ? totalVisits / total : null,
     avgVisit: totalVisits ? totalSum / totalVisits : null,
@@ -730,26 +776,108 @@ function kbSummary(docId, monthKey, win) {
     lostPct: groupAvailable.lost && total ? seg.lost / total * 100 : null,
     riskShare: groupAvailable.newRisk && total ? seg.newRisk / total * 100 : null,
     sleepRiskShare: groupAvailable.newRisk && groupAvailable.loyalSleep && total
-      ? clientRows.filter(c => c.groups.includes("newRisk") || c.groups.includes("loyalSleep")).length / total * 100
+      ? sleepRiskCount / total * 100
       : null,
     core,
     courseCnt,
     courseIdx: total ? courseCnt / total * 100 : null,
   };
+  // Персональные строки тяжелее скалярной сводки и создаются только при открытии списка пациентов.
+  Object.defineProperty(summary, "clientRows", {
+    configurable: true,
+    enumerable: false,
+    get() { return kbClientRows(docId, monthKey, win, summary); },
+  });
+  return summary;
 }
 
 /* ---------- главный расчёт ---------- */
-/* Кэш расчётов: динамика и отделение зовут computeMetrics десятки раз.
-   Сбрасывается при любом изменении данных/настроек (saveLocal). */
+/* Кэши ограничены LRU и инвалидируются только для затронутых данных. */
+const METRICS_CACHE_LIMITS = Object.freeze({ metrics: 480, kbSummary: 720, kbDetails: 48, adminBase: 120, department: 180 });
 let _mcCache = new Map();
-function clearMetricsCache() { _mcCache = new Map(); }
+let _kbSummaryCache = new Map();
+let _kbDetailsCache = new Map();
+let _adminBaseCache = new Map();
+let _deptCache = new Map();
+let _metricsCacheCounters = {};
+
+function metricsCacheGet(cache, key, name) {
+  if (!cache.has(key)) {
+    const counter = _metricsCacheCounters[name] || (_metricsCacheCounters[name] = { hits: 0, misses: 0 });
+    counter.misses++;
+    return undefined;
+  }
+  const value = cache.get(key);
+  cache.delete(key);
+  cache.set(key, value);
+  const counter = _metricsCacheCounters[name] || (_metricsCacheCounters[name] = { hits: 0, misses: 0 });
+  counter.hits++;
+  return value;
+}
+
+function metricsCacheSet(cache, key, value, limit) {
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > limit) cache.delete(cache.keys().next().value);
+  return value;
+}
+
+function clearMetricsCache() {
+  _mcCache = new Map();
+  _kbSummaryCache = new Map();
+  _kbDetailsCache = new Map();
+  _adminBaseCache = new Map();
+  _deptCache = new Map();
+  _metricsCacheCounters = {};
+}
+
+function deleteCacheWhere(cache, predicate) {
+  for (const key of cache.keys()) {
+    let parts;
+    try { parts = JSON.parse(key); } catch (_) { parts = []; }
+    if (predicate(parts)) cache.delete(key);
+  }
+}
+
+function invalidateMetricsCache(change = null) {
+  if (!change || change.settings || change.full) {
+    clearMetricsCache();
+    return;
+  }
+  const months = new Set([...(change.months || []), ...(change.deleteMonths || [])].map(String));
+  const doctors = change.doctors === true
+    ? null
+    : new Set([...(change.doctors || []), ...(change.deleteDoctors || [])].map(String));
+  if (change.doctors === true) {
+    _mcCache.clear();
+    _kbSummaryCache.clear();
+    _kbDetailsCache.clear();
+    _adminBaseCache.clear();
+  } else if (doctors.size || months.size) {
+    const affected = parts => (doctors.size && doctors.has(String(parts[0]))) || (months.size && months.has(String(parts[1])));
+    deleteCacheWhere(_mcCache, affected);
+    deleteCacheWhere(_kbSummaryCache, affected);
+    deleteCacheWhere(_kbDetailsCache, affected);
+    deleteCacheWhere(_adminBaseCache, affected);
+  }
+  if (change.departmentScope || change.doctors === true || doctors.size) _deptCache.clear();
+  else if (months.size) deleteCacheWhere(_deptCache, parts => months.has(String(parts[0])));
+}
+
+function metricsCacheStats() {
+  return {
+    sizes: { metrics: _mcCache.size, kbSummary: _kbSummaryCache.size, kbDetails: _kbDetailsCache.size, adminBase: _adminBaseCache.size, department: _deptCache.size },
+    limits: { ...METRICS_CACHE_LIMITS },
+    counters: JSON.parse(JSON.stringify(_metricsCacheCounters)),
+  };
+}
 
 function computeMetrics(docId, monthKey) {
-  const ck = docId + "|" + monthKey;
-  if (_mcCache.has(ck)) return _mcCache.get(ck);
+  const ck = JSON.stringify([String(docId), String(monthKey)]);
+  const cached = metricsCacheGet(_mcCache, ck, "metrics");
+  if (cached !== undefined) return cached;
   const r = computeMetricsRaw(docId, monthKey);
-  _mcCache.set(ck, r);
-  return r;
+  return metricsCacheSet(_mcCache, ck, r, METRICS_CACHE_LIMITS.metrics);
 }
 
 function computeMetricsRaw(docId, monthKey) {
@@ -1015,6 +1143,7 @@ function computeMetricsRaw(docId, monthKey) {
   }
   const scores = {
     vec: vecScores, total: baseTotal.total, wSum: baseTotal.wSum,
+    methodology: { id: "score-v1", v4: "legacy-overlap-v1" },
     vectorCoverage, coveragePct, rankEligible, preliminary: baseTotal.total != null && !rankEligible,
     v3ByNaz, totalByNaz,
   };
@@ -1065,6 +1194,34 @@ function doctorsForScopeInMonth(monthKey, scoped = false) {
 }
 function monthKeysSorted() {
   return Object.keys(DB.months).sort();
+}
+
+function monthKeyOrdinal(monthKey) {
+  const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(String(monthKey || ""));
+  return match ? Number(match[1]) * 12 + Number(match[2]) - 1 : null;
+}
+
+function monthKeyFromOrdinal(ordinal) {
+  if (!Number.isInteger(ordinal) || ordinal < 0) return null;
+  return `${Math.floor(ordinal / 12)}-${String(ordinal % 12 + 1).padStart(2, "0")}`;
+}
+
+function calendarMonthKeys(startMk, endMk) {
+  const start = monthKeyOrdinal(startMk);
+  const end = monthKeyOrdinal(endMk);
+  if (start == null || end == null || start > end || end - start > 2400) return [];
+  return Array.from({ length: end - start + 1 }, (_, index) => monthKeyFromOrdinal(start + index));
+}
+
+function dynamicsMonthKeys(monthsAll, endMk, maxMonths = 6) {
+  const end = monthKeyOrdinal(endMk);
+  if (end == null) return [];
+  const available = [...new Set((Array.isArray(monthsAll) ? monthsAll : [])
+    .filter(key => monthKeyOrdinal(key) != null && monthKeyOrdinal(key) <= end))].sort();
+  if (!available.length) return [];
+  const windowStart = monthKeyFromOrdinal(Math.max(0, end - Math.max(1, Number(maxMonths) || 6) + 1));
+  const start = available[0] > windowStart ? available[0] : windowStart;
+  return calendarMonthKeys(start, endMk);
 }
 
 /* Вся номенклатура ОТДЕЛЕНИЯ (по врачам этого отделения за все месяцы):
@@ -1165,7 +1322,7 @@ function dynMetricDefs(profile) {
 
 /* Общая машинка: series[mk] -> r-подобный объект; строит строки динамики */
 function buildDynamics(monthsAll, endMk, getResult, maxMonths, profile) {
-  const months = monthsAll.filter(k => k <= endMk).slice(-(maxMonths || 6));
+  const months = dynamicsMonthKeys(monthsAll, endMk, maxMonths || 6);
   const results = {};
   for (const k of months) results[k] = getResult(k);
   const defs = dynMetricDefs(profile);
@@ -1179,7 +1336,8 @@ function buildDynamics(monthsAll, endMk, getResult, maxMonths, profile) {
     const nonNull = values.filter(v => v != null);
     if (!nonNull.length) continue;
     const cur = values[values.length - 1];
-    // Сравниваем именно с предыдущим отображаемым месяцем, не перескакивая через пропуски.
+    // Календарная шкала содержит пропуски, поэтому соседняя колонка всегда
+    // является предыдущим календарным месяцем, а не предыдущим отчётом.
     const prev = values.length >= 2 ? values[values.length - 2] : null;
     // Среднее прошедшего периода: все отображаемые месяцы до текущего, текущий не включаем.
     const priorValues = values.slice(0, -1).filter(v => v != null);
@@ -1191,7 +1349,9 @@ function buildDynamics(monthsAll, endMk, getResult, maxMonths, profile) {
     const belowTarget = (cur != null && d.target) ? (d.lower ? cur > d.target : cur < d.target) : false;
     rows.push({
       key: d.key, name: d.name, fmt: d.fmt, lower: !!d.lower, target: d.target || null,
-      values, cur, prev, prevAvg, delta, deltaAvg, improving, improvingAvg, belowTarget,
+      values, cur, prev, prevKey: months.length >= 2 ? months[months.length - 2] : null,
+      prevAvg, averageKeys: months.slice(0, -1).filter((_, index) => values[index] != null),
+      delta, deltaAvg, improving, improvingAvg, belowTarget,
     });
   }
   // точки роста: улучшение ≥ 5%; точки риска: ухудшение ≥ 5% или сильное недовыполнение цели
@@ -1213,7 +1373,22 @@ function computeDoctorDynamics(docId, endMk) {
 }
 
 /* Агрегат отделения за месяц — «виртуальный r» с теми же полями, что читают dynMetricDefs */
+function aggregateDeptCacheKey(mk, deptFilter, subFilter, doctorIds) {
+  const normalizedFilter = Array.isArray(deptFilter)
+    ? [...deptFilter].map(String).sort()
+    : (deptFilter instanceof Set ? [...deptFilter].map(String).sort() : String(deptFilter));
+  const normalizedDoctors = doctorIds ? [...doctorIds].map(String).sort() : null;
+  return JSON.stringify([String(mk), normalizedFilter, String(subFilter), normalizedDoctors]);
+}
+
 function aggregateDeptMonth(mk, deptFilter, subFilter = "all", doctorIds = null) {
+  const cacheKey = aggregateDeptCacheKey(mk, deptFilter, subFilter, doctorIds);
+  const cached = metricsCacheGet(_deptCache, cacheKey, "department");
+  if (cached !== undefined) return cached;
+  return metricsCacheSet(_deptCache, cacheKey, aggregateDeptMonthRaw(mk, deptFilter, subFilter, doctorIds), METRICS_CACHE_LIMITS.department);
+}
+
+function aggregateDeptMonthRaw(mk, deptFilter, subFilter = "all", doctorIds = null) {
   const requestedIds = doctorIds ? new Set(doctorIds) : null;
   const requestedSpecs = Array.isArray(deptFilter)
     ? new Set(deptFilter)

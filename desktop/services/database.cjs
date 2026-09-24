@@ -440,7 +440,13 @@ class DatabaseService {
     }
   }
 
-  loadSnapshot() {
+  #dataRevision() {
+    const row = this.db.prepare("SELECT data_json FROM app_meta WHERE key = 'dataRevision'").get();
+    const value = Number(row && parseJson(row.data_json, 0));
+    return Number.isInteger(value) && value >= 0 ? value : 0;
+  }
+
+  loadSnapshotSelection({ monthKeys = null } = {}) {
     const settingsRow = this.db.prepare("SELECT data_json FROM app_settings WHERE id = 1").get();
     if (!settingsRow) return null;
     const doctors = {};
@@ -448,7 +454,14 @@ class DatabaseService {
     for (const row of this.db.prepare("SELECT id, data_json FROM doctors ORDER BY id").all()) {
       doctors[row.id] = parseJson(row.data_json, {});
     }
-    for (const row of this.db.prepare("SELECT month_key, data_json FROM months ORDER BY month_key").all()) {
+    const requestedMonths = monthKeys == null ? null : [...new Set(monthKeys.map(String))];
+    if (requestedMonths && (requestedMonths.length > 240 || requestedMonths.some(key => !/^\d{4}-\d{2}$/.test(key)))) {
+      throw new Error("Некорректный список месяцев для загрузки");
+    }
+    const monthRows = requestedMonths == null
+      ? this.db.prepare("SELECT month_key, data_json FROM months ORDER BY month_key").all()
+      : requestedMonths.map(key => this.db.prepare("SELECT month_key, data_json FROM months WHERE month_key = ?").get(key)).filter(Boolean);
+    for (const row of monthRows) {
       months[row.month_key] = parseJson(row.data_json, {});
     }
     const meta = {};
@@ -462,7 +475,14 @@ class DatabaseService {
       months,
       dynamicNotes: meta.dynamicNotes && typeof meta.dynamicNotes === "object" ? meta.dynamicNotes : {},
       fileLog: Array.isArray(meta.fileLog) ? meta.fileLog : [],
+      monthKeys: this.db.prepare("SELECT month_key FROM months ORDER BY month_key").all().map(row => row.month_key),
     };
+  }
+
+  loadSnapshot() {
+    const snapshot = this.loadSnapshotSelection();
+    if (snapshot) delete snapshot.monthKeys;
+    return snapshot;
   }
 
   saveSnapshot(snapshot, importRecords = []) {
@@ -475,6 +495,7 @@ class DatabaseService {
     }
     if (!Array.isArray(importRecords) || importRecords.length > 100) throw new Error("Некорректные сведения об импорте");
     const now = new Date().toISOString();
+    const nextRevision = this.#dataRevision() + 1;
     const upsertSettings = this.db.prepare(`
       INSERT INTO app_settings(id, data_json, content_hash, updated_at)
       VALUES (1, ?, ?, ?)
@@ -539,6 +560,7 @@ class DatabaseService {
         version: snapshotVersion,
         dynamicNotes: snapshot.dynamicNotes || {},
         fileLog: Array.isArray(snapshot.fileLog) ? snapshot.fileLog.slice(0, 300) : [],
+        dataRevision: nextRevision,
       };
       for (const [key, value] of Object.entries(metadata)) {
         const json = stableJson(value);
@@ -548,6 +570,78 @@ class DatabaseService {
       return this.summary();
     });
     return summary;
+  }
+
+  saveMutation(mutation, importRecords = []) {
+    if (!mutation || typeof mutation !== "object" || Array.isArray(mutation)) throw new Error("Некорректная команда изменения базы");
+    const snapshotVersion = Number(mutation.version);
+    if (!Number.isInteger(snapshotVersion) || snapshotVersion < MIN_SNAPSHOT_VERSION || snapshotVersion > SNAPSHOT_VERSION) {
+      throw new Error(`Неподдерживаемая версия данных: ${mutation.version}`);
+    }
+    if (!Array.isArray(importRecords) || importRecords.length > 100) throw new Error("Некорректные сведения об импорте");
+    const settings = mutation.settings;
+    const doctors = mutation.doctors == null ? {} : mutation.doctors;
+    const months = mutation.months == null ? {} : mutation.months;
+    const deleteDoctors = mutation.deleteDoctors == null ? [] : mutation.deleteDoctors;
+    const deleteMonths = mutation.deleteMonths == null ? [] : mutation.deleteMonths;
+    if (settings != null && (!settings || typeof settings !== "object" || Array.isArray(settings))) throw new Error("Некорректные настройки");
+    if (!doctors || typeof doctors !== "object" || Array.isArray(doctors) || Object.keys(doctors).length > 2000) throw new Error("Некорректные изменения врачей");
+    if (!months || typeof months !== "object" || Array.isArray(months) || Object.keys(months).length > 240) throw new Error("Некорректные изменения месяцев");
+    if (!Array.isArray(deleteDoctors) || deleteDoctors.length > 2000 || !Array.isArray(deleteMonths) || deleteMonths.length > 240) {
+      throw new Error("Некорректные удаления данных");
+    }
+    if (mutation.dynamicNotes != null && (!mutation.dynamicNotes || typeof mutation.dynamicNotes !== "object" || Array.isArray(mutation.dynamicNotes))) {
+      throw new Error("Некорректные заметки");
+    }
+    if (mutation.fileLog != null && !Array.isArray(mutation.fileLog)) throw new Error("Некорректный журнал файлов");
+    const expectedRevision = Number(mutation.expectedRevision);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0) throw new Error("Некорректная ревизия изменения");
+    for (const key of Object.keys(months)) if (!/^\d{4}-\d{2}$/.test(key)) throw new Error(`Некорректный месяц: ${key}`);
+    for (const key of deleteMonths) if (!/^\d{4}-\d{2}$/.test(String(key))) throw new Error(`Некорректный месяц: ${key}`);
+
+    const now = new Date().toISOString();
+    const upsert = (table, keyColumn, key, value) => {
+      const json = stableJson(value);
+      this.db.prepare(`
+        INSERT INTO ${table}(${keyColumn}, data_json, content_hash, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(${keyColumn}) DO UPDATE SET
+          data_json = excluded.data_json,
+          content_hash = excluded.content_hash,
+          updated_at = excluded.updated_at
+        WHERE ${table}.content_hash <> excluded.content_hash
+      `).run(key, json, contentHash(json), now);
+    };
+    return this.#transaction(() => {
+      const currentRevision = this.#dataRevision();
+      if (currentRevision !== expectedRevision) {
+        throw new Error(`Конфликт ревизии базы: ожидалась ${expectedRevision}, текущая ${currentRevision}`);
+      }
+      if (settings != null) {
+        const json = stableJson(settings);
+        this.db.prepare(`
+          INSERT INTO app_settings(id, data_json, content_hash, updated_at)
+          VALUES (1, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            data_json = excluded.data_json,
+            content_hash = excluded.content_hash,
+            updated_at = excluded.updated_at
+          WHERE app_settings.content_hash <> excluded.content_hash
+        `).run(json, contentHash(json), now);
+      }
+      const deleteDoctor = this.db.prepare("DELETE FROM doctors WHERE id = ?");
+      for (const id of deleteDoctors) deleteDoctor.run(String(id));
+      for (const [id, doctor] of Object.entries(doctors)) upsert("doctors", "id", id, doctor);
+      const deleteMonth = this.db.prepare("DELETE FROM months WHERE month_key = ?");
+      for (const key of deleteMonths) deleteMonth.run(String(key));
+      for (const [key, month] of Object.entries(months)) upsert("months", "month_key", key, month);
+      upsert("app_meta", "key", "version", snapshotVersion);
+      if (Object.prototype.hasOwnProperty.call(mutation, "dynamicNotes")) upsert("app_meta", "key", "dynamicNotes", mutation.dynamicNotes || {});
+      if (Object.prototype.hasOwnProperty.call(mutation, "fileLog")) upsert("app_meta", "key", "fileLog", mutation.fileLog.slice(0, 300));
+      for (const record of importRecords) this.#recordImport(record);
+      upsert("app_meta", "key", "dataRevision", currentRevision + 1);
+      return this.summary();
+    });
   }
 
   createPortableJson({ appVersion = "" } = {}) {
@@ -658,6 +752,7 @@ class DatabaseService {
       publications: this.db.prepare("SELECT COUNT(*) AS n FROM publications").get().n,
       databasePath: this.databasePath,
       schemaVersion: SCHEMA_VERSION,
+      dataRevision: this.#dataRevision(),
     };
   }
 

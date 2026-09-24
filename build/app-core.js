@@ -12,6 +12,7 @@ let DESKTOP_DATABASE_LOADED = false;
 const desktopSaveQueue = [];
 let desktopWriterPromise = null;
 let rendererImportMutation = null;
+let desktopDataRevision = 0;
 
 function loadBundledLibrary(id, globalName) {
   if (globalThis[globalName]) return globalThis[globalName];
@@ -1516,9 +1517,18 @@ async function flushDesktopSaveQueue() {
   let job;
   try {
     while ((job = desktopSaveQueue.shift())) {
-      const summary = job.records == null
-        ? await DESKTOP_API.saveDatabase(job.snapshot)
-        : await DESKTOP_API.saveImport({ snapshot: job.snapshot, records: job.records });
+      let summary;
+      if (job.mutation) {
+        job.mutation.expectedRevision = desktopDataRevision;
+        summary = job.records == null
+          ? await DESKTOP_API.saveDatabaseMutation(job.mutation)
+          : await DESKTOP_API.saveImport({ mutation: job.mutation, records: job.records });
+      } else {
+        summary = job.records == null
+          ? await DESKTOP_API.saveDatabase(job.snapshot)
+          : await DESKTOP_API.saveImport({ snapshot: job.snapshot, records: job.records });
+      }
+      if (summary && Number.isInteger(Number(summary.dataRevision))) desktopDataRevision = Number(summary.dataRevision);
       if (DESKTOP_STATE) DESKTOP_STATE.summary = summary;
       job.waiters.forEach(resolve => resolve(true));
     }
@@ -1563,6 +1573,68 @@ function queueDesktopSnapshot(snapshot, records = null) {
   return saved;
 }
 
+function mergeDesktopMutations(target, source) {
+  if (Object.prototype.hasOwnProperty.call(source, "settings")) target.settings = source.settings;
+  if (Object.prototype.hasOwnProperty.call(source, "dynamicNotes")) target.dynamicNotes = source.dynamicNotes;
+  if (Object.prototype.hasOwnProperty.call(source, "fileLog")) target.fileLog = source.fileLog;
+  target.doctors = Object.assign(target.doctors || {}, source.doctors || {});
+  target.months = Object.assign(target.months || {}, source.months || {});
+  const mergeDeletes = (key, values, updateKey) => {
+    const merged = new Set([...(target[key] || []), ...(values || [])]);
+    for (const id of Object.keys(source[updateKey] || {})) merged.delete(id);
+    target[key] = [...merged];
+  };
+  mergeDeletes("deleteDoctors", source.deleteDoctors, "doctors");
+  mergeDeletes("deleteMonths", source.deleteMonths, "months");
+  return target;
+}
+
+function queueDesktopMutation(mutation, records = null) {
+  const saved = new Promise(resolve => {
+    const tail = desktopSaveQueue[desktopSaveQueue.length - 1];
+    if (records == null && tail && tail.records == null && tail.mutation) {
+      mergeDesktopMutations(tail.mutation, mutation);
+      tail.waiters.push(resolve);
+    } else {
+      desktopSaveQueue.push({ mutation, records, waiters: [resolve] });
+    }
+  });
+  setAutosaveStatus("сохранение изменений в SQLite…");
+  startDesktopSaveWriter();
+  return saved;
+}
+
+function cloneDatabasePart(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function desktopMutationFor(options = {}, importRecords = null) {
+  const mutation = { version: DB.version, doctors: {}, months: {}, deleteDoctors: [], deleteMonths: [] };
+  const copyCollection = (source, selection, output, deleted) => {
+    const keys = selection === true ? Object.keys(source) : Array.isArray(selection) ? [...new Set(selection.map(String))] : [];
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(source, key)) output[key] = cloneDatabasePart(source[key]);
+      else deleted.push(key);
+    }
+  };
+  if (importRecords) {
+    const monthKeys = importRecords.map(record => record && record.log && record.log.slot && record.log.slot.mk).filter(Boolean);
+    copyCollection(DB.months, monthKeys, mutation.months, mutation.deleteMonths);
+    // Общие отчёты могут создать или дополнить несколько карточек врачей.
+    if (monthKeys.length) copyCollection(DB.doctors, true, mutation.doctors, mutation.deleteDoctors);
+    mutation.fileLog = cloneDatabasePart(DB.fileLog || []);
+  } else {
+    if (options.settings) mutation.settings = cloneDatabasePart(DB.settings);
+    copyCollection(DB.doctors, options.doctors, mutation.doctors, mutation.deleteDoctors);
+    copyCollection(DB.months, options.months, mutation.months, mutation.deleteMonths);
+    if (options.dynamicNotes) mutation.dynamicNotes = cloneDatabasePart(DB.dynamicNotes || {});
+    if (options.fileLog) mutation.fileLog = cloneDatabasePart(DB.fileLog || []);
+    for (const id of options.deleteDoctors || []) if (!mutation.deleteDoctors.includes(String(id))) mutation.deleteDoctors.push(String(id));
+    for (const key of options.deleteMonths || []) if (!mutation.deleteMonths.includes(String(key))) mutation.deleteMonths.push(String(key));
+  }
+  return mutation;
+}
+
 async function withImportMutation(action) {
   if (rendererImportMutation) throw new Error("Изменение импорта уже выполняется");
   let release;
@@ -1577,11 +1649,35 @@ async function withImportMutation(action) {
   }
 }
 
-function saveLocal(importRecords = null) {
-  if (typeof clearMetricsCache === "function") clearMetricsCache(); // данные/настройки изменились
+function saveLocal(request = null) {
+  const importRecords = Array.isArray(request) ? request : null;
+  const options = !importRecords && request && typeof request === "object" ? request : null;
+  if (typeof invalidateMetricsCache === "function") {
+    const cacheChange = importRecords
+      ? {
+        months: importRecords.map(record => record && record.log && record.log.slot && record.log.slot.mk).filter(Boolean),
+        // Импорт может дополнить карточки врачей и тем самым состав сводного отделения.
+        departmentScope: true,
+      }
+      : options;
+    invalidateMetricsCache(cacheChange);
+  } else if (typeof clearMetricsCache === "function") {
+    clearMetricsCache();
+  }
   if (rendererImportMutation && importRecords == null) {
     rendererImportMutation.requested = true;
     return rendererImportMutation.promise;
+  }
+  if (DESKTOP_API) {
+    if ((options || importRecords) && typeof DESKTOP_API.saveDatabaseMutation === "function") {
+      try {
+        return queueDesktopMutation(desktopMutationFor(options || {}, importRecords), importRecords);
+      } catch (e) {
+        console.warn("database mutation serialization failed", e);
+        toast("⚠ Не удалось подготовить изменения базы к сохранению: " + e.message, true);
+        return Promise.resolve(false);
+      }
+    }
   }
   let snapshot;
   try {
@@ -1623,10 +1719,23 @@ function loadLocal() {
 async function loadDesktopDatabase() {
   if (!DESKTOP_API) return null;
   DESKTOP_STATE = await DESKTOP_API.initialize();
-  if (DESKTOP_STATE.snapshot && !applyLoadedDatabase(DESKTOP_STATE.snapshot)) {
+  desktopDataRevision = Number(DESKTOP_STATE && DESKTOP_STATE.summary && DESKTOP_STATE.summary.dataRevision || 0);
+  const snapshot = DESKTOP_STATE.snapshot;
+  if (snapshot && Array.isArray(snapshot.monthKeys) && typeof DESKTOP_API.loadDatabaseMonths === "function") {
+    snapshot.months = snapshot.months || {};
+    for (let index = 0; index < snapshot.monthKeys.length; index += 24) {
+      const selection = await DESKTOP_API.loadDatabaseMonths(snapshot.monthKeys.slice(index, index + 24));
+      if (Number(selection && selection.dataRevision) !== desktopDataRevision) {
+        throw new Error("Рабочая база изменилась во время загрузки. Перезапустите приложение");
+      }
+      Object.assign(snapshot.months, selection.months || {});
+    }
+    delete snapshot.monthKeys;
+  }
+  if (snapshot && !applyLoadedDatabase(snapshot)) {
     throw new Error("Рабочая база создана несовместимой версией приложения");
   }
-  DESKTOP_DATABASE_LOADED = Boolean(DESKTOP_STATE.snapshot);
+  DESKTOP_DATABASE_LOADED = Boolean(snapshot);
   if (DESKTOP_STATE.config) setAutosaveStatus(`SQLite · ${DESKTOP_STATE.config.databasePath}`);
   return DESKTOP_STATE;
 }

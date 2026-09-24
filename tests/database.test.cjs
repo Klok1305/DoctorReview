@@ -35,6 +35,11 @@ test("SQLite snapshot, import history and verified backup round-trip", async t =
   assert.equal(summary.months, 1);
   assert.equal(summary.doctors, 1);
   assert.deepEqual(database.loadSnapshot(), snapshot());
+  const bootstrap = database.loadSnapshotSelection({ monthKeys: [] });
+  assert.deepEqual(bootstrap.months, {});
+  assert.deepEqual(bootstrap.monthKeys, ["2026-01"]);
+  assert.deepEqual(database.loadSnapshotSelection({ monthKeys: ["2026-01"] }).months, snapshot().months);
+  assert.throws(() => database.loadSnapshotSelection({ monthKeys: ["not-a-month"] }), /список месяцев/);
 
   const source = { sha256: "a".repeat(64), path: "C:\\input\\test.xlsx", name: "test.xlsx", size: 123 };
   const batchId = database.beginImportBatch({ totalFiles: 1 });
@@ -55,6 +60,48 @@ test("SQLite snapshot, import history and verified backup round-trip", async t =
   assert.equal(preview.months, 1);
   assert.equal(preview.doctors, 1);
   assert.equal(DatabaseService.inspect(backup).integrity, "ok");
+});
+
+test("revisioned mutations update only requested rows and reject stale writers atomically", t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-app-mutations-"));
+  const database = new DatabaseService(path.join(temp, "data.sqlite"));
+  t.after(() => { database.close(); fs.rmSync(temp, { recursive: true, force: true }); });
+
+  const initial = snapshot();
+  const first = database.saveSnapshot(initial);
+  assert.equal(first.dataRevision, 1);
+  const monthHash = database.db.prepare("SELECT content_hash FROM months WHERE month_key = '2026-01'").get().content_hash;
+  const doctorHash = database.db.prepare("SELECT content_hash FROM doctors WHERE id = 'd1'").get().content_hash;
+
+  const settings = structuredClone(initial.settings);
+  settings.showScores = false;
+  const second = database.saveMutation({ version: 3, expectedRevision: 1, settings, doctors: {}, months: {}, deleteDoctors: [], deleteMonths: [] });
+  assert.equal(second.dataRevision, 2);
+  assert.equal(database.loadSnapshot().settings.showScores, false);
+  assert.equal(database.db.prepare("SELECT content_hash FROM months WHERE month_key = '2026-01'").get().content_hash, monthHash);
+  assert.equal(database.db.prepare("SELECT content_hash FROM doctors WHERE id = 'd1'").get().content_hash, doctorHash);
+
+  const third = database.saveMutation({ version: 3, expectedRevision: 2, doctors: {}, months: {}, deleteDoctors: [], deleteMonths: [], dynamicNotes: { note: "точечно" } });
+  assert.equal(third.dataRevision, 3);
+  assert.deepEqual(database.loadSnapshot().dynamicNotes, { note: "точечно" });
+  assert.throws(() => database.saveMutation({ version: 3, expectedRevision: 2, doctors: {}, months: {}, deleteDoctors: [], deleteMonths: [], fileLog: [] }), /Конфликт ревизии/);
+  assert.equal(database.summary().dataRevision, 3);
+
+  const changedMonth = structuredClone(initial.months["2026-01"]);
+  changedMonth.vyrabotka.d1 = { items: [{ n: "Synthetic", q: 1, sOwn: 100 }] };
+  const source = { sha256: "f".repeat(64), name: "mutation.xlsx" };
+  database.db.exec("CREATE TEMP TRIGGER fail_mutation_import BEFORE INSERT ON import_events BEGIN SELECT RAISE(ABORT, 'mutation failure'); END");
+  assert.throws(() => database.saveMutation({ version: 3, expectedRevision: 3, doctors: {}, months: { "2026-01": changedMonth }, deleteDoctors: [], deleteMonths: [], fileLog: [] },
+    [{ source, log: { status: "загружено", month: "2026-01" } }]), /mutation failure/);
+  assert.equal(database.summary().dataRevision, 3);
+  assert.equal(database.db.prepare("SELECT content_hash FROM months WHERE month_key = '2026-01'").get().content_hash, monthHash);
+  assert.equal(database.hasSuccessfulSource(source.sha256), false);
+  database.db.exec("DROP TRIGGER fail_mutation_import");
+  const fourth = database.saveMutation({ version: 3, expectedRevision: 3, doctors: {}, months: { "2026-01": changedMonth }, deleteDoctors: [], deleteMonths: [], fileLog: [] },
+    [{ source, log: { status: "загружено", month: "2026-01" } }]);
+  assert.equal(fourth.dataRevision, 4);
+  assert.equal(database.loadSnapshot().months["2026-01"].vyrabotka.d1.items[0].sOwn, 100);
+  assert.equal(database.hasSuccessfulSource(source.sha256), true);
 });
 
 test("import snapshot and source history commit together and roll back together on write failure", t => {

@@ -6,6 +6,7 @@ const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
 
 contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   initialize: () => invoke("app:initialize"),
+  loadDatabaseMonths: monthKeys => invoke("database:load-months", { monthKeys }),
   listComments: payload => invoke("comments:list", payload),
   saveComment: payload => invoke("comments:save", payload),
   getCommentHistory: id => invoke("comments:history", id),
@@ -19,6 +20,7 @@ contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   exportMobilePublication: payload => invoke("mobile-publication:export", payload),
   exportMobilePublicationBundle: payload => invoke("mobile-publication:export-bundle", payload),
   saveDatabase: json => invoke("database:save", json),
+  saveDatabaseMutation: payload => invoke("database:save-mutation", payload),
   saveImport: payload => invoke("database:save-import", payload),
   exportJson: json => invoke("database:export-json", json),
   importJson: json => invoke("database:import-json", json),

@@ -69,7 +69,7 @@ async function syncConfiguredViewerDepartmentHeads() {
 
   let accessDoctorIds = new Set((VIEWER_ACCESS.doctors || []).map(item => String(item.doctorId)));
   if (entries.some(([, doctorId]) => !accessDoctorIds.has(String(doctorId)))) {
-    if (!await saveLocal()) throw new Error("Не удалось сохранить врачей перед назначением заведующего");
+    if (!await saveLocal({ doctors: true, settings: true })) throw new Error("Не удалось сохранить врачей перед назначением заведующего");
     await refreshViewerPublicationAccess();
     accessDoctorIds = new Set((VIEWER_ACCESS.doctors || []).map(item => String(item.doctorId)));
   }
@@ -497,7 +497,7 @@ function removeFileData(i) {
   if (!Object.values(m).some(o => o && Object.keys(o).length)) delete DB.months[s.mk]; // месяц опустел
   l.status = "удалено";
   delete l.slot;
-  saveLocal();
+  saveLocal({ months: [s.mk], fileLog: true });
   renderAll();
   toast(`Данные файла «${l.name}» убраны из базы`);
 }
@@ -2553,7 +2553,7 @@ function saveDynamicNarrative(blkId) {
   el.classList.add("is-saved");
   const badge = document.getElementById(blkId + "_narrative_status");
   if (badge) { badge.textContent = "сохранено вручную"; badge.className = "badge good"; }
-  saveLocal();
+  saveLocal({ dynamicNotes: true });
   toast("Комментарий сохранён и показан полностью");
 }
 
@@ -2567,7 +2567,7 @@ function resetDynamicNarrative(blkId) {
   el.classList.remove("is-saved");
   const badge = document.getElementById(blkId + "_narrative_status");
   if (badge) { badge.textContent = "черновик по показателям"; badge.className = "badge"; }
-  saveLocal();
+  saveLocal({ dynamicNotes: true });
   toast("Комментарий обновлён по текущим показателям");
 }
 
@@ -2611,7 +2611,7 @@ function dynamicsOutcomeHtml(dyn, blkId, noteKey, narrative, copyBlockId = "") {
 }
 
 function adminYearMonths(endMk) {
-  return Array.from({ length: Number(endMk.slice(5, 7)) }, (_, i) => `${endMk.slice(0, 4)}-${String(i + 1).padStart(2, "0")}`);
+  return calendarMonthKeys(`${endMk.slice(0, 4)}-01`, endMk);
 }
 
 function adminDoctorDynamics(docId, endMk) {
@@ -2707,8 +2707,8 @@ function dynamicsHtml(dyn, blkId, title, subtitle, noteKey, detailTailHtml = "",
   // таблица по месяцам: жирным зелёным — лучший месяц метрики, красным — худший
   const tblId = blkId + "_tbl";
   html += `<h3 class="small muted" style="margin:0 0 6px">ПОКАЗАТЕЛИ ПО МЕСЯЦАМ ${copyBtn("copyTable", tblId)}</h3>
-    <p class="small muted" style="margin:0 0 6px">Ячейки: зелёным — лучший месяц, красным — худший. Мини-график: зелёный — последний месяц лучше среднего предыдущих месяцев, красный — хуже, серый — без изменений или нет данных.</p>
-    <div class="dynamics-table-scroll"><table class="data dynamics-table" id="${tblId}"><tr><th>Метрика</th><th title="Цвет сравнивает последний месяц со средним предыдущих месяцев">Тренд</th>${dyn.months.map(k => `<th class="num">${monthLabel(k)}</th>`).join("")}<th class="num" title="Изменение к предыдущему показанному месяцу">Δ к прошлому</th><th class="num" title="Изменение к среднему всех показанных месяцев без последнего">Δ к среднему</th></tr>`;
+    <p class="small muted" style="margin:0 0 6px">Ячейки: зелёным — лучший месяц, красным — худший. Мини-график: зелёный — последний месяц лучше среднего предыдущих месяцев с данными, красный — хуже, серый — без изменений или нет данных. Полностью отсутствующие месяцы сохраняются как пропуски.</p>
+    <div class="dynamics-table-scroll"><table class="data dynamics-table" id="${tblId}"><tr><th>Метрика</th><th title="Цвет сравнивает последний месяц со средним предыдущих месяцев с данными">Тренд</th>${dyn.months.map(k => `<th class="num">${monthLabel(k)}</th>`).join("")}<th class="num" title="Изменение к предыдущему календарному месяцу">Δ к прошлому</th><th class="num" title="Изменение к среднему предыдущих показанных месяцев с данными, без текущего">Δ к среднему</th></tr>`;
   for (const row of dyn.rows) {
     if (blkId === "blkDyn" && row.key === "visits") continue;
     const nn = row.values.filter(v => v != null);
@@ -2895,8 +2895,8 @@ function clientBaseDynamics(docId, endMk, windowMonths, summary = kbSummary) {
   const prev = summary(docId, prevKey, windowMonths);
   const year = endMk.slice(0, 4);
   const groups = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
-  const ytd = monthKeysSorted()
-    .filter(k => k.startsWith(year + "-") && k <= endMk)
+  const months = calendarMonthKeys(`${year}-01`, endMk);
+  const ytd = months
     .map(k => summary(docId, k, windowMonths))
     .filter(Boolean);
   const mean = values => {
@@ -2904,7 +2904,7 @@ function clientBaseDynamics(docId, endMk, windowMonths, summary = kbSummary) {
     return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
   };
   return {
-    prevKey, prev, year, ytdCount: ytd.length,
+    prevKey, prev, year, months, ytdCount: ytd.length,
     avgTotal: mean(ytd.map(x => x.total)),
     avgGroupPct: Object.fromEntries(groups.map(group => [
       group,
@@ -2944,12 +2944,11 @@ function doctorMetricDynamics(docId, endMk, getValue) {
   };
   const prev = valueAt(prevKey);
   const year = endMk.slice(0, 4);
-  const values = monthKeysSorted()
-    .filter(k => k.startsWith(year + "-") && k <= endMk)
-    .map(valueAt)
-    .filter(v => v != null);
+  const months = calendarMonthKeys(`${year}-01`, endMk);
+  const calendarValues = months.map(valueAt);
+  const values = calendarValues.filter(v => v != null);
   return {
-    prevKey, prev, year, count: values.length,
+    prevKey, prev, year, months, values: calendarValues, count: values.length,
     avg: values.length ? values.reduce((a, b) => a + b, 0) / values.length : null,
   };
 }
@@ -3154,6 +3153,19 @@ function mobilePublicationScore(result, vectorKey = null) {
   return Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : null;
 }
 
+function mobilePublicationScoreCoverage(result, vectorKey = null) {
+  if (!result || !result.scores) return null;
+  const value = vectorKey ? result.scores.vectorCoverage && result.scores.vectorCoverage[vectorKey] : result.scores.coveragePct;
+  return Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value * 10) / 10)) : null;
+}
+
+function mobilePublicationBenchmark(benchmarks, key) {
+  const raw = benchmarks ? benchmarks[key] : null;
+  if (raw == null || raw === "") return null;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
 function mobilePublicationState(value, target, lowerIsBetter = false) {
   if (!Number.isFinite(value) || !Number.isFinite(target)) return "neutral";
   const achieved = lowerIsBetter ? value <= target : value >= target;
@@ -3226,7 +3238,7 @@ function mobilePublicationHistoryCharts(doctorId, monthKey, dynamics) {
     ], "баллов"),
   ];
   // История структуры: те же агрегаты выработки, только до выбранного месяца.
-  const months = monthKeysSorted().filter(key => key <= monthKey);
+  const months = dynamics.months;
   const summaries = months.map(key => vyrabotkaSummary(doctorId, key));
   const groups = [...new Set([...Object.keys(profile.groups || {}), ...summaries.flatMap(item => Object.keys(item && item.byGroup || {}))])];
   charts.push(mobilePublicationChart("revenue-structure", "Структура выручки по месяцам", "mirror", months.map(monthLabel), [
@@ -3242,8 +3254,8 @@ function mobilePublicationGoals(doctorId, result, profile) {
   return scoringBenchmarkDefs(profile).map(([key, title]) => {
     const vector = DOCTOR_GOAL_VECTORS[key];
     const fact = doctorGoalFact(key, result, profile);
-    const targetValue = Number(benchmarks[key]);
-    const hasTarget = Number.isFinite(targetValue) && targetValue > 0;
+    const targetValue = mobilePublicationBenchmark(benchmarks, key);
+    const hasTarget = targetValue != null;
     const lower = lowerGoals.has(key);
     const target = hasTarget ? `${lower ? "≤" : "≥"} ${doctorGoalValue(key, targetValue)}` : "не задана";
     const factText = Number.isFinite(fact) ? doctorGoalValue(key, fact) : "нет данных";
@@ -3255,7 +3267,7 @@ function mobilePublicationGoals(doctorId, result, profile) {
     }
     const state = doctorGoalState(fact, targetValue, lower).replace(/^goal-/, "");
     return {
-      key, vector, title, target, fact: factText,
+      key, vector, title, target, fact: factText, hasTarget,
       description: `Цель: ${target} · Факт: ${factText}`,
       progress: Math.max(0, Math.min(100, Math.round(progress))),
       state: state === "na" ? "neutral" : state,
@@ -3339,7 +3351,7 @@ function mobilePublicationReferralSection(result, profile) {
     ]);
   const workTotal = Object.values(result.cross.refByType || {}).reduce((sum, item) => sum + Number(item && item.s || 0), 0);
   const creditedTotal = result.cross.refSum == null ? workTotal : result.cross.refSum;
-  const target = Number(profile.scoring && profile.scoring.benchmarks && profile.scoring.benchmarks.crossShare);
+  const target = mobilePublicationBenchmark(profile.scoring && profile.scoring.benchmarks, "crossShare");
   return {
     title: "Выполненные направления",
     note: "Источник выручки — отчёт «Выработка»; персональные строки и пациенты в мобильный файл не включаются.",
@@ -3363,7 +3375,7 @@ function mobilePublicationAppointmentSections(result, profile, windowMonths) {
       metrics: [mobilePublicationMetric("Данные", "Нет точной выгрузки", `окно ${windowMonths} мес.`)],
     }, mobilePublicationReferralSection(result, profile)];
   }
-  const target = Number(profile.scoring && profile.scoring.benchmarks && profile.scoring.benchmarks.nazConv);
+  const target = mobilePublicationBenchmark(profile.scoring && profile.scoring.benchmarks, "nazConv");
   const sourceRows = Array.isArray(slice.sourceGroups) && slice.sourceGroups.length
     ? slice.sourceGroups.map(group => {
       const assigned = Number(group.assigned || 0);
@@ -3425,6 +3437,7 @@ function mobilePublicationClientWindows(result, profile) {
       id: String(windowMonths),
       label: Number(windowMonths) === 36 ? "3 года" : `${windowMonths} мес.`,
       period: `${periodStr(base.period)} · точное окно ${windowMonths} мес.`,
+      methodologyId: "legacy-overlap-v1",
       sections: [
         {
           title: "Объём базы",
@@ -3486,6 +3499,7 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
   const previousVectorScores = Object.fromEntries(["v1", "v2", "v3", "v4", "v5", "v6"].map(key => [key, mobilePublicationScore(previousResult, key)]));
   const scoreDelta = key => Number.isFinite(vectorScores[key]) && Number.isFinite(previousVectorScores[key]) ? vectorScores[key] - previousVectorScores[key] : null;
   const benchmark = profile.scoring && profile.scoring.benchmarks ? profile.scoring.benchmarks : {};
+  const benchmarkTarget = key => mobilePublicationBenchmark(benchmark, key);
   const appointmentWindows = (result.cross.nazSlices || []).map(windowMonths => ({
     id: String(windowMonths),
     label: `${windowMonths} мес.`,
@@ -3566,7 +3580,10 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
     },
     {
       id: "v4", number: 4, title: VECTOR_META.v4.name, score: vectorScores.v4, delta: scoreDelta("v4"),
-      detail: "Сегменты клиентской базы в доступных точных окнах — без списка пациентов.",
+      methodologyId: "legacy-overlap-v1",
+      scoreMethodologyId: "legacy-overlap-v1",
+      methodologyLabel: "Совместимая методика: пять групп могут пересекаться; окно выбирается отдельно. Это не новое разбиение Admin/Viewer partition-v1-36m.",
+      detail: "Сегменты клиентской базы по совместимой методике в доступных точных окнах — без списка пациентов.",
       ...(clientWindows.length ? { windowPickerLabel: "Окно клиентской базы", windows: clientWindows } : { sections: [{ title: "Клиентская база", metrics: [mobilePublicationMetric("Данные", "Нет точной выгрузки клиентской базы")] }] }),
     },
     {
@@ -3575,9 +3592,9 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
       sections: [{
         title: "Лояльность и удержание",
         metrics: [
-          mobilePublicationMetric("Загрузка расписания", fmtPct(loyalty.sched && loyalty.sched.pct), loyalty.sched ? `записано ${minToHours(loyalty.sched.busyMin)} из ${minToHours(loyalty.sched.normaMin)} по графику` : "нет выгрузки", Number.isFinite(Number(benchmark.schedLoad)) ? `цель ≥ ${fmtPct(Number(benchmark.schedLoad))}` : "", mobilePublicationState(loyalty.sched && loyalty.sched.pct, Number(benchmark.schedLoad))),
-          mobilePublicationMetric("Собственная запись в 1С", fmtPct(loyalty.ownRec && loyalty.ownRec.pct), loyalty.ownRec ? `${fmtNum(loyalty.ownRec.count)} записей / ${fmtNum(result.traffic.visits)} визитов` : "нет выгрузки", Number.isFinite(Number(benchmark.ownRecords)) ? `цель ≥ ${fmtPct(Number(benchmark.ownRecords))}` : "", mobilePublicationState(loyalty.ownRec && loyalty.ownRec.pct, Number(benchmark.ownRecords))),
-          mobilePublicationMetric(`Курсовое лечение: ≥${loyalty.courseX} виз. за ${loyalty.courseM} мес.`, fmtPct(loyalty.courseIdx), `${fmtNum(loyalty.courseCnt)} чел. · точное окно ${loyalty.courseM} мес.`, Number.isFinite(Number(benchmark.courseIdx)) ? `цель ≥ ${fmtPct(Number(benchmark.courseIdx))}` : "", mobilePublicationState(loyalty.courseIdx, Number(benchmark.courseIdx))),
+          mobilePublicationMetric("Загрузка расписания", fmtPct(loyalty.sched && loyalty.sched.pct), loyalty.sched ? `записано ${minToHours(loyalty.sched.busyMin)} из ${minToHours(loyalty.sched.normaMin)} по графику` : "нет выгрузки", benchmarkTarget("schedLoad") != null ? `цель ≥ ${fmtPct(benchmarkTarget("schedLoad"))}` : "", mobilePublicationState(loyalty.sched && loyalty.sched.pct, benchmarkTarget("schedLoad"))),
+          mobilePublicationMetric("Собственная запись в 1С", fmtPct(loyalty.ownRec && loyalty.ownRec.pct), loyalty.ownRec ? `${fmtNum(loyalty.ownRec.count)} записей / ${fmtNum(result.traffic.visits)} визитов` : "нет выгрузки", benchmarkTarget("ownRecords") != null ? `цель ≥ ${fmtPct(benchmarkTarget("ownRecords"))}` : "", mobilePublicationState(loyalty.ownRec && loyalty.ownRec.pct, benchmarkTarget("ownRecords"))),
+          mobilePublicationMetric(`Курсовое лечение: ≥${loyalty.courseX} виз. за ${loyalty.courseM} мес.`, fmtPct(loyalty.courseIdx), `${fmtNum(loyalty.courseCnt)} чел. · точное окно ${loyalty.courseM} мес.`, benchmarkTarget("courseIdx") != null ? `цель ≥ ${fmtPct(benchmarkTarget("courseIdx"))}` : "", mobilePublicationState(loyalty.courseIdx, benchmarkTarget("courseIdx"))),
           mobilePublicationMetric("Индекс возвращаемости за 12 мес.", Number.isFinite(loyalty.freq12) ? fmtNum(loyalty.freq12, 2) : "—", "визитов на пациента"),
         ],
         columns: ["Первичка", "Первичных", "Вернулось", "Не вернулось", "Возвращаемость"],
@@ -3591,9 +3608,9 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
         {
           title: "Репутация",
           metrics: [
-            mobilePublicationMetric("Средний рейтинг площадок", Number.isFinite(reputation.avgRating) ? `${fmtNum(reputation.avgRating, 2)} ★` : "—", "среднее по заполненным площадкам", Number.isFinite(Number(benchmark.rating)) ? `цель ≥ ${fmtNum(Number(benchmark.rating), 2)} ★` : "", mobilePublicationState(reputation.avgRating, Number(benchmark.rating))),
-            mobilePublicationMetric("NPS", fmtPct(reputation.nps), "индекс готовности рекомендовать", Number.isFinite(Number(benchmark.nps)) ? `цель ≥ ${fmtPct(Number(benchmark.nps))}` : "", mobilePublicationState(reputation.nps, Number(benchmark.nps))),
-            mobilePublicationMetric("Новые отзывы", Number.isFinite(reputation.reviews) ? `${fmtNum(reputation.reviews)} шт.` : "—", "за выбранный месяц", Number.isFinite(Number(benchmark.reviews)) ? `цель ≥ ${fmtNum(Number(benchmark.reviews))} шт.` : "", mobilePublicationState(reputation.reviews, Number(benchmark.reviews))),
+            mobilePublicationMetric("Средний рейтинг площадок", Number.isFinite(reputation.avgRating) ? `${fmtNum(reputation.avgRating, 2)} ★` : "—", "среднее по заполненным площадкам", benchmarkTarget("rating") != null ? `цель ≥ ${fmtNum(benchmarkTarget("rating"), 2)} ★` : "", mobilePublicationState(reputation.avgRating, benchmarkTarget("rating"))),
+            mobilePublicationMetric("NPS", fmtPct(reputation.nps), "индекс готовности рекомендовать", benchmarkTarget("nps") != null ? `цель ≥ ${fmtPct(benchmarkTarget("nps"))}` : "", mobilePublicationState(reputation.nps, benchmarkTarget("nps"))),
+            mobilePublicationMetric("Новые отзывы", Number.isFinite(reputation.reviews) ? `${fmtNum(reputation.reviews)} шт.` : "—", "за выбранный месяц", benchmarkTarget("reviews") != null ? `цель ≥ ${fmtNum(benchmarkTarget("reviews"))} шт.` : "", mobilePublicationState(reputation.reviews, benchmarkTarget("reviews"))),
           ],
         },
         { title: "Рейтинги по площадкам", columns: ["Площадка", "Рейтинг"], rows: platformRows },
@@ -3601,8 +3618,16 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
     },
   ];
 
+  for (const vector of vectors) {
+    vector.coverage = mobilePublicationScoreCoverage(result, vector.id);
+    vector.preliminary = vector.score != null && vector.coverage != null && vector.coverage < 100;
+  }
+
   const overall = mobilePublicationScore(result);
   const previousOverall = mobilePublicationScore(previousResult);
+  const coverage = mobilePublicationScoreCoverage(result);
+  const preliminary = Boolean(result.scores && result.scores.preliminary && overall != null);
+  const missing = (Array.isArray(result.missing) ? result.missing : []).map(mobilePublicationText).filter(Boolean);
   const vectorDeltas = vectors.map(vector => vector.delta).filter(Number.isFinite);
   const grew = vectorDeltas.filter(value => value > 0).length;
   const fell = vectorDeltas.filter(value => value < 0).length;
@@ -3630,10 +3655,27 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
     label: monthLabel(monthKey),
     shortLabel: monthLabel(monthKey).split(/\s+/)[0],
     overall,
+    coverage,
+    preliminary,
+    missing,
     overallDelta: Number.isFinite(overall) && Number.isFinite(previousOverall) ? overall - previousOverall : null,
     assessment,
     summary: vectorDeltas.length ? `${grew} вект. выросли, ${fell} снизились, ${vectorDeltas.length - grew - fell} без изменений.` : "Для динамики нужен предыдущий период.",
     updatedAt: new Date().toLocaleDateString("ru-RU"),
+    numbers: {
+      version: 1,
+      metrics: [
+        { id: "score.overall", value: Number.isFinite(overall) ? overall : null, unit: "score" },
+        { id: "score.coverage", value: Number.isFinite(coverage) ? coverage : null, unit: "percent" },
+        { id: "traffic.patients", value: Number.isFinite(result.traffic.patients) ? result.traffic.patients : null, unit: "count" },
+        { id: "traffic.visits", value: Number.isFinite(result.traffic.visits) ? result.traffic.visits : null, unit: "count" },
+        { id: "traffic.frequencyMonth", value: Number.isFinite(result.traffic.freq) ? result.traffic.freq : null, unit: "ratio" },
+        { id: "loyalty.frequency12", value: Number.isFinite(loyalty.freq12) ? loyalty.freq12 : null, unit: "ratio" },
+        { id: "economy.sales", value: Number.isFinite(result.econ.sales) ? result.econ.sales : null, unit: "rub" },
+        { id: "economy.averageClient", value: Number.isFinite(result.econ.avgClient) ? result.econ.avgClient : null, unit: "rub" },
+        { id: "clientBase.activeShare", value: activeBase && Number.isFinite(activeBase.activeBasePct) ? activeBase.activeBasePct : null, unit: "percent", methodologyId: "legacy-overlap-v1" },
+      ],
+    },
     headlineMetrics: [
       withHistory({ label: "Пациентов за месяц", value: fmtNum(result.traffic.patients), note: "уникальные пациенты" }, rr => rr.traffic.patients, "relative", fmtNum),
       withHistory({ label: "Загрузка расписания", value: fmtPct(loyalty.sched && loyalty.sched.pct), note: loyalty.sched ? `${minToHours(loyalty.sched.busyMin)} из ${minToHours(loyalty.sched.normaMin)} по графику` : "нет выгрузки" }, rr => rr.loyalty.sched?.pct ?? null, "pp", fmtPct),
@@ -3680,6 +3722,11 @@ function buildMobilePublication(doctorId, commentsByPeriod = {}) {
     version: 1,
     createdAt: new Date().toISOString(),
     security: { patientRegistryIncluded: false, rawExportsIncluded: false },
+    methodologies: {
+      score: "score-v1",
+      clientBase: "legacy-overlap-v1",
+      adminViewerClientBase: "partition-v1-36m",
+    },
     doctor: {
       id: String(doctorId),
       name: doctorName(doctorId),
@@ -4236,7 +4283,8 @@ function renderDoctor() {
   const kbSeries = adminClientBaseSeries(UI.docId, mk);
   html += `<div class="card vector-card" id="blkV4" data-vector-key="v4" data-client-base-methodology="partition-v1-36m" style="border-top-color:${VECTOR_META.v4.color}">
     <div class="vhead"><h3 class="mt0">Вектор 4. Работа с клиентской базой <span class="badge ${VECTOR_META.v4.cls}">${VECTOR_META.v4.tag}</span></h3>
-    <span>${vecBadge("v4", r, docProfile)} ${blockBtn("blkV4")} <span class="badge mut">База за 3 года</span></span></div>`;
+    <span>${vecBadge("v4", r, docProfile)} ${blockBtn("blkV4")} <span class="badge mut">База за 3 года</span></span></div>
+    <p class="small muted" data-client-base-methodology-note><b>Методика блока:</b> partition-v1-36m — четыре непересекающиеся группы за 36 месяцев. <b>Балл В4:</b> legacy-overlap-v1 — прежние совместимые показатели и цели; изменение формулы балла не выполнялось.</p>`;
   if (!kb) {
     html += `<p class="notice blue">За ${esc(monthLabel(mk))} нет выгрузки «Давность посещений» за 36 месяцев. Загрузите её для полной трёхлетней базы. Данные других месяцев показаны ниже; отсутствие выгрузки не означает ноль пациентов.</p>`;
   } else {
@@ -4677,7 +4725,7 @@ function saveManual6() {
   ensureMonth(mk);
   if (empty) delete DB.months[mk].manual6[id];
   else DB.months[mk].manual6[id] = rec;
-  saveLocal();
+  saveLocal({ months: [mk] });
   toast(empty ? "Данные репутации очищены" : "Репутация сохранена");
   renderDoctor();
 }
@@ -5759,7 +5807,7 @@ function dropDoctorOnStructure(event, departmentName, specializationName = "") {
   UI.setSpecialization = specializationName || "";
   UI.setDoctor = doctorId;
   finishDoctorStructureDrag();
-  saveLocal();
+  saveLocal({ doctors: [doctorId] });
   toast(specializationName
     ? `${doctorName(doctorId)} → ${departmentName} / ${specializationName}`
     : `${doctorName(doctorId)} → ${departmentName} / Без специализации`);
@@ -5886,7 +5934,7 @@ async function saveViewerDepartmentHead(select) {
     }
     if (doctorId) DB.settings.departmentHeadDoctorIds[department] = doctorId;
     else delete DB.settings.departmentHeadDoctorIds[department];
-    if (!await saveLocal()) throw new Error("назначение не записано в рабочую базу");
+    if (!await saveLocal({ settings: true })) throw new Error("назначение не записано в рабочую базу");
     await refreshViewerPublicationAccess();
     toast(doctorId ? `Заведующий отделения «${department}» сохранён` : `Заведующий отделения «${department}» снят`);
     renderSettings();
@@ -6007,7 +6055,7 @@ function renderSettings() {
 
   /* --- иерархия отделение -> опциональные специализации --- */
   html += `<div class="card"><div class="vhead"><h2 class="mt0">🏥 Структура клиники</h2>
-      <label class="small"><input type="checkbox" id="showScoresChk" onchange="DB.settings.showScores=this.checked;saveLocal();renderAll()" ${s.showScores ? "checked" : ""}> показывать баллы</label></div>
+      <label class="small"><input type="checkbox" id="showScoresChk" onchange="DB.settings.showScores=this.checked;saveLocal({settings:true});renderAll()" ${s.showScores ? "checked" : ""}> показывать баллы</label></div>
     <p class="small muted">Иерархия: клиника → отделение → специализация → врач. <b>Перетащите карточку врача</b> в нужную специализацию или в «Без специализации». Нормативы и веса задаются специализации; цели можно задать отделению, специализации или врачу.</p>
     <div class="toolbar">
       <label>Отделение: <select id="setDepartmentSel" onchange="UI.setDepartment=this.value;UI.setSpecialization='';renderSettings()">${departmentNames.map(n => `<option value="${esc(n)}" ${n === departmentName ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>
@@ -6407,7 +6455,7 @@ function addDepartmentV4() {
   DB.settings.departmentUsesSpecializations[name] = false;
   UI.setDepartment = name;
   UI.setSpecialization = "";
-  saveLocal();
+  saveLocal({ settings: true });
   toast(`Отделение «${name}» создано — настройте его нормативы ниже`);
   renderSettings();
 }
@@ -6429,7 +6477,7 @@ function removeDepartmentV4() {
   UI.setDepartment = null;
   UI.setSpecialization = "";
   normalizeProfiles();
-  saveLocal();
+  saveLocal({ settings: true, doctors: true });
   toast(`Отделение «${name}» удалено`);
   renderSettings();
 }
@@ -6439,7 +6487,7 @@ function toggleDepartmentSpecializations() {
   const enabled = !departmentUsesSpecializations(name);
   DB.settings.departmentUsesSpecializations[name] = enabled;
   if (!enabled) UI.setSpecialization = "";
-  saveLocal();
+  saveLocal({ settings: true });
   toast(enabled ? "Специализации включены — добавьте или выберите их ниже" : "Специализации выключены — врачи используют настройки отделения");
   renderAll();
 }
@@ -6457,7 +6505,7 @@ function addSpecializationV4() {
   DB.settings.departments[departmentName].push(name);
   DB.settings.departmentUsesSpecializations[departmentName] = true;
   UI.setSpecialization = name;
-  saveLocal();
+  saveLocal({ settings: true });
   toast(`Специализация «${name}» создана внутри отделения «${departmentName}»`);
   renderSettings();
 }
@@ -6478,7 +6526,7 @@ function moveSpecializationV4() {
     if (doctor.specialization === name || doctor.dept === name) doctor.department = departmentName;
   }
   UI.setSpecialization = name;
-  saveLocal();
+  saveLocal({ settings: true, doctors: true });
   toast(`Специализация «${name}» перенесена в отделение «${departmentName}» без потери настроек`);
   renderSettings();
 }
@@ -6495,7 +6543,7 @@ function removeSpecializationV4() {
     if (doctor.dept === name) doctor.dept = null;
   }
   UI.setSpecialization = "";
-  saveLocal();
+  saveLocal({ settings: true, doctors: true });
   toast(`Специализация «${name}» удалена`);
   renderSettings();
 }
@@ -6558,7 +6606,7 @@ function saveDeptBasics() {
   // Старые нормативы KPI и публикаций сохраняются в профиле без изменения.
   p.subdivisions = document.getElementById("np_subdivisions").value.split("\n").map(x => x.trim()).filter(Boolean);
   p.matchers = document.getElementById("np_matchers").value.split(",").map(x => x.trim()).filter(Boolean);
-  saveLocal();
+  saveLocal({ settings: true });
   toast(`Нормативы ${curSetProfileKind()} сохранены`);
   renderAll();
 }
@@ -6579,7 +6627,7 @@ function saveDeptExpertise() {
     group: document.getElementById("ex_group").value,
     items,
   });
-  saveLocal();
+  saveLocal({ settings: true });
   toast("Экспертность сохранена: " + items.length + " позиций");
   renderAll();
 }
@@ -6599,7 +6647,7 @@ function saveCrossFocusSettings() {
     items,
   });
   clearMetricsCache();
-  saveLocal();
+  saveLocal({ settings: true });
   toast("Фокусы Вектора 3 сохранены: " + items.length + " позиций");
   renderAll();
 }
@@ -6644,7 +6692,7 @@ function saveReferralRevenuePolicy() {
     });
   }
   clearMetricsCache();
-  saveLocal();
+  saveLocal({ settings: true });
   toast(profile.inheritReferralRevenuePolicy ? "Правило отделения подключено" : "Правило учёта выручки сохранено");
   renderAll();
 }
@@ -6660,7 +6708,7 @@ function setInterdisciplinaryHomeDepartment(select) {
   const departmentName = String(select.value || "").trim();
   if (departmentName) DB.settings.interdisciplinaryHomeDepartments[key] = departmentName;
   clearMetricsCache();
-  saveLocal();
+  saveLocal({ settings: true });
   toast(departmentName
     ? `Домашнее подразделение «${serviceName}»: ${departmentName}`
     : `Домашнее подразделение «${serviceName}» сброшено`);
@@ -6677,7 +6725,7 @@ function setInterdisciplinaryGroupDepartment(select) {
   if (departmentName) DB.settings.interdisciplinaryGroupDepartments[group.key] = departmentName;
   else delete DB.settings.interdisciplinaryGroupDepartments[group.key];
   clearMetricsCache();
-  saveLocal();
+  saveLocal({ settings: true });
   toast(departmentName
     ? `Группа «${group.path.join(" → ")}»: ${departmentName}`
     : `Привязка группы «${group.path.join(" → ")}» сброшена`);
@@ -6696,7 +6744,7 @@ function bindCandidate(i, val) {
     p.expertise.rules.push([u.n.toLowerCase(), val]);
     toast(`«${u.n.slice(0, 45)}…» → ${val}`);
   }
-  saveLocal();
+  saveLocal({ settings: true });
   renderSettings();
 }
 /* --- редактор номенклатуры --- */
@@ -6714,7 +6762,7 @@ function nomSetReferralIncluded(i, val) {
   else delete ov.referralIncluded;
   if (!Object.keys(ov).length) delete p.overrides[key];
   clearMetricsCache();
-  saveLocal();
+  saveLocal({ settings: true });
   renderAll();
   toast("Правило учёта позиции сохранено для всех месяцев выбранного профиля");
 }
@@ -6727,7 +6775,7 @@ function nomSetType(i, val) {
   const { p, key, ov } = nomOv(i);
   if (val) ov.type = val; else delete ov.type;
   if (!Object.keys(ov).length) delete p.overrides[key];
-  saveLocal();
+  saveLocal({ settings: true });
   renderSettings();
 }
 function nomSetCat(i, val) {
@@ -6741,7 +6789,7 @@ function nomSetCat(i, val) {
     delete ov.sub;
   }
   if (!Object.keys(ov).length) delete p.overrides[key];
-  saveLocal();
+  saveLocal({ settings: true });
   renderSettings();
 }
 function nomSetExpert(i, val) {
@@ -6749,13 +6797,13 @@ function nomSetExpert(i, val) {
   if (val === "") delete ov.expertItem;
   else ov.expertItem = val === "__none__" ? null : val;
   if (!Object.keys(ov).length) delete p.overrides[key];
-  saveLocal();
+  saveLocal({ settings: true });
   renderSettings();
 }
 function nomReset(i) {
   const { p, key } = nomOv(i);
   delete p.overrides[key];
-  saveLocal();
+  saveLocal({ settings: true });
   toast("Ручные правки позиции убраны — снова действуют правила");
   renderSettings();
 }
@@ -6776,7 +6824,7 @@ function saveDeptTaxonomy() {
     groups[g] = subsStr ? subsStr.split(",").map(x => x.trim()).filter(Boolean) : [];
   }
   if (Object.keys(groups).length) p.groups = groups;
-  saveLocal();
+  saveLocal({ settings: true });
   toast(`Сохранено: правил — ${rules.length}, групп — ${Object.keys(p.groups).length}`);
   renderAll();
 }
@@ -6788,7 +6836,7 @@ function enableSpecializationGoals() {
   const departmentGoals = departmentProfile(curSetDepartment()).scoring.benchmarks;
   p.scoring.benchmarks = Object.assign({}, departmentGoals);
   p.inheritGoals = false;
-  saveLocal();
+  saveLocal({ settings: true });
   toast(`Для специализации «${specializationName}» включены отдельные цели`);
   renderSettings();
 }
@@ -6799,7 +6847,7 @@ function resetSpecializationGoals() {
   const p = curSetProfile();
   if (!confirm(`Использовать для специализации «${specializationName}» цели отделения «${curSetDepartment()}»?`)) return;
   p.inheritGoals = true;
-  saveLocal();
+  saveLocal({ settings: true });
   toast(`Специализация «${specializationName}» снова наследует цели отделения`);
   renderAll();
 }
@@ -6836,7 +6884,7 @@ function saveDeptScoring() {
     }
     p.scoring.benchmarks[k] = value;
   }
-  saveLocal();
+  saveLocal({ settings: true });
   toast(specializationName
     ? (p.inheritGoals === true ? `Веса специализации «${specializationName}» сохранены` : `Веса и цели специализации «${specializationName}» сохранены`)
     : `Цели отделения «${curSetDepartment()}» сохранены`);
@@ -6847,7 +6895,7 @@ function enableDoctorMetricSettings() {
   const id = UI.setDoctor;
   if (!id || !DB.doctors[id]) return;
   DB.doctors[id].metricSettings = doctorMetricSettingsFromProfile(profileForDoctor(id));
-  saveLocal();
+  saveLocal({ doctors: [id] });
   toast(`Индивидуальные цели включены для ${doctorName(id)}`);
   renderSettings();
 }
@@ -6856,7 +6904,7 @@ function resetDoctorMetricSettings() {
   if (!id || !DB.doctors[id] || !DB.doctors[id].metricSettings) return;
   if (!confirm(`Сбросить индивидуальные цели врача «${doctorName(id)}» и снова использовать настройки его отделения/специализации?`)) return;
   delete DB.doctors[id].metricSettings;
-  saveLocal();
+  saveLocal({ doctors: [id] });
   toast(`${doctorName(id)} снова наследует цели специализации`);
   renderSettings();
 }
@@ -6888,7 +6936,7 @@ function saveDoctorMetricSettings() {
     }
     settings.scoring.benchmarks[key] = value;
   }
-  saveLocal();
+  saveLocal({ doctors: [id] });
   toast(`Цели врача «${doctorName(id)}» сохранены`);
   renderAll();
 }
@@ -6900,7 +6948,7 @@ function setDoctorDepartment(id, val) {
   doctor.structureManual = Boolean(val);
   doctor.dept = null; // старое поле больше не должно переопределять новую иерархию
   if (!val || !(departmentGroups()[val] || []).includes(doctor.specialization)) doctor.specialization = null;
-  saveLocal();
+  saveLocal({ doctors: [id] });
   renderSettings();
 }
 function addDoctorV4() {
@@ -6914,7 +6962,7 @@ function addDoctorV4() {
   while (DB.doctors[id]) id = `${base}_${suffix++}`;
   DB.doctors[id] = { name, aliases: [], structureManual: false };
   UI.setDoctor = id;
-  saveLocal();
+  saveLocal({ doctors: [id] });
   toast(`Врач «${name}» добавлен — назначьте отделение и специализацию`);
   renderSettings();
 }
@@ -6925,18 +6973,18 @@ function setDoctorSpecialization(id, val) {
   doctor.specialization = val && (departmentGroups()[departmentName] || []).includes(val) ? val : null;
   doctor.structureManual = Boolean(doctor.department || doctor.specialization);
   doctor.dept = null;
-  saveLocal();
+  saveLocal({ doctors: [id] });
   renderSettings();
 }
 function setSubdept(id, val) {
   if (!DB.doctors[id]) return;
   DB.doctors[id].subdept = val || null;
-  saveLocal();
+  saveLocal({ doctors: [id] });
 }
 function setSpec(id, val) {
   if (!DB.doctors[id]) return;
   DB.doctors[id].spec = val.trim() || null;
-  saveLocal();
+  saveLocal({ doctors: [id] });
   renderSettings(); // должность влияет на «авто»-отделение
 }
 async function mergeSelected() {
@@ -6991,6 +7039,7 @@ async function initApp() {
     }
   });
   document.getElementById("btnPickFiles").addEventListener("click", () => DESKTOP_API ? desktopPickInputFiles() : fi.click());
+  document.getElementById("btnCancelImport").addEventListener("click", cancelFileImport);
   document.getElementById("btnPickDir").addEventListener("click", async () => {
     if (!DESKTOP_API) { di.click(); return; }
     if (await desktopChooseFolder("input")) await desktopScanInput();

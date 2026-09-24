@@ -350,6 +350,55 @@ test("Admin builds a valid mobile publication from calculated metrics without pa
   assert.doesNotMatch(serialized, /"(?:patientId|patientName|clientRows|clients)"/);
 });
 
+test("mobile publication preserves preliminary score coverage, missing sources and unset goals", () => {
+  const context = createContext();
+  loadMobilePublicationRenderer(context);
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Бузина Врач', aliases: [], dept: 'Эндокринология' } };
+    const specialization = DB.settings.depts['Эндокринология'];
+    for (const key of Object.keys(specialization.scoring.enabled)) specialization.scoring.enabled[key] = key === 'v4';
+    specialization.scoring.weights.v4 = 100;
+    const own = doctorMetricSettingsFromProfile(profileForDoctor('d1'));
+    for (const key of Object.keys(own.scoring.benchmarks)) own.scoring.benchmarks[key] = '';
+    own.scoring.benchmarks.akbShare = 10;
+    own.scoring.benchmarks.riskShare = 50;
+    own.scoring.benchmarks.churn = 50;
+    DB.doctors.d1.metricSettings = own;
+    DB.months = { '2026-01': emptyMonth() };
+    DB.months['2026-01'].vyrabotka.d1 = { items: [] };
+    DB.months['2026-01'].kb.d1 = { '12': { clients: [{ name: 'Пациент', s: 100, v: 3, r: 20 }] } };
+    clearMetricsCache();
+    const metrics = computeMetrics('d1', '2026-01');
+    return { metrics: { coverage: metrics.scores.coveragePct, preliminary: metrics.scores.preliminary },
+      publication: buildMobilePublication('d1') };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  validateMobilePublication(plain.publication);
+  const period = plain.publication.periods[0];
+  const unsetRevenueGoal = period.goals.find(goal => goal.key === "revenue");
+  const v4 = period.vectors.find(vector => vector.id === "v4");
+
+  assert.deepEqual(plain.metrics, { coverage: 66.7, preliminary: true });
+  assert.equal(period.coverage, 66.7);
+  assert.equal(period.preliminary, true);
+  assert.ok(period.missing.includes("давность 3 года"));
+  assert.equal(v4.coverage, 66.7);
+  assert.equal(v4.preliminary, true);
+  assert.deepEqual(plain.publication.methodologies, {
+    score: "score-v1",
+    clientBase: "legacy-overlap-v1",
+    adminViewerClientBase: "partition-v1-36m",
+  });
+  assert.equal(v4.methodologyId, "legacy-overlap-v1");
+  assert.equal(v4.scoreMethodologyId, "legacy-overlap-v1");
+  assert.match(v4.methodologyLabel, /не новое разбиение Admin\/Viewer partition-v1-36m/);
+  assert.ok(v4.windows.every(window => window.methodologyId === "legacy-overlap-v1"));
+  assert.deepEqual({ target: unsetRevenueGoal.target, hasTarget: unsetRevenueGoal.hasTarget, progress: unsetRevenueGoal.progress },
+    { target: "не задана", hasTarget: false, progress: 0 });
+  assert.ok(period.vectors[4].sections[0].metrics.every(metric => !Object.prototype.hasOwnProperty.call(metric, "target")));
+  assert.ok(period.vectors[5].sections[0].metrics.every(metric => !Object.prototype.hasOwnProperty.call(metric, "target")));
+});
+
 test("bulk mobile export follows Viewer report eligibility and keeps head-only access without empty reports", async () => {
   const context = createContext({ desktop: true });
   loadMobilePublicationRenderer(context);
@@ -469,12 +518,12 @@ test("mobile appointment tree aggregates full paths without double counting and 
   assert.equal(fallback[0].children[0].label, "Товар");
 });
 
-test("mobile charts use canonical numeric metrics, preserve missing months and omit patient data", () => {
+test("Admin, department and mobile dynamics preserve a fully absent calendar month", () => {
   const context = createContext();
   loadMobilePublicationRenderer(context);
   const result = vm.runInContext(`(() => {
     DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], dept: 'По умолчанию' } };
-    DB.months = Object.fromEntries(['2026-01', '2026-02', '2026-03', '2026-04'].map(key => [key, emptyMonth()]));
+    DB.months = Object.fromEntries(['2026-01', '2026-03', '2026-04'].map(key => [key, emptyMonth()]));
     for (const key of ['2026-01', '2026-03', '2026-04']) {
       DB.months[key].vyrabotka.d1 = { items: [
         { form: '', cat: 'Приемы', n: 'Прием врача', q: 2, sOwn: 12345.67, sRef: 0 },
@@ -490,8 +539,16 @@ test("mobile charts use canonical numeric metrics, preserve missing months and o
     const publication = buildMobilePublication('d1');
     const dynamics = computeDoctorDynamics('d1', '2026-03');
     const charts = mobilePublicationHistoryCharts('d1', '2026-03', dynamics);
+    const salesRow = dynamics.rows.find(row => row.key === 'sales');
+    const departmentDynamics = computeDeptDynamics('2026-03', 'all');
+    const departmentSales = departmentDynamics.rows.find(row => row.key === 'sales');
+    const cardHistory = doctorMetricDynamics('d1', '2026-03', rr => rr.traffic.patients);
     return { publication, charts, expected: dynamics.rows.find(row => row.key === 'sales').values,
-      own: vyrabotkaSummary('d1', '2026-03').ownSum, ref: vyrabotkaSummary('d1', '2026-03').refIncludedSum };
+      own: vyrabotkaSummary('d1', '2026-03').ownSum, ref: vyrabotkaSummary('d1', '2026-03').refIncludedSum,
+      calendar: { months: dynamics.months, prevKey: salesRow.prevKey, prev: salesRow.prev, delta: salesRow.delta,
+        previousAverage: salesRow.prevAvg, averageKeys: salesRow.averageKeys },
+      department: { months: departmentDynamics.months, prevKey: departmentSales.prevKey, delta: departmentSales.delta },
+      cardHistory };
   })()`, context);
   const plain = JSON.parse(JSON.stringify(result));
   validateMobilePublication(plain.publication);
@@ -500,6 +557,23 @@ test("mobile charts use canonical numeric metrics, preserve missing months and o
   assert.equal(money.series[0].values[1], null);
   assert.equal(money.labels.length, 3);
   assert.equal(money.series[0].values[2], 12345.67);
+  assert.deepEqual(plain.calendar.months, ["2026-01", "2026-02", "2026-03"]);
+  assert.deepEqual(plain.calendar.averageKeys, ["2026-01"]);
+  assert.equal(plain.calendar.prevKey, "2026-02");
+  assert.equal(plain.calendar.prev, null);
+  assert.equal(plain.calendar.delta, null);
+  assert.equal(plain.calendar.previousAverage, 12345.67);
+  assert.deepEqual(plain.department.months, ["2026-01", "2026-02", "2026-03"]);
+  assert.equal(plain.department.prevKey, "2026-02");
+  assert.equal(plain.department.delta, null);
+  assert.deepEqual(plain.cardHistory.months, ["2026-01", "2026-02", "2026-03"]);
+  assert.deepEqual(plain.cardHistory.values, [1, null, 1]);
+  assert.equal(plain.cardHistory.prevKey, "2026-02");
+  assert.equal(plain.cardHistory.prev, null);
+  const marchPublication = plain.publication.periods.find(period => period.id === "2026-03");
+  assert.deepEqual(marchPublication.dynamics.columns, ["Январь 2026", "Февраль 2026", "Март 2026"]);
+  assert.equal(marchPublication.dynamics.rows.find(row => row.key === "sales").values[1], "·");
+  assert.equal(marchPublication.dynamics.rows.find(row => row.key === "sales").delta, "—");
   const mirror = plain.charts.find(chart => chart.type === "mirror");
   assert.equal(mirror.series.filter(series => series.side === "own").reduce((sum, series) => sum + series.values[2], 0), plain.own);
   assert.equal(mirror.series.find(series => series.side === "ref").values[2], plain.ref);
@@ -2037,6 +2111,68 @@ test("metric engine calculates a deterministic synthetic month", () => {
   assert.equal(result.visits, null);
 });
 
+test("bounded calculation caches reuse scalar summaries, load patient details lazily and invalidate only affected data", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], department: 'Косметология', specialization: 'Косметология' } };
+    DB.months = { '2026-01': emptyMonth(), '2026-02': emptyMonth() };
+    for (const [monthKey, amount] of [['2026-01', 1000], ['2026-02', 2000]]) {
+      DB.months[monthKey].vyrabotka.d1 = { items: [
+        { form: '', cat: 'Прием', n: 'Прием врача', q: 1, sOwn: amount, sRef: 0, goods: false }
+      ] };
+      DB.months[monthKey].kb.d1 = { '36': { clients: [
+        { patientId: monthKey, name: 'Синтетический Пациент', s: amount, v: 2, r: 10 }
+      ] } };
+    }
+    clearMetricsCache();
+    const january = computeMetrics('d1', '2026-01');
+    const february = computeMetrics('d1', '2026-02');
+    const scalarStats = metricsCacheStats();
+    const januaryAgain = computeMetrics('d1', '2026-01');
+    const department = aggregateDeptMonth('2026-01', 'all');
+    const departmentAgain = aggregateDeptMonth('2026-01', 'all');
+    const reusedStats = metricsCacheStats();
+    const detailRows = january.akb.wins[36].clientRows;
+    const detailStats = metricsCacheStats();
+    invalidateMetricsCache({ dynamicNotes: true });
+    const afterNote = computeMetrics('d1', '2026-01');
+    invalidateMetricsCache({ months: ['2026-01'] });
+    const januaryChanged = computeMetrics('d1', '2026-01');
+    const februaryKept = computeMetrics('d1', '2026-02');
+    const departmentChanged = aggregateDeptMonth('2026-01', 'all');
+    for (let index = 0; index < METRICS_CACHE_LIMITS.metrics + 25; index++) {
+      metricsCacheSet(_mcCache, JSON.stringify(['limit-' + index, '2026-03']), index, METRICS_CACHE_LIMITS.metrics);
+    }
+    const boundedStats = metricsCacheStats();
+    return {
+      noDetailsDuringScalarCalculation: scalarStats.sizes.kbDetails === 0,
+      metricReused: january === januaryAgain,
+      departmentReused: department === departmentAgain,
+      detailsLoadedOnce: detailRows.length === 1 && detailStats.sizes.kbDetails === 1,
+      noteKeptCache: afterNote === january,
+      monthInvalidated: januaryChanged !== january,
+      otherMonthKept: februaryKept === february,
+      departmentInvalidated: departmentChanged !== department,
+      metricHits: reusedStats.counters.metrics.hits,
+      departmentHits: reusedStats.counters.department.hits,
+      boundedSize: boundedStats.sizes.metrics,
+      boundedLimit: boundedStats.limits.metrics,
+    };
+  })()`, context);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.equal(plain.noDetailsDuringScalarCalculation, true);
+  assert.equal(plain.metricReused, true);
+  assert.equal(plain.departmentReused, true);
+  assert.equal(plain.detailsLoadedOnce, true);
+  assert.equal(plain.noteKeptCache, true);
+  assert.equal(plain.monthInvalidated, true);
+  assert.equal(plain.otherMonthKept, true);
+  assert.equal(plain.departmentInvalidated, true);
+  assert.ok(plain.metricHits >= 1);
+  assert.ok(plain.departmentHits >= 1);
+  assert.equal(plain.boundedSize, plain.boundedLimit);
+});
+
 test("doctor dynamics includes average patient check with referrals", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
@@ -2290,6 +2426,71 @@ test("save queue coalesces ordinary snapshots but keeps atomic import commands o
   assert.deepEqual(writes[writes.length - 1], [5, "b".repeat(64)]);
   assert.equal(await vm.runInContext("DB.dynamicNotes.revision = 4; saveLocal()", context), true);
   assert.deepEqual(writes[writes.length - 1], [4, null]);
+});
+
+test("desktop scoped saves send revisioned notes, settings and import-month mutations", async () => {
+  const writes = [];
+  let revision = 0;
+  const saveMutation = async (mutation, records = null) => {
+    const plain = JSON.parse(JSON.stringify(mutation));
+    assert.equal(plain.expectedRevision, revision);
+    writes.push({ mutation: plain, records });
+    revision++;
+    return { months: 1, doctors: 1, dataRevision: revision };
+  };
+  const context = createContext({ desktopAPI: {
+    saveDatabaseMutation: mutation => saveMutation(mutation),
+    saveImport: payload => saveMutation(payload.mutation, payload.records),
+    saveDatabase: async () => { throw new Error("full snapshot should not be used"); },
+  } });
+  assert.equal(await vm.runInContext("DB.dynamicNotes.note = 'точечно'; saveLocal({ dynamicNotes: true })", context), true);
+  assert.equal(await vm.runInContext("DB.settings.showScores = false; saveLocal({ settings: true })", context), true);
+  assert.equal(await vm.runInContext(`(() => {
+    DB.doctors.d1 = { name: 'Synthetic', aliases: [] };
+    DB.months['2026-01'] = emptyMonth();
+    DB.months['2026-01'].vyrabotka.d1 = { items: [{ n: 'Synthetic', q: 1, sOwn: 100 }] };
+    DB.fileLog = [{ status: 'загружено' }];
+    return saveLocal([{ source: { sha256: 'c'.repeat(64) }, log: { status: 'загружено', slot: { t: 'vyrabotka', mk: '2026-01', doc: 'd1' } } }]);
+  })()`, context), true);
+
+  assert.deepEqual(Object.keys(writes[0].mutation).sort(), ["deleteDoctors", "deleteMonths", "doctors", "dynamicNotes", "expectedRevision", "months", "version"]);
+  assert.deepEqual(writes[0].mutation.dynamicNotes, { note: "точечно" });
+  assert.equal(writes[0].mutation.settings, undefined);
+  assert.equal(writes[1].mutation.settings.showScores, false);
+  assert.deepEqual(Object.keys(writes[1].mutation.months), []);
+  assert.deepEqual(Object.keys(writes[2].mutation.months), ["2026-01"]);
+  assert.ok(Object.keys(writes[2].mutation.doctors).includes("d1"));
+  assert.ok(Object.keys(writes[2].mutation.doctors).length > 1, "import mutation carries roster changes without historical months");
+  assert.equal(writes[2].mutation.fileLog.length, 1);
+  assert.equal(writes[2].records[0].source.sha256, "c".repeat(64));
+});
+
+test("desktop initialization loads SQLite history through bounded month selections", async () => {
+  const seedContext = createContext();
+  const seed = JSON.parse(JSON.stringify(vm.runInContext(`(() => {
+    DB.months = {};
+    for (let index = 1; index <= 25; index++) {
+      const year = 2024 + Math.floor((index - 1) / 12);
+      const month = String(((index - 1) % 12) + 1).padStart(2, '0');
+      DB.months[year + '-' + month] = emptyMonth();
+    }
+    return DB;
+  })()`, seedContext)));
+  const allMonths = seed.months;
+  const monthKeys = Object.keys(allMonths).sort();
+  const requests = [];
+  const context = createContext({ desktopAPI: {
+    initialize: async () => ({ snapshot: { ...seed, months: {}, monthKeys }, summary: { dataRevision: 7 }, config: {} }),
+    loadDatabaseMonths: async keys => {
+      requests.push([...keys]);
+      return { months: Object.fromEntries(keys.map(key => [key, allMonths[key]])), dataRevision: 7 };
+    },
+    saveDatabaseMutation: async () => ({ dataRevision: 8 }),
+  } });
+  await vm.runInContext("loadDesktopDatabase()", context);
+  assert.deepEqual(requests.map(keys => keys.length), [24, 1]);
+  assert.equal(vm.runInContext("Object.keys(DB.months).length", context), 25);
+  assert.equal(vm.runInContext("desktopDataRevision", context), 7);
 });
 
 test("desktop autosave works immediately without an authentication session", async () => {

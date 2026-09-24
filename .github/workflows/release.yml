@@ -55,6 +55,15 @@ jobs:
       - name: Запустить тесты
         run: pnpm test
 
+      - name: Проверить воспроизводимый benchmark
+        run: pnpm run benchmark:architecture
+
+      - name: Проверить интерфейс Electron
+        run: pnpm run test:smoke
+
+      - name: Проверить PDF
+        run: pnpm run test:pdf
+
       - name: Собрать установщики Admin и Viewer
         run: pnpm run dist:all
         env:

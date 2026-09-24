@@ -52,6 +52,10 @@ function finiteNumber(value, label, { nullable = false, min = -1000000, max = 10
   if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max) fail(label);
 }
 
+function optionalBoolean(value, label) {
+  if (value != null && typeof value !== "boolean") fail(label);
+}
+
 function rejectForbiddenKeys(value, path = "публикация", depth = 0) {
   if (depth > 80) fail("слишком глубокая вложенность");
   if (Array.isArray(value)) {
@@ -163,6 +167,11 @@ function validateVector(vector, index) {
   shortText(item.title, `название вектора ${item.id}`);
   finiteNumber(item.score, `балл вектора ${item.id}`, { nullable: true, min: 0, max: 100 });
   finiteNumber(item.delta, `динамика вектора ${item.id}`, { nullable: true, min: -100, max: 100 });
+  if (Object.prototype.hasOwnProperty.call(item, "coverage")) finiteNumber(item.coverage, `полнота вектора ${item.id}`, { nullable: true, min: 0, max: 100 });
+  optionalBoolean(item.preliminary, `предварительный балл вектора ${item.id}`);
+  optionalText(item.methodologyId, `методика вектора ${item.id}`, 100);
+  optionalText(item.scoreMethodologyId, `методика балла ${item.id}`, 100);
+  optionalText(item.methodologyLabel, `описание методики ${item.id}`, 1000);
   shortText(item.detail, `описание вектора ${item.id}`, 1500);
   if (Array.isArray(item.windows)) {
     if (!item.windows.length || item.windows.length > 12) fail(`окна вектора ${item.id}`);
@@ -171,6 +180,7 @@ function validateVector(vector, index) {
       shortText(entry.id, `идентификатор окна ${item.id}`, 30);
       shortText(entry.label, `название окна ${item.id}`, 100);
       optionalText(entry.period, `период окна ${item.id}`, 500);
+      optionalText(entry.methodologyId, `методика окна ${item.id}`, 100);
       validateSections(entry.sections, `метрики окна ${item.id}.${entry.id}`);
     });
   } else {
@@ -224,6 +234,13 @@ function validateMobilePublication(publication) {
   if (value.version !== MOBILE_PUBLICATION_VERSION) fail("неподдерживаемая версия");
   optionalText(value.createdAt, "дата создания", 50);
 
+  if (value.methodologies != null) {
+    const methodologies = plainObject(value.methodologies, "описание методик");
+    optionalText(methodologies.score, "методика общей оценки", 100);
+    optionalText(methodologies.clientBase, "методика клиентской базы", 100);
+    optionalText(methodologies.adminViewerClientBase, "методика клиентской базы Admin/Viewer", 100);
+  }
+
   const security = plainObject(value.security, "описание безопасности");
   if (security.patientRegistryIncluded !== false || security.rawExportsIncluded !== false) {
     fail("публикация не подтверждает отсутствие реестра пациентов и исходных выгрузок");
@@ -244,11 +261,32 @@ function validateMobilePublication(publication) {
     shortText(item.label, `название периода ${item.id}`, 100);
     shortText(item.shortLabel, `краткое название периода ${item.id}`, 50);
     finiteNumber(item.overall, `общий балл ${item.id}`, { nullable: true, min: 0, max: 100 });
+    if (Object.prototype.hasOwnProperty.call(item, "coverage")) finiteNumber(item.coverage, `полнота оценки ${item.id}`, { nullable: true, min: 0, max: 100 });
+    optionalBoolean(item.preliminary, `предварительная оценка ${item.id}`);
+    if (item.missing != null) {
+      if (!Array.isArray(item.missing) || item.missing.length > 30) fail(`пропуски данных ${item.id}`);
+      item.missing.forEach((entry, index) => shortText(entry, `пропуск данных ${item.id}.${index + 1}`, 500));
+    }
     finiteNumber(item.overallDelta, `динамика общего балла ${item.id}`, { nullable: true, min: -100, max: 100 });
     shortText(item.assessment, `оценка периода ${item.id}`, 300);
     shortText(item.summary, `резюме периода ${item.id}`, 1000);
     optionalText(item.updatedAt, `дата обновления ${item.id}`, 100);
     optionalText(item.comment, `комментарий ${item.id}`, 3000);
+    if (item.numbers != null) {
+      const numbers = plainObject(item.numbers, `числовой контракт ${item.id}`);
+      if (numbers.version !== 1) fail(`версия числового контракта ${item.id}`);
+      if (!Array.isArray(numbers.metrics) || !numbers.metrics.length || numbers.metrics.length > 100) fail(`числа периода ${item.id}`);
+      const numberIds = new Set();
+      numbers.metrics.forEach((metric, index) => {
+        const entry = plainObject(metric, `число ${item.id}.${index + 1}`);
+        shortText(entry.id, `код числа ${item.id}.${index + 1}`, 100);
+        if (numberIds.has(entry.id)) fail(`повтор числа ${item.id}.${entry.id}`);
+        numberIds.add(entry.id);
+        finiteNumber(entry.value, `значение числа ${item.id}.${entry.id}`, { nullable: true, min: -1e15, max: 1e15 });
+        if (!["score", "percent", "count", "ratio", "rub", "minutes", "days"].includes(entry.unit)) fail(`единица числа ${item.id}.${entry.id}`);
+        optionalText(entry.methodologyId, `методика числа ${item.id}.${entry.id}`, 100);
+      });
+    }
     if (!Array.isArray(item.headlineMetrics) || item.headlineMetrics.length !== 5) fail(`верхние показатели ${item.id}`);
     item.headlineMetrics.forEach((metric, index) => {
       validateMetric(metric, `верхний показатель ${item.id}.${index + 1}`);
@@ -267,6 +305,7 @@ function validateMobilePublication(publication) {
       optionalText(entry.target, `целевое значение ${item.id}.${index + 1}`, 300);
       optionalText(entry.fact, `фактическое значение ${item.id}.${index + 1}`, 300);
       optionalText(entry.state, `состояние цели ${item.id}.${index + 1}`, 30);
+      optionalBoolean(entry.hasTarget, `признак заданной цели ${item.id}.${index + 1}`);
     });
     optionalText(item.goalsSource, `источник целей ${item.id}`, 500);
     validatePublicationDynamics(item.dynamics, item.id);
@@ -463,6 +502,37 @@ function pinKey(pin, salt) {
   return crypto.scryptSync(String(pin), salt, 32, { ...CONTENT_KDF_PARAMS, maxmem: 64 * 1024 * 1024 });
 }
 
+function pinKeyAsync(pin, salt) {
+  if (!/^\d{4}$/.test(String(pin || ""))) return Promise.reject(new Error("invalid-pin"));
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(String(pin), salt, 32, { ...CONTENT_KDF_PARAMS, maxmem: 64 * 1024 * 1024 }, (error, key) => {
+      if (error) reject(error);
+      else resolve(key);
+    });
+  });
+}
+
+async function decryptMobilePublicationAsync(record, pin) {
+  try {
+    const value = validateEncryptedMobilePublication(record);
+    const encryption = value.encryption;
+    const key = await pinKeyAsync(pin, Buffer.from(encryption.salt, "base64"));
+    try {
+      const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(encryption.iv, "base64"));
+      decipher.setAAD(encryptionAad(value.doctorId, value.pinVersion));
+      decipher.setAuthTag(Buffer.from(encryption.tag, "base64"));
+      const plaintext = Buffer.concat([decipher.update(Buffer.from(value.ciphertext, "base64")), decipher.final()]);
+      const publication = validateMobilePublication(JSON.parse(plaintext.toString("utf8")));
+      if (publication.doctor.id != null && String(publication.doctor.id) !== value.doctorId) throw new Error("doctor-mismatch");
+      if (publication.doctor.name !== value.displayName || publication.doctor.department !== value.department
+        || publication.periods.length !== value.periods) throw new Error("metadata-mismatch");
+      return publication;
+    } finally { key.fill(0); }
+  } catch (_) {
+    throw new Error("Не удалось открыть отчёт. Проверьте PIN врача");
+  }
+}
+
 function sealEnvelope(payload, key, aad) {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
@@ -549,6 +619,80 @@ function createMobilePublicationBundle({ publications, recipients, credentials, 
   } finally { for (const key of keys.values()) key.fill(0); }
 }
 
+async function mapWithConcurrency(items, limit, mapper) {
+  const result = new Array(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      result[index] = await mapper(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return result;
+}
+
+async function createMobilePublicationBundleAsync({ publications, recipients, credentials, appVersion = "" }) {
+  if (!Array.isArray(publications) || !publications.length || publications.length > MAX_BUNDLE_DOCTORS) bundleFail("список публикаций");
+  const credentialItems = credentials && Array.isArray(credentials.doctors) ? credentials.doctors : [];
+  const credentialsByDoctor = new Map(credentialItems.map(item => [String(item.doctorId || ""), item]));
+  const recipientItems = recipients || publications.map(item => ({ doctorId: item.doctorId,
+    displayName: item.publication.doctor.name, department: item.publication.doctor.department }));
+  if (!Array.isArray(recipientItems) || !recipientItems.length || recipientItems.length > MAX_BUNDLE_DOCTORS) bundleFail("получатели");
+  const bundleId = crypto.randomUUID(), keys = new Map(), scopes = new Map();
+  try {
+    const reports = publications.map(item => {
+      plainObject(item, "публикация врача");
+      const doctorId = bundleText(String(item.doctorId || ""), "идентификатор врача", 200);
+      if (keys.has(doctorId) || !credentialsByDoctor.has(doctorId)) bundleFail("дублирующийся или неактивный врач");
+      const publication = validateMobilePublication(item.publication);
+      if (publication.doctor.id != null && String(publication.doctor.id) !== doctorId) bundleFail("отчёт другого врача");
+      const key = crypto.randomBytes(32);
+      keys.set(doctorId, key);
+      scopes.set(doctorId, bundleText(item.department || publication.doctor.department, "отделение отчёта", 300));
+      return encryptEnvelopeRecord(publication, key, bundleId, { doctorId, displayName: publication.doctor.name,
+        department: publication.doctor.department, periods: publication.periods.length });
+    });
+    const seen = new Set();
+    const recipientPlans = recipientItems.map(recipient => {
+      const id = bundleText(String(recipient.doctorId || ""), "получатель", 200);
+      if (seen.has(id)) bundleFail("повторяющийся получатель");
+      seen.add(id);
+      const access = credentialsByDoctor.get(id);
+      if (!access) bundleFail(`нет настроенного доступа врача ${id}`);
+      const managedDepartments = [...new Set((access.headDepartments || []).map(String).filter(Boolean))];
+      const allowed = reports.filter(report => report.doctorId === id || managedDepartments.includes(scopes.get(report.doctorId)));
+      if (!allowed.length) return null;
+      const own = reports.find(report => report.doctorId === id);
+      return { id, access, managedDepartments, allowed, metadata: { doctorId: id,
+        displayName: own?.displayName || recipient.displayName, department: own?.department || recipient.department,
+        periods: own?.periods || 0, pinVersion: Number(access.pinVersion) } };
+    }).filter(Boolean);
+    const doctors = (await mapWithConcurrency(recipientPlans, 2, async plan => {
+      const salt = crypto.randomBytes(24);
+      const key = await pinKeyAsync(plan.access.pinCode, salt);
+      try {
+        const record = encryptEnvelopeRecord({ doctorId: plan.id, managedDepartments: plan.managedDepartments,
+          grants: plan.allowed.map(report => ({ doctorId: report.doctorId, key: keys.get(report.doctorId).toString("base64") })) },
+        key, bundleId, plan.metadata, true);
+        Object.assign(record.encryption, { kdf: "scrypt", salt: salt.toString("base64"), params: CONTENT_KDF_PARAMS });
+        return record;
+      } finally { key.fill(0); }
+    })).sort((a, b) => a.displayName.localeCompare(b.displayName, "ru") || a.doctorId.localeCompare(b.doctorId));
+    if (reports.some(report => !seen.has(report.doctorId))) bundleFail("для отчёта не указан получатель");
+    return validateMobilePublicationBundle({
+      format: MOBILE_BUNDLE_FORMAT,
+      version: MOBILE_BUNDLE_VERSION,
+      bundleId,
+      createdAt: new Date().toISOString(),
+      appVersion: String(appVersion || ""),
+      security: { patientRegistryIncluded: false, rawExportsIncluded: false, encryptedPerDoctor: true },
+      doctors,
+      reports,
+    });
+  } finally { for (const key of keys.values()) key.fill(0); }
+}
+
 function openMobileReportSession(bundle, doctorId, pin) {
   try {
     const record = bundle.doctors.find(item => item.doctorId === String(doctorId));
@@ -563,6 +707,52 @@ function openMobileReportSession(bundle, doctorId, pin) {
     }
     validateEnvelopeRecord(record, true);
     const key = pinKey(pin, Buffer.from(record.encryption.salt, "base64"));
+    let access;
+    try { access = openEnvelope(record, key, envelopeAad(bundle.bundleId, record, true)); }
+    finally { key.fill(0); }
+    if (access.doctorId !== owner.doctorId || !Array.isArray(access.grants) || !access.grants.length
+      || access.grants.length > MAX_BUNDLE_DOCTORS || !Array.isArray(access.managedDepartments)
+      || access.managedDepartments.length > MAX_BUNDLE_DOCTORS) bundleFail("права получателя");
+    access.managedDepartments.forEach(department => bundleText(department, "отделение заведующего", 300));
+    const allowed = new Map();
+    for (const grant of access.grants) {
+      if (!grant || allowed.has(grant.doctorId)) bundleFail("повторяющееся разрешение");
+      base64Bytes(grant.key, "ключ отчёта", { exact: 32 });
+      const report = bundle.reports.find(item => item.doctorId === grant.doctorId);
+      if (!report) bundleFail("отчёт не найден");
+      allowed.set(grant.doctorId, { record: report, key: grant.key });
+    }
+    const reports = [...allowed.values()].map(({ record: item }) => ({ doctorId: item.doctorId, displayName: item.displayName,
+      department: item.department, periods: item.periods })).sort((a, b) => a.doctorId === owner.doctorId ? -1
+      : b.doctorId === owner.doctorId ? 1 : a.displayName.localeCompare(b.displayName, "ru"));
+    return { owner, managedDepartments: access.managedDepartments, reports, readReport(id) {
+      const grant = allowed.get(id);
+      if (!grant) throw new Error("Нет доступа к отчёту");
+      const contentKey = Buffer.from(grant.key, "base64");
+      let publication;
+      try { publication = validateMobilePublication(openEnvelope(grant.record, contentKey, envelopeAad(bundle.bundleId, grant.record, false))); }
+      finally { contentKey.fill(0); }
+      if ((publication.doctor.id != null && String(publication.doctor.id) !== id) || publication.doctor.name !== grant.record.displayName
+        || publication.doctor.department !== grant.record.department || publication.periods.length !== grant.record.periods) bundleFail("несовпадение отчёта");
+      return publication;
+    } };
+  } catch (_) { throw new Error("Не удалось открыть отчёт. Проверьте PIN врача"); }
+}
+
+async function openMobileReportSessionAsync(bundle, doctorId, pin) {
+  try {
+    const record = bundle.doctors.find(item => item.doctorId === String(doctorId));
+    if (!record) bundleFail("врач не найден");
+    const owner = { doctorId: record.doctorId, displayName: record.displayName, department: record.department, periods: record.periods };
+    if (Number(bundle.version) === 1) {
+      const publication = await decryptMobilePublicationAsync(record, pin);
+      return { owner, managedDepartments: [], reports: [owner], readReport(id) {
+        if (id !== owner.doctorId) throw new Error("Нет доступа к отчёту");
+        return publication;
+      } };
+    }
+    validateEnvelopeRecord(record, true);
+    const key = await pinKeyAsync(pin, Buffer.from(record.encryption.salt, "base64"));
     let access;
     try { access = openEnvelope(record, key, envelopeAad(bundle.bundleId, record, true)); }
     finally { key.fill(0); }
@@ -611,9 +801,11 @@ module.exports = {
   MOBILE_PUBLICATION_FORMAT,
   MOBILE_PUBLICATION_VERSION,
   createMobilePublicationBundle,
+  createMobilePublicationBundleAsync,
   decryptMobilePublication,
   encryptMobilePublication,
   openMobileReportSession,
+  openMobileReportSessionAsync,
   serializeMobilePublication,
   serializeMobilePublicationBundle,
   validateEncryptedMobilePublication,
