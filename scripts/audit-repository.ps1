@@ -26,6 +26,7 @@ $allowedPatterns = @(
   '^build/viewer-html-sanitizer\.js$',
   '^desktop/[^/]+\.cjs$',
   '^desktop/services/[^/]+\.cjs$',
+  '^desktop/services/background-task-(queue|worker)\.cjs$',
   '^viewer/[^/]+\.(cjs|js|css|html|json)$',
   '^mobile-pilot/[^/]+\.(html|css|js|webmanifest)$',
   '^mobile-pilot/icons/app-icon-(192|512)\.png$',
@@ -33,6 +34,8 @@ $allowedPatterns = @(
   '^docs/[^/]+\.md$', # Includes PROJECT_MAP.md and ARCHITECTURE_REVIEW.md; measurements use synthetic data only.
   '^resources/(app-icon\.(ico|png)|update-config\.json)$',
   '^scripts/benchmark-architecture\.cjs$', # Reproducible synthetic-only architecture benchmark.
+  '^scripts/benchmark-background\.cjs$', # Synthetic event-loop delay measurement for background workers.
+  '^scripts/test-mobile-webkit\.cjs$', # Synthetic mobile WebKit browser check.
   '^scripts/[^/]+\.(cjs|ps1|py)$',
   '^tests/[^/]+\.test\.cjs$'
 )

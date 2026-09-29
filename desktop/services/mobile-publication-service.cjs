@@ -632,7 +632,7 @@ async function mapWithConcurrency(items, limit, mapper) {
   return result;
 }
 
-async function createMobilePublicationBundleAsync({ publications, recipients, credentials, appVersion = "" }) {
+async function createMobilePublicationBundleAsync({ publications, recipients, credentials, appVersion = "", onProgress = () => {} }) {
   if (!Array.isArray(publications) || !publications.length || publications.length > MAX_BUNDLE_DOCTORS) bundleFail("список публикаций");
   const credentialItems = credentials && Array.isArray(credentials.doctors) ? credentials.doctors : [];
   const credentialsByDoctor = new Map(credentialItems.map(item => [String(item.doctorId || ""), item]));
@@ -641,7 +641,8 @@ async function createMobilePublicationBundleAsync({ publications, recipients, cr
   if (!Array.isArray(recipientItems) || !recipientItems.length || recipientItems.length > MAX_BUNDLE_DOCTORS) bundleFail("получатели");
   const bundleId = crypto.randomUUID(), keys = new Map(), scopes = new Map();
   try {
-    const reports = publications.map(item => {
+    onProgress({ stage: "reports", completed: 0, total: publications.length });
+    const reports = publications.map((item, index) => {
       plainObject(item, "публикация врача");
       const doctorId = bundleText(String(item.doctorId || ""), "идентификатор врача", 200);
       if (keys.has(doctorId) || !credentialsByDoctor.has(doctorId)) bundleFail("дублирующийся или неактивный врач");
@@ -650,8 +651,10 @@ async function createMobilePublicationBundleAsync({ publications, recipients, cr
       const key = crypto.randomBytes(32);
       keys.set(doctorId, key);
       scopes.set(doctorId, bundleText(item.department || publication.doctor.department, "отделение отчёта", 300));
-      return encryptEnvelopeRecord(publication, key, bundleId, { doctorId, displayName: publication.doctor.name,
+      const record = encryptEnvelopeRecord(publication, key, bundleId, { doctorId, displayName: publication.doctor.name,
         department: publication.doctor.department, periods: publication.periods.length });
+      onProgress({ stage: "reports", completed: index + 1, total: publications.length });
+      return record;
     });
     const seen = new Set();
     const recipientPlans = recipientItems.map(recipient => {
@@ -668,6 +671,8 @@ async function createMobilePublicationBundleAsync({ publications, recipients, cr
         displayName: own?.displayName || recipient.displayName, department: own?.department || recipient.department,
         periods: own?.periods || 0, pinVersion: Number(access.pinVersion) } };
     }).filter(Boolean);
+    onProgress({ stage: "grants", completed: 0, total: recipientPlans.length });
+    let completedGrants = 0;
     const doctors = (await mapWithConcurrency(recipientPlans, 2, async plan => {
       const salt = crypto.randomBytes(24);
       const key = await pinKeyAsync(plan.access.pinCode, salt);
@@ -676,6 +681,7 @@ async function createMobilePublicationBundleAsync({ publications, recipients, cr
           grants: plan.allowed.map(report => ({ doctorId: report.doctorId, key: keys.get(report.doctorId).toString("base64") })) },
         key, bundleId, plan.metadata, true);
         Object.assign(record.encryption, { kdf: "scrypt", salt: salt.toString("base64"), params: CONTENT_KDF_PARAMS });
+        onProgress({ stage: "grants", completed: ++completedGrants, total: recipientPlans.length });
         return record;
       } finally { key.fill(0); }
     })).sort((a, b) => a.displayName.localeCompare(b.displayName, "ru") || a.doctorId.localeCompare(b.doctorId));

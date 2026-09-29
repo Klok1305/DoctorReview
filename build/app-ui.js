@@ -3764,10 +3764,27 @@ async function exportMobilePublication() {
   }
 }
 
+let mobileExportCancelRequested = false;
+let mobileExportOperationId = null;
+
+function cancelMobileExport() {
+  mobileExportCancelRequested = true;
+  if (mobileExportOperationId && DESKTOP_API?.cancelBackgroundOperation) {
+    DESKTOP_API.cancelBackgroundOperation(mobileExportOperationId).catch(console.error);
+  }
+  const progress = document.getElementById("mobileExportProgress");
+  if (progress) progress.textContent = "Останавливаем пакет…";
+}
+
 async function exportAllMobilePublications() {
   const button = document.getElementById("btnExportAllMobilePublications");
+  const cancelButton = document.getElementById("btnCancelMobileExport");
+  const progress = document.getElementById("mobileExportProgress");
+  let unsubscribeProgress = () => {};
   try {
     if (button) button.disabled = true;
+    mobileExportCancelRequested = false;
+    if (cancelButton) cancelButton.classList.remove("hidden");
     if (!DESKTOP_API || !DESKTOP_API.exportMobilePublicationBundle) {
       throw new Error("Пакет для сервера формируется только в установленном Admin");
     }
@@ -3783,23 +3800,39 @@ async function exportAllMobilePublications() {
     const publications = [];
     const recipients = activeDoctorIds.map(doctorId => ({ doctorId, displayName: doctorName(doctorId), department: doctorStructureLabel(doctorId) }));
     let skipped = 0;
-    for (const doctorId of activeDoctorIds) {
+    for (const [index, doctorId] of activeDoctorIds.entries()) {
+      if (mobileExportCancelRequested) throw new DOMException("Операция отменена", "AbortError");
       try {
         publications.push({ doctorId, department: resolvedDepartmentName(doctorId), publication: buildMobilePublication(doctorId, commentsByPeriod) });
       } catch (error) {
         if (/нет рассчитанных периодов/i.test(String(error && error.message))) skipped += 1;
         else throw error;
       }
+      if (progress) progress.textContent = `Подготовлены отчёты: ${index + 1} из ${activeDoctorIds.length}`;
+      await new Promise(resolve => setTimeout(resolve, 0));
     }
     if (!publications.length) throw new Error("У активных врачей пока нет рассчитанных периодов");
-    const result = await DESKTOP_API.exportMobilePublicationBundle({ publications, recipients });
+    if (mobileExportCancelRequested) throw new DOMException("Операция отменена", "AbortError");
+    mobileExportOperationId = crypto.randomUUID();
+    unsubscribeProgress = DESKTOP_API.onBackgroundProgress?.(event => {
+      if (event.operationId !== mobileExportOperationId || !progress) return;
+      const label = event.stage === "reports" ? "Шифруем отчёты" : event.stage === "grants" ? "Выдаём ключи" : "Сохраняем пакет";
+      progress.textContent = `${label}: ${event.completed} из ${event.total}`;
+    }) || (() => {});
+    const result = await DESKTOP_API.exportMobilePublicationBundle({ publications, recipients, operationId: mobileExportOperationId });
     if (!result.canceled) {
       toast(`Общий мобильный пакет сохранён: ${result.doctors} врачей${skipped ? `, без личных показателей: ${skipped}` : ""}`);
     }
   } catch (error) {
-    toast(error.message || "Не удалось сформировать общий мобильный пакет", true);
+    toast(error.name === "AbortError" ? "Формирование мобильного пакета остановлено" : (error.message || "Не удалось сформировать общий мобильный пакет"),
+      error.name !== "AbortError");
   } finally {
+    unsubscribeProgress();
+    mobileExportOperationId = null;
+    mobileExportCancelRequested = false;
     if (button) button.disabled = false;
+    if (cancelButton) cancelButton.classList.add("hidden");
+    if (progress) progress.textContent = "";
   }
 }
 
@@ -5125,7 +5158,19 @@ async function composeViewerDashboardHtml(target, periodKey, context, comments) 
   return `<div class="viewer-dashboard-snapshot" data-source-tab="${esc(target.tab)}">${root.innerHTML}</div>`;
 }
 
+let viewerExportRunning = false;
+let viewerExportCancelRequested = false;
+let viewerExportOperationId = null;
+
 function closeViewerExportDialog() {
+  if (viewerExportRunning) {
+    viewerExportCancelRequested = true;
+    if (viewerExportOperationId && DESKTOP_API?.cancelBackgroundOperation) {
+      DESKTOP_API.cancelBackgroundOperation(viewerExportOperationId).catch(console.error);
+    }
+    document.getElementById("viewerExportStatus").textContent = "Останавливаем публикацию…";
+    return;
+  }
   const dialog = document.getElementById("viewerExportDialog");
   if (dialog && dialog.open) dialog.close();
 }
@@ -5268,8 +5313,10 @@ async function openViewerExportDialog() {
 }
 
 async function exportViewerPackage(format = "html", { allReportDoctors = false } = {}) {
+  if (viewerExportRunning) return;
   const buttons = [document.getElementById("viewerExportStart"), document.getElementById("viewerExportZip"), document.getElementById("viewerExportFullHtml")];
   const errorBox = document.getElementById("viewerExportError");
+  let unsubscribeProgress = () => {};
   const periodKeys = [...document.querySelectorAll("#viewerExportPeriods input:checked")].map(input => input.value);
   const pageTypes = new Set([...document.querySelectorAll("#viewerExportPageTypes input:checked")].map(input => input.value));
   const doctorIds = allReportDoctors
@@ -5302,6 +5349,14 @@ async function exportViewerPackage(format = "html", { allReportDoctors = false }
     return;
   }
   const skippedDoctors = doctorIds.length - eligibleDoctorIds.length;
+  viewerExportRunning = true;
+  viewerExportCancelRequested = false;
+  viewerExportOperationId = crypto.randomUUID();
+  unsubscribeProgress = DESKTOP_API.onBackgroundProgress?.(event => {
+    if (event.operationId !== viewerExportOperationId) return;
+    const label = event.stage === "pages" ? "Шифруем страницы" : event.stage === "grants" ? "Выдаём ключи" : event.stage === "zip" ? "Собираем ZIP" : "Собираем HTML";
+    document.getElementById("viewerExportStatus").textContent = `${label}: ${event.completed} из ${event.total}`;
+  }) || (() => {});
   buttons.forEach(button => { button.disabled = true; });
   errorBox.classList.add("hidden");
   const previousUi = {
@@ -5351,12 +5406,14 @@ async function exportViewerPackage(format = "html", { allReportDoctors = false }
       sum + [...subjectIds].filter(doctorId => doctorHasDashboardData(doctorId, periodKey)).length,
     0);
     for (const periodKey of publicationPeriodKeys) {
+      if (viewerExportCancelRequested) throw new DOMException("Операция отменена", "AbortError");
       if (!DB.months[periodKey]) continue;
       const comments = await DESKTOP_API.listComments({ periodKey });
       const departmentCache = new Map();
       const specializationCache = new Map();
       const periodSubjectIds = [...subjectIds].filter(doctorId => doctorHasDashboardData(doctorId, periodKey));
       for (const doctorId of periodSubjectIds) {
+        if (viewerExportCancelRequested) throw new DOMException("Операция отменена", "AbortError");
         const department = resolvedDepartmentName(doctorId) || "";
         const specialization = resolvedSpecializationName(doctorId) || "";
         if (pageTypes.has("department") && department) {
@@ -5394,25 +5451,34 @@ async function exportViewerPackage(format = "html", { allReportDoctors = false }
       }
     }
     const reportModel = await createImmutableReportModel(publicationPeriodKeys, pages);
+    if (viewerExportCancelRequested) throw new DOMException("Операция отменена", "AbortError");
     const avoided = Math.max(0, reportModel.bindings.length - reportModel.pages.length);
     document.getElementById("viewerExportStatus").textContent = `Модель зафиксирована · ревизия ${reportModel.revision.slice(0, 12)}… · общих страниц ${reportModel.pages.length}${avoided ? ` · исключено копий ${avoided}` : ""}`;
     const result = await DESKTOP_API.exportViewerPackage({
       format, doctors, subjects, periods: publicationPeriodKeys, reportModel: reportModelJsonAdapter(reportModel),
       allReportDoctors,
+      operationId: viewerExportOperationId,
       ...(format === "html" ? { adminPin } : {}),
     });
     if (result.canceled) {
       updateViewerExportStatus();
       return;
     }
+    viewerExportRunning = false;
     closeViewerExportDialog();
     const label = result.format === "html" ? "Автономный HTML создан" : "ZIP создан";
     const skippedSuffix = skippedDoctors ? ` Исключено без доступных страниц: ${skippedDoctors}.` : "";
     toast(`${label}: врачей — ${result.doctors}, периодов — ${result.periods}.${skippedSuffix} SHA-256: ${result.sha256.slice(0, 12)}…`);
   } catch (error) {
-    errorBox.textContent = "Публикация не выполнена: " + error.message;
+    errorBox.textContent = viewerExportCancelRequested || error.name === "AbortError"
+      ? "Публикация остановлена"
+      : "Публикация не выполнена: " + error.message;
     errorBox.classList.remove("hidden");
   } finally {
+    unsubscribeProgress();
+    viewerExportRunning = false;
+    viewerExportCancelRequested = false;
+    viewerExportOperationId = null;
     document.getElementById("viewerExportAdminPin").value = "";
     Object.assign(UI, previousUi);
     switchTab(previousUi.tab);
@@ -7062,6 +7128,7 @@ async function initApp() {
   document.getElementById("docMonth").addEventListener("change", e => { UI.docMonth = e.target.value; renderDoctor(); });
   document.getElementById("docSelect").addEventListener("change", e => { UI.docId = e.target.value; renderDoctor(); });
   document.getElementById("btnExportAllMobilePublications").addEventListener("click", exportAllMobilePublications);
+  document.getElementById("btnCancelMobileExport").addEventListener("click", cancelMobileExport);
   document.getElementById("btnExportMobilePublication").addEventListener("click", exportMobilePublication);
   document.getElementById("repMonth").addEventListener("change", e => { UI.repMonth = e.target.value; });
   document.getElementById("btnExportAllPdf").addEventListener("click", openPdfExportDialog);

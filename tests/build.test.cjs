@@ -1048,7 +1048,7 @@ test("full Viewer HTML includes doctors with work reports even when ordinary acc
   vm.runInContext(`${adminUi.slice(start, end)}\n;globalThis.fullIds = viewerFullExportDoctorIds(["2026-08"]);`, context);
   assert.deepEqual([...context.fullIds], ["active", "head", "inactive"]);
   assert.match(adminUi, /allReportDoctors\s*\? viewerFullExportDoctorIds\(periodKeys\)/);
-  assert.match(adminUi, /allReportDoctors,\s*\.\.\.\(format === "html"/);
+  assert.match(adminUi, /allReportDoctors,\s*operationId: viewerExportOperationId,\s*\.\.\.\(format === "html"/);
 });
 
 test("Admin exports a patient-free mobile publication for the selected doctor", () => {

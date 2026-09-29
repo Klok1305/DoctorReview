@@ -23,6 +23,7 @@
     loadBundleButton: document.getElementById("loadBundleButton"),
     bundleInput: document.getElementById("bundleInput"),
     serverPublicationStatus: document.getElementById("serverPublicationStatus"),
+    cancelBundleButton: document.getElementById("cancelBundleButton"),
     staticProfile: document.getElementById("staticProfile"),
     serverLoginForm: document.getElementById("serverLoginForm"),
     serverDoctorSelect: document.getElementById("serverDoctorSelect"),
@@ -938,15 +939,16 @@
     if (state.uploadController) state.uploadController.abort();
     const uploadController = new AbortController();
     state.uploadController = uploadController;
-    const upload = await apiRequest("/api/admin/publications/uploads", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bytes: file.size, sha256 }),
-      retries: 2,
-      signal: uploadController.signal,
-    });
+    elements.cancelBundleButton.classList.remove("hidden");
     let completed = false;
     try {
+      const upload = await apiRequest("/api/admin/publications/uploads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bytes: file.size, sha256 }),
+        retries: 2,
+        signal: uploadController.signal,
+      });
       let nextIndex = Number(upload.nextIndex) || 0;
       const status = await apiRequest(`/api/admin/publications/uploads/${upload.uploadId}`, {
         retries: 2,
@@ -986,6 +988,7 @@
         elements.serverPublicationStatus.textContent = "Загрузка прервана. Выберите тот же файл — отправка продолжится с принятой части.";
       }
       if (state.uploadController === uploadController) state.uploadController = null;
+      elements.cancelBundleButton.classList.add("hidden");
     }
     await refreshServerContext();
   }
@@ -1008,6 +1011,7 @@
   elements.teamDoctorSelect.addEventListener("change", () => selectTeamReport(elements.teamDoctorSelect.value));
   elements.ownReportButton.addEventListener("click", () => selectTeamReport(state.reportAccess?.owner.doctorId));
   elements.loadBundleButton.addEventListener("click", () => elements.bundleInput.click());
+  elements.cancelBundleButton.addEventListener("click", () => state.uploadController?.abort());
   elements.bundleInput.addEventListener("change", async () => {
     const file = elements.bundleInput.files && elements.bundleInput.files[0];
     elements.bundleInput.value = "";
@@ -1016,8 +1020,11 @@
       elements.serverPublicationStatus.classList.remove("error");
       await uploadBundle(file);
     } catch (error) {
-      elements.serverPublicationStatus.textContent = error.message || "Не удалось обновить отчёты";
-      elements.serverPublicationStatus.classList.add("error");
+      const cancelled = error.message === "Операция отменена";
+      elements.serverPublicationStatus.textContent = cancelled
+        ? "Загрузка остановлена. Выберите тот же файл, чтобы продолжить с принятой части."
+        : error.message || "Не удалось обновить отчёты";
+      elements.serverPublicationStatus.classList.toggle("error", !cancelled);
     }
   });
   elements.logoutButton.addEventListener("click", async () => {

@@ -41,8 +41,17 @@ jobs:
       - name: Проверить воспроизводимый benchmark
         run: pnpm run benchmark:architecture
 
+      - name: Проверить задержку событий в фоновых операциях
+        run: pnpm run benchmark:background
+
       - name: Проверить интерфейс Electron
         run: pnpm run test:smoke
 
       - name: Проверить PDF
         run: pnpm run test:pdf
+
+      - name: Установить тестовый WebKit
+        run: pnpm exec playwright install webkit
+
+      - name: Проверить мобильный WebKit
+        run: pnpm run test:webkit

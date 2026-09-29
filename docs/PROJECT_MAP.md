@@ -1,6 +1,6 @@
 # Карта проекта
 
-Проверено: **2026-09-24**. Версия приложения: **2.6.21** (источник — `package.json`).
+Проверено: **2026-09-29**. Версия приложения: **2.7.0** (источник — `package.json`).
 Репозиторий: `Klok1305/DoctorReview`. Desktop: Windows / Electron 37. Node.js ≥22, pnpm 11.
 
 ## Самое важное: релиз запускаем и не ждём
@@ -26,20 +26,20 @@
 ## Поток данных
 
 ```text
-Файлы 1С → FileService → renderer: parsers → DB → metrics → UI
+Файлы 1С → FileService → renderer: XLSX Web Worker → parsers → DB → metrics → UI
                                            ↓ saveLocal: очередь точечных команд с ревизией; полный снимок для совместимости
-                          preload → desktop/main → DatabaseService → SQLite
+                          preload → desktop/main → BackgroundTaskQueue → DatabaseService worker → SQLite
                           импорт: database:save-import (изменённый месяц и врачи + источники)
                                   → одна транзакция SQLite → успех либо откат renderer
 
 UI → неизменяемая ReportModel v1 с SHA-256-ревизией
    → общая очистка HTML в renderer до хеширования и повторная проверка в сервисе
-   → HTML/PDF/JSON-адаптеры → Viewer ZIP v4 / автономный HTML v4 / PDF
-UI → buildMobilePublication → mobile-publication-service → .kvmobilebundle
+   → HTML/PDF/JSON-адаптеры → worker упаковки → Viewer ZIP v4 / автономный HTML v4 / PDF
+UI → buildMobilePublication → worker упаковки → mobile-publication-service → .kvmobilebundle
    → мобильный сервер → API готового отчёта → mobile-pilot/app.js
 ```
 
-Renderer Admin — общая очистка Viewer HTML и четыре скрипта в общем глобальном контексте: `viewer-html-sanitizer → core → parsers → metrics → ui`. ES-модулей и bundler нет. Большая часть расчётов выполняется в renderer. SQLite и локальные сервисы работают в main-процессе Electron; основной драйвер — `DatabaseSync`.
+Renderer Admin — общая очистка Viewer HTML и четыре скрипта в общем глобальном контексте: `viewer-html-sanitizer → core → parsers → metrics → ui`. ES-модулей и bundler нет. Большая часть расчётов выполняется в renderer; чтение XLSX и перевод листа в строки — в одном Web Worker. Основные записи аналитики и упаковка публикаций выполняются в ограниченных очередях `desktop/services/background-task-queue.cjs` через `background-task-worker.cjs`; короткие служебные операции SQLite остаются в main. Основной драйвер — `DatabaseSync`.
 
 ## Куда идти за изменением
 
@@ -48,10 +48,10 @@ Renderer Admin — общая очистка Viewer HTML и четыре скр�
 | Задача | Исходники и поисковые якоря | Связанные тесты |
 |---|---|---|
 | Состояние, профили, миграция снимка, сохранение | `build/app-core.js`: `DB`, `migrateDB`, `normalizeProfiles`, `profileForDoctor`, `saveLocal`, `desktopMutationFor`, `flushDesktopSaveQueue`, `withImportMutation` | `tests/legacy-core.test.cjs` |
-| Импорт 1С, ZIP, сопоставление полей | `build/app-parsers.js`: `detectReportType`, `processFile`, `handleFilesBatch` | `tests/legacy-core.test.cjs` |
+| Импорт 1С, ZIP, сопоставление полей | `build/app-parsers.js`: `readXlsxRows`, `detectReportType`, `processFile`, `handleFilesBatch`; CSP `worker-src` в `build/index.template.html` | `tests/legacy-core.test.cjs`, Electron smoke |
 | Формулы и сводки | `build/app-metrics.js`: `computeMetrics`, `kbSummary`, `metricsCacheStats`, `invalidateMetricsCache`, `partitionClientBase`, `aggregateDeptMonth` (`coverage`, необязательный список врачей), `buildDynamics`; `build/app-ui.js`: `aggregateCoverageHtml` | `tests/legacy-core.test.cjs`, `scripts/benchmark-architecture.cjs` |
 | Экраны, настройки, графики, публикации | `build/app-ui.js`: `initApp`, `renderAll`, `renderSettings`, `saveDeptBasics`; `build/app.css`; `build/index.template.html` | `tests/build.test.cjs`, `tests/legacy-core.test.cjs`, smoke |
-| Electron и IPC | `desktop/main.cjs`: `registerIpc`; `desktop/preload.cjs`: `window.desktopAPI` | `tests/build.test.cjs`, smoke |
+| Electron и IPC, фоновые очереди | `desktop/main.cjs`: `registerIpc`, `runDatabaseWrite`, `runPublicationTask`; `desktop/preload.cjs`: `window.desktopAPI`; `desktop/services/background-task-queue.cjs`, `background-task-worker.cjs` | `tests/background-operations.test.cjs`, `scripts/benchmark-background.cjs`, smoke |
 | SQLite, JSON-копия, комментарии, назначения заведующих | `desktop/services/database.cjs`: `DatabaseService`, `saveMutation`, `saveSnapshot`, `loadSnapshotSelection`, `createPortableJson`, `restorePortableJson`, `viewerExportCredentials` | `tests/database.test.cjs`, `tests/auth-publication.test.cjs` |
 | Рабочая папка и файлы | `desktop/services/config-store.cjs`, `desktop/services/file-service.cjs` | `tests/desktop-services.test.cjs` |
 | Backup и обновление Admin | `desktop/services/backup-service.cjs`, `desktop/services/update-service.cjs` | `tests/desktop-services.test.cjs`, `tests/database.test.cjs` |
@@ -60,7 +60,7 @@ Renderer Admin — общая очистка Viewer HTML и четыре скр�
 | Установленный Viewer | `viewer/main.cjs`, `viewer/preload.cjs`, `viewer/storage-service.cjs`: поколения каталога и общий пул страниц; `viewer/app.js`, `viewer/index.html`, `viewer/viewer.css` | `tests/viewer-publication.test.cjs` |
 | Автономный Viewer | `viewer/standalone.html`, `viewer/standalone-app.js`, `desktop/services/viewer-package-service.cjs` | `tests/viewer-publication.test.cjs`, smoke |
 | Данные мобильного отчёта | `build/app-ui.js`: `buildMobilePublication`, `exportAllMobilePublications`; `desktop/services/mobile-publication-service.cjs` | `tests/legacy-core.test.cjs`, `tests/mobile-pilot.test.cjs` |
-| Мобильный интерфейс | `mobile-pilot/app.js`, `app.css`, `index.html`, `demo-data.js`, `manifest.webmanifest`, `service-worker.js`, `icons/` | `tests/mobile-pilot.test.cjs`, браузерная проверка |
+| Мобильный интерфейс | `mobile-pilot/app.js`, `app.css`, `index.html`, `demo-data.js`, `manifest.webmanifest`, `service-worker.js`, `icons/` | `tests/mobile-pilot.test.cjs`, `tests/mobile-network.test.cjs`, `scripts/test-mobile-webkit.cjs` |
 | Мобильный сервер | `mobile-server/server.cjs`: `createMobileServer`, возобновляемые порции загрузки, выдача одного периода, ограничение async KDF; `scripts/build-mobile-server-package.cjs` | `tests/mobile-server.test.cjs` |
 | Сборка и релиз | `build/assemble.ps1`, `package.json`, `electron-builder.viewer.json`, `.github/workflows/ci.yml`, `.github/workflows/release.yml` | `tests/build.test.cjs`, audit, `dist:all` |
 
@@ -69,7 +69,7 @@ Renderer Admin — общая очистка Viewer HTML и четыре скр�
 - Рабочая папка Admin: `Входящие/`, `База/оценка-врачей.sqlite`, `Результаты/`, `Резервные копии/`, `Журналы/`. Путь хранит `ConfigStore` в пользовательском `config.json`. OneDrive и сетевые UNC/SMB-папки не поддерживаются.
 - SQLite: **схема 5**, снимок `DB`: **версия 4**, читаются снимки 1–4. Это отдельные версии, не версия приложения. Миграции — только в `database.cjs`, учёт — `schema_migrations`; выпущенные миграции не переписывать.
 - Аналитика хранится JSON-записями в `app_settings`, `app_meta`, `doctors`, `months`. Импорты, комментарии и версии, публикации и страницы, настройки Viewer и заведующие хранятся в отдельных таблицах того же сервиса. `saveMutation(mutation, importRecords)` проверяет `dataRevision` и атомарно сохраняет затронутые строки и происхождение импорта; `saveSnapshot` остаётся для полной замены и старых SQLite/JSON. Схема не менялась. При запуске месяцы загружаются порциями до 24 по одной ревизии.
-- Импорт фиксируется по одному файлу через `desktopAPI.saveImport` → `database:save-import`; передаёт изменённый месяц и карточки врачей. Успех и счётчики обновляются после commit; отказ откатывает врачей/месяцы renderer и останавливает оставшуюся пачку. Обычное автосохранение во время изменения импорта откладывается до commit или отката. Ожидающие обычные команды объединяются; команды импорта сохраняют порядок и происхождение. ZIP подтверждается в транзакции последнего поддерживаемого файла; при ошибке архива подтверждения нет. Повтор пропускает только источники, успешно записанные в SQLite, без доверия устаревшему `source.imported`. В интерфейсе есть прогресс по файлам и отмена после текущего файла; парсинг XLSX остаётся синхронным.
+- Импорт фиксируется по одному файлу через `desktopAPI.saveImport` → `database:save-import`; передаёт изменённый месяц и карточки врачей. Успех и счётчики обновляются после commit; отказ откатывает врачей/месяцы renderer и останавливает оставшуюся пачку. Обычное автосохранение во время изменения импорта откладывается до commit или отката. Ожидающие обычные команды объединяются; команды импорта сохраняют порядок и происхождение. ZIP подтверждается в транзакции последнего поддерживаемого файла; при ошибке архива подтверждения нет. Повтор пропускает только источники, успешно записанные в SQLite, без доверия устаревшему `source.imported`. XLSX читается и разбирается в Web Worker с одной активной задачей и максимум двумя ожидающими; отмена прерывает разбор до изменения DB или останавливает пачку после текущей атомарной SQLite-транзакции. Записи снимка и точечных команд идут через отдельную ограниченную очередь worker с сохранением ревизии и отката.
 - Полная JSON-копия: `klinvekt-portable-json` v1, включает снимок и служебные таблицы. Фактические заведующие берутся из `viewer_department_heads`, а не из устаревшего renderer-снимка. Старый JSON остаётся импортом только аналитики. Восстановление имеет страховочную копию и откат. `.ovbackup` — копия SQLite.
 - Viewer ZIP и автономный HTML создаются в формате **4** из неизменяемой `klinvekt-report-model` v1. Перед вычислением идентификаторов страниц renderer очищает HTML тем же модулем `build/viewer-html-sanitizer.js`, который сервис повторно применяет при проверке. Модель содержит уникальные страницы, привязки к врачам и SHA-256-ревизию; одинаковая сводная страница хранится и шифруется один раз, а получателю через его PIN выдаются только ключи разрешённых страниц. До PBKDF2/scrypt и сборки результата сервис рассчитывает верхнюю оценку размера и отклоняет заведомо слишком большую публикацию. ZIP форматов 2 и 3 импортируются новым Viewer; ранее выпущенные автономные HTML форматов 2 и 3 самодостаточны, а код нового автономного Viewer также сохраняет их контракт чтения.
 - Личный В3 в новых HTML/ZIP-страницах Viewer сохраняет снимок блока Admin для выбранного при публикации окна назначений: группировку 1С, цели, графики и выполненные направления. Установленный и автономный Viewer раскрывают вложенные строки по `data-g` без встроенных обработчиков. Переключатели окон старых публикаций остаются читаемыми.
@@ -96,6 +96,7 @@ Renderer Admin — общая очистка Viewer HTML и четыре скр�
 - Мобильные отчёты не содержат реестра пациентов и сырых выгрузок. Локальный `.kvmobile` не зашифрован; серверный пакет передаётся администратору. Black Hole использует `PORTAL`/`NAMED_USERS`, gateway identity и сессии. Новая загрузка пакета отзывает прежние сессии.
 - Мобильные сессии хранятся в памяти одного процесса. Очистка использует настоящее время; при лимите 2000 новый вход получает HTTP 503 с `Retry-After`, действующие сессии и незавершённые загрузки не удаляются. Повторный вход заменяет только сессии той же учётной записи в том же портале. После перезапуска нужен новый вход; сохранённый пакет остаётся доступным.
 - PWA кэширует оболочку, не серверные отчёты. API использует таймауты/отмену и ограниченные повторы; загрузка пакета возобновляется по SHA-256 файла, части идемпотентны, подтверждение повторяемо. Для iPhone сохранять flex-оболочку `100dvh`, скролл `main#reportScroller`, поля от 16 px и явное закрытие установочного диалога. После изменений ресурсов синхронно обновлять версии CSS/JS и кэш service worker; проверять WebKit, узкий/горизонтальный экран и iframe.
+- WebKit автоматически проверяется с настройками iPhone 13: узкий/горизонтальный экран, iframe и кэш оболочки. Эмуляция не заменяет ручную проверку на физическом телефоне.
 
 ## Сборка и проверки
 
@@ -107,8 +108,10 @@ Renderer Admin — общая очистка Viewer HTML и четыре скр�
 | `pnpm run assemble` | Изменились исходники Admin в `build/` |
 | `pnpm test` | Любое изменение кода |
 | `pnpm run benchmark:architecture` | Синтетический набор 10 врачей × 12 месяцев, скорость/память и пределы кэша |
+| `pnpm run benchmark:background` | Синтетические SQLite/Viewer/мобильная упаковка, время и задержка цикла событий |
 | `pnpm run test:smoke` | UI, рендеринг, публикации; скрытый Electron, синтетическая база |
 | `pnpm run test:pdf` | PDF; Chromium `printToPDF`, затем визуальная проверка |
+| `pnpm run test:webkit` | PWA в Playwright WebKit; перед первым запуском `pnpm exec playwright install webkit` |
 | `pnpm run audit:repo` | Состав репозитория и документация |
 | `pnpm run dist:all` | Локальная сборка установщиков Admin и Viewer |
 | `pnpm run start:mobile-pilot` / `start:mobile-pilot:lan` | Локальная PWA, порт 4173; сервер — `scripts/serve-mobile-pilot.cjs` |
@@ -121,7 +124,7 @@ Smoke запускать последовательно, дожидаться к
 
 Данные клиники, базы, выгрузки, backup, установщики, результаты и секреты не добавлять в Git. При изменении состава исходников синхронно обновлять `.gitignore` и `scripts/audit-repository.ps1`. После одной документации достаточно audit и проверки ссылок.
 
-CI проверяет `main` и PR: Node-тесты, benchmark, Electron smoke и PDF smoke. Release workflow проверяет совпадение тега с версией, запускает те же проверки и сборки. Артефакты релиза: Admin EXE, `.blockmap`, `latest.yml`, Viewer EXE, `KlinVekt-Mobile-Server-<version>.zip`. Рабочий мобильный пакет туда не входит. Автообновление есть у Admin; Viewer обновляется отдельным установщиком.
+CI проверяет `main` и PR: Node-тесты, оба benchmark, Electron smoke, PDF smoke и мобильный WebKit. Release workflow проверяет совпадение тега с версией, запускает те же проверки и сборки. Артефакты релиза: Admin EXE, `.blockmap`, `latest.yml`, Viewer EXE, `KlinVekt-Mobile-Server-<version>.zip`. Рабочий мобильный пакет туда не входит. Автообновление есть у Admin; Viewer обновляется отдельным установщиком.
 
 ## Дополнительные документы
 

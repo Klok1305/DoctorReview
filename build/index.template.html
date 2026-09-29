@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <link rel="icon" type="image/png" href="resources/app-icon.png">
 <title>КлинВект Щербатова — Администратор</title>
 <style>
@@ -116,6 +116,8 @@
     <h2 style="margin:0">Профайл специалиста</h2>
     <span class="spacer"></span>
     <button class="btn" id="btnExportAllMobilePublications" title="Создать один PIN-зашифрованный файл со всеми активными врачами для загрузки на сервер Битрикс24">⇩ Все врачи для сервера</button>
+    <button class="btn danger hidden" id="btnCancelMobileExport" type="button">Остановить пакет</button>
+    <span class="small muted" id="mobileExportProgress" role="status"></span>
     <button class="btn" id="btnExportMobilePublication" title="Создать файл с агрегированными метриками выбранного врача без списка пациентов">⇩ В мобильную версию</button>
     <label>Специалист: <select id="docSelect" style="min-width:240px"></select></label>
     <label>Месяц: <select id="docMonth"></select></label>

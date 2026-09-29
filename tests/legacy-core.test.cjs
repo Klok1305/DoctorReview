@@ -2340,7 +2340,9 @@ test("ZIP import rolls back a failed file, defers autosave safely and resumes fr
   const main = fs.readFileSync(path.resolve(build, "..", "desktop", "main.cjs"), "utf8");
   vm.runInNewContext(main.slice(main.indexOf('  ipcMain.handle("database:save-import"'), main.indexOf('  ipcMain.handle("database:export-json"')), {
     ipcMain: { handle: (name, handler) => { handlers[name] = handler; } }, database,
-    localAdminActor: () => ({}), ensureObject: value => { if (!value || typeof value !== "object") throw Error("invalid object"); return value; }
+    localAdminActor: () => ({}), ensureObject: value => { if (!value || typeof value !== "object") throw Error("invalid object"); return value; },
+    runDatabaseWrite: (task, value, records) => task === "database-save-mutation"
+      ? database.saveMutation(value, records) : database.saveSnapshot(JSON.parse(value), records),
   });
   const context = createContext({ desktopAPI: {
     saveDatabase: async json => database.saveSnapshot(JSON.parse(json)),

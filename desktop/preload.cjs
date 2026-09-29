@@ -19,6 +19,13 @@ contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   exportViewerPins: payload => invoke("viewer-publication:export-pins", payload),
   exportMobilePublication: payload => invoke("mobile-publication:export", payload),
   exportMobilePublicationBundle: payload => invoke("mobile-publication:export-bundle", payload),
+  cancelBackgroundOperation: operationId => invoke("background:cancel", operationId),
+  onBackgroundProgress: callback => {
+    if (typeof callback !== "function") return () => {};
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on("background:progress", listener);
+    return () => ipcRenderer.removeListener("background:progress", listener);
+  },
   saveDatabase: json => invoke("database:save", json),
   saveDatabaseMutation: payload => invoke("database:save-mutation", payload),
   saveImport: payload => invoke("database:save-import", payload),

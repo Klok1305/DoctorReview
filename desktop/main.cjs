@@ -11,16 +11,15 @@ const {
 } = require("electron");
 const { ConfigStore, isUnsupportedStoragePath } = require("./services/config-store.cjs");
 const { DatabaseService } = require("./services/database.cjs");
+const { BackgroundTaskQueue } = require("./services/background-task-queue.cjs");
 const { BackupService } = require("./services/backup-service.cjs");
 const { FileService } = require("./services/file-service.cjs");
 const { UpdateService } = require("./services/update-service.cjs");
-const { createStandaloneViewerHtml, createViewerPackage, validateFullViewerExportSelection } = require("./services/viewer-package-service.cjs");
+const { validateFullViewerExportSelection } = require("./services/viewer-package-service.cjs");
 const {
   MOBILE_BUNDLE_EXTENSION,
   MOBILE_PUBLICATION_EXTENSION,
-  createMobilePublicationBundleAsync,
   serializeMobilePublication,
-  serializeMobilePublicationBundle,
 } = require("./services/mobile-publication-service.cjs");
 
 const PDF_SMOKE_TEST = process.argv.includes("--pdf-smoke");
@@ -102,6 +101,9 @@ if (SMOKE_TEST) {
 let mainWindow = null;
 let configStore = null;
 let database = null;
+const databaseWrites = new BackgroundTaskQueue({ maxQueued: 8 });
+const publicationTasks = new BackgroundTaskQueue({ maxQueued: 1 });
+const activePublicationOperations = new Map();
 let backupService = null;
 let fileService = null;
 let updateService = null;
@@ -210,6 +212,7 @@ function sanitizeRichTextHtml(value) {
 async function copyDatabaseToWorkspace(rootPath) {
   const requestedRoot = path.resolve(rootPath);
   if (requestedRoot === path.resolve(configStore.publicConfig().workspaceRoot)) return configStore.markConfigured();
+  await databaseWrites.idle();
   const currentPath = database.databasePath;
   const previousConfig = configStore.snapshot();
   const migrationCopy = path.join(app.getPath("temp"), `doctor-app-workspace-${Date.now()}.sqlite`);
@@ -465,6 +468,16 @@ function createWindow() {
               await new Promise(resolve => setTimeout(resolve, 1200));
               const optionalLibrariesDeferred = typeof XLSX === 'undefined' && typeof JSZip === 'undefined' && typeof html2canvas === 'undefined' && !window.jspdf;
               loadBundledLibrary('lib-xlsx', 'XLSX');
+              const workerBook = XLSX.utils.book_new();
+              XLSX.utils.book_append_sheet(workerBook, XLSX.utils.aoa_to_sheet([
+                ['Период: 01.01.2026 - 31.01.2026'], ['Сотрудник', 'Сумма'], ['Тестов Врач', 42]
+              ]), 'Синтетика');
+              const workerBytes = XLSX.write(workerBook, { bookType: 'xlsx', type: 'array' });
+              let parserTimerFired = false;
+              setTimeout(() => { parserTimerFired = true; }, 0);
+              const workerParsed = await readXlsxRows(new File([workerBytes], 'synthetic.xlsx'));
+              const xlsxWorkerValid = parserTimerFired && workerParsed.rows[2][1] === 42
+                && workerParsed.rows[0][0].includes('Период:');
               DB.doctors = {
                 d1: {
                   name: 'Тестов Косметолог',
@@ -885,6 +898,29 @@ function createWindow() {
               const viewerSnapshotMs = Math.round(performance.now() - viewerSnapshotStarted);
               const viewerDoctorRoot = document.createElement('div');
               viewerDoctorRoot.innerHTML = viewerDoctorHtml;
+              const goldenModel = await createImmutableReportModel(['2026-02'], [{
+                doctorId: 'd1', periodKey: '2026-02', pageType: 'doctor', scopeId: 'd1',
+                title: 'Синтетический врач · февраль', html: viewerDoctorHtml
+              }]);
+              const goldenViewerRoot = document.createElement('div');
+              goldenViewerRoot.innerHTML = goldenModel.pages[0].html;
+              const goldenAdmin = computeMetrics('d1', '2026-02');
+              const goldenMobile = buildMobilePublication('d1').periods.find(period => period.id === '2026-02');
+              const goldenNumbers = Object.fromEntries(goldenMobile.numbers.metrics.map(metric => [metric.id, metric.value]));
+              const goldenDetails = {
+                admin: { patients: goldenAdmin.traffic.patients, visits: goldenAdmin.traffic.visits, sales: goldenAdmin.econ.sales },
+                adminPatientText: document.querySelector('#blkHead .kpi .val')?.textContent.trim(),
+                viewerPatientText: goldenViewerRoot.querySelector('.kpi .val')?.textContent.trim(),
+                pwaPatientText: goldenMobile.headlineMetrics[0].value,
+                mobilePatients: goldenNumbers['traffic.patients'],
+                mobileVisits: goldenNumbers['traffic.visits'],
+                mobileSales: goldenNumbers['economy.sales'],
+              };
+              const crossClientGoldenValid = goldenDetails.admin.patients === 3
+                && goldenDetails.admin.visits === 4 && goldenDetails.admin.sales === 136000
+                && goldenDetails.adminPatientText === '3' && goldenDetails.viewerPatientText === '3'
+                && goldenDetails.pwaPatientText === '3' && goldenDetails.mobilePatients === 3
+                && goldenDetails.mobileVisits === 4 && goldenDetails.mobileSales === 136000;
               const viewerChartImages = [...viewerDoctorRoot.querySelectorAll('img[data-pdf-chart]')];
               await Promise.all(viewerChartImages.map(image => image.decode()));
               const viewerChartsValid = viewerChartImages.length > 0
@@ -997,8 +1033,11 @@ function createWindow() {
                 viewerChartsValid,
                 viewerChartImages: viewerChartImages.length,
                 viewerSnapshotMs,
+                crossClientGoldenValid,
+                goldenDetails,
                 viewerRatingsValid,
                 doctorMetricSettings,
+                xlsxWorkerValid,
                 xlsx: typeof XLSX !== 'undefined',
                 chart: typeof Chart !== 'undefined',
                 desktop: Boolean(window.desktopAPI)
@@ -1321,7 +1360,7 @@ function createWindow() {
         result.rendererErrors = smokeRendererErrors.slice();
         const passed = result.dataPage && result.optionalLibrariesDeferred && result.xlsx && result.chart && result.desktop
           && result.rendererErrors.length === 0
-          && (PDF_SMOKE_TEST || (result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.specializationFocusBlockValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.viewerPatientRegisterValid && result.viewerChartsValid && result.viewerRatingsValid && result.doctorMetricSettings && result.commentWorkflowValid))
+          && (PDF_SMOKE_TEST || (result.xlsxWorkerValid && result.crossClientGoldenValid && result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.specializationFocusBlockValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.viewerPatientRegisterValid && result.viewerChartsValid && result.viewerRatingsValid && result.doctorMetricSettings && result.commentWorkflowValid))
           && (!PDF_SMOKE_TEST || (result.pdfSelectionDialogValid && result.pdfExport && result.pdfExport.saved === 1
             && result.pdfExport.chartImages >= 1 && result.pdfFiles.length === 1));
         result.status = passed ? "passed" : "failed";
@@ -1339,7 +1378,37 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, "..", "index.html"));
 }
 
+function runDatabaseWrite(task, value, importRecords = []) {
+  return databaseWrites.run(task, { databasePath: database.databasePath, value, importRecords });
+}
+
+async function runPublicationTask(event, operationId, task, payload) {
+  const id = String(operationId || "");
+  if (!/^[a-zA-Z0-9-]{8,80}$/.test(id) || activePublicationOperations.has(id)) {
+    throw new Error("Некорректный идентификатор фоновой операции");
+  }
+  const controller = new AbortController();
+  activePublicationOperations.set(id, { controller, senderId: event.sender.id });
+  try {
+    return await publicationTasks.run(task, payload, {
+      signal: controller.signal,
+      onProgress: progress => {
+        if (!event.sender.isDestroyed()) event.sender.send("background:progress", { operationId: id, ...progress });
+      },
+    });
+  } finally {
+    activePublicationOperations.delete(id);
+  }
+}
+
 function registerIpc() {
+  ipcMain.handle("background:cancel", (event, operationId) => {
+    localAdminActor();
+    const operation = activePublicationOperations.get(String(operationId || ""));
+    if (!operation || operation.senderId !== event.sender.id) return false;
+    operation.controller.abort();
+    return true;
+  });
   ipcMain.on("app:renderer-error", (event, payload) => {
     if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return;
     const input = payload && typeof payload === "object" ? payload : {};
@@ -1426,7 +1495,7 @@ function registerIpc() {
       details: { pinVersion: result.version } });
     return result;
   });
-  ipcMain.handle("viewer-publication:export", async (_event, payload) => {
+  ipcMain.handle("viewer-publication:export", async (event, payload) => {
     const session = localAdminActor();
     const input = ensureObject(payload, "публикация Viewer");
     if (!Array.isArray(input.doctors) || !Array.isArray(input.periods)
@@ -1460,9 +1529,7 @@ function registerIpc() {
       reportModel: input.reportModel && typeof input.reportModel === "object" ? input.reportModel : undefined,
       credentials,
     };
-    const created = format === "html"
-      ? await createStandaloneViewerHtml(publication)
-      : await createViewerPackage(publication);
+    const created = await runPublicationTask(event, input.operationId, format === "html" ? "viewer-html" : "viewer-zip", publication);
     const date = new Date().toISOString().slice(0, 10);
     const selected = await dialog.showSaveDialog(mainWindow, {
       title: format === "html" ? "Сохранить автономный Viewer" : "Сохранить ZIP для КлинВект Щербатова Viewer",
@@ -1472,7 +1539,7 @@ function registerIpc() {
         : [{ name: "Пакет отчётов Viewer", extensions: ["zip"] }],
     });
     if (selected.canceled || !selected.filePath) return { canceled: true };
-    fs.writeFileSync(selected.filePath, created.buffer, { flag: "w" });
+    await fs.promises.writeFile(selected.filePath, Buffer.from(created.buffer), { flag: "w" });
     const recorded = database.recordViewerExport({
       packageId: created.manifest.packageId,
       fileName: path.basename(selected.filePath),
@@ -1548,7 +1615,7 @@ function registerIpc() {
     });
     return { canceled: false, path: selected.filePath, periods: publication.periods.length, doctorName };
   });
-  ipcMain.handle("mobile-publication:export-bundle", async (_event, payload) => {
+  ipcMain.handle("mobile-publication:export-bundle", async (event, payload) => {
     const session = localAdminActor();
     const input = ensureObject(payload, "пакет мобильных публикаций");
     if (!Array.isArray(input.publications) || !input.publications.length || input.publications.length > 1000) {
@@ -1567,13 +1634,13 @@ function registerIpc() {
       || doctorIds.some(id => !recipientIds.includes(id))) throw new Error("Некорректные получатели мобильного пакета");
     // PIN and managed departments come only from SQLite, never from renderer-supplied roles.
     const credentials = database.viewerExportCredentials(recipientIds, { requireAdmin: false });
-    const bundle = await createMobilePublicationBundleAsync({
+    const bundle = await runPublicationTask(event, input.operationId, "mobile-bundle", {
       publications: input.publications,
       recipients,
       credentials,
       appVersion: app.getVersion(),
     });
-    const serialized = serializeMobilePublicationBundle(bundle);
+    const serialized = bundle.serialized;
     const date = new Date().toISOString().slice(0, 10);
     const selected = await dialog.showSaveDialog(mainWindow, {
       title: "Сохранить общий пакет для мобильного сервера",
@@ -1581,7 +1648,7 @@ function registerIpc() {
       filters: [{ name: "Пакет мобильных отчётов КлинВект", extensions: [MOBILE_BUNDLE_EXTENSION] }],
     });
     if (selected.canceled || !selected.filePath) return { canceled: true };
-    fs.writeFileSync(selected.filePath, serialized, { encoding: "utf8", flag: "w" });
+    await fs.promises.writeFile(selected.filePath, serialized, { encoding: "utf8", flag: "w" });
     const periods = input.publications.reduce((sum, item) => sum + item.publication.periods.length, 0);
     database.audit({
       actorUserId: session.userId,
@@ -1590,7 +1657,7 @@ function registerIpc() {
       targetId: date,
       details: {
         fileName: path.basename(selected.filePath),
-        doctors: bundle.doctors.length,
+        doctors: bundle.doctors,
         reports: doctorIds.length,
         periods,
         encryptedPerDoctor: true,
@@ -1598,19 +1665,18 @@ function registerIpc() {
         rawExportsIncluded: false,
       },
     });
-    return { canceled: false, path: selected.filePath, doctors: bundle.doctors.length, periods };
+    return { canceled: false, path: selected.filePath, doctors: bundle.doctors, periods };
   });
   ipcMain.handle("database:save", (_event, json) => {
     localAdminActor();
     if (typeof json !== "string" || json.length > 200 * 1024 * 1024) throw new Error("Некорректный размер снимка базы");
-    const snapshot = JSON.parse(json);
-    return database.saveSnapshot(snapshot);
+    return runDatabaseWrite("database-save-snapshot", json);
   });
   ipcMain.handle("database:save-mutation", (_event, payload) => {
     localAdminActor();
     const mutation = ensureObject(payload, "команда изменения базы");
     if (JSON.stringify(mutation).length > 100 * 1024 * 1024) throw new Error("Некорректный размер изменения базы");
-    return database.saveMutation(mutation);
+    return runDatabaseWrite("database-save-mutation", mutation);
   });
   ipcMain.handle("database:save-import", (_event, payload) => {
     localAdminActor();
@@ -1620,10 +1686,10 @@ function registerIpc() {
     if (input.mutation != null) {
       const mutation = ensureObject(input.mutation, "изменение импорта");
       if (JSON.stringify(mutation).length > 100 * 1024 * 1024) throw new Error("Некорректный размер изменения импорта");
-      return database.saveMutation(mutation, input.records);
+      return runDatabaseWrite("database-save-mutation", mutation, input.records);
     }
     if (typeof input.snapshot !== "string" || input.snapshot.length > 200 * 1024 * 1024) throw new Error("Некорректный размер снимка базы");
-    return database.saveSnapshot(JSON.parse(input.snapshot), input.records);
+    return runDatabaseWrite("database-save-snapshot", input.snapshot, input.records);
   });
 
   ipcMain.handle("database:export-json", async (_event, json) => {
@@ -1860,5 +1926,7 @@ if (!gotLock) {
 
 app.on("window-all-closed", () => app.quit());
 app.on("will-quit", () => {
+  publicationTasks.close();
+  databaseWrites.close();
   try { if (database) database.close(); } catch (_) { /* best effort */ }
 });

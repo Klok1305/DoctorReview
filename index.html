@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <link rel="icon" type="image/png" href="resources/app-icon.png">
 <title>КлинВект Щербатова — Администратор</title>
 <style>
@@ -1285,6 +1285,8 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
     <h2 style="margin:0">Профайл специалиста</h2>
     <span class="spacer"></span>
     <button class="btn" id="btnExportAllMobilePublications" title="Создать один PIN-зашифрованный файл со всеми активными врачами для загрузки на сервер Битрикс24">⇩ Все врачи для сервера</button>
+    <button class="btn danger hidden" id="btnCancelMobileExport" type="button">Остановить пакет</button>
+    <span class="small muted" id="mobileExportProgress" role="status"></span>
     <button class="btn" id="btnExportMobilePublication" title="Создать файл с агрегированными метриками выбранного врача без списка пациентов">⇩ В мобильную версию</button>
     <label>Специалист: <select id="docSelect" style="min-width:240px"></select></label>
     <label>Месяц: <select id="docMonth"></select></label>
@@ -1904,6 +1906,7 @@ const APP_VERSION = 4;
 const LS_KEY = "dpi_app_db_v1"; // ключ не меняем — миграция по полю version
 const PORTABLE_JSON_FORMAT = "klinvekt-portable-json";
 const DESKTOP_API = window.desktopAPI || null;
+let bundledXlsxSource = null;
 let DESKTOP_STATE = null;
 let DESKTOP_DATABASE_LOADED = false;
 const desktopSaveQueue = [];
@@ -1915,6 +1918,7 @@ function loadBundledLibrary(id, globalName) {
   if (globalThis[globalName]) return globalThis[globalName];
   const source = document.getElementById(id);
   if (!source) throw new Error(`Bundled library source is missing: ${id}`);
+  if (id === "lib-xlsx") bundledXlsxSource = source.textContent;
   const script = document.createElement("script");
   script.textContent = source.textContent;
   document.head.appendChild(script);
@@ -4680,14 +4684,104 @@ function finalizeFileLog(log) {
   return log;
 }
 
+let xlsxParseWorker = null;
+let xlsxParseActive = null;
+const xlsxParseQueue = [];
+let xlsxParseSequence = 0;
+
+function xlsxParseAbortError() {
+  const error = new Error("Импорт остановлен пользователем");
+  error.name = "AbortError";
+  return error;
+}
+
+function createXlsxParseWorker() {
+  const source = bundledXlsxSource || document.getElementById("lib-xlsx")?.textContent;
+  if (!source) throw new Error("Не найден встроенный парсер XLSX");
+  const code = `${source}\n${fixMojibake.toString()}\nself.onmessage = function(event) {
+    const { id, buffer } = event.data;
+    try {
+      self.postMessage({ id, progress: "read" });
+      const book = XLSX.read(buffer, { type: "array", cellStyles: true });
+      const sheet = book.Sheets[book.SheetNames[0]];
+      if (!sheet) throw new Error("В файле нет листа с данными");
+      self.postMessage({ id, progress: "rows" });
+      const rows = fixMojibake(XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null }));
+      self.postMessage({ id, rows, rowLevels: sheet["!rows"] || null });
+    } catch (error) {
+      self.postMessage({ id, error: error.message || String(error) });
+    }
+  };`;
+  const url = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
+  try { return new Worker(url); }
+  finally { URL.revokeObjectURL(url); }
+}
+
+function pumpXlsxParseQueue() {
+  if (xlsxParseActive || !xlsxParseQueue.length) return;
+  if (!xlsxParseWorker) {
+    try {
+      xlsxParseWorker = createXlsxParseWorker();
+      xlsxParseWorker.onmessage = event => {
+        const message = event.data || {};
+        const job = xlsxParseActive;
+        if (!job || message.id !== job.id) return;
+        if (message.progress) {
+          const progress = document.getElementById("importProgress");
+          if (progress) progress.textContent = `${job.name}: ${message.progress === "read" ? "читаем книгу" : "разбираем строки"}…`;
+          return;
+        }
+        xlsxParseActive = null;
+        if (message.error) job.reject(new Error(message.error));
+        else job.resolve({ rows: message.rows, ws: { "!rows": message.rowLevels } });
+        pumpXlsxParseQueue();
+      };
+      xlsxParseWorker.onerror = event => {
+        const error = new Error(event.message || "Ошибка фонового разбора XLSX");
+        xlsxParseWorker.terminate();
+        xlsxParseWorker = null;
+        if (xlsxParseActive) xlsxParseActive.reject(error);
+        xlsxParseActive = null;
+        for (const job of xlsxParseQueue.splice(0)) job.reject(error);
+      };
+    } catch (error) {
+      for (const job of xlsxParseQueue.splice(0)) job.reject(error);
+      return;
+    }
+  }
+  const job = xlsxParseQueue.shift();
+  xlsxParseActive = job;
+  xlsxParseWorker.postMessage({ id: job.id, buffer: job.buffer }, [job.buffer]);
+}
+
+function cancelXlsxParse() {
+  if (xlsxParseWorker) xlsxParseWorker.terminate();
+  xlsxParseWorker = null;
+  if (xlsxParseActive) xlsxParseActive.reject(xlsxParseAbortError());
+  xlsxParseActive = null;
+  for (const job of xlsxParseQueue.splice(0)) job.reject(xlsxParseAbortError());
+}
+
+async function readXlsxRows(file) {
+  const buffer = await file.arrayBuffer();
+  if (fileImportCancelRequested) throw xlsxParseAbortError();
+  if (typeof Worker !== "function") {
+    loadBundledLibrary("lib-xlsx", "XLSX");
+    const book = XLSX.read(buffer, { type: "array", cellStyles: true });
+    const ws = book.Sheets[book.SheetNames[0]];
+    return { rows: sheetToRows(ws), ws };
+  }
+  if (xlsxParseQueue.length >= 2) throw new Error("Очередь разбора XLSX занята");
+  return new Promise((resolve, reject) => {
+    xlsxParseQueue.push({ id: ++xlsxParseSequence, name: file.name, buffer, resolve, reject });
+    pumpXlsxParseQueue();
+  });
+}
+
 async function processFile(file, options = {}) {
   const log = { name: file.name, type: null, doctor: null, period: null, month: null, status: "ошибка", note: "" };
   try {
-    const buf = await file.arrayBuffer();
-    loadBundledLibrary("lib-xlsx", "XLSX");
-    const wb = XLSX.read(buf, { type: "array", cellStyles: true });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = sheetToRows(ws);
+    const { rows, ws } = await readXlsxRows(file);
     const type = detectReportType(rows);
     if (!type) throw new Error("не удалось распознать тип отчёта 1С");
     log.type = type;
@@ -4787,6 +4881,7 @@ async function processFile(file, options = {}) {
       log.doctor = "все (" + res.perDoc.length + ")";
     }
   } catch (e) {
+    if (e && e.name === "AbortError") throw e;
     log.note = e.message;
     console.error("processFile", file.name, e);
   }
@@ -4888,6 +4983,7 @@ let fileImportCancelRequested = false;
 function cancelFileImport() {
   if (!fileImportInProgress) return;
   fileImportCancelRequested = true;
+  cancelXlsxParse();
   const progress = document.getElementById("importProgress");
   if (progress) progress.textContent = "Останавливаем после текущего файла…";
 }
@@ -4979,7 +5075,9 @@ async function handleFilesBatch(fileList, options = {}) {
     if (progress) progress.textContent = `Обрабатываем ${index + 1} из ${files.length}: ${f.name}`;
     await yieldImportEvents();
     const source = DESKTOP_API ? await ensureDesktopFileSource(f) : null;
-    const saved = await withImportMutation(async () => {
+    let saved;
+    try {
+      saved = await withImportMutation(async () => {
       const before = JSON.parse(JSON.stringify({ doctors: DB.doctors, months: DB.months, fileLog: DB.fileLog }));
       const log = await processFile(f, options);
       if (log.status !== "загружено") {
@@ -4999,6 +5097,7 @@ async function handleFilesBatch(fileList, options = {}) {
         });
       }
       // Фильтр типа не меняет базу и не подтверждает успешную обработку источника.
+      if (progress) progress.textContent = `Сохраняем ${index + 1} из ${files.length}: ${f.name}`;
       const committed = log.skipReason === "filtered-type" || await saveLocal(records);
       if (!committed) {
         DB.doctors = before.doctors;
@@ -5017,7 +5116,14 @@ async function handleFilesBatch(fileList, options = {}) {
       else if (log.status === "пропущено") skipped++;
       else err++;
       return true;
-    });
+      });
+    } catch (error) {
+      if (error && error.name === "AbortError") {
+        unprocessed = files.length - index;
+        break;
+      }
+      throw error;
+    }
     if (!saved) {
       unprocessed = files.length - index - 1;
       break;
@@ -10418,10 +10524,27 @@ async function exportMobilePublication() {
   }
 }
 
+let mobileExportCancelRequested = false;
+let mobileExportOperationId = null;
+
+function cancelMobileExport() {
+  mobileExportCancelRequested = true;
+  if (mobileExportOperationId && DESKTOP_API?.cancelBackgroundOperation) {
+    DESKTOP_API.cancelBackgroundOperation(mobileExportOperationId).catch(console.error);
+  }
+  const progress = document.getElementById("mobileExportProgress");
+  if (progress) progress.textContent = "Останавливаем пакет…";
+}
+
 async function exportAllMobilePublications() {
   const button = document.getElementById("btnExportAllMobilePublications");
+  const cancelButton = document.getElementById("btnCancelMobileExport");
+  const progress = document.getElementById("mobileExportProgress");
+  let unsubscribeProgress = () => {};
   try {
     if (button) button.disabled = true;
+    mobileExportCancelRequested = false;
+    if (cancelButton) cancelButton.classList.remove("hidden");
     if (!DESKTOP_API || !DESKTOP_API.exportMobilePublicationBundle) {
       throw new Error("Пакет для сервера формируется только в установленном Admin");
     }
@@ -10437,23 +10560,39 @@ async function exportAllMobilePublications() {
     const publications = [];
     const recipients = activeDoctorIds.map(doctorId => ({ doctorId, displayName: doctorName(doctorId), department: doctorStructureLabel(doctorId) }));
     let skipped = 0;
-    for (const doctorId of activeDoctorIds) {
+    for (const [index, doctorId] of activeDoctorIds.entries()) {
+      if (mobileExportCancelRequested) throw new DOMException("Операция отменена", "AbortError");
       try {
         publications.push({ doctorId, department: resolvedDepartmentName(doctorId), publication: buildMobilePublication(doctorId, commentsByPeriod) });
       } catch (error) {
         if (/нет рассчитанных периодов/i.test(String(error && error.message))) skipped += 1;
         else throw error;
       }
+      if (progress) progress.textContent = `Подготовлены отчёты: ${index + 1} из ${activeDoctorIds.length}`;
+      await new Promise(resolve => setTimeout(resolve, 0));
     }
     if (!publications.length) throw new Error("У активных врачей пока нет рассчитанных периодов");
-    const result = await DESKTOP_API.exportMobilePublicationBundle({ publications, recipients });
+    if (mobileExportCancelRequested) throw new DOMException("Операция отменена", "AbortError");
+    mobileExportOperationId = crypto.randomUUID();
+    unsubscribeProgress = DESKTOP_API.onBackgroundProgress?.(event => {
+      if (event.operationId !== mobileExportOperationId || !progress) return;
+      const label = event.stage === "reports" ? "Шифруем отчёты" : event.stage === "grants" ? "Выдаём ключи" : "Сохраняем пакет";
+      progress.textContent = `${label}: ${event.completed} из ${event.total}`;
+    }) || (() => {});
+    const result = await DESKTOP_API.exportMobilePublicationBundle({ publications, recipients, operationId: mobileExportOperationId });
     if (!result.canceled) {
       toast(`Общий мобильный пакет сохранён: ${result.doctors} врачей${skipped ? `, без личных показателей: ${skipped}` : ""}`);
     }
   } catch (error) {
-    toast(error.message || "Не удалось сформировать общий мобильный пакет", true);
+    toast(error.name === "AbortError" ? "Формирование мобильного пакета остановлено" : (error.message || "Не удалось сформировать общий мобильный пакет"),
+      error.name !== "AbortError");
   } finally {
+    unsubscribeProgress();
+    mobileExportOperationId = null;
+    mobileExportCancelRequested = false;
     if (button) button.disabled = false;
+    if (cancelButton) cancelButton.classList.add("hidden");
+    if (progress) progress.textContent = "";
   }
 }
 
@@ -11779,7 +11918,19 @@ async function composeViewerDashboardHtml(target, periodKey, context, comments) 
   return `<div class="viewer-dashboard-snapshot" data-source-tab="${esc(target.tab)}">${root.innerHTML}</div>`;
 }
 
+let viewerExportRunning = false;
+let viewerExportCancelRequested = false;
+let viewerExportOperationId = null;
+
 function closeViewerExportDialog() {
+  if (viewerExportRunning) {
+    viewerExportCancelRequested = true;
+    if (viewerExportOperationId && DESKTOP_API?.cancelBackgroundOperation) {
+      DESKTOP_API.cancelBackgroundOperation(viewerExportOperationId).catch(console.error);
+    }
+    document.getElementById("viewerExportStatus").textContent = "Останавливаем публикацию…";
+    return;
+  }
   const dialog = document.getElementById("viewerExportDialog");
   if (dialog && dialog.open) dialog.close();
 }
@@ -11922,8 +12073,10 @@ async function openViewerExportDialog() {
 }
 
 async function exportViewerPackage(format = "html", { allReportDoctors = false } = {}) {
+  if (viewerExportRunning) return;
   const buttons = [document.getElementById("viewerExportStart"), document.getElementById("viewerExportZip"), document.getElementById("viewerExportFullHtml")];
   const errorBox = document.getElementById("viewerExportError");
+  let unsubscribeProgress = () => {};
   const periodKeys = [...document.querySelectorAll("#viewerExportPeriods input:checked")].map(input => input.value);
   const pageTypes = new Set([...document.querySelectorAll("#viewerExportPageTypes input:checked")].map(input => input.value));
   const doctorIds = allReportDoctors
@@ -11956,6 +12109,14 @@ async function exportViewerPackage(format = "html", { allReportDoctors = false }
     return;
   }
   const skippedDoctors = doctorIds.length - eligibleDoctorIds.length;
+  viewerExportRunning = true;
+  viewerExportCancelRequested = false;
+  viewerExportOperationId = crypto.randomUUID();
+  unsubscribeProgress = DESKTOP_API.onBackgroundProgress?.(event => {
+    if (event.operationId !== viewerExportOperationId) return;
+    const label = event.stage === "pages" ? "Шифруем страницы" : event.stage === "grants" ? "Выдаём ключи" : event.stage === "zip" ? "Собираем ZIP" : "Собираем HTML";
+    document.getElementById("viewerExportStatus").textContent = `${label}: ${event.completed} из ${event.total}`;
+  }) || (() => {});
   buttons.forEach(button => { button.disabled = true; });
   errorBox.classList.add("hidden");
   const previousUi = {
@@ -12005,12 +12166,14 @@ async function exportViewerPackage(format = "html", { allReportDoctors = false }
       sum + [...subjectIds].filter(doctorId => doctorHasDashboardData(doctorId, periodKey)).length,
     0);
     for (const periodKey of publicationPeriodKeys) {
+      if (viewerExportCancelRequested) throw new DOMException("Операция отменена", "AbortError");
       if (!DB.months[periodKey]) continue;
       const comments = await DESKTOP_API.listComments({ periodKey });
       const departmentCache = new Map();
       const specializationCache = new Map();
       const periodSubjectIds = [...subjectIds].filter(doctorId => doctorHasDashboardData(doctorId, periodKey));
       for (const doctorId of periodSubjectIds) {
+        if (viewerExportCancelRequested) throw new DOMException("Операция отменена", "AbortError");
         const department = resolvedDepartmentName(doctorId) || "";
         const specialization = resolvedSpecializationName(doctorId) || "";
         if (pageTypes.has("department") && department) {
@@ -12048,25 +12211,34 @@ async function exportViewerPackage(format = "html", { allReportDoctors = false }
       }
     }
     const reportModel = await createImmutableReportModel(publicationPeriodKeys, pages);
+    if (viewerExportCancelRequested) throw new DOMException("Операция отменена", "AbortError");
     const avoided = Math.max(0, reportModel.bindings.length - reportModel.pages.length);
     document.getElementById("viewerExportStatus").textContent = `Модель зафиксирована · ревизия ${reportModel.revision.slice(0, 12)}… · общих страниц ${reportModel.pages.length}${avoided ? ` · исключено копий ${avoided}` : ""}`;
     const result = await DESKTOP_API.exportViewerPackage({
       format, doctors, subjects, periods: publicationPeriodKeys, reportModel: reportModelJsonAdapter(reportModel),
       allReportDoctors,
+      operationId: viewerExportOperationId,
       ...(format === "html" ? { adminPin } : {}),
     });
     if (result.canceled) {
       updateViewerExportStatus();
       return;
     }
+    viewerExportRunning = false;
     closeViewerExportDialog();
     const label = result.format === "html" ? "Автономный HTML создан" : "ZIP создан";
     const skippedSuffix = skippedDoctors ? ` Исключено без доступных страниц: ${skippedDoctors}.` : "";
     toast(`${label}: врачей — ${result.doctors}, периодов — ${result.periods}.${skippedSuffix} SHA-256: ${result.sha256.slice(0, 12)}…`);
   } catch (error) {
-    errorBox.textContent = "Публикация не выполнена: " + error.message;
+    errorBox.textContent = viewerExportCancelRequested || error.name === "AbortError"
+      ? "Публикация остановлена"
+      : "Публикация не выполнена: " + error.message;
     errorBox.classList.remove("hidden");
   } finally {
+    unsubscribeProgress();
+    viewerExportRunning = false;
+    viewerExportCancelRequested = false;
+    viewerExportOperationId = null;
     document.getElementById("viewerExportAdminPin").value = "";
     Object.assign(UI, previousUi);
     switchTab(previousUi.tab);
@@ -13716,6 +13888,7 @@ async function initApp() {
   document.getElementById("docMonth").addEventListener("change", e => { UI.docMonth = e.target.value; renderDoctor(); });
   document.getElementById("docSelect").addEventListener("change", e => { UI.docId = e.target.value; renderDoctor(); });
   document.getElementById("btnExportAllMobilePublications").addEventListener("click", exportAllMobilePublications);
+  document.getElementById("btnCancelMobileExport").addEventListener("click", cancelMobileExport);
   document.getElementById("btnExportMobilePublication").addEventListener("click", exportMobilePublication);
   document.getElementById("repMonth").addEventListener("change", e => { UI.repMonth = e.target.value; });
   document.getElementById("btnExportAllPdf").addEventListener("click", openPdfExportDialog);

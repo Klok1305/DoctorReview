@@ -7,6 +7,7 @@ const APP_VERSION = 4;
 const LS_KEY = "dpi_app_db_v1"; // ключ не меняем — миграция по полю version
 const PORTABLE_JSON_FORMAT = "klinvekt-portable-json";
 const DESKTOP_API = window.desktopAPI || null;
+let bundledXlsxSource = null;
 let DESKTOP_STATE = null;
 let DESKTOP_DATABASE_LOADED = false;
 const desktopSaveQueue = [];
@@ -18,6 +19,7 @@ function loadBundledLibrary(id, globalName) {
   if (globalThis[globalName]) return globalThis[globalName];
   const source = document.getElementById(id);
   if (!source) throw new Error(`Bundled library source is missing: ${id}`);
+  if (id === "lib-xlsx") bundledXlsxSource = source.textContent;
   const script = document.createElement("script");
   script.textContent = source.textContent;
   document.head.appendChild(script);

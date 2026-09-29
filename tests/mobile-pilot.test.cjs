@@ -140,7 +140,8 @@ test("mobile pilot scripts parse and use only bundled relative assets", () => {
   const html = read("mobile-pilot/index.html");
   assert.match(html, /rel="manifest" href="\.\/manifest\.webmanifest"/);
   assert.match(html, /src="\.\/demo-data\.js\?v=10"/);
-  assert.match(html, /src="\.\/app\.js\?v=16"/);
+  assert.match(html, /src="\.\/app\.js\?v=17"/);
+  assert.match(html, /id="cancelBundleButton"/);
   assert.match(html, /href="\.\/app\.css\?v=14"/);
   assert.doesNotMatch(html, /https?:\/\//i);
 
@@ -388,7 +389,7 @@ test("mobile chart typography excludes icon strokes and keeps moderate font weig
     assert.match(rule(selector), /font-weight:\s*500/);
   }
   assert.match(rule(".report-chart h5"), /font-weight:\s*600/);
-  assert.match(read("mobile-pilot/service-worker.js"), /klinvekt-mobile-pilot-v18/);
+  assert.match(read("mobile-pilot/service-worker.js"), /klinvekt-mobile-pilot-v19/);
   assert.match(read("mobile-pilot/service-worker.js"), /app\.css\?v=14/);
 });
 

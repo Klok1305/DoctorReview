@@ -38,6 +38,8 @@
 !/desktop/services/
 /desktop/services/*
 !/desktop/services/*.cjs
+!/desktop/services/background-task-queue.cjs
+!/desktop/services/background-task-worker.cjs
 
 # Отдельный on-demand Viewer без рабочей SQLite.
 !/viewer/
@@ -81,6 +83,8 @@
 !/scripts/*.py
 # Синтетический нагрузочный сценарий включён в исходники и CI.
 !/scripts/benchmark-architecture.cjs
+!/scripts/benchmark-background.cjs
+!/scripts/test-mobile-webkit.cjs
 !/scripts/*.cjs
 !/tests/
 /tests/*

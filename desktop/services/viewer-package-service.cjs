@@ -504,7 +504,7 @@ function ensureEstimatedSize(input, format) {
   return estimate;
 }
 
-async function createViewerPackage(input) {
+async function createViewerPackage(input, onProgress = () => {}) {
   const { appVersion, credentials } = input;
   const estimate = ensureEstimatedSize(input, "zip");
   const { normalizedPeriods, reportModel, doctorMap, subjectMap } = prepareViewerPublication(input);
@@ -521,15 +521,19 @@ async function createViewerPackage(input) {
   };
 
   const pageKeys = new Map();
-  for (const page of reportModel.pages) {
+  onProgress({ stage: "pages", completed: 0, total: reportModel.pages.length });
+  for (const [index, page] of reportModel.pages.entries()) {
     const pageKey = crypto.randomBytes(32);
     pageKeys.set(page.pageId, pageKey.toString("base64"));
     addJson(`pages/${page.pageId}.json`, encryptSharedPage(page, pageKey, {
       packageId,
       reportRevision: reportModel.revision,
     }));
+    onProgress({ stage: "pages", completed: index + 1, total: reportModel.pages.length });
   }
 
+  onProgress({ stage: "grants", completed: 0, total: doctorMap.size });
+  let granted = 0;
   for (const doctor of doctorMap.values()) {
     const prefix = `doctors/${doctor.folderId}`;
     if (!/^\d{4}$/.test(String(doctor.access.pinCode || ""))) throw new Error(`Не настроен PIN Viewer для врача ${doctor.displayName}`);
@@ -560,6 +564,7 @@ async function createViewerPackage(input) {
       bindings,
       pageKeys: Object.fromEntries(permittedPageIds.map(pageId => [pageId, pageKeys.get(pageId)])),
     }, doctor.access.pinCode));
+    onProgress({ stage: "grants", completed: ++granted, total: doctorMap.size });
   }
 
   const manifest = {
@@ -605,7 +610,8 @@ async function createViewerPackage(input) {
     files: fileHashes,
   };
   zip.file("manifest.json", jsonBytes(manifest));
-  const buffer = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
+  const buffer = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } },
+    metadata => onProgress({ stage: "zip", completed: Math.round(metadata.percent), total: 100 }));
   if (buffer.length > MAX_PACKAGE_BYTES) throw new Error("Архив публикации превышает 300 МБ");
   return { buffer, manifest, sha256: sha256(buffer), estimate };
 }
@@ -652,7 +658,7 @@ function jsonForInlineScript(value) {
   return JSON.stringify(value).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
 }
 
-async function createStandaloneViewerHtml(input) {
+async function createStandaloneViewerHtml(input, onProgress = () => {}) {
   const { appVersion, credentials } = input;
   const estimate = ensureEstimatedSize(input, "html");
   const { normalizedPeriods, reportModel, doctorMap, subjectMap } = prepareViewerPublication(input);
@@ -663,12 +669,17 @@ async function createStandaloneViewerHtml(input) {
   const createdAt = new Date().toISOString();
   const encryptedDoctors = [];
   const pageKeys = new Map();
-  const sharedPages = reportModel.pages.map(page => {
+  onProgress({ stage: "pages", completed: 0, total: reportModel.pages.length });
+  const sharedPages = reportModel.pages.map((page, index) => {
     const pageKey = crypto.randomBytes(32);
     pageKeys.set(page.pageId, pageKey.toString("base64"));
-    return encryptSharedPage(page, pageKey, { packageId, reportRevision: reportModel.revision });
+    const encrypted = encryptSharedPage(page, pageKey, { packageId, reportRevision: reportModel.revision });
+    onProgress({ stage: "pages", completed: index + 1, total: reportModel.pages.length });
+    return encrypted;
   });
 
+  onProgress({ stage: "grants", completed: 0, total: doctorMap.size + 1 });
+  let granted = 0;
   for (const doctor of doctorMap.values()) {
     const bindings = allowedBindings(reportModel, doctor.visibleDoctorIds);
     if (!bindings.length) throw new Error(`Для врача ${doctor.displayName} нет выбранных страниц`);
@@ -696,6 +707,7 @@ async function createStandaloneViewerHtml(input) {
       pageTypes: [...new Set(bindings.map(binding => binding.pageType))].sort(),
       ...encrypted,
     });
+    onProgress({ stage: "grants", completed: ++granted, total: doctorMap.size + 1 });
   }
 
   const adminPageIds = [...new Set(reportModel.bindings.map(binding => binding.pageId))];
@@ -715,6 +727,7 @@ async function createStandaloneViewerHtml(input) {
       pageKeys: Object.fromEntries(adminPageIds.map(pageId => [pageId, pageKeys.get(pageId)])),
     }, credentials.admin.pinCode, "admin"),
   };
+  onProgress({ stage: "grants", completed: doctorMap.size + 1, total: doctorMap.size + 1 });
 
   const manifest = {
     format: STANDALONE_FORMAT,
@@ -750,6 +763,7 @@ async function createStandaloneViewerHtml(input) {
     .replace("/*__VIEWER_CSS__*/", standaloneAsset("viewer/viewer.css"))
     .replace("/*__STANDALONE_DATA__*/", jsonForInlineScript(bundle))
     .replace("/*__STANDALONE_APP__*/", standaloneAsset("viewer/standalone-app.js"));
+  onProgress({ stage: "html", completed: 1, total: 1 });
   if (/\/\*__[A-Z0-9_]+__\*\//.test(html)) throw new Error("Не удалось собрать автономный HTML Viewer");
   const buffer = Buffer.from(html, "utf8");
   if (buffer.length > MAX_STANDALONE_BYTES) throw new Error("Автономный HTML Viewer превышает 400 МБ");

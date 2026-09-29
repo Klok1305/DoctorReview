@@ -685,14 +685,104 @@ function finalizeFileLog(log) {
   return log;
 }
 
+let xlsxParseWorker = null;
+let xlsxParseActive = null;
+const xlsxParseQueue = [];
+let xlsxParseSequence = 0;
+
+function xlsxParseAbortError() {
+  const error = new Error("Импорт остановлен пользователем");
+  error.name = "AbortError";
+  return error;
+}
+
+function createXlsxParseWorker() {
+  const source = bundledXlsxSource || document.getElementById("lib-xlsx")?.textContent;
+  if (!source) throw new Error("Не найден встроенный парсер XLSX");
+  const code = `${source}\n${fixMojibake.toString()}\nself.onmessage = function(event) {
+    const { id, buffer } = event.data;
+    try {
+      self.postMessage({ id, progress: "read" });
+      const book = XLSX.read(buffer, { type: "array", cellStyles: true });
+      const sheet = book.Sheets[book.SheetNames[0]];
+      if (!sheet) throw new Error("В файле нет листа с данными");
+      self.postMessage({ id, progress: "rows" });
+      const rows = fixMojibake(XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null }));
+      self.postMessage({ id, rows, rowLevels: sheet["!rows"] || null });
+    } catch (error) {
+      self.postMessage({ id, error: error.message || String(error) });
+    }
+  };`;
+  const url = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
+  try { return new Worker(url); }
+  finally { URL.revokeObjectURL(url); }
+}
+
+function pumpXlsxParseQueue() {
+  if (xlsxParseActive || !xlsxParseQueue.length) return;
+  if (!xlsxParseWorker) {
+    try {
+      xlsxParseWorker = createXlsxParseWorker();
+      xlsxParseWorker.onmessage = event => {
+        const message = event.data || {};
+        const job = xlsxParseActive;
+        if (!job || message.id !== job.id) return;
+        if (message.progress) {
+          const progress = document.getElementById("importProgress");
+          if (progress) progress.textContent = `${job.name}: ${message.progress === "read" ? "читаем книгу" : "разбираем строки"}…`;
+          return;
+        }
+        xlsxParseActive = null;
+        if (message.error) job.reject(new Error(message.error));
+        else job.resolve({ rows: message.rows, ws: { "!rows": message.rowLevels } });
+        pumpXlsxParseQueue();
+      };
+      xlsxParseWorker.onerror = event => {
+        const error = new Error(event.message || "Ошибка фонового разбора XLSX");
+        xlsxParseWorker.terminate();
+        xlsxParseWorker = null;
+        if (xlsxParseActive) xlsxParseActive.reject(error);
+        xlsxParseActive = null;
+        for (const job of xlsxParseQueue.splice(0)) job.reject(error);
+      };
+    } catch (error) {
+      for (const job of xlsxParseQueue.splice(0)) job.reject(error);
+      return;
+    }
+  }
+  const job = xlsxParseQueue.shift();
+  xlsxParseActive = job;
+  xlsxParseWorker.postMessage({ id: job.id, buffer: job.buffer }, [job.buffer]);
+}
+
+function cancelXlsxParse() {
+  if (xlsxParseWorker) xlsxParseWorker.terminate();
+  xlsxParseWorker = null;
+  if (xlsxParseActive) xlsxParseActive.reject(xlsxParseAbortError());
+  xlsxParseActive = null;
+  for (const job of xlsxParseQueue.splice(0)) job.reject(xlsxParseAbortError());
+}
+
+async function readXlsxRows(file) {
+  const buffer = await file.arrayBuffer();
+  if (fileImportCancelRequested) throw xlsxParseAbortError();
+  if (typeof Worker !== "function") {
+    loadBundledLibrary("lib-xlsx", "XLSX");
+    const book = XLSX.read(buffer, { type: "array", cellStyles: true });
+    const ws = book.Sheets[book.SheetNames[0]];
+    return { rows: sheetToRows(ws), ws };
+  }
+  if (xlsxParseQueue.length >= 2) throw new Error("Очередь разбора XLSX занята");
+  return new Promise((resolve, reject) => {
+    xlsxParseQueue.push({ id: ++xlsxParseSequence, name: file.name, buffer, resolve, reject });
+    pumpXlsxParseQueue();
+  });
+}
+
 async function processFile(file, options = {}) {
   const log = { name: file.name, type: null, doctor: null, period: null, month: null, status: "ошибка", note: "" };
   try {
-    const buf = await file.arrayBuffer();
-    loadBundledLibrary("lib-xlsx", "XLSX");
-    const wb = XLSX.read(buf, { type: "array", cellStyles: true });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = sheetToRows(ws);
+    const { rows, ws } = await readXlsxRows(file);
     const type = detectReportType(rows);
     if (!type) throw new Error("не удалось распознать тип отчёта 1С");
     log.type = type;
@@ -792,6 +882,7 @@ async function processFile(file, options = {}) {
       log.doctor = "все (" + res.perDoc.length + ")";
     }
   } catch (e) {
+    if (e && e.name === "AbortError") throw e;
     log.note = e.message;
     console.error("processFile", file.name, e);
   }
@@ -893,6 +984,7 @@ let fileImportCancelRequested = false;
 function cancelFileImport() {
   if (!fileImportInProgress) return;
   fileImportCancelRequested = true;
+  cancelXlsxParse();
   const progress = document.getElementById("importProgress");
   if (progress) progress.textContent = "Останавливаем после текущего файла…";
 }
@@ -984,7 +1076,9 @@ async function handleFilesBatch(fileList, options = {}) {
     if (progress) progress.textContent = `Обрабатываем ${index + 1} из ${files.length}: ${f.name}`;
     await yieldImportEvents();
     const source = DESKTOP_API ? await ensureDesktopFileSource(f) : null;
-    const saved = await withImportMutation(async () => {
+    let saved;
+    try {
+      saved = await withImportMutation(async () => {
       const before = JSON.parse(JSON.stringify({ doctors: DB.doctors, months: DB.months, fileLog: DB.fileLog }));
       const log = await processFile(f, options);
       if (log.status !== "загружено") {
@@ -1004,6 +1098,7 @@ async function handleFilesBatch(fileList, options = {}) {
         });
       }
       // Фильтр типа не меняет базу и не подтверждает успешную обработку источника.
+      if (progress) progress.textContent = `Сохраняем ${index + 1} из ${files.length}: ${f.name}`;
       const committed = log.skipReason === "filtered-type" || await saveLocal(records);
       if (!committed) {
         DB.doctors = before.doctors;
@@ -1022,7 +1117,14 @@ async function handleFilesBatch(fileList, options = {}) {
       else if (log.status === "пропущено") skipped++;
       else err++;
       return true;
-    });
+      });
+    } catch (error) {
+      if (error && error.name === "AbortError") {
+        unprocessed = files.length - index;
+        break;
+      }
+      throw error;
+    }
     if (!saved) {
       unprocessed = files.length - index - 1;
       break;
