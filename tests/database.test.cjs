@@ -22,6 +22,25 @@ function snapshot() {
   };
 }
 
+test("platform review counts survive SQLite and portable JSON with old records left unset", t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-reputation-"));
+  const source = new DatabaseService(path.join(directory, "source.sqlite"));
+  const target = new DatabaseService(path.join(directory, "target.sqlite"));
+  t.after(() => { source.close(); target.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  const data = snapshot();
+  data.version = 4;
+  data.months["2026-01"].manual6.d1 = { prodoctorov: 5, reviews: 2, prodoctorovReviews: 0, napopravkuReviews: 10, doctuReviews: 5, sberhealthReviews: 7 };
+  data.months["2026-02"] = { ...snapshot().months["2026-01"], manual6: { d1: { prodoctorov: 4.5, reviews: 1 } } };
+  source.saveSnapshot(data);
+  const loaded = source.loadSnapshot();
+  assert.deepEqual(loaded.months["2026-01"].manual6.d1, data.months["2026-01"].manual6.d1);
+  const portable = source.createPortableJson();
+  target.restorePortableJson(JSON.parse(JSON.stringify(portable)));
+  const restored = target.loadSnapshot();
+  assert.deepEqual(restored.months["2026-01"].manual6.d1, data.months["2026-01"].manual6.d1);
+  assert.equal(restored.months["2026-02"].manual6.d1.prodoctorovReviews, undefined);
+});
+
 test("SQLite snapshot, import history and verified backup round-trip", async t => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-app-db-"));
   const databasePath = path.join(temp, "data.sqlite");

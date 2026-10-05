@@ -1224,6 +1224,183 @@ test("reputation rating uses SberHealth and ignores legacy Yandex Maps values", 
   assert.equal(result.legacyYandexOnly, null);
 });
 
+test("primary-return import keeps every doctor in flat reports and reads shifted count columns", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    const rows = [
+      ['Врач', 'Не вернулось', 'Количество посещений', 'Первичных пациентов', 'Вернулось', 'Вернулось, %'],
+      ['Тестов Врач Один', 6, 30, 10, 4, 40],
+      ['Тестов Врач Два', 2, 20, 10, 8, 80],
+      ['Тестов Врач Три', 8, 40, 10, 2, 20],
+      ['Тестов Врач Четыре', 4, 15, 10, 6, 60],
+      ['Итого', 20, 105, 40, 20, 50],
+    ];
+    const parsed = parsePervichka(rows, {});
+    const noTotal = parsePervichka(rows.slice(0, -1), {});
+    DB.doctors = {}; DB.months = { '2026-09': emptyMonth() };
+    const month = DB.months['2026-09'];
+    month.pervichka['3'] = { perDoc: {} };
+    parsed.perDoc.forEach((item, index) => {
+      const id = 'd' + index;
+      DB.doctors[id] = { name: item.raw, aliases: [] };
+      month.pervichka['3'].perDoc[id] = { first: item.first, ret: item.ret, notRet: item.notRet, visits: item.visits };
+      month.vyrabotka[id] = { items: [{ form: '', cat: 'Приемы', n: 'Приём', q: 1, sOwn: 100, sRef: 0, goods: false }] };
+    });
+    clearMetricsCache();
+    return { parsed, noTotal: noTotal.perDoc.length, percentages: Object.keys(DB.doctors).map(id => computeMetrics(id, '2026-09').loyalty.pvSlices[3].pct),
+      aggregate: aggregateDeptMonth('2026-09', 'all').loyalty.pvSlices[3].pct };
+  })()`, context);
+  assert.equal(result.parsed.perDoc.length, 4);
+  assert.equal(result.noTotal, 4);
+  assert.equal(result.parsed.checked, true);
+  assert.deepEqual(Array.from(result.percentages), [40, 80, 20, 60]);
+  assert.equal(result.aggregate, 50);
+});
+
+test("primary-return import preserves legacy hierarchical reports and rejects missing counts", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    const row = (name, first, ret, notRet) => { const r = []; r[0] = name; r[6] = 10; r[9] = first; r[11] = ret; r[12] = notRet; return r; };
+    const rows = [['Врач'], ['Клиент'], row('Тестов Врач Один', 2, 1, 1), row('Первичный Пациент', 1, 1, 0), row('Другой Пациент', 1, 0, 1),
+      row('Тестов Врач Два', 1, 0, 1), row('Третий Пациент', 1, 0, 1), row('Итого', 3, 1, 2)];
+    const parsed = parsePervichka(rows, {}, { '!rows': rows.map((r, i) => ({ level: [3, 4, 6].includes(i) ? 1 : 0 })) });
+    DB.doctors = { d1: { name: 'Тестов Врач Один', aliases: [] } }; DB.months = { '2026-09': emptyMonth() };
+    DB.months['2026-09'].pervichka['3'] = { perDoc: { d1: { first: 2, ret: null, notRet: 2 } } };
+    clearMetricsCache();
+    return { names: parsed.perDoc.map(r => r.raw), checked: parsed.checked, pv: computeMetrics('d1', '2026-09').loyalty.pvSlices[3] };
+  })()`, context);
+  assert.deepEqual(Array.from(result.names), ["Тестов Врач Один", "Тестов Врач Два"]);
+  assert.equal(result.checked, true);
+  assert.equal(result.pv.valid, false);
+  assert.equal(result.pv.pct, null);
+});
+
+test("platform review totals preserve zero, missing values and existing vector 6 scores", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Тестов Врач', aliases: [] } }; DB.months = { '2026-09': emptyMonth() };
+    const raw = { prodoctorov: 5, napopravku: 4, doctu: 4.5, sberhealth: 4.5, nps: 70, reviews: 5 };
+    DB.months['2026-09'].vyrabotka.d1 = { items: [{ form: '', cat: 'Приемы', n: 'Приём', q: 1, sOwn: 100, sRef: 0, goods: false }] };
+    DB.months['2026-09'].manual6.d1 = raw;
+    clearMetricsCache();
+    const old = computeMetrics('d1', '2026-09');
+    Object.assign(raw, { prodoctorovReviews: 15, napopravkuReviews: 20, doctuReviews: 0, sberhealthReviews: 7 });
+    clearMetricsCache(); const complete = computeMetrics('d1', '2026-09');
+    delete raw.sberhealthReviews;
+    clearMetricsCache(); const partial = computeMetrics('d1', '2026-09');
+    raw.sberhealthReviews = -1;
+    return { old: old.rep, complete: complete.rep, partial: partial.rep,
+      oldScore: old.scores.vec.v6, newScore: complete.scores.vec.v6, invalid: reputationSummary(raw),
+      aggregate: aggregateDeptMonth('2026-09', 'all').rep.totalReviews };
+  })()`, context);
+  assert.equal(result.old.totalReviews, null);
+  assert.equal(result.complete.totalReviews, 42);
+  assert.equal(result.complete.platforms[2].reviews, 0);
+  assert.equal(result.partial.totalReviews, null);
+  assert.equal(result.partial.knownReviews, 35);
+  assert.equal(result.partial.reviewCoverage.covered, 3);
+  assert.equal(result.aggregate, null);
+  assert.equal(result.invalid.valid, false);
+  assert.equal(result.oldScore, result.newScore);
+});
+
+test("honor board ranks by overall score, shares tied medals and leaves preliminary scores unranked", () => {
+  const context = createContext();
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  vm.runInContext(ui.slice(ui.indexOf("function reputationReviewCountMarkup"), ui.indexOf("function compactBaseTrend")), context);
+  const html = vm.runInContext(`(() => {
+    DB.settings.showScores = true;
+    DB.doctors = { d1: { name: 'Первый' }, d2: { name: 'Второй' }, d3: { name: 'Третий' }, d4: { name: 'Предварительный' } };
+    globalThis.scoreBadge = v => String(v);
+    const rep = reputationSummary({ prodoctorovReviews: 10, napopravkuReviews: 20, doctuReviews: 0, sberhealthReviews: 5 });
+    return reputationReportHtml([
+      { id: 'd1', r: { rep, scores: { total: 80, rankEligible: true } } },
+      { id: 'd2', r: { rep, scores: { total: 90, rankEligible: true } } },
+      { id: 'd3', r: { rep, scores: { total: 90, rankEligible: true } } },
+      { id: 'd4', r: { rep: reputationSummary({ reviews: 1 }), scores: { total: 99, rankEligible: false } } },
+    ], '2026-09', 'Клиника');
+  })()`, context);
+  assert.match(html, /data-doctor-id="d2" data-honor-place="1"/);
+  assert.match(html, /data-doctor-id="d3" data-honor-place="1"/);
+  assert.match(html, /data-doctor-id="d1" data-honor-place="3"/);
+  assert.doesNotMatch(html, /data-doctor-id="d4" data-honor-place/);
+  assert.match(html, /35 шт\./);
+  assert.match(html, /Полностью заполнено у 3 из 4/);
+});
+
+test("separate vector score charts keep one numeric series and do not connect a missing month", () => {
+  const context = createContext();
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  vm.runInContext(ui.slice(ui.indexOf("function scoreAxisBounds"), ui.indexOf("function toggleGroup")), context);
+  const result = vm.runInContext(`(() => {
+    const UI = globalThis.UI = { scoreChartModes: {}, scoreChartSources: {}, showLabels: true };
+    const VEC_LINE_COLORS = globalThis.VEC_LINE_COLORS = { v1: '#aaa', v4: '#bbb' };
+    const configs = globalThis.configs = [];
+    globalThis.chart = (id, config) => configs.push({ id, config });
+    const months = ['2026-01', '2026-02', '2026-03'];
+    const getter = (month, vector) => vector === 'v4' ? ({ '2026-01': 30, '2026-03': 60 }[month] ?? null) : vector === 'v1' ? 80 : null;
+    const rendered = renderScoresChart('v4', months, getter, () => 55, 'v4');
+    const empty = renderScoresChart('v6', months, getter, () => 55, 'v6');
+    renderScoresChart('total', months, getter, () => 55, 'total');
+    return { rendered, empty, configs };
+  })()`, context);
+  assert.equal(result.rendered, true);
+  assert.equal(result.empty, false);
+  assert.equal(result.configs.length, 2);
+  assert.equal(result.configs[0].config.data.datasets.length, 1);
+  assert.equal(result.configs[0].config.data.datasets[0].scoreMode, "v4");
+  assert.deepEqual(Array.from(result.configs[0].config.data.datasets[0].data), [30, null, 60]);
+  assert.equal(result.configs[0].config.data.datasets[0].spanGaps, false);
+  assert.equal(result.configs[1].config.data.datasets[0].scoreMode, "total");
+});
+
+test("reputation form saves four counts and rejects fractions without overwriting the stored month", () => {
+  const context = createContext();
+  const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
+  vm.runInContext(ui.slice(ui.indexOf("function saveManual6()"), ui.indexOf("/* ================= СТРАНИЦА: ОТЧЁТ")), context);
+  const result = vm.runInContext(`(() => {
+    globalThis.UI = { docMonth: '2026-09', docId: 'd1' };
+    const values = { prodoctorov: '5', napopravku: '4.5', doctu: '', sberhealth: '', nps: '', reviews: '2',
+      prodoctorovReviews: '0', napopravkuReviews: '20', doctuReviews: '3', sberhealthReviews: '7' };
+    globalThis.document = { getElementById: id => ({ value: values[id.slice(3)] }) };
+    globalThis.toast = () => {}; globalThis.renderDoctor = () => {};
+    const saved = globalThis.saved = [];
+    globalThis.saveLocal = () => saved.push(JSON.parse(JSON.stringify(DB.months)));
+    saveManual6();
+    const first = DB.months['2026-09'].manual6.d1;
+    values.doctuReviews = '0.5'; saveManual6();
+    return { first, after: DB.months['2026-09'].manual6.d1, saves: saved.length, rep: reputationSummary(first) };
+  })()`, context);
+  assert.equal(result.first.prodoctorovReviews, 0);
+  assert.equal(result.rep.totalReviews, 30);
+  assert.equal(result.first.reviews, 2);
+  assert.equal(result.saves, 1);
+  assert.equal(result.after, result.first);
+});
+
+test("client-base diagnostics identify source defects, group repeated months and keep names out of exported notes", () => {
+  const context = createContext();
+  const result = vm.runInContext(`(() => {
+    const base = partitionClientBase({ clientRows: [
+      { key: 'id:1', name: 'Нет Визитов', v: 0, r: 10, s: 0 },
+      { key: 'id:2', name: 'Нет Давности', v: 4, r: null, s: 0 },
+      { key: 'id:3', name: 'Активный', v: 4, r: 10, s: 0 },
+    ] }, { clientBasePartition: { loyalVisits: 3, activeM: 6, lostM: 12 } });
+    return { seg: base.seg, note: adminClientBaseQualityNote(base),
+      details: adminClientBaseQualityDetailsHtml({ months: ['2026-01', '2026-02'], bases: [base, base] }) };
+  })()`, context);
+  assert.equal(result.seg.active, 1);
+  assert.equal(result.seg.newRisk, 1);
+  assert.equal(result.seg.loyalSleep, 1);
+  assert.match(result.note, /а не ошибка настроек/);
+  assert.doesNotMatch(result.note, /Нет Визитов|Нет Давности/);
+  assert.match(result.details, /class="no-print client-base-quality-details"/);
+  assert.match(result.details, /Январь 2026, Февраль 2026/);
+  assert.equal((result.details.match(/<td>Нет Визитов<\/td>/g) || []).length, 1);
+  assert.match(result.details, /число визитов отсутствует/);
+  assert.match(result.details, /давность визита отсутствует/);
+});
+
 test("interdisciplinary focuses expose assigned and completed counts without changing vector 3 scoring", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {

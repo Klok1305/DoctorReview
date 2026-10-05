@@ -23,6 +23,7 @@ $allowedPatterns = @(
   '^pnpm-lock\.yaml$',
   '^pnpm-workspace\.yaml$',
   '^build/[^/]+\.(js|css|html|ps1)$',
+  '^build/installer\.nsh$',
   '^build/viewer-html-sanitizer\.js$',
   '^desktop/[^/]+\.cjs$',
   '^desktop/services/[^/]+\.cjs$',
@@ -56,7 +57,7 @@ if ($LASTEXITCODE -ne 0) { throw "Could not read the Git file list." }
 
 $problems = [System.Collections.Generic.List[string]]::new()
 $secretPattern = '(?i)(github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----)'
-$textExtensions = @('.cjs', '.css', '.html', '.js', '.json', '.md', '.ps1', '.py', '.webmanifest', '.yaml', '.yml')
+$textExtensions = @('.cjs', '.css', '.html', '.js', '.json', '.md', '.nsh', '.ps1', '.py', '.webmanifest', '.yaml', '.yml')
 
 foreach ($file in $files) {
   if (-not (Test-MatchesAny $file $allowedPatterns)) {

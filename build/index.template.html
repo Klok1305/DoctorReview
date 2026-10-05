@@ -21,11 +21,20 @@
     <button data-tab="settings">⚙️ Настройки</button>
   </nav>
   <div class="header-status" id="headerStatus"></div>
-  <div class="app-version-badge desktop-only hidden" id="headerAppVersion"></div>
+  <div class="header-updates desktop-only hidden">
+    <div class="header-update-actions">
+      <div class="app-version-badge" id="headerAppVersion"></div>
+      <button class="btn mini" id="btnCheckUpdates" type="button">Проверить обновления</button>
+    </div>
+    <div class="small muted header-update-status hidden" id="updateStatus" role="status" aria-live="polite"></div>
+  </div>
 </header>
 <main>
 
 <section id="page-data" class="page">
+  <details class="card page-block" id="dataImportCard" data-page-block="data.import" open>
+    <summary class="page-block-summary"><span class="page-block-title">Загрузка отчётов из 1С</span><span class="collapse-hint" aria-hidden="true"></span></summary>
+    <div class="page-block-body">
   <div class="notice blue">
     Загружайте сюда выгрузки из 1С (.xls / .xlsx) — можно <b>пачкой, папкой или ZIP-архивом</b>, сразу за несколько месяцев.
     Поддерживаются отчёты: <b>выработка</b> и <b>возвращаемость пациентов и КБ</b> (по врачу),
@@ -47,46 +56,89 @@
   <div class="toolbar" style="margin-top:14px">
     <button class="btn primary" id="btnSaveSession" title="Зафиксировать текущее состояние рабочей базы со всеми изменениями этой сессии">💾 Сохранить изменения</button>
     <span class="small muted" id="sessionSaveStatus" role="status" aria-live="polite"></span>
-    <button class="btn" id="btnExport" title="Полная переносимая копия: данные, комментарии, публикации, PIN и настройки Viewer">⇓ Полная копия в JSON</button>
-    <button class="btn" id="btnImport">📂 Импорт данных из JSON</button>
-    <input type="file" id="importInput" accept=".json" class="hidden">
     <button class="btn" id="btnAutosave" title="База будет автоматически записываться в выбранный файл при каждом изменении (Chrome/Edge)">⚡ Автосохранение в файл</button>
     <span class="small muted" id="autosaveStatus"></span>
-    <span class="spacer"></span>
-    <button class="btn danger" id="btnClear">🗑 Очистить базу</button>
   </div>
-  <div class="card desktop-only hidden" id="desktopWorkspaceCard">
+    </div>
+  </details>
+  <details class="card page-block desktop-only hidden" id="desktopWorkspaceCard" data-page-block="data.workspace" open>
+    <summary class="page-block-summary"><span class="page-block-title">Рабочее место</span><span class="collapse-hint" aria-hidden="true"></span></summary>
+    <div class="page-block-body">
     <div class="workspace-head">
       <div>
-        <h2>Рабочее место</h2>
         <div class="small muted" id="desktopAppVersion"></div>
       </div>
       <div class="flex">
         <button class="btn primary" id="btnScanInput">▶ Обработать новые выгрузки</button>
-        <button class="btn" id="btnReprocessAppointments" title="Повторно разобрать старые выгрузки назначений и восстановить группировки 1С">↻ Переобработать назначения</button>
-        <button class="btn" id="btnOpenOutput">📂 Открыть результаты</button>
       </div>
     </div>
-    <div class="workspace-paths">
-      <div class="workspace-path-row"><b>Рабочая папка</b><code id="workspaceRootPath"></code><button class="btn mini" id="btnChooseWorkspace">изменить</button><button class="btn mini" data-open-path="workspace">открыть</button></div>
-      <div class="workspace-path-row"><b>Входящие данные</b><code id="inputDirPath"></code><button class="btn mini" data-choose-folder="input">изменить</button><button class="btn mini" data-open-path="input">открыть</button></div>
-      <div class="workspace-path-row"><b>Результаты</b><code id="outputDirPath"></code><button class="btn mini" data-choose-folder="output">изменить</button><button class="btn mini" data-open-path="output">открыть</button></div>
-      <div class="workspace-path-row"><b>Резервные копии</b><code id="backupDirPath"></code><button class="btn mini" data-choose-folder="backup">изменить</button><button class="btn mini" data-open-path="backup">открыть</button></div>
-      <div class="workspace-path-row"><b>Рабочая база</b><code id="databasePath"></code><span></span><button class="btn mini" data-open-path="database">открыть</button></div>
+    <details class="page-block page-block-nested" id="workspacePathsDetails" data-page-block="data.paths">
+      <summary class="page-block-summary"><span class="page-block-title">Пути к рабочим папкам</span><span class="collapse-hint" aria-hidden="true"></span></summary>
+      <div class="page-block-body">
+      <div class="workspace-paths">
+        <div class="workspace-path-row"><b>Рабочая папка</b><code id="workspaceRootPath"></code><button class="btn mini" id="btnChooseWorkspace">изменить</button><button class="btn mini" data-open-path="workspace">открыть</button></div>
+        <div class="workspace-path-row"><b>Входящие данные</b><code id="inputDirPath"></code><button class="btn mini" data-choose-folder="input">изменить</button><button class="btn mini" data-open-path="input">открыть</button></div>
+        <div class="workspace-path-row"><b>Результаты</b><code id="outputDirPath"></code><button class="btn mini" data-choose-folder="output">изменить</button><button class="btn mini" data-open-path="output">открыть</button></div>
+        <div class="workspace-path-row"><b>Резервные копии</b><code id="backupDirPath"></code><button class="btn mini" data-choose-folder="backup">изменить</button><button class="btn mini" data-open-path="backup">открыть</button></div>
+        <div class="workspace-path-row"><b>Рабочая база</b><code id="databasePath"></code><span></span><button class="btn mini" data-open-path="database">открыть</button></div>
+      </div>
+      </div>
+    </details>
     </div>
+  </details>
+  <details class="card page-block" id="jsonDatabaseCard" data-page-block="data.json" open>
+    <summary class="page-block-summary"><span class="page-block-title">Вся база в JSON</span><span class="collapse-hint" aria-hidden="true"></span></summary>
+    <div class="page-block-body">
+    <p class="small muted">Перенос рабочей базы с данными, комментариями и настройками доступа Viewer.</p>
     <div class="toolbar compact-toolbar">
-      <button class="btn" id="btnBackupNow">🛡 Локальная резервная копия</button>
-      <button class="btn" id="btnExportBackup">⇓ Полная копия для переноса</button>
-      <button class="btn" id="btnRestoreBackup">↺ Восстановить полную копию</button>
-      <span class="spacer"></span>
-      <span class="small muted" id="updateStatus"></span>
-      <button class="btn" id="btnCheckUpdates">Проверить обновления</button>
-      <button class="btn" id="btnInstallUpdate">Установить обновление из файла</button>
+      <button class="btn" id="btnExport" title="Полная переносимая копия: данные, комментарии, публикации, PIN и настройки Viewer">Выгрузка всей базы в JSON</button>
+      <button class="btn" id="btnImport">Загрузка всей базы из JSON</button>
+      <input type="file" id="importInput" accept=".json" class="hidden">
     </div>
-  </div>
-  <div class="card" id="completenessCard"><div id="completeness"></div></div>
-  <div class="card"><h2>Данные в базе</h2><div id="dataSummary"></div></div>
-  <div class="card"><h2>Журнал загрузок</h2><div class="file-log" id="fileLog"></div></div>
+    </div>
+  </details>
+  <details class="card page-block" id="completenessCard" data-page-block="data.completeness" open>
+    <summary class="page-block-summary"><span class="page-block-title">Полнота данных</span><span class="collapse-hint" aria-hidden="true"></span></summary>
+    <div class="page-block-body" id="completeness"></div>
+  </details>
+  <details class="card page-block" data-page-block="data.summary" open>
+    <summary class="page-block-summary"><span class="page-block-title">Данные в базе</span><span class="collapse-hint" aria-hidden="true"></span></summary>
+    <div class="page-block-body" id="dataSummary"></div>
+  </details>
+  <details class="card page-block" data-page-block="data.log" open>
+    <summary class="page-block-summary"><span class="page-block-title">Журнал загрузок</span><span class="collapse-hint" aria-hidden="true"></span></summary>
+    <div class="page-block-body"><div class="file-log" id="fileLog"></div></div>
+  </details>
+  <details class="card page-block" id="databaseToolsDetails" data-page-block="data.tools">
+    <summary class="page-block-summary"><span class="page-block-title">Обслуживание базы и приложения</span><span class="collapse-hint" aria-hidden="true"></span></summary>
+    <div class="page-block-body">
+      <div class="data-tools-section desktop-only hidden">
+        <h3>Повторная обработка исходных выгрузок</h3>
+        <div class="toolbar compact-toolbar">
+          <button class="btn" id="btnReprocessAppointments" title="Повторно разобрать старые выгрузки назначений и восстановить группировки 1С">↻ Переобработать назначения</button>
+          <button class="btn" id="btnReprocessPrimaryReturn" title="Повторно прочитать строки врачей и колонки возвращаемости из исходных файлов 1С">↻ Переобработать первичку</button>
+        </div>
+      </div>
+      <div class="data-tools-section desktop-only hidden">
+        <h3>Резервные копии и восстановление</h3>
+        <div class="toolbar compact-toolbar">
+          <button class="btn" id="btnBackupNow">🛡 Локальная резервная копия</button>
+          <button class="btn" id="btnExportBackup">⇓ Полная копия для переноса</button>
+          <button class="btn" id="btnRestoreBackup">↺ Восстановить полную копию</button>
+        </div>
+      </div>
+      <div class="data-tools-section desktop-only hidden">
+        <h3>Установка обновления вручную</h3>
+        <div class="toolbar compact-toolbar">
+          <button class="btn" id="btnInstallUpdate">Установить обновление из файла</button>
+        </div>
+      </div>
+      <div class="data-tools-section">
+        <h3>Очистка базы</h3>
+        <button class="btn danger" id="btnClear">🗑 Очистить базу</button>
+      </div>
+    </div>
+  </details>
 </section>
 
 <section id="page-department" class="page">
@@ -188,17 +240,17 @@
 
 <section id="page-settings" class="page">
   <h2>Настройки</h2>
-  <div class="card settings-export-card">
-    <div class="settings-export-heading">
-      <div><h2 class="mt0">📤 Экспорт и публикация</h2><p class="small muted">PDF и Viewer формируются из тех же дашбордов, которые показаны на вкладках «Отделение», «Специализации» и «Врач».</p></div>
-      <div class="small muted">Установленная версия: <b id="settingsAppVersion">—</b></div>
-    </div>
+  <details class="card page-block settings-export-card" id="settingsExportCard" data-page-block="settings.export" open>
+    <summary class="page-block-summary"><span class="page-block-title">📤 Экспорт и публикация</span><span class="page-block-meta">Установленная версия: <b id="settingsAppVersion">—</b></span><span class="collapse-hint" aria-hidden="true"></span></summary>
+    <div class="page-block-body settings-export-body">
+    <p class="small muted">PDF и Viewer формируются из тех же дашбордов, которые показаны на вкладках «Отделение», «Специализации» и «Врач».</p>
     <div class="toolbar">
       <label>Период: <select id="repMonth"></select></label>
       <button class="btn primary" id="btnExportAllPdf" title="Выбрать отделения, специализации и врачей для PDF-выгрузки">📁 Выгрузить PDF</button>
       <button class="btn primary" id="btnExportViewerPackage" title="Сформировать один автономный HTML или ZIP для установленного Viewer">⇧ Файл для Viewer</button>
     </div>
-  </div>
+    </div>
+  </details>
   <div id="settingsBody"></div>
 </section>
 

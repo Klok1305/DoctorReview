@@ -111,7 +111,7 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /image\.style\.aspectRatio/);
   assert.match(actual, /async function saveSessionState/);
   assert.match(actual, /Все изменения текущей сессии сохранены/);
-  assert.match(actual, /Полная копия в JSON/);
+  assert.match(actual, /Выгрузка всей базы в JSON/);
   assert.match(actual, /Полная копия для переноса/);
   assert.match(actual, /pdf-chart-image/);
   assert.match(actual, /pdf-continuation-title/);
@@ -1101,7 +1101,7 @@ test("portable JSON uses the authoritative SQLite data and restores auxiliary ta
   const main = fs.readFileSync(path.join(root, "desktop", "main.cjs"), "utf8");
   const database = fs.readFileSync(path.join(root, "desktop", "services", "database.cjs"), "utf8");
 
-  assert.match(template, /Полная копия в JSON/);
+  assert.match(template, /Выгрузка всей базы в JSON/);
   assert.match(template, /комментарии, публикации, PIN и настройки Viewer/);
   assert.match(core, /parsed && parsed\.format === PORTABLE_JSON_FORMAT/);
   assert.match(core, /DESKTOP_API\.importJson\(String\(reader\.result\)\)/);

@@ -427,6 +427,8 @@ function createWindow() {
                 ] } };
               }
               UI.repMonth = '2026-03';
+              for (const mk of Object.keys(DB.months)) DB.months[mk].manual6.d1 = { prodoctorov: 5, napopravku: 4.5, doctu: 4, sberhealth: 4.5, reviews: 5,
+                prodoctorovReviews: 15, napopravkuReviews: 20, doctuReviews: 0, sberhealthReviews: 7 };
               clearMetricsCache();
               openPdfExportDialog();
               const exportDialog = document.getElementById('pdfExportDialog');
@@ -566,6 +568,15 @@ function createWindow() {
                   { n: 'Прочая услуга', a: 3, d: 1, sq: 1, ss: 12000, groupPath: ['Клиника', 'Диагностика', 'Прочие услуги'] }
                 ] } };
               }
+              const primaryFixture = parsePervichka([
+                ['Врач', 'Первичных пациентов', 'Вернулось', 'Не вернулось', 'Количество посещений'],
+                ['Тестов Косметолог', 10, 6, 4, 20], ['Примерова Косметолог', 10, 4, 6, 15],
+                ['Тестов Терапевт', 10, 5, 5, 20], ['Итого', 30, 15, 15, 55]
+              ], {}, {});
+              DB.months['2026-02'].pervichka['3'] = { perDoc: Object.fromEntries(primaryFixture.perDoc.map(row =>
+                [row.raw === 'Тестов Косметолог' ? 'd1' : row.raw === 'Примерова Косметолог' ? 'd3' : 'd2', row])) };
+              DB.months['2026-02'].manual6.d1 = { prodoctorov: 5, napopravku: 4, doctu: 4.5, sberhealth: 4.5, reviews: 5,
+                prodoctorovReviews: 15, napopravkuReviews: 20, doctuReviews: 0, sberhealthReviews: 7 };
               clearMetricsCache();
               UI.departmentMonth = '2026-02';
               UI.departmentFilter = 'all';
@@ -610,6 +621,16 @@ function createWindow() {
                 .find(cell => cell.textContent.includes('Возвращаемость'));
               const specializationPrimaryReturnHeaderValid = Boolean(specializationPrimaryReturnHeader)
                 && specializationPrimaryReturnHeader.innerHTML === 'Возвращаемость<br>первички (3 мес.)';
+              const primaryReturnValuesValid = primaryFixture.perDoc.length === 3
+                && computeMetrics('d1', '2026-02').loyalty.pvSlices[3].pct === 60
+                && computeMetrics('d3', '2026-02').loyalty.pvSlices[3].pct === 40
+                && aggregateDeptMonth('2026-02', 'Косметология').loyalty.pvSlices[3].pct === 50
+                && [...document.querySelectorAll('#tblRating tr')].slice(1).some(row => row.textContent.includes('60%'));
+              const reputationReportsValid = document.querySelectorAll('#deptBody .reputation-report').length === 1
+                && document.querySelectorAll('#deptBody .reputation-honor-person').length === 2
+                && document.querySelector('#deptBody .reputation-report').textContent.includes('42 шт.')
+                && buildDeptReport('2026-02', 'all', 'all').includes('Доска почёта · Клиника')
+                && buildDepartmentReport('2026-02', 'Косметология').includes('42 шт.');
               const heatmapFocusWidths = [...document.querySelectorAll('#tblHeat .heatmap-focus-heading')]
                 .map(cell => Math.round(cell.getBoundingClientRect().width));
               const heatmapCellWidths = [...document.querySelectorAll('#tblHeat tr:nth-child(2) .heat-cell')]
@@ -945,6 +966,18 @@ function createWindow() {
                 && viewerPlatformRatings.some(card => card.textContent.includes('СберЗдоровье'))
                 && !viewerDoctorRoot.querySelector('[id^="m6_"]')
                 && !viewerDoctorRoot.textContent.includes('РЕДАКТИРОВАНИЕ ДАННЫХ РЕПУТАЦИИ');
+              const reviewCountsValid = computeMetrics('d1', '2026-02').rep.totalReviews === 42
+                && viewerPlatformRatings[2]?.textContent.includes('0 шт.')
+                && viewerDoctorRoot.querySelector('[data-vector-key="v6"]').textContent.includes('42 шт.');
+              const vectorHistoryKeys = ['v1', 'v2', 'v3', 'v4', 'v5', 'v6'];
+              const separateVectorChartsValid = vectorHistoryKeys.every(key => {
+                const canvas = document.getElementById('chScore_' + key);
+                const graph = UI.charts['chScore_' + key];
+                return canvas?.closest('.vector-card')?.id === 'blkV' + key[1]
+                  && graph?.data.datasets.length === 1 && graph.data.datasets[0].scoreMode === key
+                  && graph.data.datasets[0].spanGaps === false
+                  && viewerDoctorRoot.querySelector('[data-vector-score-history="' + key + '"] img[data-pdf-chart]');
+              }) && UI.charts.chScores?.data.datasets.length === 1 && UI.charts.chScores.data.datasets[0].scoreMode === 'total';
               const viewerPatientRegisterDetails = {
                 registers: viewerPatientRegisters.length,
                 rows: viewerPatientRows.length,
@@ -979,11 +1012,61 @@ function createWindow() {
               document.getElementById('doctorMetricSettingsCard').scrollIntoView({ block: 'start' });
               await new Promise(resolve => setTimeout(resolve, 200));
               const doctorMetricSettings = profileForDoctor('d1').scoring.benchmarks.revenue === 150000 && !document.getElementById('dm_bm_revenue').disabled;
+              const updateButton = document.getElementById('btnCheckUpdates');
+              const updateMessage = document.getElementById('updateStatus');
+              const originalUpdateStatus = DESKTOP_STATE.update;
+              renderUpdateStatus({ configured: true, state: 'idle', message: 'Обновления ещё не проверялись' });
+              const updateRect = updateButton.getBoundingClientRect();
+              const updateInHeader = Boolean(updateButton.closest('.app-header') && updateMessage.closest('.app-header'))
+                && document.querySelectorAll('#btnCheckUpdates').length === 1
+                && getComputedStyle(updateButton).display !== 'none'
+                && updateRect.top >= 0 && updateRect.right <= window.innerWidth
+                && updateMessage.classList.contains('hidden');
+              renderUpdateStatus({ configured: true, state: 'checking', message: 'Проверяю обновления…' });
+              const updateCheckingVisible = updateButton.disabled && !updateMessage.classList.contains('hidden')
+                && updateMessage.textContent === 'Проверяю обновления…';
+              renderUpdateStatus({ configured: true, state: 'downloading', message: 'Загружено 42%' });
+              const updateProgressVisible = updateButton.disabled && updateMessage.textContent === 'Загружено 42%';
+              renderUpdateStatus({ configured: true, state: 'downloaded', message: 'Версия 3.0.0 готова к установке' });
+              const headerUpdateControlsValid = updateInHeader && updateCheckingVisible && updateProgressVisible
+                && !updateButton.disabled && updateButton.textContent === 'Установить загруженное'
+                && document.getElementById('btnInstallUpdate').closest('#databaseToolsDetails') !== null;
+              renderUpdateStatus(originalUpdateStatus);
+              const exportCard = document.getElementById('settingsExportCard');
+              const exportBody = exportCard.querySelector('.settings-export-body');
+              const exportCopyBottom = exportBody.querySelector('p').getBoundingClientRect().bottom;
+              const exportControlsTop = exportBody.querySelector('.toolbar').getBoundingClientRect().top;
+              const exportSpacingValid = exportControlsTop - exportCopyBottom >= 16;
+              exportCard.querySelector('summary').click();
+              document.querySelector('[data-page-block="settings.staff"] > summary').click();
+              renderSettings();
+              const settingsCollapseRemembered = !document.getElementById('settingsExportCard').open
+                && !document.querySelector('[data-page-block="settings.staff"]').open;
+              switchTab('data');
+              document.getElementById('jsonDatabaseCard').querySelector('summary').click();
+              renderData();
+              const dataCollapseRemembered = !document.getElementById('jsonDatabaseCard').open
+                && !document.getElementById('workspacePathsDetails').open
+                && !document.getElementById('databaseToolsDetails').open;
+              const uniformPageBlocks = [...document.querySelectorAll('#page-data .card, #page-settings .card')]
+                .every(card => card.tagName === 'DETAILS' && card.dataset.pageBlock
+                  && card.querySelector(':scope > .page-block-summary') && card.querySelector(':scope > .page-block-body'));
+              switchTab('settings');
+              const pageBlockCollapseValid = settingsCollapseRemembered && dataCollapseRemembered && uniformPageBlocks
+                && !document.querySelector('[data-page-block="settings.staff"]').open
+                && getComputedStyle(document.getElementById('settingsExportCard').querySelector('.page-block-body')).display === 'none';
+              openDoctorGoalSettings('d1');
+              const doctorGoalBlockOpens = document.getElementById('doctorMetricSettingsCard').open;
+              setPageBlockOpen('settings.export', true); setPageBlockOpen('settings.staff', true); setPageBlockOpen('data.json', true);
               switchTab('doctor');
               await new Promise(resolve => setTimeout(resolve, 200));
               return {
                 title: document.title,
                 dataPage: Boolean(document.getElementById('page-data')),
+                pageBlockCollapseValid,
+                exportSpacingValid,
+                doctorGoalBlockOpens,
+                headerUpdateControlsValid,
                 optionalLibrariesDeferred,
                 departmentPage,
                 departmentCharts,
@@ -991,6 +1074,10 @@ function createWindow() {
                 reportLeaderboardsValid,
                 specializationSummaryValid,
                 specializationPrimaryReturnHeaderValid,
+                primaryReturnValuesValid,
+                reputationReportsValid,
+                reviewCountsValid,
+                separateVectorChartsValid,
                 specializationFocusBlockValid: specializationFocusMatrixValid,
                 specializationFocusMatrixDetails,
                 comparisonHeaders,
@@ -1061,6 +1148,54 @@ function createWindow() {
         const artifactRoot = SMOKE_ARTIFACT_ROOT;
         fs.mkdirSync(artifactRoot, { recursive: true });
         if (!PDF_SMOKE_TEST) {
+          const dataWorkspaceScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            loadBundledLibrary('lib-html2canvas', 'html2canvas');
+            switchTab('data'); window.scrollTo(0, 0);
+            const canvas = await html2canvas(document.getElementById('page-data'), {
+              backgroundColor: '#f4f6fa', scale: 1, logging: false, windowWidth: 1400
+            });
+            return canvas.toDataURL('image/png');
+          })()`);
+          const dataWorkspaceScreenshotPath = path.join(artifactRoot, "data-workspace-smoke.png");
+          fs.writeFileSync(dataWorkspaceScreenshotPath, Buffer.from(dataWorkspaceScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.dataWorkspaceScreenshot = dataWorkspaceScreenshotPath;
+          const headerUpdateScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            const canvas = await html2canvas(document.querySelector('.app-header'), {
+              backgroundColor: '#ffffff', scale: 1, logging: false, windowWidth: 1440
+            });
+            return canvas.toDataURL('image/png');
+          })()`);
+          const headerUpdateScreenshotPath = path.join(artifactRoot, "header-update-smoke.png");
+          fs.writeFileSync(headerUpdateScreenshotPath, Buffer.from(headerUpdateScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.headerUpdateScreenshot = headerUpdateScreenshotPath;
+          await mainWindow.webContents.executeJavaScript(`(() => {
+            document.getElementById('workspacePathsDetails').open = true;
+            document.getElementById('databaseToolsDetails').open = true;
+            document.getElementById('databaseToolsDetails').scrollIntoView({ block: 'start' });
+          })()`);
+          await new Promise(resolve => setTimeout(resolve, 200));
+          const dataToolsScreenshotPath = path.join(artifactRoot, "data-tools-smoke.png");
+          fs.writeFileSync(dataToolsScreenshotPath, (await mainWindow.webContents.capturePage()).toPNG());
+          result.dataToolsScreenshot = dataToolsScreenshotPath;
+          const settingsBlocksScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            switchTab('settings'); window.scrollTo(0, 0);
+            const blocks = [...document.querySelectorAll('#page-settings details[data-page-block]')];
+            const previous = blocks.map(block => [block.dataset.pageBlock, block.open]);
+            blocks.forEach(block => setPageBlockOpen(block.dataset.pageBlock, block.dataset.pageBlock === 'settings.export'));
+            const canvas = await html2canvas(document.getElementById('page-settings'), {
+              backgroundColor: '#f4f6fa', scale: 1, logging: false, windowWidth: 1400
+            });
+            previous.forEach(([key, isOpen]) => setPageBlockOpen(key, isOpen));
+            return canvas.toDataURL('image/png');
+          })()`);
+          const settingsBlocksScreenshotPath = path.join(artifactRoot, "settings-blocks-smoke.png");
+          fs.writeFileSync(settingsBlocksScreenshotPath, Buffer.from(settingsBlocksScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.settingsBlocksScreenshot = settingsBlocksScreenshotPath;
+          await mainWindow.webContents.executeJavaScript(`(() => {
+            document.getElementById('workspacePathsDetails').open = false;
+            document.getElementById('databaseToolsDetails').open = false;
+            switchTab('doctor');
+          })()`);
           const goalsScreenshotPath = path.join(artifactRoot, "doctor-goals-smoke.png");
           const goalsScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
             loadBundledLibrary('lib-html2canvas', 'html2canvas');
@@ -1084,6 +1219,16 @@ function createWindow() {
           if (!clientBaseScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок Вектора 4');
           fs.writeFileSync(clientBaseScreenshotPath, Buffer.from(clientBaseScreenshot.slice('data:image/png;base64,'.length), 'base64'));
           result.clientBaseScreenshot = clientBaseScreenshotPath;
+          const reputationScreenshotPath = path.join(artifactRoot, "reputation-vector-smoke.png");
+          const reputationScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            const element = document.getElementById('blkV6');
+            if (!element) return '';
+            const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.25, logging: false, windowWidth: 1400 });
+            return canvas.toDataURL('image/png');
+          })()`);
+          if (!reputationScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок репутации');
+          fs.writeFileSync(reputationScreenshotPath, Buffer.from(reputationScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.reputationScreenshot = reputationScreenshotPath;
           const appointmentCollapseScreenshotPath = path.join(artifactRoot, "appointment-conversion-collapsed-smoke.png");
           const appointmentCollapseScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
             const element = document.getElementById('blkV3');
@@ -1111,6 +1256,16 @@ function createWindow() {
           if (!leaderboardScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок лидерборда врачей');
           fs.writeFileSync(leaderboardScreenshotPath, Buffer.from(leaderboardScreenshot.slice('data:image/png;base64,'.length), 'base64'));
           result.leaderboardScreenshot = leaderboardScreenshotPath;
+          const honorScreenshotPath = path.join(artifactRoot, "reputation-honor-board-smoke.png");
+          const honorScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            const element = document.querySelector('#deptBody .reputation-honor-board');
+            if (!element) return '';
+            const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.5, logging: false, windowWidth: 1400 });
+            return canvas.toDataURL('image/png');
+          })()`);
+          if (!honorScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок доски почёта');
+          fs.writeFileSync(honorScreenshotPath, Buffer.from(honorScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.honorScreenshot = honorScreenshotPath;
           const specializationRatingScreenshotPath = path.join(artifactRoot, "specialization-rating-summary-smoke.png");
           const specializationRatingScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
             const table = document.getElementById('tblRating');
@@ -1360,6 +1515,8 @@ function createWindow() {
         result.rendererErrors = smokeRendererErrors.slice();
         const passed = result.dataPage && result.optionalLibrariesDeferred && result.xlsx && result.chart && result.desktop
           && result.rendererErrors.length === 0
+          && (PDF_SMOKE_TEST || (result.pageBlockCollapseValid && result.exportSpacingValid && result.doctorGoalBlockOpens && result.headerUpdateControlsValid))
+          && (PDF_SMOKE_TEST || (result.primaryReturnValuesValid && result.reputationReportsValid && result.reviewCountsValid && result.separateVectorChartsValid))
           && (PDF_SMOKE_TEST || (result.xlsxWorkerValid && result.crossClientGoldenValid && result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.specializationFocusBlockValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.viewerPatientRegisterValid && result.viewerChartsValid && result.viewerRatingsValid && result.doctorMetricSettings && result.commentWorkflowValid))
           && (!PDF_SMOKE_TEST || (result.pdfSelectionDialogValid && result.pdfExport && result.pdfExport.saved === 1
             && result.pdfExport.chartImages >= 1 && result.pdfFiles.length === 1));

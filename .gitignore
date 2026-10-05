@@ -30,6 +30,7 @@
 !/build/*.css
 !/build/*.html
 !/build/*.ps1
+!/build/installer.nsh
 
 # Electron и локальные сервисы.
 !/desktop/

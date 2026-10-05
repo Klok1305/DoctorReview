@@ -20,6 +20,7 @@ const UI = {
   staffFilter: "",
   openGroups: {},
   openLists: {},
+  openPageBlocks: {},
   setDoctor: null,
   pvSlice: 3,     // тогл первички: 3/6/12
   nazSlice: 1,    // тогл назначений: 1/3
@@ -102,6 +103,36 @@ function rememberListToggle(key, isOpen) {
   UI.openLists[key] = Boolean(isOpen);
 }
 
+function pageBlockStart(key, title, { id = "", defaultOpen = true, meta = "", nested = false } = {}) {
+  const isOpen = Object.prototype.hasOwnProperty.call(UI.openPageBlocks, key) ? UI.openPageBlocks[key] : defaultOpen;
+  return `<details class="page-block ${nested ? "page-block-nested" : "card"}" data-page-block="${esc(key)}"${id ? ` id="${esc(id)}"` : ""}${isOpen ? " open" : ""}>
+    <summary class="page-block-summary"><span class="page-block-title">${title}</span>${meta ? `<span class="page-block-meta">${meta}</span>` : ""}<span class="collapse-hint" aria-hidden="true"></span></summary>
+    <div class="page-block-body">`;
+}
+
+function rememberPageBlocks(root) {
+  if (!root) return;
+  root.querySelectorAll("details[data-page-block]").forEach(block => {
+    UI.openPageBlocks[block.dataset.pageBlock] = block.open;
+  });
+}
+
+function restorePageBlocks(root) {
+  if (!root) return;
+  root.querySelectorAll("details[data-page-block]").forEach(block => {
+    if (Object.prototype.hasOwnProperty.call(UI.openPageBlocks, block.dataset.pageBlock)) {
+      block.open = UI.openPageBlocks[block.dataset.pageBlock];
+    }
+  });
+}
+
+function setPageBlockOpen(key, isOpen) {
+  UI.openPageBlocks[key] = Boolean(isOpen);
+  document.querySelectorAll("details[data-page-block]").forEach(block => {
+    if (block.dataset.pageBlock === key) block.open = Boolean(isOpen);
+  });
+}
+
 function renderDesktopWorkspace() {
   if (!DESKTOP_API || !DESKTOP_STATE) return;
   const config = DESKTOP_STATE.config;
@@ -149,12 +180,16 @@ function renderReportExportSettings() {
 function renderUpdateStatus(status) {
   if (!DESKTOP_API || !status) return;
   const el = document.getElementById("updateStatus");
-  if (el) el.textContent = status.message || "";
+  if (el) {
+    el.textContent = status.message || "";
+    el.classList.toggle("hidden", !status.message || status.state === "idle" || status.state === "unconfigured");
+  }
   const check = document.getElementById("btnCheckUpdates");
   if (check) {
     check.classList.toggle("hidden", !status.configured);
     check.disabled = status.state === "checking" || status.state === "downloading";
     check.textContent = status.state === "downloaded" ? "Установить загруженное" : "Проверить обновления";
+    check.title = status.message || "";
   }
 }
 
@@ -243,6 +278,35 @@ async function desktopChooseWorkspace() {
     window.location.reload();
   } catch (error) {
     toast("Не удалось изменить рабочую папку: " + error.message, true);
+  }
+}
+
+async function desktopReprocessPrimaryReturn() {
+  const button = document.getElementById("btnReprocessPrimaryReturn");
+  const old = button.textContent;
+  button.disabled = true;
+  button.textContent = "⏳ Ищу исходные файлы…";
+  try {
+    const imported = await DESKTOP_API.listImportedSources("pervichka");
+    const scanned = await DESKTOP_API.scanInputFolder();
+    const bySource = new Map();
+    for (const descriptor of [...(imported.files || []), ...(scanned || [])]) {
+      const key = descriptor.sha256 || String(descriptor.path || "").toLocaleLowerCase("ru-RU");
+      if (key && !bySource.has(key)) bySource.set(key, descriptor);
+    }
+    if (!bySource.size) {
+      toast("Исходные выгрузки первички не найдены. Нажмите «Выбрать файлы» и укажите их вручную.", true);
+      return;
+    }
+    const files = await desktopDescriptorsToFiles([...bySource.values()], true);
+    await handleFiles(files, { onlyType: "pervichka", replaceExisting: true, forceReimport: true,
+      summaryLabel: "Переобработка первички завершена" });
+    if (imported.missing?.length) toast(`Исходные файлы по прежнему адресу не найдены: ${imported.missing.length}. Их можно выбрать вручную.`, true);
+  } catch (error) {
+    toast("Не удалось переобработать первичку: " + error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = old;
   }
 }
 
@@ -431,6 +495,7 @@ async function saveSessionState() {
 }
 
 function renderData() {
+  rememberPageBlocks(document.getElementById("page-data"));
   const asEl = document.getElementById("autosaveStatus");
   if (asEl) asEl.textContent = autosaveStatus || (DESKTOP_API ? "SQLite · автоматическое сохранение" : (window.showSaveFilePicker ? "не подключено" : "недоступно в этом браузере"));
   if (DESKTOP_API) renderDesktopWorkspace();
@@ -481,6 +546,7 @@ function renderData() {
     html += "</table>";
     logEl.innerHTML = html;
   }
+  restorePageBlocks(document.getElementById("page-data"));
 }
 
 /* убрать из базы данные ошибочно загруженного файла (слот записан при загрузке) */
@@ -520,7 +586,6 @@ function renderCompleteness() {
   const slices = Object.keys(m.pervichka).map(Number).sort((a, b) => a - b);
   const mark = ok => ok ? '<span style="color:var(--good)">✓</span>' : '<span style="color:var(--bad)">✗</span>';
   let html = `<div class="toolbar" style="margin-bottom:8px">
-    <h2 style="margin:0">Полнота данных</h2>
     <span class="spacer"></span>
     <label>Месяц: <select id="checkMonthSel">${months.map(k => `<option value="${k}" ${k === mk ? "selected" : ""}>${monthLabel(k)}</option>`).join("")}</select></label>
   </div>
@@ -644,7 +709,7 @@ function renderDepartmentCharts(history, defs) {
 
 function aggregateCoverageHtml(result) {
   if (!result) return "";
-  const labels = { patients: "пациенты за месяц", visits: "визиты за месяц", avgClient: "средний чек пациента", avgClientRef: "чек с перенаправлениями", avgVisit: "средний чек визита", freq: "частота визитов", freq12: "частота за 12 месяцев", schedLoad: "загрузка расписания", schedFact: "фактическая загрузка", ownRec: "собственная запись", courseIdx: "курсовое лечение", crossShare: "доля перенаправлений", expertShare: "доля экспертных услуг" };
+  const labels = { patients: "пациенты за месяц", visits: "визиты за месяц", avgClient: "средний чек пациента", avgClientRef: "чек с перенаправлениями", avgVisit: "средний чек визита", freq: "частота визитов", freq12: "частота за 12 месяцев", schedLoad: "загрузка расписания", schedFact: "фактическая загрузка", ownRec: "собственная запись", courseIdx: "курсовое лечение", crossShare: "доля перенаправлений", expertShare: "доля экспертных услуг", totalReviews: "общее количество отзывов на четырёх площадках" };
   const issues = Object.entries(result.coverage || {}).filter(([, c]) => !c.complete && c.coveredDoctors > 0).map(([key, c]) => {
     const label = labels[key] || (key.startsWith("pv") ? `первичка за ${key.slice(2)} мес.` : key.startsWith("naz") ? `конверсия за ${key.slice(3)} мес.` : key);
     return `${label}: сопоставимые данные у ${c.coveredDoctors} из ${c.expectedDoctors} врачей`;
@@ -724,6 +789,7 @@ function renderDepartment() {
   }
   html += "</table></div></div>";
 
+  html += reputationReportHtml(scoreRows, mk, UI.departmentFilter === "all" ? "Клиника" : scope);
   html += `<div class="grid cols-2"><div class="card"><h2>Выручка за ${year} год <span class="spacer"></span>${copyBtn("copyChart", "chDepartmentRevenue", "график")}</h2><div class="chart-box"><canvas id="chDepartmentRevenue"></canvas></div></div>
     <div class="card"><h2>Возвращаемость, перенаправления и загрузка <span class="spacer"></span>${copyBtn("copyChart", "chDepartmentRates", "график")}</h2><div class="chart-box"><canvas id="chDepartmentRates"></canvas></div></div></div>
     <div class="card"><h2>Клиентская база за ${year} год <span class="spacer"></span>${copyBtn("copyChart", "chDepartmentBase", "график")}</h2><div class="chart-box"><canvas id="chDepartmentBase"></canvas></div></div>`;
@@ -837,6 +903,53 @@ function deptKpiTrend(current, average, mode) {
   const arrow = flat ? "→" : delta > 0 ? "▲" : "▼";
   const value = mode === "pp" ? fmtNum(Math.abs(delta), 1) + " п.п." : fmtPct(Math.abs(delta), 1);
   return `<span class="delta ${cls}" title="Отклонение от среднего по доступным месяцам года">${arrow} ${value}</span>`;
+}
+
+function reputationReviewCountMarkup(rep) {
+  if (rep && rep.totalReviews != null) return `${fmtNum(rep.totalReviews)} шт.`;
+  return `—<span class="small muted reputation-count-note">${rep && rep.knownReviews != null
+    ? `${fmtNum(rep.knownReviews)} шт. по ${rep.reviewCoverage.covered} из 4 площадок`
+    : "количество отзывов не заполнено"}</span>`;
+}
+
+function reputationReportHtml(rows, mk, scopeLabel, { slide = false } = {}) {
+  if (!rows.length) return "";
+  const cardClass = slide ? "card slide" : "card";
+  const complete = rows.filter(item => item.r.rep && item.r.rep.totalReviews != null);
+  const total = complete.length === rows.length ? complete.reduce((sum, item) => sum + item.r.rep.totalReviews, 0) : null;
+  const sorted = [...rows].sort((a, b) => Number(Boolean(b.r.scores?.rankEligible)) - Number(Boolean(a.r.scores?.rankEligible))
+    || (b.r.scores?.total ?? -1) - (a.r.scores?.total ?? -1) || doctorName(a.id).localeCompare(doctorName(b.id), "ru"));
+  let rank = 0, previousScore = null, eligibleIndex = 0;
+  const board = sorted.map(item => {
+    const score = item.r.scores;
+    let place = null;
+    if (score?.rankEligible && score.total != null) {
+      eligibleIndex++;
+      if (score.total !== previousScore) rank = eligibleIndex;
+      place = rank;
+      previousScore = score.total;
+    }
+    const medal = place != null && place <= 3 ? ["🥇", "🥈", "🥉"][place - 1] : "";
+    return `<div class="reputation-honor-person" data-doctor-id="${esc(item.id)}"${place != null ? ` data-honor-place="${place}"` : ""}>
+      <div class="reputation-honor-medal">${medal || (place != null ? `№ ${place}` : "—")}</div>
+      <b>${esc(doctorName(item.id))}</b>
+      <div>Общий балл: <strong>${score?.total != null ? fmtNum(score.total, 0) + " / 100" : "—"}</strong>${score?.total != null && !score.rankEligible ? ' <span class="badge warn">предварительный</span>' : ""}</div>
+      <div>Отзывы на 4 площадках: <strong>${reputationReviewCountMarkup(item.r.rep)}</strong></div>
+    </div>`;
+  }).join("");
+  return `<section class="${cardClass} reputation-report" data-analytics-block-key="reputation">
+    <h2>Репутация · ${esc(scopeLabel)} <span class="small muted">· ${monthLabel(mk)}</span></h2>
+    <div class="kpi"><div class="lbl">Всего отзывов на четырёх площадках</div><div class="val">${total != null ? fmtNum(total) + " шт." : "—"}</div>
+      <div class="sub">${total == null ? `Полностью заполнено у ${complete.length} из ${rows.length} сотрудников. Для отсутствующих значений ноль не подставляется.` : "Сумма отзывов сотрудников на дату выбранного месяца"}</div></div>
+    <div class="reputation-table-scroll"><table class="data"><tr><th>Сотрудник</th>${REPUTATION_PLATFORMS.map(item => `<th class="num">${esc(item.name)}<br><span class="small muted">рейтинг · отзывы</span></th>`).join("")}<th class="num">Всего отзывов</th><th class="num">Средний рейтинг</th><th class="num">NPS</th><th class="num">Новые отзывы за месяц</th>${DB.settings.showScores ? '<th class="num">Общий балл</th>' : ""}</tr>
+      ${sorted.map(item => `<tr><td><b>${esc(doctorName(item.id))}</b></td>${REPUTATION_PLATFORMS.map(platform => {
+        const value = item.r.rep?.platforms.find(p => p.key === platform.key);
+        return `<td class="num">${value?.rating != null ? fmtNum(value.rating, 1) + " ★" : "—"}<br><span class="small muted">${value?.reviews != null ? fmtNum(value.reviews) + " шт." : "—"}</span></td>`;
+      }).join("")}<td class="num">${reputationReviewCountMarkup(item.r.rep)}</td><td class="num">${item.r.rep?.avgRating != null ? fmtNum(item.r.rep.avgRating, 2) + " ★" : "—"}</td><td class="num">${fmtPct(item.r.rep?.nps)}</td><td class="num">${fmtNum(item.r.rep?.reviews)}</td>${DB.settings.showScores ? `<td class="num">${scoreBadge(item.r.scores?.total, item.r.scores?.rankEligible, item.r.scores?.coveragePct)}</td>` : ""}</tr>`).join("")}
+    </table></div></section>
+    ${DB.settings.showScores ? `<section class="${cardClass} reputation-honor-board" data-analytics-block-key="honor-board"><h2>Доска почёта · ${esc(scopeLabel)}</h2>
+      <p class="small muted">Места и медали — по общему баллу врача за ${monthLabel(mk)}. При равном балле место одинаковое. Предварительные оценки не получают место.</p>
+      <div class="reputation-honor-grid">${board}</div></section>` : ""}`;
 }
 
 function compactBaseTrend(current, previous, lowerBetter = false) {
@@ -1023,7 +1136,7 @@ function renderDept() {
     { name: "С перенаправл.", get: x => x.r.econ.revenueWithRef, fmt: fmtMoney },
     { name: "Ср. чек пациента", get: x => x.r.econ.avgClient, fmt: fmtMoney },
     { name: "Загрузка расписания", header: "Загрузка<br>расписания", get: x => x.r.loyalty.sched ? x.r.loyalty.sched.pct : null, fmt: fmtPct },
-    { name: `Возвращаемость первички (${UI.pvSlice} мес.)`, header: `Возвращаемость<br>первички (${UI.pvSlice} мес.)`, get: x => { const pv = x.r.loyalty.pvSlices[UI.pvSlice]; return pv ? pv.pct : null; }, fmt: fmtPct },
+    { name: `Возвращаемость первички (${UI.pvSlice} мес.)`, header: `Возвращаемость<br>первички (${UI.pvSlice} мес.)`, get: x => { const pv = x.r.loyalty.pvSlices[UI.pvSlice]; return pv ? pv.pct : null; }, fmt: fmtPct, note: x => primaryReturnMissingReason(x.r, UI.pvSlice) },
     { name: "Доля выручки от перенаправлений", header: "Доля выручки<br>от перенаправлений", get: x => x.r.cross.crossShare, fmt: fmtPct },
   ];
   for (const cd of colDefs) {
@@ -1036,7 +1149,7 @@ function renderDept() {
     let st = "";
     if (v != null && cd.best != null && v === cd.best) st = "font-weight:700;color:var(--good)";
     else if (v != null && cd.worst != null && v === cd.worst) st = "font-weight:700;color:var(--bad)";
-    return `<td class="num" style="${st}">${v != null ? cd.fmt(v) : "—"}</td>`;
+    return `<td class="num" style="${st}"${v == null && cd.note ? ` title="${esc(cd.note(x))}"` : ""}>${v != null ? cd.fmt(v) : "—"}</td>`;
   };
   html += `<div class="card"><h2>Сводная по специалистам <span class="spacer"></span>${copyBtn("copyTable", "tblRating")}</h2><table class="data" id="tblRating">
     <tr><th>#</th><th>Специалист</th>${showScCol ? '<th class="num">Балл<br><span class="small muted">из 100</span></th>' : ""}${colDefs.map(cd => `<th class="num">${cd.header || esc(cd.name)}</th>`).join("")}</tr>`;
@@ -1047,6 +1160,10 @@ function renderDept() {
       ${colDefs.map(cd => hlCell(cd, x)).join("")}</tr>`;
   });
   html += '</table><p class="small muted">Клик по строке — профайл специалиста. «частично» — загружены не все отчёты.</p></div>';
+  const missingPrimary = rows.filter(x => x.r.loyalty.pvSlices[UI.pvSlice]?.pct == null);
+  if (missingPrimary.length) html += `<details class="card primary-return-diagnostics"><summary>Нет значения первички за ${UI.pvSlice} мес. · ${missingPrimary.length} специалистов</summary>
+    <p class="small muted">Если отчёт загружен, откройте «Данные → Обслуживание базы и приложения» и нажмите «Переобработать первичку». Значение появится после чтения корректной строки врача за выбранный период.</p>
+    ${missingPrimary.map(x => `<div class="small"><b>${esc(doctorName(x.id))}:</b> ${esc(primaryReturnMissingReason(x.r, UI.pvSlice))}</div>`).join("")}</details>`;
 
   // лидерборды
   const lb = (title, getter, fmt) => {
@@ -1139,6 +1256,7 @@ function renderDept() {
   }
 
   /* ---- динамика специализации: точки роста и риска ---- */
+  html += reputationReportHtml(rows, mk, UI.deptFilter === "all" ? "Клиника" : scoreScope);
   const deptDyn = computeDeptDynamics(mk, UI.deptFilter, UI.subFilter);
   if (deptDyn && deptDyn.months.length) {
     const deptScoresHtml = DB.settings.showScores && deptDyn.months.length >= 2
@@ -1239,6 +1357,7 @@ function renderCompare(mk, rows) {
     { name: "Средний рейтинг площадок", fmt: r => r.rep && r.rep.avgRating != null ? fmtNum(r.rep.avgRating, 2) + " ★" : "—", num: r => r.rep ? r.rep.avgRating : null, targetKey: "rating", targetFmt: v => fmtNum(v, 2) + " ★" },
     { name: "NPS", fmt: r => r.rep && r.rep.nps != null ? fmtPct(r.rep.nps) : "—", num: r => r.rep ? r.rep.nps : null, targetKey: "nps", targetFmt: fmtPct },
     { name: "Новые отзывы", fmt: r => r.rep && r.rep.reviews != null ? fmtNum(r.rep.reviews) + " шт." : "—", num: r => r.rep ? r.rep.reviews : null, targetKey: "reviews", targetFmt: v => fmtNum(v) + " шт." },
+    { name: "Всего отзывов на 4 площадках", fmt: r => r.rep?.totalReviews != null ? fmtNum(r.rep.totalReviews) + " шт." : "—", num: r => r.rep?.totalReviews ?? null },
   ];
   if (DB.settings.showScores) {
     rowsDef.unshift({
@@ -1271,7 +1390,8 @@ async function exportDeptXlsx() {
   const header = ["Специалист", "Отделение", "Специализация", "Общий балл", "Статус балла", "Полнота балла, %", "Выручка, ₽", "Выручка с перенаправл., ₽", "Выручка от перенаправлений, ₽", "Ср. чек пациента, ₽", "Ср. чек посещения, ₽",
     "Визиты", "Пациенты", "Частота", "Загрузка расписания, %", "Часы график", "Часы записано",
     `Возвращаемость первички (${UI.pvSlice} мес.), %`, "Собственных записей в 1С, шт", "Собственная запись в 1С, %", "Курсовое, %",
-    "Настройки клиентской базы", "Период базы, мес.", "Общая клиентская база", "Лояльные, чел.", "Лояльные, % от общей клиентской базы", "Активные, чел.", "Активные, % от общей клиентской базы", "Новые, риск, чел.", "Новые, риск, % от общей клиентской базы", "Лояльные, спящие, чел.", "Лояльные, спящие, % от общей клиентской базы", "Потерянные, чел.", "Потерянные, % от общей клиентской базы", "Экспертных позиций", "Конверсия назначений, %", "Доля выручки от перенаправлений, %"];
+    "Настройки клиентской базы", "Период базы, мес.", "Общая клиентская база", "Лояльные, чел.", "Лояльные, % от общей клиентской базы", "Активные, чел.", "Активные, % от общей клиентской базы", "Новые, риск, чел.", "Новые, риск, % от общей клиентской базы", "Лояльные, спящие, чел.", "Лояльные, спящие, % от общей клиентской базы", "Потерянные, чел.", "Потерянные, % от общей клиентской базы", "Экспертных позиций", "Конверсия назначений, %", "Доля выручки от перенаправлений, %",
+    ...REPUTATION_PLATFORMS.flatMap(({ name }) => [`${name}: рейтинг`, `${name}: всего отзывов`]), "Всего отзывов на 4 площадках", "Средний рейтинг площадок", "NPS", "Новые отзывы за месяц"];
   const aoa = [["Сводная по векторам за " + monthLabel(mk)], [], header];
   const num = v => (v == null || isNaN(v)) ? null : Math.round(v * 100) / 100;
   for (const x of rows) {
@@ -1301,6 +1421,10 @@ async function exportDeptXlsx() {
       r.product ? r.product.devicesUsed : null,
       nz && nz.totals.conv != null ? num(nz.totals.conv) : null,
       num(r.cross.crossShare),
+      ...REPUTATION_PLATFORMS.flatMap(({ key }) => {
+        const item = r.rep?.platforms.find(platform => platform.key === key);
+        return [item?.rating ?? null, item?.reviews ?? null];
+      }), r.rep?.totalReviews ?? null, num(r.rep?.avgRating), num(r.rep?.nps), r.rep?.reviews ?? null,
     ]);
   }
   const ws = XLSX.utils.aoa_to_sheet(aoa);
@@ -1389,7 +1513,39 @@ function adminClientBaseQualityNote(base) {
   if (!base) return "";
   const notes = Object.entries(base.provisional).filter(([, count]) => count > 0)
     .map(([group, count]) => `${adminClientBaseGroupLabel(group)} — ${fmtNum(count)} чел.`);
-  return notes.length ? `Нет корректного числа визитов или их давности: ${notes.join("; ")}. Эти пациенты включены предварительно для проверки данных; активность и потеря для них не подтверждены.` : "";
+  return notes.length ? `В исходной «Давности посещений» есть строки без корректного числа визитов или давности: ${notes.join("; ")}. Это качество исходных данных, а не ошибка настроек. Пациенты учтены предварительно; активность и потеря не подтверждены.` : "";
+}
+
+function primaryReturnMissingReason(result, windowMonths) {
+  const item = result.loyalty.pvSlices[windowMonths];
+  if (item?.valid === false) return `Ошибка строки первички: ${item.issue}. Проверьте исходный отчёт и переобработайте файл.`;
+  if (item && item.first === 0) return "В отчёте нет первичных пациентов; процент возвращаемости не определён.";
+  if (item?.pct != null) return "";
+  return result.loyalty.slices.includes(Number(windowMonths))
+    ? `Отчёт за ${windowMonths} мес. загружен, но строка этого врача не найдена. Переобработайте первичку и проверьте ФИО.`
+    : `Нет отчёта первички за ${windowMonths} мес. в выбранном месяце. Проверьте период исходного файла.`;
+}
+
+function adminClientBaseQualityDetailsHtml(series) {
+  const issues = new Map();
+  series.bases.forEach((base, index) => {
+    for (const client of base?.clientRows || []) {
+      if (!client.provisional) continue;
+      const reasons = [];
+      if (!Number.isSafeInteger(client.v) || client.v <= 0) reasons.push("число визитов отсутствует, равно нулю или некорректно");
+      if (!Number.isFinite(client.r) || client.r < 0) reasons.push("давность визита отсутствует или некорректна");
+      const key = JSON.stringify([client.key, client.v, client.r]);
+      if (!issues.has(key)) issues.set(key, { client, reasons, months: [] });
+      issues.get(key).months.push(monthLabel(series.months[index]));
+    }
+  });
+  if (!issues.size) return "";
+  const rows = [...issues.values()];
+  return `<details class="no-print client-base-quality-details"><summary>Проверить исходные строки · ${rows.length}</summary>
+    <p class="small muted">Проверьте этих пациентов в отчёте 1С «Давность посещений» за 36 месяцев. После исправления загрузите файл повторно. Изменение порогов групп не восстановит отсутствующие данные.</p>
+    <div style="overflow-x:auto"><table class="data"><tr><th>Пациент</th><th>Месяцы отчётов</th><th class="num">Визитов</th><th class="num">Дней с визита</th><th>Причина</th></tr>
+      ${rows.slice(0, 250).map(({ client, months, reasons }) => `<tr><td>${esc(client.name)}</td><td>${months.map(esc).join(", ")}</td><td class="num">${fmtNum(client.v)}</td><td class="num">${fmtNum(client.r)}</td><td>${esc(reasons.join("; "))}</td></tr>`).join("")}
+    </table></div>${rows.length > 250 ? '<p class="small muted">Показаны первые 250 строк; полный список доступен в исходных выгрузках.</p>' : ""}</details>`;
 }
 
 function clientBaseProfileDescription(profile, groups = ["loyal", "active", "newRisk", "loyalSleep", "lost"]) {
@@ -2773,6 +2929,13 @@ function scoreChartPicker(canvasId) {
   ).join("")}</div>`;
 }
 
+function doctorVectorScoreChartHtml(vector, dynamics) {
+  if (!DB.settings.showScores || !dynamics || dynamics.months.length < 2) return "";
+  const canvasId = "chScore_" + vector;
+  return `<div class="doctor-vector-score-history" data-vector-score-history="${vector}"><h3 class="small muted">ДИНАМИКА БАЛЛА ВЕКТОРА ${vector[1]} ЗА ${dynamics.months[0].slice(0, 4)} ГОД ${copyBtn("copyChart", canvasId, "PNG")}</h3>
+    <div class="chart-box score-chart"><canvas id="${canvasId}"></canvas></div></div>`;
+}
+
 function syncScoreChartPicker(canvasId, current, available) {
   const picker = document.getElementById(canvasId + "_score_picker");
   if (!picker) return;
@@ -2794,7 +2957,7 @@ function setScoreChartMode(canvasId, mode) {
 }
 
 /* График баллов векторов по месяцам: общий вид или выбранная отдельная серия. */
-function renderScoresChart(canvasId, months, vecGetter, totalGetter) {
+function renderScoresChart(canvasId, months, vecGetter, totalGetter, fixedMode = null) {
   UI.scoreChartSources[canvasId] = { months, vecGetter, totalGetter };
   const allDatasets = [];
   const available = new Set();
@@ -2806,7 +2969,7 @@ function renderScoresChart(canvasId, months, vecGetter, totalGetter) {
       scoreMode: vk,
       label: "В" + vk[1] + " " + VECTOR_META[vk].name,
       data, borderColor: VEC_LINE_COLORS[vk], backgroundColor: VEC_LINE_COLORS[vk],
-      borderWidth: 2.2, pointRadius: 3.5, spanGaps: true, tension: 0.25,
+      borderWidth: 2.2, pointRadius: 3.5, spanGaps: false, tension: 0.25,
     });
   }
   const totalData = months.map(totalGetter);
@@ -2816,11 +2979,12 @@ function renderScoresChart(canvasId, months, vecGetter, totalGetter) {
       scoreMode: "total",
       label: "Общий балл", data: totalData,
       borderColor: "#1c2333", backgroundColor: "#1c2333",
-      borderWidth: 3.5, pointRadius: 4, spanGaps: true, tension: 0.25,
+      borderWidth: 3.5, pointRadius: 4, spanGaps: false, tension: 0.25,
     });
   }
   if (!allDatasets.length) return false;
-  let mode = UI.scoreChartModes[canvasId] || "all";
+  if (fixedMode && !available.has(fixedMode)) return false;
+  let mode = fixedMode || UI.scoreChartModes[canvasId] || "all";
   if (mode !== "all" && !available.has(mode)) mode = "all";
   UI.scoreChartModes[canvasId] = mode;
   const datasets = mode === "all" ? allDatasets : allDatasets.filter(dataset => dataset.scoreMode === mode);
@@ -3511,12 +3675,10 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
     const item = loyalty.pvSlices[windowMonths];
     return item ? [`${windowMonths} мес.`, fmtNum(item.first), fmtNum(item.ret), fmtNum(item.notRet), fmtPct(item.pct)] : null;
   }).filter(Boolean);
-  const platformRows = [
-    ["ПроДокторов", manualReputation.prodoctorov],
-    ["НаПоправку", manualReputation.napopravku],
-    ["DocTu", manualReputation.doctu],
-    ["СберЗдоровье", manualReputation.sberhealth],
-  ].map(([name, value]) => [name, Number.isFinite(value) ? `${fmtNum(value, 1)} ★` : "—"]);
+  const platformRows = REPUTATION_PLATFORMS.map(({ key, name }) => {
+    const item = reputation.platforms?.find(platform => platform.key === key);
+    return [name, item?.rating != null ? `${fmtNum(item.rating, 1)} ★` : "—", item?.reviews != null ? `${fmtNum(item.reviews)} шт.` : "—"];
+  });
 
   const vectors = [
     {
@@ -3611,9 +3773,10 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
             mobilePublicationMetric("Средний рейтинг площадок", Number.isFinite(reputation.avgRating) ? `${fmtNum(reputation.avgRating, 2)} ★` : "—", "среднее по заполненным площадкам", benchmarkTarget("rating") != null ? `цель ≥ ${fmtNum(benchmarkTarget("rating"), 2)} ★` : "", mobilePublicationState(reputation.avgRating, benchmarkTarget("rating"))),
             mobilePublicationMetric("NPS", fmtPct(reputation.nps), "индекс готовности рекомендовать", benchmarkTarget("nps") != null ? `цель ≥ ${fmtPct(benchmarkTarget("nps"))}` : "", mobilePublicationState(reputation.nps, benchmarkTarget("nps"))),
             mobilePublicationMetric("Новые отзывы", Number.isFinite(reputation.reviews) ? `${fmtNum(reputation.reviews)} шт.` : "—", "за выбранный месяц", benchmarkTarget("reviews") != null ? `цель ≥ ${fmtNum(benchmarkTarget("reviews"))} шт.` : "", mobilePublicationState(reputation.reviews, benchmarkTarget("reviews"))),
+            mobilePublicationMetric("Всего отзывов на 4 площадках", reputation.totalReviews != null ? `${fmtNum(reputation.totalReviews)} шт.` : "—", reputation.totalReviews != null ? "накопленное количество на дату выбранного месяца" : reputation.knownReviews != null ? `${fmtNum(reputation.knownReviews)} шт. по ${reputation.reviewCoverage.covered} из 4 площадок; итог неполный` : "количество отзывов не заполнено"),
           ],
         },
-        { title: "Рейтинги по площадкам", columns: ["Площадка", "Рейтинг"], rows: platformRows },
+        { title: "Рейтинги по площадкам", columns: ["Площадка", "Рейтинг", "Количество отзывов"], rows: platformRows },
       ],
     },
   ];
@@ -3648,6 +3811,7 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
     [rr => rr.rep?.avgRating ?? null, "absolute", value => `${fmtNum(value, 2)} ★`, 2, " балла"],
     [rr => rr.rep?.nps ?? null, "pp", fmtPct],
     [rr => rr.rep?.reviews ?? null, "absolute", value => `${fmtNum(value)} шт.`, 0, " шт."],
+    [rr => rr.rep?.totalReviews ?? null, "absolute", value => `${fmtNum(value)} шт.`, 0, " шт."],
   ];
   vectors[5].sections[0].metrics = vectors[5].sections[0].metrics.map((metric, index) => withHistory(metric, ...reputationHistory[index]));
   return {
@@ -4392,7 +4556,9 @@ function renderDoctor() {
     <p class="small muted">Настройки → Нормативы специализации → Четыре группы базы за 3 года. Число визитов берётся за все 36 месяцев; давность — от даты отчёта, а не от сегодняшнего дня.</p>
     <div class="chart-box" style="height:${Math.max(260, adminYearMonths(mk).length * 48 + 85)}px"><canvas id="chSegments"></canvas></div>
     ${kbSeries.bases.some(base => !base) ? `<p class="small muted">Нет выгрузки за 36 месяцев: ${esc(kbSeries.months.filter((_month, index) => !kbSeries.bases[index]).map(monthLabel).join(", "))}. Эти месяцы оставлены пустыми.</p>` : ""}
-    ${kbQualityNotes.length ? `<div class="notice blue">${kbQualityNotes.map(esc).join("<br>")}</div>` : ""}</div></div>`;
+    ${kbQualityNotes.length ? `<div class="notice blue"><b>Есть строки для проверки в 1С.</b> В исходных выгрузках отсутствует корректное число визитов или давность. Это качество исходных данных, а не ошибка настроек. Такие пациенты учтены предварительно; активность и потеря не подтверждены.
+      <div class="small">Месяцы: ${esc(kbSeries.months.filter((_month, index) => kbSeries.bases[index] && Object.values(kbSeries.bases[index].provisional).some(count => count > 0)).map(monthLabel).join(", "))}</div></div>` : ""}
+    ${adminClientBaseQualityDetailsHtml(kbSeries)}</div></div>`;
 
   /* ---- В5 Лояльность ---- */
   const L = r.loyalty;
@@ -4430,28 +4596,24 @@ function renderDoctor() {
   const npsDyn = doctorMetricDynamics(UI.docId, mk, rr => rr.rep ? rr.rep.nps : null);
   const reviewsDyn = doctorMetricDynamics(UI.docId, mk, rr => rr.rep ? rr.rep.reviews : null);
   const inp = (id, val, step, max, min = 0) => `<input type="number" id="m6_${id}" value="${val != null ? val : ""}" min="${min}" ${max != null ? `max="${max}"` : ""} step="${step}" style="width:90px">`;
-  const platformRatings = [
-    ["ПроДокторов", man6.prodoctorov],
-    ["НаПоправку", man6.napopravku],
-    ["DocTu", man6.doctu],
-    ["СберЗдоровье", man6.sberhealth],
-  ];
-  html += `<div class="card vector-card" id="blkV6" style="border-top-color:${VECTOR_META.v6.color}">
+  const platformRatings = REPUTATION_PLATFORMS.map(platform => ({ ...platform,
+    rating: r.rep?.platforms.find(item => item.key === platform.key)?.rating ?? null,
+    reviews: r.rep?.platforms.find(item => item.key === platform.key)?.reviews ?? null,
+  }));
+  html += `<div class="card vector-card" id="blkV6" data-vector-key="v6" style="border-top-color:${VECTOR_META.v6.color}">
     <div class="vhead"><h3 class="mt0">Вектор 6. Репутация и NPS <span class="badge ${VECTOR_META.v6.cls}">${VECTOR_META.v6.tag}</span></h3>
     <span>${vecBadge("v6", r, docProfile)} ${blockBtn("blkV6")} ${r.rep && r.rep.avgRating != null ? `<span class="vscore">${fmtNum(r.rep.avgRating, 2)} ★</span>` : ""}</span></div>
     <div class="metric-highlights">
       ${metricHighlight("Средний рейтинг площадок", ratingValue != null ? fmtNum(ratingValue, 2) + " ★" : "—", "среднее по заполненным площадкам", trackedMetricState(ratingValue, B6.rating), metricGoalText(B6.rating, v => fmtNum(v, 2) + " ★"), metricHistoryMarkup(ratingValue, ratingDyn, "absolute", " балла", 2, v => fmtNum(v, 2) + " ★"))}
       ${metricHighlight("NPS", fmtPct(npsValue), "индекс готовности рекомендовать", trackedMetricState(npsValue, B6.nps), metricGoalText(B6.nps, fmtPct), metricHistoryMarkup(npsValue, npsDyn, "pp", "", 1, fmtPct))}
       ${metricHighlight("Новые отзывы", reviewsValue != null ? fmtNum(reviewsValue) + " шт." : "—", "новые отзывы за выбранный месяц", trackedMetricState(reviewsValue, B6.reviews), metricGoalText(B6.reviews, v => fmtNum(v) + " шт."), metricHistoryMarkup(reviewsValue, reviewsDyn, "absolute", " шт.", 0, v => fmtNum(v) + " шт."))}
+      ${metricHighlight("Всего отзывов на 4 площадках", reputationReviewCountMarkup(r.rep), "накопленное количество на дату выбранного месяца", "", "", "")}
     </div>
     <h3 class="section-title" style="margin:4px 0 8px">РЕЙТИНГИ ПО ПЛОЩАДКАМ</h3>
-    <div class="rating-platform-grid">${platformRatings.map(([name, value]) => `<div class="rating-platform-card"><span>${esc(name)}</span><strong>${value != null ? `${fmtNum(value, 1)} ★` : "—"}</strong></div>`).join("")}</div>
+    <div class="rating-platform-grid">${platformRatings.map(({ name, rating, reviews }) => `<div class="rating-platform-card"><div class="rating-platform-heading"><span>${esc(name)}</span><strong>${rating != null ? `${fmtNum(rating, 1)} ★` : "—"}</strong></div><div class="rating-platform-count"><span>Количество отзывов</span><strong>${reviews != null ? fmtNum(reviews) + " шт." : "—"}</strong></div></div>`).join("")}</div>
     <h3 class="section-title no-print" style="margin:12px 0 8px">РЕДАКТИРОВАНИЕ ДАННЫХ РЕПУТАЦИИ</h3>
     <div class="flex no-print" style="margin-top:8px">
-      <label class="fld"><span>ПроДокторов (0–5)</span>${inp("prodoctorov", man6.prodoctorov, "0.1", 5)}</label>
-      <label class="fld"><span>НаПоправку (0–5)</span>${inp("napopravku", man6.napopravku, "0.1", 5)}</label>
-      <label class="fld"><span>DocTu (0–5)</span>${inp("doctu", man6.doctu, "0.1", 5)}</label>
-      <label class="fld"><span>СберЗдоровье (0–5)</span>${inp("sberhealth", man6.sberhealth, "0.1", 5)}</label>
+      ${REPUTATION_PLATFORMS.map(({ key, name }) => `<div class="reputation-platform-editor"><b>${esc(name)}</b><label class="fld"><span>Рейтинг (0–5)</span>${inp(key, man6[key], "0.1", 5)}</label><label class="fld"><span>Всего отзывов</span>${inp(key + "Reviews", man6[key + "Reviews"], "1")}</label></div>`).join("")}
       <label class="fld"><span>NPS (−100…100)</span>${inp("nps", man6.nps, "1", 100, -100)}</label>
       <label class="fld"><span>Новых отзывов</span>${inp("reviews", man6.reviews, "1")}</label>
       <button class="btn primary" onclick="saveManual6()">Сохранить</button>
@@ -4470,8 +4632,7 @@ function renderDoctor() {
   const docDynamicsNoteKey = `doctor|${mk}|${UI.docId}`;
   if (docDyn && docDyn.months.length) {
     const doctorScoresHtml = DB.settings.showScores && docDyn.months.length >= 2
-      ? `<div id="chScoresWrap"><h3 class="small muted" style="margin:14px 0 6px">БАЛЛЫ ПО ВЕКТОРАМ ПО МЕСЯЦАМ ${copyBtn("copyChart", "chScores", "PNG")}</h3>
-        ${scoreChartPicker("chScores")}
+      ? `<div id="chScoresWrap"><h3 class="small muted" style="margin:14px 0 6px">ОБЩИЙ БАЛЛ ПО МЕСЯЦАМ ${copyBtn("copyChart", "chScores", "PNG")}</h3>
         <div class="chart-box score-chart"><canvas id="chScores"></canvas></div></div>`
       : "";
     html += dynamicsHtml(docDyn, "blkDyn", "Динамика показателей по месяцам",
@@ -4500,6 +4661,19 @@ function renderDoctor() {
   body.innerHTML = html;
 
   /* -------- графики -------- */
+  if (docDyn && DB.settings.showScores && docDyn.months.length >= 2) {
+    for (const vector of ["v1", "v2", "v3", "v4", "v5", "v6"]) {
+      const block = document.getElementById("blkV" + vector[1]);
+      block.insertAdjacentHTML("beforeend", doctorVectorScoreChartHtml(vector, docDyn));
+      const rendered = renderScoresChart("chScore_" + vector, docDyn.months,
+        (k, key) => {
+          const rr = docDyn.results[k];
+          return key === "v3" && scoreNazSlice != null && rr?.scores?.v3ByNaz
+            ? rr.scores.v3ByNaz[scoreNazSlice] ?? null : rr?.scores?.vec[key] ?? null;
+        }, () => null, vector);
+      if (!rendered) block.querySelector(".doctor-vector-score-history")?.remove();
+    }
+  }
   const vy = r.extras.vy;
   if (vy && vy.ownSum > 0 && r.product) {
     const chartGroups = [...Object.keys(docProfile.groups)];
@@ -4729,12 +4903,12 @@ function renderDoctor() {
     },
   });
   // графики динамики + баллы по векторам
-  if (docDyn.months.length >= 2) {
+  if (docDyn && docDyn.months.length >= 2) {
     renderDynCharts(docDyn, "blkDyn");
     if (DB.settings.showScores) {
       const rendered = renderScoresChart("chScores", docDyn.months,
         (k, vk) => { const rr = docDyn.results[k]; return rr && rr.scores ? rr.scores.vec[vk] : null; },
-        k => { const rr = docDyn.results[k]; return rr && rr.scores ? rr.scores.total : null; });
+        k => { const rr = docDyn.results[k]; return rr && rr.scores ? rr.scores.total : null; }, "total");
       if (!rendered) document.getElementById("chScoresWrap")?.remove();
     }
   }
@@ -4745,13 +4919,16 @@ function saveManual6() {
   if (!mk || !id) return;
   const val = k => {
     const el = document.getElementById("m6_" + k);
-    const v = parseFloat(el.value);
-    return isNaN(v) ? null : v;
+    if (el.validity?.badInput) return NaN;
+    return el.value.trim() === "" ? null : Number(el.value);
   };
   const rec = { prodoctorov: val("prodoctorov"), napopravku: val("napopravku"), doctu: val("doctu"), sberhealth: val("sberhealth"), nps: val("nps"), reviews: val("reviews") };
+  for (const { key } of REPUTATION_PLATFORMS) rec[key + "Reviews"] = val(key + "Reviews");
   const ratings = [rec.prodoctorov, rec.napopravku, rec.doctu, rec.sberhealth].filter(v => v != null);
-  if (ratings.some(v => v < 0 || v > 5) || (rec.nps != null && (rec.nps < -100 || rec.nps > 100)) || (rec.reviews != null && rec.reviews < 0)) {
-    toast("Проверьте диапазоны: рейтинги 0–5, NPS −100…100, отзывы ≥ 0", true);
+  const counts = [rec.reviews, ...REPUTATION_PLATFORMS.map(({ key }) => rec[key + "Reviews"])].filter(v => v != null);
+  if (Object.values(rec).some(v => v != null && !Number.isFinite(v)) || ratings.some(v => v < 0 || v > 5)
+    || (rec.nps != null && (rec.nps < -100 || rec.nps > 100)) || counts.some(v => !Number.isSafeInteger(v) || v < 0)) {
+    toast("Проверьте диапазоны: рейтинги 0–5, NPS −100…100, отзывы — целое число ≥ 0", true);
     return;
   }
   const empty = Object.values(rec).every(v => v == null);
@@ -4940,6 +5117,7 @@ function buildDepartmentReport(mk, departmentName) {
     }).join("")}
   </table></div>`;
   html += `<div class="card slide" data-analytics-block-key="performance"><h2>Результативность врачей отделения</h2>${doctorScoreLeaderboardHtml(rows, mk, departmentName) || '<p class="muted">Баллы недоступны.</p>'}</div>`;
+  html += reputationReportHtml(rows, mk, departmentName === "all" ? "Клиника" : departmentName, { slide: true });
   return html;
 }
 
@@ -5545,6 +5723,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
   html += "</table></div>";
 
   /* Слайд 2: баллы по векторам */
+  html += reputationReportHtml(rows, mk, deptFilter === "all" ? "Клиника" : deptFilter, { slide: true });
   if (showSc) {
     html += `<div class="card slide" data-analytics-block-key="vector-scores"><h2>Баллы по векторам · ${sub}</h2>
       <table class="data"><tr><th>Специалист</th>${["v1", "v2", "v3", "v4", "v5", "v6"].map(vk => `<th class="num" title="${VECTOR_META[vk].name}">В${vk[1]}</th>`).join("")}<th class="num">Общий</th></tr>`;
@@ -5883,9 +6062,8 @@ function dropDoctorOnStructure(event, departmentName, specializationName = "") {
 function openDoctorGoalSettings(doctorId) {
   if (!doctorId || !DB.doctors[doctorId]) return;
   UI.setDoctor = doctorId;
-  if (!UI.setOpen) UI.setOpen = {};
-  UI.setOpen.doctor = true;
   renderSettings();
+  setPageBlockOpen("settings.doctor", true);
   requestAnimationFrame(() => {
     const card = document.getElementById("doctorMetricSettingsCard");
     if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -5939,9 +6117,8 @@ function viewerAccessSettingsHtml() {
         <div class="small muted">версия ${item.pinVersion}</div></td>
       <td><button class="btn mini" type="button" onclick="saveViewerDoctorAccess(this)">Сохранить</button></td></tr>`;
   }).join("");
-  return `<div class="card" id="viewerAccessSettingsCard"><div class="vhead"><div><h2 class="mt0">👁 Публикация в Viewer</h2>
-      <p class="small muted">Viewer не получает рабочую SQLite. Он открывает только ZIP с проверкой SHA-256, готовыми страницами и комментариями.</p></div>
-      <span class="badge ${VIEWER_ACCESS.adminPinConfigured ? "good" : "warn"}">${VIEWER_ACCESS.adminPinConfigured ? `Admin PIN настроен · v${VIEWER_ACCESS.adminPinVersion}` : "Admin PIN не задан"}</span></div>
+  return `${pageBlockStart("settings.viewer", "👁 Публикация в Viewer", { id: "viewerAccessSettingsCard", meta: `<span class="badge ${VIEWER_ACCESS.adminPinConfigured ? "good" : "warn"}">${VIEWER_ACCESS.adminPinConfigured ? `Admin PIN настроен · v${VIEWER_ACCESS.adminPinVersion}` : "Admin PIN не задан"}</span>` })}
+    <p class="small muted">Viewer не получает рабочую SQLite. Он открывает только ZIP с проверкой SHA-256, готовыми страницами и комментариями.</p>
     <div class="notice blue"><b>Вход врача:</b> в Viewer врач выбирает своё имя и вводит постоянный четырёхзначный PIN. Обычный врач видит только свои страницы. Назначенный заведующий дополнительно может переключаться между всеми врачами своего отделения.</div>
     <h3>Заведующие отделениями</h3>
     <p class="small muted">Назначение сохраняется один раз в администраторской базе. При выборе заведующего доступ к Viewer для него включается автоматически.</p>
@@ -5955,7 +6132,7 @@ function viewerAccessSettingsHtml() {
       <button class="btn mini" type="button" onclick="exportViewerPinsTable()" ${items.length ? "" : "disabled"}>📊 Выгрузить все PIN в Excel</button>
       <span class="small muted">Две колонки: врач и сохранённый PIN</span></div>
     <div class="scroll-y"><table class="data viewer-access-table"><tr><th>Врач и публикация</th><th>PIN врача</th><th></th></tr>${rows || '<tr><td colspan="3" class="muted">Врачи появятся после импорта данных.</td></tr>'}</table></div>
-  </div>`;
+  </div></details>`;
 }
 
 async function exportViewerPinsTable() {
@@ -6068,6 +6245,7 @@ async function setAllViewerDoctorsActive(active) {
 }
 
 function renderSettings() {
+  rememberPageBlocks(document.getElementById("page-settings"));
   const settingsBody = document.getElementById("settingsBody");
   renderReportExportSettings();
   if (DESKTOP_API) renderDesktopWorkspace();
@@ -6114,14 +6292,10 @@ function renderSettings() {
     structureTree += `<div class="clinic-tree-department clinic-tree-unassigned"><div class="clinic-tree-head"><div><b>Не распределено</b><span class="badge warn">${unassignedDoctors.length}</span>${doctorStructureDragList(unassignedDoctors, "Нет врачей")}</div></div></div>`;
   }
   let html = viewerAccessSettingsHtml();
-  // состояние «свёрнуто/развёрнуто» секций настроек — переживает перерисовку
-  if (!UI.setOpen) UI.setOpen = { norm: false, expert: false, nom: false, score: false, doctor: true, rules: false };
-  // атрибуты для схлопывающейся секции: data-ключ + запоминание при переключении
-  const det = key => `data-sk="${key}" ${UI.setOpen[key] ? "open" : ""}`;
 
   /* --- иерархия отделение -> опциональные специализации --- */
-  html += `<div class="card"><div class="vhead"><h2 class="mt0">🏥 Структура клиники</h2>
-      <label class="small"><input type="checkbox" id="showScoresChk" onchange="DB.settings.showScores=this.checked;saveLocal({settings:true});renderAll()" ${s.showScores ? "checked" : ""}> показывать баллы</label></div>
+  html += `${pageBlockStart("settings.structure", "🏥 Структура клиники")}
+    <div class="toolbar"><label class="small"><input type="checkbox" id="showScoresChk" onchange="DB.settings.showScores=this.checked;saveLocal({settings:true});renderAll()" ${s.showScores ? "checked" : ""}> показывать баллы</label></div>
     <p class="small muted">Иерархия: клиника → отделение → специализация → врач. <b>Перетащите карточку врача</b> в нужную специализацию или в «Без специализации». Нормативы и веса задаются специализации; цели можно задать отделению, специализации или врачу.</p>
     <div class="toolbar">
       <label>Отделение: <select id="setDepartmentSel" onchange="UI.setDepartment=this.value;UI.setSpecialization='';renderSettings()">${departmentNames.map(n => `<option value="${esc(n)}" ${n === departmentName ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>
@@ -6147,12 +6321,12 @@ function renderSettings() {
       <button class="btn" onclick="openDoctorGoalSettings(document.getElementById('structureDoctorSel').value)">Настроить цели врача</button>
     </div>` : ""}
     <div class="clinic-tree">${structureTree}</div>
-  </div>`;
+  </div></details>`;
 
   /* --- 1. Нормативы и подразделения --- */
   if (specializationName) {
     const partition = clientBasePartitionSettings(p);
-    html += `<details class="card" style="display:block" ${det("norm")}><summary style="cursor:pointer"><b>📐 Нормативы специализации: клиентская база, курсовое, первичка — «${esc(specializationName)}»</b></summary>
+    html += `${pageBlockStart("settings.norm", `📐 Нормативы специализации: клиентская база, курсовое, первичка — «${esc(specializationName)}»`, { defaultOpen: false })}
     <h3 style="margin:12px 0 6px">Четыре группы базы за 3 года</h3>
     <p class="small muted">Для каждой группы задайте число визитов и срок последнего визита. Визиты считаются за все 36 месяцев. Связанные границы в соседних строках меняются вместе: каждый пациент остаётся ровно в одной группе. После сохранения пересчитываются все месяцы.</p>
     <div class="client-base-settings-scroll"><table class="data wtable" id="clientBasePartitionRules">
@@ -6192,17 +6366,17 @@ function renderSettings() {
         ${fmtEx("гинеколог, акушер")}</label>
     </div>
     <button class="btn primary" onclick="saveDeptBasics()">💾 Сохранить нормативы</button>
-  </details>`;
+  </div></details>`;
   } else {
-    html += `<details class="card" style="display:block" ${det("norm")}><summary style="cursor:pointer"><b>📐 Нормативы специализации</b></summary>
+    html += `${pageBlockStart("settings.norm", "📐 Нормативы специализации", { defaultOpen: false })}
       <div class="notice blue" style="margin-top:10px">Нормативы настраиваются только на уровне специализации. Выберите специализацию в дереве клиники.</div>
-    </details>`;
+    </div></details>`;
   }
 
   /* --- 2. Экспертность (Вектор 2): аппараты ИЛИ услуги --- */
   const exp = p.expertise;
   const cands = collectDeviceCandidates(dn);
-  html += `<details class="card" style="display:block" ${det("expert")}><summary style="cursor:pointer"><b>⭐ Экспертность (Вектор 2) — «${esc(dn)}»</b></summary>
+  html += `${pageBlockStart("settings.expert", `⭐ Экспертность (Вектор 2) — «${esc(dn)}»`, { defaultOpen: false })}
     <p class="small muted" style="margin-top:8px">Что отслеживаем у врачей этого профиля: аппараты или услуги. Название блока задаёте сами — так он будет называться в профайле врача и отчётах.</p>
     <div class="toolbar">
       <label>Название блока: <input type="text" id="ex_title" value="${esc(exp.title || "")}" style="min-width:220px"></label>
@@ -6231,7 +6405,7 @@ function renderSettings() {
     });
     html += "</table></div>";
   }
-  html += `</details>`;
+  html += `</div></details>`;
 
   /* --- 3. Фокусы междисциплинарного подхода (Вектор 3) --- */
   const crossFocus = p.crossFocus || { title: "Фокусы междисциплинарного подхода", items: [] };
@@ -6259,7 +6433,7 @@ function renderSettings() {
     : p.referralRevenuePolicy);
   const referralPolicyControlsDisabled = inheritsReferralRevenuePolicy || effectiveReferralRevenuePolicy.mode === "all";
   const excludedReferralDepartments = new Set(effectiveReferralRevenuePolicy.excludedServiceDepartments);
-  html += `<details class="card" style="display:block" ${det("crossFocus")}><summary style="cursor:pointer"><b>🤝 Фокусы междисциплинарного подхода (Вектор 3) — «${esc(dn)}»</b></summary>
+  html += `${pageBlockStart("settings.crossFocus", `🤝 Фокусы междисциплинарного подхода (Вектор 3) — «${esc(dn)}»`, { defaultOpen: false })}
     <p class="small muted" style="margin-top:8px">Настройте назначения, которые считаются фокусами этого профиля. Они ищутся непосредственно в названиях позиций отчёта «Назначения» и не зависят от категорий выручки.</p>
     <div class="toolbar"><label>Название блока: <input type="text" id="cf_title" value="${esc(crossFocus.title || "")}" style="min-width:280px"></label></div>
     <p class="small muted">Фокусы — по одному в строке: <code>Название = синоним1, синоним2</code>. Звёздочка в начале строки — отслеживать, но не учитывать в широте фокусов. Результат фокуса: для услуг выполнено + продано, для товаров — продано. Фокус считается использованным, когда результат больше нуля.</p>
@@ -6300,7 +6474,7 @@ function renderSettings() {
     <div class="toolbar"><button class="btn primary" type="button" onclick="saveReferralRevenuePolicy()">💾 Сохранить правило учёта выручки</button></div>
     <p class="small muted">В балл Вектора 3 входят широта реализованных фокусов и доля учтённой выручки от перенаправлений. Цель по доле выручки задаётся ниже в блоке «Баллы и веса».</p>
     <div class="toolbar"><button class="btn primary" onclick="saveCrossFocusSettings()">💾 Сохранить фокусы Вектора 3</button></div>
-  </details>`;
+  </div></details>`;
 
   /* --- 4. Номенклатура отделения: мама распихивает сама --- */
   const nomAll = collectDeptItems(dn, p);
@@ -6323,7 +6497,7 @@ function renderSettings() {
     }
     return o;
   };
-  html += `<details class="card" style="display:block" ${det("nom")}><summary style="cursor:pointer"><b>🧩 Номенклатура — «${esc(dn)}»</b> <span class="small muted">(${nomAll.length} позиций, неразобрано: ${unmappedCnt})</span></summary>
+  html += `${pageBlockStart("settings.nom", `🧩 Номенклатура — «${esc(dn)}»`, { defaultOpen: false, meta: `${nomAll.length} позиций, неразобрано: ${unmappedCnt}` })}
     <p class="small muted" style="margin-top:8px">Скрипт разложил всё автоматически — здесь можно поправить руками: вид позиции, категорию, домашнее подразделение услуги и привязку к «${esc(exp.title)}». Подразделение используется общим правилом учёта выручки; обычные услуги показаны вместе. Товары, приёмы и анализы всегда остаются самостоятельными категориями. Точная привязка номенклатуры имеет приоритет над привязкой фокуса и применяется ко всем месяцам.</p>
     <div class="toolbar">
       <input type="text" id="nomFilter" placeholder="поиск по названию…" value="${esc(UI.nomFilter || "")}">
@@ -6368,15 +6542,15 @@ function renderSettings() {
   });
   if (nomItems.length > 300) html += `<tr><td colspan="8" class="small muted">Показаны первые 300 — уточните поиск.</td></tr>`;
   html += `</table></div>
-    <details style="margin-top:10px" ${det("rules")}><summary class="small muted" style="cursor:pointer">Расширенное: правила по подстрокам (${(p.rules || []).length})</summary>
+    ${pageBlockStart("settings.rules", `Расширенное: правила по подстрокам (${(p.rules || []).length})`, { defaultOpen: false, nested: true })}
       <p class="small muted">Формат строки: <code>подстрока = Группа / Подгруппа / вид</code>. Подгруппу и вид (<i>услуга</i> или <i>товар</i>) можно не писать. Правила проверяются по порядку; ручные правки номенклатуры выше сильнее правил.</p>
       <textarea id="rulesTa" placeholder="подстрока = Группа / Подгруппа / вид" style="min-height:180px">${esc((p.rules || []).map(rl => rl[0] + " = " + rl[1] + (rl[2] ? " / " + rl[2] : "") + (rl[3] ? " / " + rl[3] : "")).join("\n"))}</textarea>
       ${fmtEx("узи = Узи\nкольпоскоп = Гинекологические процедуры / Кольпоскопия\nбад = Товары / БАДы / товар")}
       <label class="fld" style="margin-top:8px"><span>Группы и подгруппы категорий — по одной группе в строке: <code>Группа: подгруппа1, подгруппа2</code> (подгруппы можно не писать)</span>
       <textarea id="groupsTa" placeholder="Группа: подгруппа1, подгруппа2" style="min-height:110px">${esc(Object.entries(p.groups).map(([g, subs]) => g + (subs.length ? ": " + subs.join(", ") : "")).join("\n"))}</textarea></label>
       ${fmtEx("Приемы\nАппараты: Дека, Ultra Femme\nГинекологические процедуры: Кольпоскопия, Пайпель, Прочие\nТовары: Аптека, Косметика, БАДы")}
-      <button class="btn" onclick="saveDeptTaxonomy()">Сохранить правила и группы</button></details>
-  </details>`;
+      <button class="btn" onclick="saveDeptTaxonomy()">Сохранить правила и группы</button></div></details>
+  </div></details>`;
 
   /* --- 4. Веса специализации и цели трёх уровней --- */
   const sc = p.scoring;
@@ -6385,7 +6559,7 @@ function renderSettings() {
   const goalBenchmarks = goalProfile.scoring.benchmarks;
   const bmDefs = scoringBenchmarkDefs(specializationName ? p : goalProfile);
   const goalInputs = bmDefs.map(([k, n]) => `<tr><td>${n}</td><td class="num"><input type="number" id="sc_bm_${k}" value="${goalBenchmarks[k] != null && goalBenchmarks[k] !== "" ? goalBenchmarks[k] : ""}" step="any" style="width:110px" placeholder="—" ${inheritsDepartmentGoals ? "disabled" : ""}></td></tr>`).join("");
-  html += `<details class="card" style="display:block" ${det("score")}><summary style="cursor:pointer"><b>🎯 ${specializationName ? `Векторы, веса и цели специализации «${esc(specializationName)}»` : `Цели отделения «${esc(departmentName)}»`}</b></summary>
+  html += `${pageBlockStart("settings.score", `🎯 ${specializationName ? `Векторы, веса и цели специализации «${esc(specializationName)}»` : `Цели отделения «${esc(departmentName)}»`}`, { defaultOpen: false })}
     <p class="small muted" style="margin-top:8px"><b>Пустая цель = метрика не оценивается.</b> Цели врача имеют приоритет над целями специализации, а цели специализации — над целями отделения.</p>
     ${specializationName ? `<div class="grid cols-2">
       <div><h3>Векторы и веса специализации</h3>
@@ -6406,7 +6580,7 @@ function renderSettings() {
       </div>
     </div>` : `<h3>Цели отделения</h3><table class="data" style="width:100%"><tr><th>Метрика</th><th class="num">Цель</th></tr>${goalInputs}</table>`}
     <div class="toolbar"><button class="btn primary" onclick="saveDeptScoring()">💾 ${specializationName ? "Сохранить веса и цели специализации" : "Сохранить цели отделения"}</button></div>
-  </details>`;
+  </div></details>`;
 
   /* --- 5. Персональные цели врача --- */
   const ids = allDoctorIds;
@@ -6420,7 +6594,7 @@ function renderSettings() {
     const disabled = hasOwn ? "" : "disabled";
     const effectiveSpecializationName = resolvedSpecializationName(doctorId);
     const structureName = doctorStructureLabel(doctorId);
-    html += `<details class="card" id="doctorMetricSettingsCard" style="display:block" ${det("doctor")}><summary style="cursor:pointer"><b>👤 Индивидуальные цели врача</b></summary>
+    html += `${pageBlockStart("settings.doctor", "👤 Индивидуальные цели врача", { id: "doctorMetricSettingsCard" })}
       <div class="toolbar" style="margin-top:10px">
         <label>Врач: <select id="setDoctorSel" onchange="UI.setDoctor=this.value;renderSettings()">${ids.map(id => `<option value="${esc(id)}" ${id === doctorId ? "selected" : ""}>${esc(doctorName(id))}</option>`).join("")}</select></label>
         <span class="badge ${hasOwn ? "ok" : ""}">${hasOwn ? "индивидуальные цели" : "наследует цели"}</span>
@@ -6436,15 +6610,15 @@ function renderSettings() {
           ${doctorBmDefs.map(([k, n]) => `<tr><td>${n}</td><td class="num"><input type="number" id="dm_bm_${k}" value="${doctorSc.benchmarks[k] != null && doctorSc.benchmarks[k] !== "" ? doctorSc.benchmarks[k] : ""}" step="any" style="width:110px" placeholder="—" ${disabled}></td></tr>`).join("")}
       </table>
       <div class="toolbar"><button class="btn primary" onclick="saveDoctorMetricSettings()" ${disabled}>💾 Сохранить цели врача</button></div>
-    </details>`;
+    </div></details>`;
   } else {
-    html += '<div class="card"><h2>👤 Персональные цели врача</h2><p class="muted">В базе пока нет врачей. Они появятся после загрузки отчётов.</p></div>';
+    html += `${pageBlockStart("settings.doctor", "👤 Персональные цели врача")}<p class="muted">В базе пока нет врачей. Они появятся после загрузки отчётов.</p></div></details>`;
   }
 
   /* --- Сотрудники --- */
   const filter = UI.staffFilter.toLowerCase();
   const visible = ids.filter(id => !filter || doctorName(id).toLowerCase().includes(filter));
-  html += `<div class="card"><h2>👥 Сотрудники (${ids.length})</h2>
+  html += `${pageBlockStart("settings.staff", `👥 Сотрудники (${ids.length})`)}
     <p class="small muted"><b>Отделение</b> объединяет специализации. <b>Специализация</b> задаёт нормативы и веса врачей. Для врача при необходимости настраиваются только индивидуальные цели. «Авто» определяется по должности и словам-определителям.</p>
     <div class="toolbar">
       <input type="text" id="staffFilter" placeholder="поиск по фамилии…" value="${esc(UI.staffFilter)}">
@@ -6475,10 +6649,11 @@ function renderSettings() {
       <td><button class="btn mini" onclick="openDoctorGoalSettings('${id}')">Настроить</button></td>
       <td class="small muted">${d.aliases.length ? esc(d.aliases.join("; ")) : "—"}</td></tr>`;
   }
-  html += `</table></div></div>`;
+  html += `</table></div></div></details>`;
 
   const nomScrollTop = document.getElementById("nomScroll") ? document.getElementById("nomScroll").scrollTop : 0;
   settingsBody.innerHTML = html;
+  restorePageBlocks(document.getElementById("page-settings"));
   const nomScrollEl = document.getElementById("nomScroll");
   if (nomScrollEl && nomScrollTop) nomScrollEl.scrollTop = nomScrollTop; // не прыгать вверх при правках
   const sf = document.getElementById("staffFilter");
@@ -7164,7 +7339,7 @@ async function initApp() {
   if (DESKTOP_API) {
     document.getElementById("btnScanInput").addEventListener("click", desktopScanInput);
     document.getElementById("btnReprocessAppointments").addEventListener("click", desktopReprocessAppointments);
-    document.getElementById("btnOpenOutput").addEventListener("click", () => DESKTOP_API.openPath("output").catch(error => toast(error.message, true)));
+    document.getElementById("btnReprocessPrimaryReturn").addEventListener("click", desktopReprocessPrimaryReturn);
     document.getElementById("btnChooseWorkspace").addEventListener("click", desktopChooseWorkspace);
     document.querySelectorAll("[data-choose-folder]").forEach(button => button.addEventListener("click", () => desktopChooseFolder(button.dataset.chooseFolder)));
     document.querySelectorAll("[data-open-path]").forEach(button => button.addEventListener("click", () => DESKTOP_API.openPath(button.dataset.openPath).catch(error => toast(error.message, true))));
@@ -7185,16 +7360,15 @@ async function initApp() {
 document.addEventListener("toggle", event => {
   const details = event.target;
   if (!(details instanceof HTMLDetailsElement)) return;
+  if (details.dataset.pageBlock && details.isConnected) {
+    UI.openPageBlocks[details.dataset.pageBlock] = details.open;
+  }
   if (details.dataset.listKey) {
     if (details.classList.contains("doctor-semantic-section")) {
       rememberDoctorSectionToggle(details.dataset.listKey, details.open);
     } else {
       rememberListToggle(details.dataset.listKey, details.open);
     }
-  }
-  if (details.dataset.sk) {
-    if (!UI.setOpen) UI.setOpen = {};
-    UI.setOpen[details.dataset.sk] = details.open;
   }
 }, true);
 

@@ -54,7 +54,8 @@ h3 { font-size: 15px; }
   padding: 10px 24px;
   display: flex;
   align-items: center;
-  gap: 24px;
+  flex-wrap: wrap;
+  gap: 10px 16px;
   position: sticky;
   top: 0;
   z-index: 50;
@@ -63,7 +64,7 @@ h3 { font-size: 15px; }
 .brand-symbol { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 8px; }
 .app-header .logo .logo-work { color: #1d4ed8; }
 .app-header .logo .logo-doctors { color: #0f766e; }
-nav.tabs { display: flex; gap: 4px; flex: 1; }
+nav.tabs { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; }
 nav.tabs button {
   border: none;
   background: transparent;
@@ -73,6 +74,7 @@ nav.tabs button {
   cursor: pointer;
   color: var(--muted);
   font-weight: 600;
+  white-space: nowrap;
 }
 nav.tabs button:hover { background: var(--bg); color: var(--ink); }
 nav.tabs button.active { background: var(--accent-soft); color: var(--accent); }
@@ -81,6 +83,10 @@ nav.tabs button.active { background: var(--accent-soft); color: var(--accent); }
   flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px;
   background: #fff; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums;
 }
+.header-updates { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 260px; }
+.header-update-actions { display: flex; align-items: center; gap: 8px; }
+.header-update-actions .btn { white-space: nowrap; }
+.header-update-status { text-align: right; overflow-wrap: anywhere; line-height: 1.35; }
 main { padding: 20px 24px 60px; max-width: 1500px; margin: 0 auto; }
 .page { display: none; }
 .page.active { display: block; }
@@ -173,7 +179,7 @@ body.pdf-export-running { overflow: hidden; }
 .workspace-paths {
   display: grid;
   gap: 7px;
-  margin-bottom: 12px;
+  margin-top: 12px;
 }
 .workspace-path-row {
   display: grid;
@@ -192,11 +198,61 @@ body.pdf-export-running { overflow: hidden; }
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 11px;
 }
+.page-block { padding: 0; overflow: hidden; }
+.page-block-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 18px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+.page-block-summary::-webkit-details-marker { display: none; }
+.page-block-summary::before { content: "▸"; color: var(--accent); flex: 0 0 auto; }
+.page-block[open] > .page-block-summary::before { content: "▾"; }
+.page-block-summary:hover { background: var(--accent-soft); }
+.page-block-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius);
+}
+.page-block-title { flex: 1; min-width: 0; font-size: 18px; font-weight: 700; }
+.page-block-meta { font-size: 12px; color: var(--muted); }
+.page-block-summary > .collapse-hint { flex: 0 0 auto; }
+.page-block[open] > .page-block-summary > .collapse-hint::after { content: "Свернуть"; }
+.page-block-body { min-width: 0; padding: 4px 18px 18px; overflow-x: auto; }
+.page-block:not([open]) > .page-block-body { display: none; }
+.page-block-body > :first-child { margin-top: 0; }
+.page-block-body > :last-child { margin-bottom: 0; }
+.page-block-nested {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.page-block-nested > .page-block-summary { padding: 10px 12px; }
+.page-block-nested > .page-block-summary > .page-block-title { font-size: 13px; }
+.page-block-nested > .page-block-body { padding: 4px 12px 12px; }
+@media (max-width: 760px) {
+  .page-block-summary { flex-wrap: wrap; }
+  .page-block-summary > .page-block-meta { width: 100%; order: 2; padding-left: 18px; }
+}
+.data-tools-section + .data-tools-section {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.data-tools-section h3 { font-size: 14px; }
 .compact-toolbar { margin-top: 8px; }
+#page-data .compact-toolbar { margin-bottom: 0; }
 @media (max-width: 1000px) {
   .workspace-head { align-items: flex-start; flex-direction: column; }
   .workspace-path-row { grid-template-columns: 130px minmax(180px, 1fr); }
   .workspace-path-row .btn { justify-self: start; }
+}
+@media (max-width: 600px) {
+  .workspace-path-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .workspace-path-row > b { grid-column: 1 / -1; }
 }
 .seg {
   display: inline-flex;
@@ -782,13 +838,33 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .viewer-patient-table thead { position: sticky; top: 0; z-index: 2; background: #fff; }
 .viewer-patient-table tr[hidden] { display: none; }
 .rating-platform-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0 0 10px; }
-.rating-platform-card { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); }
+.rating-platform-card { display: flex; flex-direction: column; gap: 10px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); }
+.rating-platform-heading, .rating-platform-count { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; width: 100%; }
+.rating-platform-count { border-top: 1px solid var(--line); padding-top: 8px; }
+.rating-platform-count strong { font-size: 16px; }
+.reputation-platform-editor { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; border: 1px solid var(--line); border-radius: 9px; padding: 12px; }
+.reputation-platform-editor > b { grid-column: 1 / -1; font-size: 12px; }
+.reputation-count-note { display: block; font-weight: 400; font-size: 12px; }
+.reputation-table-scroll { overflow-x: auto; margin-top: 12px; }
+.reputation-table-scroll table { min-width: 1000px; }
+.reputation-honor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+.reputation-honor-person { border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
+.reputation-honor-person[data-honor-place="1"] { border-color: #d4a017; background: #fff9e6; }
+.reputation-honor-medal { font-size: 26px; }
+.doctor-vector-score-history { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
+.doctor-vector-score-history .chart-box.score-chart { height: 240px; }
 .rating-platform-card span { color: var(--muted); font-size: 12px; font-weight: 700; }
 .rating-platform-card strong { font-size: 18px; white-space: nowrap; }
 @media (max-width: 720px) { .viewer-patient-controls { grid-template-columns: 1fr; } }
 @media (max-width: 900px) { .rating-platform-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 520px) { .rating-platform-grid { grid-template-columns: 1fr; } }
-@media print { .viewer-patient-table-wrap { max-height: none; overflow: visible; border: 0; } .viewer-patient-table { min-width: 0; } }
+@media print {
+  .viewer-patient-table-wrap { max-height: none; overflow: visible; border: 0; }
+  .viewer-patient-table { min-width: 0; }
+  .reputation-table-scroll { overflow: visible; }
+  .reputation-table-scroll table { min-width: 0; width: 100%; font-size: 10px; }
+  .reputation-honor-person, .doctor-vector-score-history { break-inside: avoid; page-break-inside: avoid; }
+}
 .dyn-target-badges { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-left: 4px; vertical-align: middle; }
 .dyn-target-value { font-weight: 700; }
 .dynamics-table th[title^="Изменение к"] { white-space: normal; line-height: 1.25; }
@@ -1113,12 +1189,10 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .seg-legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
 footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; padding: 18px; }
 .settings-export-card { border-color: #bfdbfe; background: linear-gradient(135deg, #fff 0%, #f8fbff 100%); }
-.settings-export-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
-.settings-export-heading p { margin: 0; }
-.settings-export-heading > :last-child { white-space: nowrap; }
-@media (max-width: 760px) {
-  .settings-export-heading { flex-direction: column; gap: 8px; }
-}
+.settings-export-card > .page-block-summary { padding: 20px; }
+.settings-export-body { display: flex; flex-direction: column; gap: 18px; padding: 6px 20px 22px; }
+.settings-export-body > p { margin: 0; line-height: 1.55; }
+.settings-export-body > .toolbar { gap: 12px; margin: 0; }
 .viewer-export-dialog {
   width: min(1200px, calc(100vw - 24px));
   height: min(900px, calc(100vh - 24px));

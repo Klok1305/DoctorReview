@@ -528,10 +528,31 @@ function parseKB(rows, info) {
 }
 
 /* ---------- ВОЗВРАЩАЕМОСТЬ ПЕРВИЧКИ (общая, окно 1/3/6/12 мес) ---------- */
-function parsePervichka(rows, info, ws) {
+function parsePervichka(rows, info, ws = {}) {
   const hIdx = findRowIdx(rows, r => cellStr(r[0]) === "Врач");
   if (hIdx < 0) throw new Error("не найдена шапка «Врач»");
-  const C = { visits: 6, first: 9, ret: 11, notRet: 12 };
+  // Новые настройки 1С могут сдвинуть колонки. Старые файлы без подписей читаем по прежним позициям.
+  const headers = [rows[hIdx]];
+  for (const row of rows.slice(hIdx + 1, hIdx + 4)) {
+    if (cellStr(row[0]) && cellStr(row[0]) !== "Клиент") break;
+    headers.push(row);
+  }
+  const column = (pattern, fallback) => {
+    for (const row of headers) {
+      const found = row.findIndex(value => {
+        const label = cellStr(value).toLowerCase().replace(/ё/g, "е").replace(/\s+/g, " ");
+        return !/%|процент|доля/.test(label) && pattern.test(label);
+      });
+      if (found >= 0) return found;
+    }
+    return fallback;
+  };
+  const C = {
+    visits: column(/(?:количество|число|всего).*посещ|^посещений$|^визитов$/, 6),
+    first: column(/первичн|^впервые/, 9),
+    ret: column(/^(?:(?:количество|число)\s+)?вернул|^возврат/, 11),
+    notRet: column(/не\s*вернул|не\s*возврат/, 12),
+  };
   const levels = getRowLevels(ws);
   const dataRows = [];
   let itogoFirst = null;
@@ -540,7 +561,11 @@ function parsePervichka(rows, info, ws) {
     const name = cellStr(r[0]);
     if (!name) continue;
     if (name === "Клиент") continue;
-    const row = { i, raw: name, visits: parseRuNumber(r[C.visits]) || 0, first: parseRuNumber(r[C.first]) || 0, ret: parseRuNumber(r[C.ret]) || 0, notRet: parseRuNumber(r[C.notRet]) || 0 };
+    const values = Object.fromEntries(Object.entries(C).map(([key, index]) => [key, parseRuNumber(r[index])]));
+    if (Object.values(values).every(value => value == null)) continue;
+    // В 1С пустая числовая ячейка обозначает ноль. Непустой некорректный текст остаётся null.
+    for (const [key, index] of Object.entries(C)) if (cellStr(r[index]) === "") values[key] = 0;
+    const row = { i, raw: name, ...values };
     if (name === "Итого") { if (itogoFirst == null) itogoFirst = row.first; continue; }
     dataRows.push(row);
   }
@@ -554,6 +579,8 @@ function parsePervichka(rows, info, ws) {
       candidates.push(body.filter(d => lv(d) === minLv));
     }
   }
+  // Плоская таблица содержит только врачей: greedy раньше принимал следующих врачей за пациентов.
+  candidates.push(body);
   {
     const greedy = [];
     let k = 0;
@@ -571,11 +598,12 @@ function parsePervichka(rows, info, ws) {
   }
   let perDoc = null;
   if (itogoFirst != null) {
-    perDoc = candidates.find(c => c.length && c.length < body.length && Math.abs(c.reduce((a, d) => a + d.first, 0) - itogoFirst) < 0.5);
+    perDoc = candidates.find(c => c.length && Math.abs(c.reduce((a, d) => a + d.first, 0) - itogoFirst) < 0.5);
   }
+  if (!perDoc && !levels && !rows.slice(hIdx + 1).some(row => cellStr(row[0]) === "Клиент")) perDoc = body;
   if (!perDoc) perDoc = candidates.find(c => c.length && c.length < body.length) || candidates[candidates.length - 1];
   if (!perDoc || !perDoc.length) throw new Error("не удалось выделить строки врачей");
-  return { perDoc, checked: itogoFirst != null };
+  return { perDoc, checked: itogoFirst != null && Math.abs(perDoc.reduce((sum, row) => sum + row.first, 0) - itogoFirst) < 0.5 };
 }
 
 /* ---------- ПРОСТОЙ / ЗАГРУЗКА РАСПИСАНИЯ (общая, за месяц) ---------- */
@@ -1003,7 +1031,7 @@ async function handleFiles(fileList, options = {}) {
   }
   fileImportInProgress = true;
   fileImportCancelRequested = false;
-  const controlIds = ["btnPickFiles", "btnPickDir", "btnScanInput", "btnReprocessAppointments"];
+  const controlIds = ["btnPickFiles", "btnPickDir", "btnScanInput", "btnReprocessAppointments", "btnReprocessPrimaryReturn"];
   const controls = controlIds.map(id => document.getElementById(id)).filter(Boolean);
   const previousDisabled = controls.map(control => control.disabled);
   controls.forEach(control => { control.disabled = true; });

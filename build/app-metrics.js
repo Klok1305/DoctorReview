@@ -576,7 +576,7 @@ function partitionClientBase(base, profile) {
   const seg = { active: 0, loyalSleep: 0, newRisk: 0, lost: 0 };
   const provisional = { active: 0, loyalSleep: 0, newRisk: 0, lost: 0 };
   const clientRows = base.clientRows.map(client => {
-    const validVisits = Number.isFinite(client.v) && client.v > 0;
+    const validVisits = Number.isSafeInteger(client.v) && client.v > 0;
     const validRecency = Number.isFinite(client.r) && client.r >= 0;
     const loyal = validVisits && client.v >= t.loyalVisits;
     let group;
@@ -791,6 +791,38 @@ function computeKbSummary(docId, monthKey, win) {
   return summary;
 }
 
+const REPUTATION_PLATFORMS = [
+  { key: "prodoctorov", name: "ПроДокторов" },
+  { key: "napopravku", name: "НаПоправку" },
+  { key: "doctu", name: "DocTu" },
+  { key: "sberhealth", name: "СберЗдоровье" },
+];
+
+function reputationSummary(raw) {
+  if (!raw) return null;
+  const platforms = REPUTATION_PLATFORMS.map(({ key, name }) => ({
+    key, name,
+    rating: Number.isFinite(raw[key]) && raw[key] >= 0 && raw[key] <= 5 ? raw[key] : null,
+    reviews: Number.isSafeInteger(raw[key + "Reviews"]) && raw[key + "Reviews"] >= 0 ? raw[key + "Reviews"] : null,
+  }));
+  const ratings = platforms.map(item => item.rating).filter(value => value != null);
+  const counted = platforms.filter(item => item.reviews != null);
+  const nps = Number.isFinite(raw.nps) && raw.nps >= -100 && raw.nps <= 100 ? raw.nps : null;
+  const reviews = Number.isFinite(raw.reviews) && raw.reviews >= 0 ? raw.reviews : null;
+  const knownReviews = counted.reduce((sum, item) => sum + item.reviews, 0);
+  return {
+    avgRating: ratings.length ? ratings.reduce((a, b) => a + b, 0) / ratings.length : null,
+    nps, reviews, platforms,
+    totalReviews: counted.length === platforms.length ? knownReviews : null,
+    knownReviews: counted.length ? knownReviews : null,
+    reviewCoverage: { covered: counted.length, expected: platforms.length, complete: counted.length === platforms.length },
+    valid: platforms.every(item => (raw[item.key] == null || item.rating != null)
+      && (raw[item.key + "Reviews"] == null || item.reviews != null))
+      && (raw.nps == null || nps != null) && (raw.reviews == null || reviews != null),
+    raw,
+  };
+}
+
 /* ---------- главный расчёт ---------- */
 /* Кэши ограничены LRU и инвалидируются только для затронутых данных. */
 const METRICS_CACHE_LIMITS = Object.freeze({ metrics: 480, kbSummary: 720, kbDetails: 48, adminBase: 120, department: 180 });
@@ -901,10 +933,12 @@ function computeMetricsRaw(docId, monthKey) {
   for (const s of slices) {
     const d = m.pervichka[String(s)].perDoc[docId];
     if (d) {
-      const valid = d.first >= 0 && d.ret >= 0 && d.notRet >= 0 && d.ret <= d.first && Math.abs((d.ret + d.notRet) - d.first) < 0.5;
+      const countsValid = [d.first, d.ret, d.notRet].every(value => Number.isSafeInteger(value) && value >= 0);
+      const valid = countsValid && d.ret <= d.first && d.ret + d.notRet === d.first;
       pvSlices[s] = Object.assign({
         valid,
-        issue: valid ? null : "вернулось + не вернулось должно равняться числу первичных",
+        issue: valid ? null : countsValid ? "вернулось + не вернулось должно равняться числу первичных"
+          : "числа первичных, вернувшихся и не вернувшихся должны быть целыми и неотрицательными",
         pct: valid && d.first > 0 ? d.ret / d.first * 100 : null,
       }, d);
     }
@@ -1035,21 +1069,8 @@ function computeMetricsRaw(docId, monthKey) {
     crossShare: (revenueWithRef && refRevenue != null) ? refRevenue / revenueWithRef * 100 : null,
   };
 
-  /* В6 Репутация */
-  let rep = null;
-  if (man6) {
-    const ratingKeys = ["prodoctorov", "napopravku", "doctu", "sberhealth"];
-    const ratings = ratingKeys.map(k => man6[k]).filter(v => v != null && v >= 0 && v <= 5);
-    const nps = man6.nps != null && man6.nps >= -100 && man6.nps <= 100 ? man6.nps : null;
-    const reviews = man6.reviews != null && man6.reviews >= 0 ? man6.reviews : null;
-    rep = {
-      avgRating: ratings.length ? ratings.reduce((a, b) => a + b, 0) / ratings.length : null,
-      nps,
-      reviews,
-      valid: ratings.length === ratingKeys.map(k => man6[k]).filter(v => v != null).length && (man6.nps == null || nps != null) && (man6.reviews == null || reviews != null),
-      raw: man6,
-    };
-  }
+  /* В6 Репутация: накопленные отзывы не заменяют новые отзывы за месяц в балле. */
+  const rep = reputationSummary(man6);
 
   /* ---- Баллы: % выполнения нормативов ОТДЕЛЕНИЯ (профиль → «Баллы и веса»).
      Пустая цель = метрика не оценивается (пример: нет плана по выручке, но есть по чеку). ---- */
@@ -1593,6 +1614,7 @@ function aggregateDeptMonthRaw(mk, deptFilter, subFilter = "all", doctorIds = nu
       avgRating: avg(r => r.rep ? r.rep.avgRating : null),
       nps: avg(r => r.rep ? r.rep.nps : null),
       reviews: sum(r => r.rep ? r.rep.reviews : null),
+      totalReviews: completeFor("totalReviews", r => Number.isFinite(r.rep?.totalReviews)) ? sum(r => r.rep.totalReviews) : null,
     },
     extras: { vy: (ownSum != null && ownSum > 0) ? { ownSum, expertShareSum: expSum || 0 } : null },
     scores: { total: scoreTotal, rankEligible: scoreTotal != null },
