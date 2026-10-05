@@ -134,6 +134,8 @@ Smoke запускать последовательно, дожидаться к
 
 CI проверяет `main` и PR: Node-тесты, оба benchmark, Electron smoke, PDF smoke и мобильный WebKit. Release workflow проверяет совпадение тега с версией, запускает те же проверки и сборки. Артефакты релиза: Admin EXE, `.blockmap`, `latest.yml`, Viewer EXE, `KlinVekt-Mobile-Server-<version>.zip`. Рабочий мобильный пакет туда не входит. Автообновление есть у Admin; Viewer обновляется отдельным установщиком.
 
+Оба workflow всегда выводят `tmp/smoke-result.json` и последние строки `tmp/electron-smoke/**/smoke.log`; при сбое сохраняют их и синтетические PNG как `ci-electron-diagnostics` или `release-electron-diagnostics` на семь дней. Эти файлы позволяют определить конкретную упавшую проверку, даже если Electron не может писать в консоль.
+
 ## Дополнительные документы
 
 - [Обзор архитектуры: быстродействие, расчёты, мобильный перенос](ARCHITECTURE_REVIEW.md) — подтверждённые проблемы, замеры и порядок исправлений на дату проверки.

@@ -55,3 +55,27 @@ jobs:
 
       - name: Проверить мобильный WebKit
         run: pnpm run test:webkit
+
+      - name: Показать диагностику Electron
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath "tmp/smoke-result.json") {
+            Get-Content -LiteralPath "tmp/smoke-result.json" -Raw
+          }
+          if (Test-Path -LiteralPath "tmp/electron-smoke") {
+            Get-ChildItem -LiteralPath "tmp/electron-smoke" -Filter "smoke.log" -File -Recurse |
+              ForEach-Object { Get-Content -LiteralPath $_.FullName -Tail 40 }
+          }
+
+      - name: Сохранить диагностику сбоя
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-electron-diagnostics
+          path: |
+            tmp/smoke-result.json
+            tmp/electron-smoke/**/smoke.log
+            tmp/*.png
+          if-no-files-found: ignore
+          retention-days: 7

@@ -113,3 +113,27 @@ jobs:
 
           gh release create $env:RELEASE_TAG @assets --draft --verify-tag --title $displayVersion --generate-notes
           gh release edit $env:RELEASE_TAG --draft=false --latest
+
+      - name: Показать диагностику Electron
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath "tmp/smoke-result.json") {
+            Get-Content -LiteralPath "tmp/smoke-result.json" -Raw
+          }
+          if (Test-Path -LiteralPath "tmp/electron-smoke") {
+            Get-ChildItem -LiteralPath "tmp/electron-smoke" -Filter "smoke.log" -File -Recurse |
+              ForEach-Object { Get-Content -LiteralPath $_.FullName -Tail 40 }
+          }
+
+      - name: Сохранить диагностику сбоя
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-electron-diagnostics
+          path: |
+            tmp/smoke-result.json
+            tmp/electron-smoke/**/smoke.log
+            tmp/*.png
+          if-no-files-found: ignore
+          retention-days: 7
