@@ -327,7 +327,7 @@ async function promptForWorkspaceOnFirstRun() {
 function createWindow() {
   const smokeRendererErrors = [];
   mainWindow = new BrowserWindow({
-    width: 1440,
+    width: SMOKE_TEST && process.argv.includes("--smoke-narrow") ? 1040 : 1440,
     height: 940,
     minWidth: 1040,
     minHeight: 720,
@@ -743,11 +743,21 @@ function createWindow() {
                 && !doctorHeaderMetrics.some(label => label.includes('Количество визитов за месяц'));
               const doctorHeaderCardRects = [...document.querySelectorAll('#blkHead .kpi')].map(element => {
                 const rect = element.getBoundingClientRect();
-                return { width: Math.round(rect.width), top: Math.round(rect.top) };
+                return { width: Math.round(rect.width), top: Math.round(rect.top), left: Math.round(rect.left),
+                  right: Math.round(rect.right), bottom: Math.round(rect.bottom) };
               });
+              const doctorHeaderColumns = window.matchMedia('(max-width: 1100px)').matches ? 2 : 5;
+              const doctorHeaderViewport = { width: window.innerWidth, height: window.innerHeight };
               const doctorHeaderLayoutValid = doctorHeaderCardRects.length === 5
-                && doctorHeaderCardRects.every(rect => rect.width >= 150)
-                && Math.max(...doctorHeaderCardRects.map(rect => rect.top)) - Math.min(...doctorHeaderCardRects.map(rect => rect.top)) <= 2;
+                && doctorHeaderCardRects.every((rect, index, rects) => {
+                  const rowStart = index - index % doctorHeaderColumns;
+                  const previousRow = rects.slice(Math.max(0, rowStart - doctorHeaderColumns), rowStart);
+                  return rect.width >= 150 && rect.left >= 0 && rect.right <= window.innerWidth
+                    && Math.abs(rect.top - rects[rowStart].top) <= 2
+                    && Math.abs(rect.left - rects[index % doctorHeaderColumns].left) <= 2
+                    && (index === rowStart || rect.left > rects[index - 1].right)
+                    && (!previousRow.length || rect.top > Math.max(...previousRow.map(item => item.bottom)));
+                });
               const doctorGoalCards = [...document.querySelectorAll('#doctorGoalsSummary .doctor-goal-item')].map(element => ({
                 key: element.dataset.goalKey,
                 vector: element.dataset.goalVector,
@@ -1098,6 +1108,8 @@ function createWindow() {
                 doctorHeaderMetrics,
                 doctorHeaderMetricsValid,
                 doctorHeaderCardRects,
+                doctorHeaderColumns,
+                doctorHeaderViewport,
                 doctorHeaderLayoutValid,
                 clientBaseDynamicsValid,
                 clientBaseButtonsValid: Boolean(riskActionButton) && fixedThreeYearBase && clientActionOpened,

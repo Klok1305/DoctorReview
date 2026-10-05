@@ -118,6 +118,7 @@ Renderer Admin — общая очистка Viewer HTML и четыре скр�
 | `pnpm run benchmark:architecture` | Синтетический набор 10 врачей × 12 месяцев, скорость/память и пределы кэша |
 | `pnpm run benchmark:background` | Синтетические SQLite/Viewer/мобильная упаковка, время и задержка цикла событий |
 | `pnpm run test:smoke` | UI, рендеринг, публикации; скрытый Electron, синтетическая база |
+| `pnpm run test:smoke --smoke-narrow` | Та же проверка в узком окне 1040 px; карточки врача проверяются по адаптивной раскладке в два столбца |
 | `pnpm run test:pdf` | PDF; Chromium `printToPDF`, затем визуальная проверка |
 | `pnpm run test:webkit` | PWA в Playwright WebKit; перед первым запуском `pnpm exec playwright install webkit` |
 | `pnpm run audit:repo` | Состав репозитория и документация |
