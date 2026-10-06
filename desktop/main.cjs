@@ -568,11 +568,20 @@ function createWindow() {
                   { n: 'Прочая услуга', a: 3, d: 1, sq: 1, ss: 12000, groupPath: ['Клиника', 'Диагностика', 'Прочие услуги'] }
                 ] } };
               }
-              const primaryFixture = parsePervichka([
-                ['Врач', 'Первичных пациентов', 'Вернулось', 'Не вернулось', 'Количество посещений'],
-                ['Тестов Косметолог', 10, 6, 4, 20], ['Примерова Косметолог', 10, 4, 6, 15],
-                ['Тестов Терапевт', 10, 5, 5, 20], ['Итого', 30, 15, 15, 55]
-              ], {}, {});
+              const primaryBook = XLSX.utils.book_new();
+              XLSX.utils.book_append_sheet(primaryBook, XLSX.utils.aoa_to_sheet([
+                ['Период: 01.12.2025 - 28.02.2026'],
+                ['Посещение и возвращаемость клиентов по сотрудникам'],
+                ['Врач', null, null, null, null, 'Посещения мастера', null, null,
+                  'Первые посещения мастера', null, 'Возвратилось', 'Не возвратилось', 'Возвратилось %'],
+                ['Тестов Косметолог', null, null, null, null, 20, null, null, 10, null, 6, 4, 60],
+                ['Примерова Косметолог', null, null, null, null, 15, null, null, 10, null, 4, 6, 40],
+                ['Тестов Терапевт', null, null, null, null, 20, null, null, 10, null, 5, 5, 50],
+                ['Итого', null, null, null, null, 55, null, null, 30, null, 15, 15, 50]
+              ]), 'Синтетика');
+              const primaryBytes = XLSX.write(primaryBook, { bookType: 'biff8', type: 'array' });
+              const primaryParsed = await readXlsxRows(new File([primaryBytes], 'synthetic-primary.xls'));
+              const primaryFixture = parsePervichka(primaryParsed.rows, extractHeaderInfo(primaryParsed.rows), primaryParsed.ws);
               DB.months['2026-02'].pervichka['3'] = { perDoc: Object.fromEntries(primaryFixture.perDoc.map(row =>
                 [row.raw === 'Тестов Косметолог' ? 'd1' : row.raw === 'Примерова Косметолог' ? 'd3' : 'd2', row])) };
               DB.months['2026-02'].manual6.d1 = { prodoctorov: 5, napopravku: 4, doctu: 4.5, sberhealth: 4.5, reviews: 5,

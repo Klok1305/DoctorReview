@@ -1257,6 +1257,68 @@ test("primary-return import keeps every doctor in flat reports and reads shifted
   assert.equal(result.aggregate, 50);
 });
 
+test("primary-return XLS import reads master-visit headings and calculates September percentages", async () => {
+  const context = createContext();
+  const XLSX = require("../build/xlsx.full.min.js");
+  const row = (name, visits, first, ret, notRet) => {
+    const cells = Array(14).fill(null);
+    Object.assign(cells, { 0: name, 5: visits, 8: first, 10: ret, 11: notRet });
+    return cells;
+  };
+  const rows = [[], ['Параметры:', null, 'Период: 01.07.2026 - 30.09.2026'], [],
+    ['Посещение и возвращаемость клиентов по сотрудникам'], ...Array.from({ length: 33 }, () => []),
+    row('Врач', 'Посещения мастера', 'Первые посещения мастера', 'Возвратилось', 'Не возвратилось'),
+    ['Клиент'], row('Итого', 9, 5, 1, 4),
+    row('Тестов Врач Один', 7, 3, 1, 2),
+    row('Синтетический Пациент Один', 3, 1, 1, null),
+    row('Синтетический Пациент Два', 2, 1, null, 1),
+    row('Синтетический Пациент Три', 2, 1, null, 1),
+    row('Тестов Врач Два', 2, 2, null, 2),
+    row('Синтетический Пациент Четыре', 1, 1, null, 1),
+    row('Синтетический Пациент Пять', 1, 1, null, 1),
+    row('Итого', 9, 5, 1, 4)];
+  rows[37][12] = 'Возвратилось %';
+  rows[37][13] = 'Не возвратилось %';
+  rows[39][12] = rows[47][12] = 20;
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  sheet['!merges'] = [
+    { s: { r: 37, c: 0 }, e: { r: 37, c: 4 } },
+    { s: { r: 37, c: 5 }, e: { r: 38, c: 7 } },
+    { s: { r: 37, c: 8 }, e: { r: 38, c: 9 } },
+  ];
+  sheet['!rows'] = rows.map((_row, index) => ({ level: [41, 42, 43, 45, 46].includes(index) ? 1 : 0 }));
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, sheet, 'Лист_1');
+  context.XLSX = XLSX;
+  context.primaryFile = new File([XLSX.write(book, { bookType: 'biff8', type: 'buffer' })], 'synthetic-primary.xls');
+  const result = await vm.runInContext(`(async () => {
+    loadBundledLibrary = () => {};
+    DB.doctors = {}; DB.months = {};
+    const log = await processFile(primaryFile);
+    const month = DB.months['2026-09'];
+    const ids = Object.keys(DB.doctors);
+    for (const id of ids) month.vyrabotka[id] = { items: [{ form: '', cat: 'Приемы', n: 'Приём', q: 1, sOwn: 100, sRef: 0, goods: false }] };
+    clearMetricsCache();
+    return { log, names: ids.map(id => doctorName(id)),
+      counts: ids.map(id => month.pervichka['3'].perDoc[id]),
+      metrics: ids.map(id => computeMetrics(id, '2026-09').loyalty.pvSlices[3]),
+      aggregate: aggregateDeptMonth('2026-09', 'all').loyalty.pvSlices[3] };
+  })()`, context);
+  assert.equal(result.log.status, 'загружено');
+  assert.equal(result.log.month, '2026-09');
+  assert.equal(result.log.slot.sl, '3');
+  assert.match(result.log.note, /сверено с «Итого»/);
+  assert.deepEqual(Array.from(result.names), ['Тестов Врач Один', 'Тестов Врач Два']);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.counts)), [
+    { visits: 7, first: 3, ret: 1, notRet: 2 },
+    { visits: 2, first: 2, ret: 0, notRet: 2 },
+  ]);
+  assert.deepEqual(Array.from(result.metrics, metric => metric.valid), [true, true]);
+  assert.ok(Math.abs(result.metrics[0].pct - 100 / 3) < 1e-10);
+  assert.equal(result.metrics[1].pct, 0);
+  assert.equal(result.aggregate.pct, 20);
+});
+
 test("primary-return import preserves legacy hierarchical reports and rejects missing counts", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
