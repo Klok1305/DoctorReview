@@ -8,7 +8,10 @@ const {
   dialog,
   ipcMain,
   shell,
+  safeStorage,
 } = require("electron");
+const { CloudConnectionStore, publishCloudPublication } = require("./services/cloud-publisher.cjs");
+const { cloudAccountsFromSettings, createCloudPublication } = require("./services/cloud-publication-service.cjs");
 const { ConfigStore, isUnsupportedStoragePath } = require("./services/config-store.cjs");
 const { DatabaseService } = require("./services/database.cjs");
 const { BackgroundTaskQueue } = require("./services/background-task-queue.cjs");
@@ -100,6 +103,8 @@ if (SMOKE_TEST) {
 
 let mainWindow = null;
 let configStore = null;
+let cloudConnectionStore = null;
+const cloudUploadResumeState = {};
 let database = null;
 const databaseWrites = new BackgroundTaskQueue({ maxQueued: 8 });
 const publicationTasks = new BackgroundTaskQueue({ maxQueued: 1 });
@@ -271,6 +276,7 @@ async function initializeServices() {
   app.setName(APP_NAME);
   const userDataDir = app.getPath("userData");
   const documentsDir = app.getPath("documents");
+  cloudConnectionStore = new CloudConnectionStore(userDataDir, safeStorage);
   const localDataDir = !SMOKE_TEST && process.env.LOCALAPPDATA
     ? process.env.LOCALAPPDATA
     : documentsDir;
@@ -1154,6 +1160,23 @@ function createWindow() {
         const result = await mainWindow.webContents.executeJavaScript(smokeAction);
         smokeLog("[smoke] renderer assertions completed");
         if (!PDF_SMOKE_TEST) {
+          const cloudPayload = await mainWindow.webContents.executeJavaScript("buildCloudPublicationPayload()");
+          const cloudPublication = createCloudPublication({ ...cloudPayload, appVersion: app.getVersion() });
+          const cloudDoctorHtml = cloudPublication.pages.find(page => page.kind === "doctor" && page.doctorId === "d1" && page.periodKey === "2026-02")?.html || "";
+          const cloudPatientText = await mainWindow.webContents.executeJavaScript(`(() => {
+            const root = document.createElement('div'); root.innerHTML = ${JSON.stringify(cloudDoctorHtml)};
+            return root.querySelector('.kpi .val')?.textContent.trim();
+          })()`);
+          const cloudSerialized = JSON.stringify(cloudPublication);
+          result.cloudPublicationValid = cloudPatientText === "3"
+            && cloudPublication.pages.some(page => page.kind === "clinic")
+            && cloudPublication.pages.some(page => page.kind === "department")
+            && cloudPublication.pages.some(page => page.kind === "specialization")
+            && !/data-viewer-patient|clientSegmentPatients/.test(cloudSerialized)
+            && cloudSerialized.includes("Комментарий smoke-теста");
+          result.cloudPublication = { doctors: cloudPublication.doctors.length, pages: cloudPublication.pages.length, patientText: cloudPatientText };
+          if (!result.cloudPublicationValid) throw new Error("Облачная публикация: нарушены показатели, комментарии или обезличивание");
+          fs.writeFileSync(path.join(SMOKE_ARTIFACT_ROOT, "cloud-publication-smoke.kvcloud"), cloudSerialized, "utf8");
           const savedComment = database.listComments({
             periodKey: result.smokeCommentContext.periodKey,
             scopeType: result.smokeCommentContext.scopeType,
@@ -1603,6 +1626,7 @@ function registerIpc() {
       snapshot: database.loadSnapshotSelection({ monthKeys: [] }),
       summary: database.summary(),
       update: updateService.getStatus(),
+      cloudConnection: cloudConnectionStore.publicSettings(),
     };
   });
   ipcMain.handle("database:load-months", (_event, payload) => {
@@ -1792,6 +1816,46 @@ function registerIpc() {
       },
     });
     return { canceled: false, path: selected.filePath, periods: publication.periods.length, doctorName };
+  });
+  ipcMain.handle("cloud-publication:connection", () => {
+    localAdminActor(); return cloudConnectionStore.publicSettings();
+  });
+  ipcMain.handle("cloud-publication:save-connection", (_event, payload) => {
+    localAdminActor(); return cloudConnectionStore.save(ensureObject(payload, "подключение к облаку"));
+  });
+  ipcMain.handle("cloud-publication:export", async (event, payload) => {
+    const session = localAdminActor();
+    const input = ensureObject(payload, "облачная публикация");
+    if (!["json", "publish"].includes(input.action)) throw new Error("Некорректная операция облачной публикации");
+    const snapshot = database.loadSnapshot() || {};
+    if (!Array.isArray(input.doctors) || input.doctors.length !== Object.keys(snapshot.doctors || {}).length
+      || input.doctors.some(doctor => !snapshot.doctors?.[doctor.doctorId])) throw new Error("Некорректный список врачей облачной публикации");
+    const accounts = cloudAccountsFromSettings(input.doctors, snapshot.settings || {}, database.viewerAccessSnapshot().departmentHeads);
+    if (!accounts.some(account => account.admin)) throw new Error("Укажите хотя бы один ID администратора Битрикса в настройках онлайн-КлинВекта");
+    // Access settings come from the committed local database. The package never
+    // carries working months, Viewer PINs or the external API secret.
+    const bundle = await runPublicationTask(event, input.operationId, "cloud-publication", {
+      doctors: input.doctors, pages: input.pages, accounts, appVersion: app.getVersion() });
+    if (input.action === "json") {
+      const selected = await dialog.showSaveDialog(mainWindow, { title: "Обезличенный JSON для онлайн-КлинВекта",
+        defaultPath: path.join(configStore.publicConfig().outputDir, `КлинВект-онлайн-без-пациентов-${new Date().toISOString().slice(0, 10)}.json`),
+        filters: [{ name: "Обезличенный пакет JSON", extensions: ["json"] }] });
+      if (selected.canceled || !selected.filePath) return { canceled: true };
+      await fs.promises.writeFile(selected.filePath, bundle.serialized, "utf8");
+      return { canceled: false, path: selected.filePath, doctors: bundle.doctors, pages: bundle.pages };
+    }
+    const operationId = String(input.operationId || "");
+    if ([...activePublicationOperations.values()].some(operation => operation.cloudUpload)) throw new Error("Отправка в облако уже выполняется");
+    const controller = new AbortController();
+    activePublicationOperations.set(operationId, { senderId: event.sender.id, controller, cloudUpload: true });
+    try {
+      const result = await publishCloudPublication(bundle.serialized, cloudConnectionStore.credentials(), { signal: controller.signal, resumeState: cloudUploadResumeState,
+        onProgress: progress => { if (!event.sender.isDestroyed()) event.sender.send("background:progress", { operationId, ...progress }); } });
+      database.audit({ actorUserId: session.userId, action: "cloud-publication.published", targetType: "cloud",
+        targetId: cloudConnectionStore.publicSettings().applicationId,
+        details: { doctors: bundle.doctors, pages: bundle.pages, patientRegistryIncluded: false, rawExportsIncluded: false } });
+      return { canceled: false, ...result };
+    } finally { activePublicationOperations.delete(operationId); }
   });
   ipcMain.handle("mobile-publication:export-bundle", async (event, payload) => {
     const session = localAdminActor();

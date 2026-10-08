@@ -64,6 +64,7 @@
 !/mobile-pilot/icons/app-icon-512.png
 
 # Сервер мобильной версии для Bitrix24 Black Hole. Рабочий пакет хранится только вне Git.
+# Облачные маршруты/публикация и online.* — исходники; .kvcloud — только рабочие данные.
 !/mobile-server/
 /mobile-server/*
 !/mobile-server/*.cjs
@@ -114,6 +115,7 @@ output/
 *.zip
 *.kvmobile
 *.kvmobilebundle
+*.kvcloud
 *.7z
 *.rar
 *.log

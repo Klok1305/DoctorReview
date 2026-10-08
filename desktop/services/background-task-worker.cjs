@@ -34,6 +34,14 @@ async function execute() {
     progress({ stage: "serialize", completed: 1, total: 1 });
     return { serialized, doctors: bundle.doctors.length };
   }
+  if (task === "cloud-publication") {
+    const { createCloudPublication } = require("./cloud-publication-service.cjs");
+    progress({ stage: "cloud", completed: 0, total: 1 });
+    const publication = createCloudPublication(payload);
+    const serialized = JSON.stringify(publication);
+    progress({ stage: "cloud", completed: 1, total: 1 });
+    return { serialized, doctors: publication.doctors.length, pages: publication.pages.length };
+  }
   throw new Error("Неизвестная фоновая операция");
 }
 

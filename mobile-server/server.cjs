@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { createCloudRoutes } = require("./cloud-routes.cjs");
 
 function loadPublicationService() {
   const candidates = [
@@ -149,6 +150,9 @@ function createMobileServer(options = {}) {
   const dataDir = path.resolve(options.dataDir || process.env.KLINVEKT_DATA_DIR || path.join(__dirname, "data"));
   const bundlePath = path.join(dataDir, BUNDLE_FILE_NAME);
   fs.mkdirSync(dataDir, { recursive: true });
+  const cloud = createCloudRoutes({ dataDir, portalId: options.cloudPortalId || process.env.KLINVEKT_CLOUD_PORTAL_ID || "",
+    publisherKeyIds: options.cloudPublisherKeyIds || String(process.env.KLINVEKT_CLOUD_KEY_IDS || "").split(",").map(value => value.trim()).filter(Boolean),
+    sendJson, readBody, readJson, securityHeaders, isAdminRole });
 
   const state = {
     bundle: loadBundle(bundlePath),
@@ -554,7 +558,7 @@ function createMobileServer(options = {}) {
     }
     let relative = "";
     if (url.pathname === "/" || url.pathname === "/mobile" || url.pathname === "/mobile/") {
-      relative = "index.html";
+      relative = cloud.configured || cloud.available ? "online.html" : "index.html";
     } else if (url.pathname.startsWith("/mobile/")) {
       relative = url.pathname.slice("/mobile/".length);
     } else if (url.pathname.startsWith("/")) {
@@ -605,7 +609,9 @@ function createMobileServer(options = {}) {
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
     try {
-      if (url.pathname.startsWith("/api/")) {
+      if (url.pathname.startsWith("/api/cloud/")) {
+        await cloud.handle(request, response, url, requestIdentity(request, { trustLocal, localRole: options.localRole }));
+      } else if (url.pathname.startsWith("/api/")) {
         await handleApi(request, response, url, requestIdentity(request, { trustLocal, localRole: options.localRole }));
       } else {
         serveStatic(request, response, url);

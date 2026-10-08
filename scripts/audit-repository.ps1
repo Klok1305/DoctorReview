@@ -31,7 +31,7 @@ $allowedPatterns = @(
   '^viewer/[^/]+\.(cjs|js|css|html|json)$',
   '^mobile-pilot/[^/]+\.(html|css|js|webmanifest)$',
   '^mobile-pilot/icons/app-icon-(192|512)\.png$',
-  '^mobile-server/[^/]+\.cjs$',
+  '^mobile-server/[^/]+\.cjs$', # Includes cloud-routes; online assets use the mobile-pilot source allowlist.
   '^docs/[^/]+\.md$', # Includes PROJECT_MAP.md and ARCHITECTURE_REVIEW.md; measurements use synthetic data only.
   '^resources/(app-icon\.(ico|png)|update-config\.json)$',
   '^scripts/benchmark-architecture\.cjs$', # Reproducible synthetic-only architecture benchmark.
@@ -43,7 +43,7 @@ $allowedPatterns = @(
 
 $blockedPatterns = @(
   '(^|/)(node_modules|dist|out|tmp|output)(/|$)',
-  '\.(sqlite|sqlite-shm|sqlite-wal|db|db-shm|db-wal|ovbackup|xls|xlsx|xlsm|csv|tsv|pdf|zip|kvmobile|kvmobilebundle|7z|rar|log|exe|msi|blockmap)$',
+  '\.(sqlite|sqlite-shm|sqlite-wal|db|db-shm|db-wal|ovbackup|xls|xlsx|xlsm|csv|tsv|pdf|zip|kvmobile|kvmobilebundle|kvcloud|7z|rar|log|exe|msi|blockmap)$',
   '(^|/)latest\.yml$',
   '(^|/)config\.json$',
   '(^|/)\.env(?:\..+)?$',
@@ -56,7 +56,7 @@ $files = @(& git -c core.quotepath=false ls-files --cached --others --exclude-st
 if ($LASTEXITCODE -ne 0) { throw "Could not read the Git file list." }
 
 $problems = [System.Collections.Generic.List[string]]::new()
-$secretPattern = '(?i)(github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----)'
+$secretPattern = '(?i)(github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|vibe_(?:app_local|api)_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----)'
 $textExtensions = @('.cjs', '.css', '.html', '.js', '.json', '.md', '.nsh', '.ps1', '.py', '.webmanifest', '.yaml', '.yml')
 
 foreach ($file in $files) {

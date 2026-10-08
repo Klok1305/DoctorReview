@@ -19,6 +19,9 @@ contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   exportViewerPins: payload => invoke("viewer-publication:export-pins", payload),
   exportMobilePublication: payload => invoke("mobile-publication:export", payload),
   exportMobilePublicationBundle: payload => invoke("mobile-publication:export-bundle", payload),
+  getCloudConnection: () => invoke("cloud-publication:connection"),
+  saveCloudConnection: payload => invoke("cloud-publication:save-connection", payload),
+  exportCloudPublication: payload => invoke("cloud-publication:export", payload),
   cancelBackgroundOperation: operationId => invoke("background:cancel", operationId),
   onBackgroundProgress: callback => {
     if (typeof callback !== "function") return () => {};

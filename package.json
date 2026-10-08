@@ -1,6 +1,6 @@
 {
   "name": "doctor-performance-app",
-  "version": "3.0.1",
+  "version": "3.1.0",
   "description": "Административное приложение «КлинВект Щербатова» для аналитики врачей и отделений",
   "main": "desktop/main.cjs",
   "author": "Nikita",
@@ -29,7 +29,7 @@
     "benchmark:background": "node ./scripts/benchmark-background.cjs",
     "test:smoke": "pnpm run assemble && electron . --smoke-test",
     "test:pdf": "pnpm run assemble && electron . --pdf-smoke",
-    "test:webkit": "node ./scripts/test-mobile-webkit.cjs",
+    "test:webkit": "node ./scripts/test-mobile-webkit.cjs && node ./scripts/test-cloud-webkit.cjs",
     "dist": "pnpm run assemble && electron-builder --win nsis --publish never",
     "dist:viewer": "electron-builder --config electron-builder.viewer.json --win nsis --publish never",
     "dist:all": "pnpm run dist && pnpm run dist:viewer"

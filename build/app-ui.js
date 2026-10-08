@@ -5319,7 +5319,7 @@ function composeViewerReportHtml(rawHtml, context, comments) {
   return root.innerHTML;
 }
 
-async function composeViewerDashboardHtml(target, periodKey, context, comments) {
+async function composeViewerDashboardHtml(target, periodKey, context, comments, { patientRegistry = true } = {}) {
   const source = pdfTargetSource(target, periodKey);
   if (!source) throw new Error("не найден дашборд для Viewer");
   const { clone } = await cloneDashboardForViewer(source);
@@ -5328,12 +5328,88 @@ async function composeViewerDashboardHtml(target, periodKey, context, comments) 
   // Keep the Admin V3 snapshot: its nested 1C hierarchy, goals, focus charts and
   // referral sections all belong to the same selected appointment window.
   // The Viewer binds the retained data-g rows without inline event handlers.
-  const clientBase = viewerClientBaseHtml(target, periodKey);
+  const clientBase = patientRegistry ? viewerClientBaseHtml(target, periodKey) : "";
   if (clientBase) {
     const originalClientBase = root.querySelector('[data-vector-key="v4"]');
     if (originalClientBase) originalClientBase.insertAdjacentHTML("beforeend", clientBase);
   }
   return `<div class="viewer-dashboard-snapshot" data-source-tab="${esc(target.tab)}">${root.innerHTML}</div>`;
+}
+
+async function buildCloudPublicationPayload(onProgress = () => {}, isCanceled = () => false) {
+  const doctorIds = sortDoctorIdsAlphabetically(Object.keys(DB.doctors));
+  const doctors = doctorIds.map(doctorId => ({ doctorId, displayName: doctorName(doctorId),
+    department: resolvedDepartmentName(doctorId) || "", specialization: resolvedSpecializationName(doctorId) || "" }));
+  const periods = monthKeysSorted().filter(periodKey => doctorIds.some(id => doctorHasDashboardData(id, periodKey)));
+  if (!periods.length) throw new Error("Нет рассчитанных периодов с личной «Выработкой»");
+  const previousUi = { tab: UI.tab, departmentMonth: UI.departmentMonth, departmentFilter: UI.departmentFilter,
+    deptMonth: UI.deptMonth, deptFilter: UI.deptFilter, subFilter: UI.subFilter,
+    docMonth: UI.docMonth, docId: UI.docId, showLabels: UI.showLabels };
+  const pages = [];
+  UI.showLabels = true;
+  try {
+    await saveVisibleCommentDrafts();
+    if (!await saveLocal()) throw new Error("Не удалось сохранить текущую рабочую базу");
+    for (const periodKey of periods) {
+      if (isCanceled()) throw new DOMException("Операция отменена", "AbortError");
+      const comments = await DESKTOP_API.listComments({ periodKey });
+      const subjects = doctors.filter(doctor => doctorHasDashboardData(doctor.doctorId, periodKey));
+      const targets = [
+        { kind: "clinic", department: "", specialization: "", doctorId: "", title: "Вся клиника",
+          target: { tab: "department", departmentName: "all" }, context: { scopeType: "department", scopeId: "all" } },
+        ...[...new Set(subjects.map(doctor => doctor.department).filter(Boolean))].map(department => ({
+          kind: "department", department, specialization: "", doctorId: "", title: `Отделение ${department}`,
+          target: { tab: "department", departmentName: department }, context: { scopeType: "department", scopeId: department } })),
+        ...[...new Set(subjects.map(doctor => doctor.specialization).filter(Boolean))].map(specialization => ({
+          kind: "specialization", department: "", specialization, doctorId: "", title: `Специализация ${specialization}`,
+          target: { tab: "dept", deptFilter: specialization }, context: { scopeType: "specialization", scopeId: specialization } })),
+        ...subjects.map(doctor => ({ kind: "doctor", ...doctor, title: doctor.displayName,
+          target: { tab: "doctor", doctorId: doctor.doctorId }, context: { scopeType: "doctor", scopeId: doctor.doctorId } })),
+      ];
+      for (const item of targets) {
+        if (isCanceled()) throw new DOMException("Операция отменена", "AbortError");
+        const html = await composeViewerDashboardHtml(item.target, periodKey,
+          { ...item.context, periodKey, pageType: item.kind === "clinic" ? "department" : item.kind }, comments, { patientRegistry: false });
+        pages.push({ kind: item.kind, periodKey, doctorId: item.doctorId,
+          department: item.department, specialization: item.specialization,
+          title: `${item.title} · ${monthLabel(periodKey)}`, html: viewerHtmlSanitizer.sanitizeReportHtml(html) });
+        onProgress(`Формируются отчёты: ${pages.length} · ${monthLabel(periodKey)}`);
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+    }
+    assertCloudPatientPrivacy(pages);
+    return { doctors, pages };
+  } finally {
+    Object.assign(UI, previousUi);
+    renderAll();
+    switchTab(previousUi.tab);
+  }
+}
+
+function assertCloudPatientPrivacy(pages) {
+  const names = new Set();
+  const identifiers = new Set();
+  for (const month of Object.values(DB.months)) {
+    for (const windows of Object.values(month.kb || {})) {
+      for (const base of Object.values(windows || {})) {
+        for (const patient of base.clients || []) {
+          const name = String(patient.name || "").trim();
+          const id = String(patient.patientId || "").trim();
+          if (name.length >= 4) names.add(name);
+          if (id.length >= 4) identifiers.add(id);
+        }
+      }
+    }
+  }
+  const html = pages.map(page => page.html).join("\n");
+  for (const name of names) {
+    if (html.includes(esc(name)) || html.includes(name)) throw new Error("В отчёте найдено имя пациента. Проверьте комментарии перед публикацией в облако");
+  }
+  for (const id of identifiers) {
+    // Numeric patient IDs can coincide with an aggregate amount. Structured
+    // patient fields/blocks are prohibited separately; opaque IDs are checked here.
+    if (!/^\d+$/.test(id) && (html.includes(esc(id)) || html.includes(id))) throw new Error("В отчёте найден идентификатор пациента. Публикация остановлена");
+  }
 }
 
 let viewerExportRunning = false;
@@ -6135,6 +6211,104 @@ function viewerAccessSettingsHtml() {
   </div></details>`;
 }
 
+let cloudExportRunning = false;
+let cloudExportCanceled = false;
+let cloudExportOperationId = null;
+
+function cloudPublicationSettingsHtml() {
+  const connection = DESKTOP_STATE?.cloudConnection || {};
+  const users = DB.settings.cloudDoctorUserIds || {};
+  const heads = new Set(DB.settings.cloudSpecializationHeadDoctorIds || []);
+  const rows = sortDoctorIdsAlphabetically(Object.keys(DB.doctors)).map(doctorId => {
+    const specialization = resolvedSpecializationName(doctorId) || "";
+    const managed = viewerManagedDepartments(doctorId);
+    return `<tr data-cloud-doctor="${esc(doctorId)}"><td><b>${esc(doctorName(doctorId))}</b>
+      <div class="small muted">${esc(doctorStructureLabel(doctorId))}${managed.length ? ` · заведующий: ${esc(managed.join(", "))}` : ""}</div></td>
+      <td><input data-cloud-user-id type="text" inputmode="numeric" maxlength="20" value="${esc(users[doctorId] || "")}" aria-label="ID Битрикса ${esc(doctorName(doctorId))}"></td>
+      <td><label><input data-cloud-specialization-head type="checkbox" ${heads.has(doctorId) ? "checked" : ""} ${specialization ? "" : "disabled"}> ${specialization ? esc(specialization) : "Нет специализации"}</label></td></tr>`;
+  }).join("");
+  return `${pageBlockStart("settings.cloud", "☁ Онлайн-КлинВект в Битрикс24", { id: "cloudPublicationSettingsCard" })}
+    <p class="small muted">Сохраните обезличенный JSON и загрузите его в онлайн-КлинВект через Битрикс. В файл входят все рассчитанные месяцы, готовые показатели, графики и комментарии. ФИО/ID пациентов, их отдельные строки, исходники и рабочая база в пакет не входят.</p>
+    <div class="notice blue">Врач видит себя. Заведующий специализацией — свою специализацию и себя. Заведующий отделением — своё отделение, его специализации и врачей. Администратор — всю клинику. Вход привязан к ID сотрудника Битрикса; роли складываются.</div>
+    <label class="fld"><span>ID администраторов КлинВекта в Битриксе (через запятую)</span><input id="cloudAdminUserIds" value="${esc((DB.settings.cloudAdminUserIds || []).join(", "))}" inputmode="numeric"></label>
+    <p class="small muted">ID указан в карточке сотрудника Битрикса. Пустой ID врача означает отсутствие онлайн-доступа. Заведующие отделениями берутся из назначений Viewer выше; здесь дополнительно назначаются заведующие специализациями.</p>
+    <div class="scroll-y"><table class="data"><tr><th>Врач</th><th>ID Битрикса</th><th>Заведующий специализацией</th></tr>${rows}</table></div>
+    <div class="toolbar"><button class="btn" type="button" onclick="saveCloudPublicationSettings()" ${DESKTOP_API ? "" : "disabled"}>Сохранить онлайн-доступ</button>
+      <button id="btnExportCloudJson" class="btn primary" type="button" onclick="exportCloudPublications('json')" ${!DESKTOP_API || cloudExportRunning ? "disabled" : ""}>Выгрузить обезличенный JSON</button></div>
+    <p class="small muted">Для ручной загрузки ключ API не нужен. Первый файл загружает администратор портала; укажите его ID среди администраторов КлинВекта. Следующие файлы загружают назначенные администраторы КлинВекта. Загрузка заменяет отчёты и права целиком.</p>
+    <details><summary>Дополнительно: автоматическая отправка через API</summary><div class="grid cols-2"><label class="fld"><span>ID приложения Вайбкод</span><input id="cloudApplicationId" value="${esc(connection.applicationId || "")}" placeholder="ID существующего приложения"></label>
+      <label class="fld"><span>Ключ внешнего API приложения</span><input id="cloudApiKey" type="password" autocomplete="new-password" placeholder="${connection.keyConfigured ? "Ключ сохранён; оставьте пустым для сохранения" : "Введите ключ внешнего API"}"></label></div>
+      <button id="btnPublishCloud" class="btn" type="button" onclick="exportCloudPublications('publish')" ${!DESKTOP_API || cloudExportRunning ? "disabled" : ""}>Отправить всё в облако</button>
+      <p class="small muted">Требует отдельно включённого внешнего API на сервере. Ключ хранится защищённо в Windows.</p></details>
+  </div></details>`;
+}
+
+async function saveCloudPublicationSettings({ silent = false } = {}) {
+  try {
+    const users = {}, heads = [];
+    for (const row of document.querySelectorAll("[data-cloud-doctor]")) {
+      const id = row.dataset.cloudDoctor, userId = row.querySelector("[data-cloud-user-id]").value.trim();
+      if (userId && !/^[1-9]\d{0,19}$/.test(userId)) throw new Error(`Некорректный ID Битрикса у врача ${doctorName(id)}`);
+      if (userId) users[id] = userId;
+      if (row.querySelector("[data-cloud-specialization-head]").checked) heads.push(id);
+    }
+    if (new Set(Object.values(users)).size !== Object.keys(users).length) throw new Error("Один ID Битрикса указан у нескольких врачей");
+    const adminIds = document.getElementById("cloudAdminUserIds").value.split(/[,;\s]+/).filter(Boolean);
+    if (adminIds.some(id => !/^[1-9]\d{0,19}$/.test(id))) throw new Error("Некорректный ID администратора Битрикса");
+    const applicationId = document.getElementById("cloudApplicationId").value.trim();
+    const apiKey = document.getElementById("cloudApiKey").value.trim();
+    if (applicationId || apiKey) {
+      DESKTOP_STATE.cloudConnection = await DESKTOP_API.saveCloudConnection({ applicationId, apiKey });
+      document.getElementById("cloudApiKey").value = "";
+      document.getElementById("cloudApiKey").placeholder = "Ключ сохранён; оставьте пустым для сохранения";
+    }
+    DB.settings.cloudDoctorUserIds = users;
+    DB.settings.cloudSpecializationHeadDoctorIds = heads;
+    DB.settings.cloudAdminUserIds = [...new Set(adminIds)];
+    if (!await saveLocal({ settings: true })) throw new Error("Не удалось сохранить онлайн-доступ в рабочую базу");
+    if (!silent) toast("Онлайн-доступ сохранён");
+    return true;
+  } catch (error) { if (silent) throw error; toast(error.message, true); return false; }
+}
+
+function cancelCloudPublication() {
+  cloudExportCanceled = true;
+  if (cloudExportOperationId) DESKTOP_API.cancelBackgroundOperation(cloudExportOperationId).catch(console.error);
+}
+
+async function exportCloudPublications(action) {
+  if (cloudExportRunning) return;
+  let progressDialog, unsubscribe = () => {};
+  try {
+    await saveCloudPublicationSettings({ silent: true });
+    if (action === "publish" && !DESKTOP_STATE?.cloudConnection?.keyConfigured) throw new Error("Сначала сохраните подключение к Битриксу");
+    if (!DB.settings.cloudAdminUserIds?.length) throw new Error("Укажите ID администратора КлинВекта в Битриксе");
+    await refreshViewerPublicationAccess();
+    cloudExportRunning = true; cloudExportCanceled = false;
+    cloudExportOperationId = crypto.randomUUID();
+    progressDialog = document.createElement("dialog");
+    progressDialog.innerHTML = '<h3>Онлайн-КлинВект</h3><p role="status">Формируются отчёты…</p><button class="btn" type="button">Отмена</button>';
+    progressDialog.querySelector("button").addEventListener("click", cancelCloudPublication);
+    progressDialog.addEventListener("cancel", event => { event.preventDefault(); cancelCloudPublication(); });
+    document.body.appendChild(progressDialog); progressDialog.showModal();
+    const progress = message => { progressDialog.querySelector("p").textContent = message; };
+    const payload = await buildCloudPublicationPayload(progress, () => cloudExportCanceled);
+    if (cloudExportCanceled) throw new DOMException("Операция отменена", "AbortError");
+    unsubscribe = DESKTOP_API.onBackgroundProgress(event => {
+      if (event.operationId !== cloudExportOperationId) return;
+      progress(event.stage === "upload" ? `Отправляется в облако: ${event.completed} из ${event.total} порций` : "Проверяется и упаковывается обезличенный JSON…");
+    });
+    const result = await DESKTOP_API.exportCloudPublication({ ...payload, action, operationId: cloudExportOperationId });
+    if (!result.canceled) toast(action === "publish" ? `Облако обновлено: ${result.doctors} врачей, ${result.pages} отчётов` : `Обезличенный JSON сохранён: ${result.path}`);
+  } catch (error) {
+    toast(error.name === "AbortError" || cloudExportCanceled ? "Отправка остановлена; полученные порции можно продолжить" : error.message, !(error.name === "AbortError" || cloudExportCanceled));
+  } finally {
+    unsubscribe(); progressDialog?.close(); progressDialog?.remove();
+    cloudExportRunning = false; cloudExportOperationId = null;
+    renderSettings();
+  }
+}
+
 async function exportViewerPinsTable() {
   const items = (VIEWER_ACCESS.doctors || [])
     .filter(item => DB.doctors[item.doctorId])
@@ -6291,7 +6465,7 @@ function renderSettings() {
   if (unassignedDoctors.length) {
     structureTree += `<div class="clinic-tree-department clinic-tree-unassigned"><div class="clinic-tree-head"><div><b>Не распределено</b><span class="badge warn">${unassignedDoctors.length}</span>${doctorStructureDragList(unassignedDoctors, "Нет врачей")}</div></div></div>`;
   }
-  let html = viewerAccessSettingsHtml();
+  let html = viewerAccessSettingsHtml() + cloudPublicationSettingsHtml();
 
   /* --- иерархия отделение -> опциональные специализации --- */
   html += `${pageBlockStart("settings.structure", "🏥 Структура клиники")}
