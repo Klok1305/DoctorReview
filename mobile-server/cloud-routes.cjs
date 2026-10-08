@@ -1,6 +1,7 @@
 "use strict";
 const fs = require("node:fs");
 const path = require("node:path");
+const { createCloudAuth } = require("./cloud-auth.cjs");
 const crypto = require("node:crypto");
 const servicePath = fs.existsSync(path.join(__dirname, "cloud-publication-service.cjs"))
   ? "./cloud-publication-service.cjs" : "../desktop/services/cloud-publication-service.cjs";
@@ -10,7 +11,7 @@ const TTL = 20 * 60 * 1000;
 const sha256 = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
 const error = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode });
 
-function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, readBody, readJson, securityHeaders, isAdminRole }) {
+function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, readBody, readJson, securityHeaders, isAdminRole, trustLocal = false }) {
   const filePath = path.join(dataDir, "publications.kvcloud");
   let publication = null;
   if (fs.existsSync(filePath)) {
@@ -20,6 +21,7 @@ function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, 
     publication = validateCloudPublication(stored.publication);
   }
   const uploads = new Map(), completed = new Map();
+  const auth = createCloudAuth({ trustLocal });
   const allowedKeys = new Set(publisherKeyIds);
   const clean = () => {
     for (const [id, upload] of uploads) if (!upload.busy && upload.expiresAt <= Date.now()) {
@@ -37,14 +39,19 @@ function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, 
     if (request.headers["x-vibe-caller-kind"]) throw error("Внешний API не предоставляет доступ к отчётам", 403);
     if (!identity || !portalId || identity.portalId !== portalId || !/^[1-9]\d*$/.test(identity.userId)) throw error("Откройте КлинВект из своего портала Битрикс24", 401);
   };
-  const canUpload = identity => publication
-    ? publication.accounts.some(account => account.userId === identity.userId && account.admin)
-    : isAdminRole(identity.role);
+  const accountFor = (request, identity) => {
+    if (!publication) return null;
+    const id = publication.version === 2 ? auth.current(request, identity) : identity.userId;
+    return publication.accounts.find(account => (publication.version === 2 ? account.accountId : account.userId) === id);
+  };
+  const canUpload = (request, identity) => publication?.version === 1
+    ? Boolean(accountFor(request, identity)?.admin)
+    : isAdminRole(identity.role) || Boolean(accountFor(request, identity)?.admin);
   const manualPublisher = (request, identity) => {
     requireUser(request, identity);
     // A custom header forces cross-origin requests through an unsupported CORS
     // preflight. Portal identity alone must not authorize a cross-site upload.
-    if (request.headers["x-klinvekt-cloud-upload"] !== "1" || !canUpload(identity)) throw error("Загрузка доступна только администратору КлинВекта", 403);
+    if (request.headers["x-klinvekt-cloud-upload"] !== "1" || !canUpload(request, identity)) throw error("Загрузка доступна только администратору КлинВекта", 403);
     return `user:${identity.portalId}:${identity.userId}`;
   };
   const ownedUpload = (id, key) => {
@@ -72,7 +79,17 @@ function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, 
       sendJson(response, 200, { ok: true, uploadId: id, nextIndex: 0, chunkBytes: CHUNK_BYTES }); return;
     }
     if (uploadMatch) {
-      const key = manual ? manualPublisher(request, identity) : publisher(request), id = uploadMatch[1];
+      const id = uploadMatch[1];
+      // A successful v2 publication revokes sessions. Its owner can still repeat
+      // the acknowledgement after a lost response, without authorizing new writes.
+      if (manual && request.method === "POST" && uploadMatch[2]) {
+        requireUser(request, identity);
+        const prior = completed.get(id);
+        if (request.headers["x-klinvekt-cloud-upload"] === "1" && prior?.key === `user:${identity.portalId}:${identity.userId}`) {
+          sendJson(response, 200, { ...prior.result, repeated: true }); return;
+        }
+      }
+      const key = manual ? manualPublisher(request, identity) : publisher(request);
       if (request.method === "POST" && uploadMatch[2] && completed.get(id)?.key === key) {
         sendJson(response, 200, { ...completed.get(id).result, repeated: true }); return;
       }
@@ -107,7 +124,7 @@ function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, 
           let value;
           try { value = JSON.parse(raw.toString("utf8")); } catch (_) { throw error("Пакет JSON повреждён"); }
           const validated = validateCloudPublication(value);
-          if (manual && !validated.accounts.some(account => account.userId === identity.userId && account.admin)) {
+          if (manual && validated.version === 1 && !validated.accounts.some(account => account.userId === identity.userId && account.admin)) {
             throw error(`В JSON должен быть указан ваш ID ${identity.userId} среди администраторов КлинВекта`);
           }
           // Persist first, then replace the in-memory publication. An invalid or
@@ -116,7 +133,7 @@ function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, 
           await fs.promises.writeFile(candidatePath, JSON.stringify({ portalId, publication: validated }), { mode: 0o600 });
           try { await fs.promises.rename(candidatePath, filePath); }
           finally { await fs.promises.rm(candidatePath, { force: true }).catch(() => {}); }
-          publication = validated; uploads.delete(id);
+          publication = validated; auth.revoke(); uploads.delete(id);
           const result = { ok: true, doctors: validated.doctors.length, pages: validated.pages.length, createdAt: validated.createdAt };
           completed.set(id, { key, result, expiresAt: Date.now() + TTL });
           await fs.promises.rm(upload.filePath, { force: true }).catch(() => {});
@@ -129,18 +146,35 @@ function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, 
     // External API keys publish only. They cannot read reports or impersonate a
     // doctor, including when a caller supplies fake user headers.
     requireUser(request, identity);
+    if (request.method === "POST" && ["/api/cloud/login", "/api/cloud/logout"].includes(url.pathname)) {
+      if (request.headers["x-klinvekt-cloud-auth"] !== "1") throw error("Откройте форму входа КлинВекта", 403);
+      if (url.pathname.endsWith("/logout")) {
+        auth.logout(request, response, identity); sendJson(response, 200, { ok: true }); return;
+      }
+      if (!publication || publication.version !== 2) throw error("Сначала загрузите JSON с PIN из обновлённого Admin", 409);
+      const input = await readJson(request, 4096);
+      if (!input || typeof input !== "object" || Array.isArray(input)) throw error("Некорректная форма входа");
+      const { account, sessionToken } = await auth.login(request, response, identity, input, () => publication);
+      sendJson(response, 200, { ok: true, displayName: account.displayName, sessionToken }); return;
+    }
     if (request.method === "GET" && url.pathname === "/api/cloud/admin") {
+      const account = accountFor(request, identity);
       sendJson(response, 200, { ok: true, userId: identity.userId, userName: identity.userName,
-        canUpload: canUpload(identity), publicationAvailable: Boolean(publication) }); return;
+        canUpload: canUpload(request, identity), publicationAvailable: Boolean(publication),
+        authMode: publication?.version === 1 ? "bitrix" : "pin",
+        account: publication?.version === 2 && account ? { accountId: account.accountId, displayName: account.displayName, admin: account.admin } : null,
+        accounts: publication?.version === 2 ? publication.accounts.map(({ accountId, displayName }) => ({ accountId, displayName })) : [] }); return;
     }
     if (!publication) throw error("Администратор ещё не загрузил отчёты", 409);
-    const pages = visibleCloudPages(publication, identity.userId);
+    const account = accountFor(request, identity);
+    if (publication.version === 2 && !account) throw error("Выберите ФИО и введите PIN", 401);
+    const pages = visibleCloudPages(publication, publication.version === 2 ? account.accountId : identity.userId);
     if (!pages.length) throw error("Доступ не назначен. Обратитесь к администратору КлинВекта", 403);
     if (request.method === "GET" && url.pathname === "/api/cloud/context") {
       const cursor = Number(url.searchParams.get("cursor") || 0);
       if (!Number.isInteger(cursor) || cursor < 0 || cursor >= pages.length) throw error("Некорректная позиция каталога");
       const end = Math.min(cursor + 128, pages.length);
-      sendJson(response, 200, { ok: true, userName: identity.userName, createdAt: publication.createdAt,
+      sendJson(response, 200, { ok: true, userName: publication.version === 2 ? account.displayName : identity.userName, createdAt: publication.createdAt,
         pages: pages.slice(cursor, end).map(({ html, ...descriptor }) => descriptor),
         nextCursor: end < pages.length ? end : null }); return;
     }

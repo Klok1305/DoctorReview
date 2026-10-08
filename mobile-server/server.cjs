@@ -152,7 +152,7 @@ function createMobileServer(options = {}) {
   fs.mkdirSync(dataDir, { recursive: true });
   const cloud = createCloudRoutes({ dataDir, portalId: options.cloudPortalId || process.env.KLINVEKT_CLOUD_PORTAL_ID || "",
     publisherKeyIds: options.cloudPublisherKeyIds || String(process.env.KLINVEKT_CLOUD_KEY_IDS || "").split(",").map(value => value.trim()).filter(Boolean),
-    sendJson, readBody, readJson, securityHeaders, isAdminRole });
+    sendJson, readBody, readJson, securityHeaders, isAdminRole, trustLocal });
 
   const state = {
     bundle: loadBundle(bundlePath),
@@ -598,7 +598,7 @@ function createMobileServer(options = {}) {
     response.writeHead(200, {
       "Content-Type": MIME_TYPES[extension] || "application/octet-stream",
       "Content-Length": stat.size,
-      "Cache-Control": ["index.html", "service-worker.js", "manifest.webmanifest"].includes(path.basename(target))
+      "Cache-Control": ["index.html", "online.html", "service-worker.js", "manifest.webmanifest"].includes(path.basename(target))
         ? "no-cache"
         : "public, max-age=86400",
     });

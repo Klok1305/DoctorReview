@@ -1,15 +1,34 @@
 "use strict";
 const periodSelect = document.getElementById("onlinePeriod"), scopeSelect = document.getElementById("onlineScope");
 const reportFrame = document.getElementById("onlineFrame"), statusLine = document.getElementById("onlineStatus");
-let catalog = [], publicationDate = "", loading = null, uploading = null;
+let catalog = [], publicationDate = "", loading = null, uploading = null, reportLoading = null, cloudSessionToken = "";
 const uploadPanel = document.getElementById("onlineUploadPanel"), uploadStatus = document.getElementById("onlineUploadStatus");
+const loginForm = document.getElementById("onlineLoginForm"), accountSelect = document.getElementById("onlineAccount");
+const pinInput = document.getElementById("onlinePin"), loginStatus = document.getElementById("onlineLoginStatus");
+const logoutButton = document.getElementById("onlineLogout");
 const scopeKey = page => JSON.stringify([page.kind, page.doctorId, page.department, page.specialization]);
-function showReport() {
+async function showReport() {
+  reportLoading?.abort(); const controller = new AbortController(); reportLoading = controller;
   const page = catalog.find(page => page.periodKey === periodSelect.value && scopeKey(page) === scopeSelect.value);
-  if (!page) { reportFrame.hidden = true; return; }
-  reportFrame.hidden = false;
-  reportFrame.src = `/api/cloud/pages/${encodeURIComponent(page.pageId)}`;
-  statusLine.textContent = `Публикация: ${new Date(publicationDate).toLocaleString("ru-RU")} · ${page.title}`;
+  reportFrame.hidden = true; reportFrame.removeAttribute("src"); reportFrame.removeAttribute("srcdoc");
+  if (!page) return;
+  try {
+    const response = await fetch(`/api/cloud/pages/${encodeURIComponent(page.pageId)}`, { cache: "no-store",
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]),
+      headers: cloudSessionToken ? { "X-Klinvekt-Cloud-Session": cloudSessionToken } : {} });
+    if (!response.ok) {
+      const data = await response.json(); throw Object.assign(new Error(data.error || "Не удалось открыть отчёт"), { status: response.status });
+    }
+    const html = await response.text(); if (controller.signal.aborted) return;
+    // srcdoc keeps the token out of iframe URLs/history and works when Safari
+    // blocks third-party cookies. The server still checks each requested page.
+    reportFrame.srcdoc = html; reportFrame.hidden = false;
+    statusLine.textContent = `Публикация: ${new Date(publicationDate).toLocaleString("ru-RU")} · ${page.title}`;
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    if (error.status === 401) { cloudSessionToken = ""; await refresh(); }
+    else statusLine.textContent = error.message;
+  }
 }
 function updateScopes(previousKey = scopeSelect.value) {
   const pages = catalog.filter(page => page.periodKey === periodSelect.value);
@@ -18,31 +37,49 @@ function updateScopes(previousKey = scopeSelect.value) {
   scopeSelect.disabled = !pages.length; showReport();
 }
 async function requestJson(url, signal, options = {}) {
+  const { retry = true, ...fetchOptions } = options;
   let response;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < (retry ? 3 : 1); attempt++) {
     try {
-      response = await fetch(url, { ...options, cache: "no-store", signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]) });
-      if (![429, 503].includes(response.status) || attempt === 2) break;
-    } catch (error) { if (signal.aborted || attempt === 2) throw error; }
+      response = await fetch(url, { ...fetchOptions, headers: { ...fetchOptions.headers,
+        ...(cloudSessionToken ? { "X-Klinvekt-Cloud-Session": cloudSessionToken } : {}) },
+        cache: "no-store", signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]) });
+      if (!retry || ![429, 503].includes(response.status) || attempt === 2) break;
+    } catch (error) { if (!retry || signal.aborted || attempt === 2) throw error; }
     await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
   }
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "Не удалось открыть отчёты");
+  if (!response.ok) throw Object.assign(new Error(data.error || "Не удалось открыть отчёты"), { status: response.status });
   return data;
 }
 async function refresh() {
   loading?.abort(); loading = new AbortController();
+  reportLoading?.abort();
   const signal = loading.signal;
   statusLine.textContent = "Загружаются доступные отчёты…";
   // Clear the old report immediately: an updated publication may revoke access.
-  reportFrame.hidden = true; reportFrame.removeAttribute("src");
+  reportFrame.hidden = true; reportFrame.removeAttribute("src"); reportFrame.removeAttribute("srcdoc");
   periodSelect.disabled = true; scopeSelect.disabled = true;
   try {
     const access = await requestJson("/api/cloud/admin", signal);
     if (signal.aborted) return;
+    if (!access.account) cloudSessionToken = "";
     document.getElementById("onlineUser").textContent = access.userName;
     uploadPanel.hidden = !access.canUpload;
-    document.getElementById("onlineUploadHelp").textContent = `Ваш ID в Битриксе: ${access.userId}. Укажите его среди администраторов КлинВекта в Admin → Настройки → Онлайн-КлинВект. Файл обновляет все отчёты и права.`;
+    document.getElementById("onlineUploadHelp").textContent = access.authMode === "pin"
+      ? "Выберите файл «Выгрузить обезличенный JSON» из Admin. Он обновит все отчёты, роли и PIN. После загрузки войдите снова."
+      : "Это прежняя публикация с доступом по Битриксу. Для входа по ФИО и PIN загрузите JSON из обновлённого Admin.";
+    logoutButton.hidden = !access.account;
+    loginForm.hidden = access.authMode !== "pin" || !access.publicationAvailable || Boolean(access.account);
+    if (!loginForm.hidden) {
+      const previous = accountSelect.value;
+      const accounts = [...access.accounts].sort((a, b) => a.accountId === "admin" ? -1 : b.accountId === "admin" ? 1 : a.displayName.localeCompare(b.displayName, "ru"));
+      accountSelect.replaceChildren(...accounts.map(account => new Option(account.displayName, account.accountId)));
+      if (accounts.some(account => account.accountId === previous)) accountSelect.value = previous;
+      updatePinInput();
+      catalog = []; periodSelect.replaceChildren(); scopeSelect.replaceChildren();
+      statusLine.textContent = "Выберите ФИО и введите PIN"; return;
+    }
     if (!access.publicationAvailable) {
       catalog = []; periodSelect.replaceChildren(); scopeSelect.replaceChildren();
       uploadPanel.open = access.canUpload;
@@ -67,6 +104,40 @@ async function refresh() {
     periodSelect.disabled = !periods.length; updateScopes();
   } catch (error) { if (!signal.aborted) statusLine.textContent = error.message || "Нет связи с облаком. Нажмите «Обновить»"; }
 }
+function updatePinInput() {
+  const admin = accountSelect.value === "admin";
+  pinInput.minLength = admin ? 6 : 4; pinInput.maxLength = admin ? 12 : 4;
+  pinInput.pattern = admin ? "[0-9]{6,12}" : "[0-9]{4}";
+  pinInput.placeholder = admin ? "PIN администратора Viewer (6–12 цифр)" : "PIN врача (4 цифры)";
+  pinInput.value = "";
+}
+accountSelect.addEventListener("change", updatePinInput);
+loginForm.addEventListener("submit", async event => {
+  event.preventDefault(); const button = document.getElementById("onlineLoginButton");
+  if (button.disabled) return;
+  button.disabled = true; loginStatus.textContent = "Проверяется PIN…";
+  try {
+    const body = JSON.stringify({ accountId: accountSelect.value, pin: pinInput.value });
+    pinInput.value = "";
+    const result = await requestJson("/api/cloud/login", new AbortController().signal, { method: "POST", retry: false,
+      headers: { "Content-Type": "application/json", "X-Klinvekt-Cloud-Auth": "1" }, body });
+    if (!/^[a-f0-9]{64}$/.test(result.sessionToken || "")) throw new Error("Не удалось открыть сессию. Обновите приложение");
+    cloudSessionToken = result.sessionToken;
+    loginStatus.textContent = ""; await refresh();
+  } catch (error) { loginStatus.textContent = error.message; }
+  finally { button.disabled = false; }
+});
+logoutButton.addEventListener("click", async () => {
+  loading?.abort(); reportLoading?.abort(); catalog = []; reportFrame.hidden = true;
+  reportFrame.removeAttribute("src"); reportFrame.removeAttribute("srcdoc");
+  periodSelect.disabled = true; scopeSelect.disabled = true; logoutButton.disabled = true;
+  try {
+    await requestJson("/api/cloud/logout", new AbortController().signal, { method: "POST", retry: false, headers: { "X-Klinvekt-Cloud-Auth": "1" } });
+    cloudSessionToken = "";
+    await refresh();
+  } catch (error) { statusLine.textContent = error.message; }
+  finally { logoutButton.disabled = false; }
+});
 async function hash(bytes) {
   return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -83,7 +154,7 @@ document.getElementById("onlineUploadForm").addEventListener("submit", async eve
     uploadStatus.textContent = "Проверяется файл…";
     const bytes = new Uint8Array(await file.arrayBuffer());
     const value = JSON.parse(new TextDecoder().decode(bytes));
-    if (value.format !== "klinvekt-cloud-publication" || value.version !== 1) throw new Error("Нужен файл из кнопки «Выгрузить обезличенный JSON» в Admin. Полная копия базы сюда не подходит");
+    if (value.format !== "klinvekt-cloud-publication" || ![1, 2].includes(value.version)) throw new Error("Нужен файл из кнопки «Выгрузить обезличенный JSON» в Admin. Полная копия базы сюда не подходит");
     const sha256 = await hash(bytes);
     if (signal.aborted) throw new DOMException("Отменено", "AbortError");
     const headers = { "X-Klinvekt-Cloud-Upload": "1" };

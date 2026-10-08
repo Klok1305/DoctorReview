@@ -31,7 +31,7 @@ $allowedPatterns = @(
   '^viewer/[^/]+\.(cjs|js|css|html|json)$',
   '^mobile-pilot/[^/]+\.(html|css|js|webmanifest)$',
   '^mobile-pilot/icons/app-icon-(192|512)\.png$',
-  '^mobile-server/[^/]+\.cjs$', # Includes cloud-routes; online assets use the mobile-pilot source allowlist.
+  '^mobile-server/[^/]+\.cjs$', # Includes cloud-routes/cloud-auth; online assets use the mobile-pilot source allowlist.
   '^docs/[^/]+\.md$', # Includes PROJECT_MAP.md and ARCHITECTURE_REVIEW.md; measurements use synthetic data only.
   '^resources/(app-icon\.(ico|png)|update-config\.json)$',
   '^scripts/benchmark-architecture\.cjs$', # Reproducible synthetic-only architecture benchmark.

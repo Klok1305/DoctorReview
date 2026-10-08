@@ -11,7 +11,7 @@ const {
   safeStorage,
 } = require("electron");
 const { CloudConnectionStore, publishCloudPublication } = require("./services/cloud-publisher.cjs");
-const { cloudAccountsFromSettings, createCloudPublication } = require("./services/cloud-publication-service.cjs");
+const { cloudAccountsFromViewer, createCloudPublication } = require("./services/cloud-publication-service.cjs");
 const { ConfigStore, isUnsupportedStoragePath } = require("./services/config-store.cjs");
 const { DatabaseService } = require("./services/database.cjs");
 const { BackgroundTaskQueue } = require("./services/background-task-queue.cjs");
@@ -1161,7 +1161,12 @@ function createWindow() {
         smokeLog("[smoke] renderer assertions completed");
         if (!PDF_SMOKE_TEST) {
           const cloudPayload = await mainWindow.webContents.executeJavaScript("buildCloudPublicationPayload()");
-          const cloudPublication = createCloudPublication({ ...cloudPayload, appVersion: app.getVersion() });
+          database.setViewerAdminPin("654321");
+          database.viewerAccessSnapshot();
+          const cloudDoctorIds = cloudPayload.doctors.map(doctor => doctor.doctorId);
+          const cloudCredentials = database.viewerExportCredentials(cloudDoctorIds, { allowInactiveDoctorIds: cloudDoctorIds });
+          const cloudPublication = createCloudPublication({ ...cloudPayload, version: 2, appVersion: app.getVersion(),
+            accounts: cloudAccountsFromViewer(cloudPayload.doctors, database.loadSnapshot().settings, cloudCredentials) });
           const cloudDoctorHtml = cloudPublication.pages.find(page => page.kind === "doctor" && page.doctorId === "d1" && page.periodKey === "2026-02")?.html || "";
           const cloudPatientText = await mainWindow.webContents.executeJavaScript(`(() => {
             const root = document.createElement('div'); root.innerHTML = ${JSON.stringify(cloudDoctorHtml)};
@@ -1173,7 +1178,26 @@ function createWindow() {
             && cloudPublication.pages.some(page => page.kind === "department")
             && cloudPublication.pages.some(page => page.kind === "specialization")
             && !/data-viewer-patient|clientSegmentPatients/.test(cloudSerialized)
+            && !/pinCode|userId/.test(cloudSerialized)
             && cloudSerialized.includes("Комментарий smoke-теста");
+          result.cloudPinsVisible = await mainWindow.webContents.executeJavaScript(`(async () => {
+            await refreshViewerPublicationAccess(); switchTab('settings');
+            const pins = [...document.querySelectorAll('[data-cloud-pin]')].map(element => element.textContent);
+            return pins.length === VIEWER_ACCESS.doctors.length && pins.every(pin => /^\\d{4}$/.test(pin))
+              && !document.getElementById('cloudAdminUserIds') && !document.querySelector('[data-cloud-user-id]')
+              && document.querySelectorAll('[data-viewer-pin]').length === VIEWER_ACCESS.doctors.length;
+          })()`);
+          if (!result.cloudPinsVisible) throw new Error("Онлайн-настройки: существующие PIN не видны или остались поля ID Битрикса");
+          const cloudPinsScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            loadBundledLibrary('lib-html2canvas', 'html2canvas'); switchTab('settings');
+            setPageBlockOpen('settings.cloud', true);
+            const card = document.getElementById('cloudPublicationSettingsCard');
+            const canvas = await html2canvas(card, { backgroundColor: '#f4f6fa', scale: 1, logging: false, windowWidth: 1400 });
+            return canvas.toDataURL('image/png');
+          })()`);
+          const cloudPinsScreenshotPath = path.join(SMOKE_ARTIFACT_ROOT, "cloud-pins-smoke.png");
+          fs.writeFileSync(cloudPinsScreenshotPath, Buffer.from(cloudPinsScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.cloudPinsScreenshot = cloudPinsScreenshotPath;
           result.cloudPublication = { doctors: cloudPublication.doctors.length, pages: cloudPublication.pages.length, patientText: cloudPatientText };
           if (!result.cloudPublicationValid) throw new Error("Облачная публикация: нарушены показатели, комментарии или обезличивание");
           fs.writeFileSync(path.join(SMOKE_ARTIFACT_ROOT, "cloud-publication-smoke.kvcloud"), cloudSerialized, "utf8");
@@ -1830,12 +1854,14 @@ function registerIpc() {
     const snapshot = database.loadSnapshot() || {};
     if (!Array.isArray(input.doctors) || input.doctors.length !== Object.keys(snapshot.doctors || {}).length
       || input.doctors.some(doctor => !snapshot.doctors?.[doctor.doctorId])) throw new Error("Некорректный список врачей облачной публикации");
-    const accounts = cloudAccountsFromSettings(input.doctors, snapshot.settings || {}, database.viewerAccessSnapshot().departmentHeads);
-    if (!accounts.some(account => account.admin)) throw new Error("Укажите хотя бы один ID администратора Битрикса в настройках онлайн-КлинВекта");
+    database.viewerAccessSnapshot();
+    const doctorIds = input.doctors.map(doctor => doctor.doctorId);
+    const credentials = database.viewerExportCredentials(doctorIds, { allowInactiveDoctorIds: doctorIds });
+    const accounts = cloudAccountsFromViewer(input.doctors, snapshot.settings || {}, credentials);
     // Access settings come from the committed local database. The package never
-    // carries working months, Viewer PINs or the external API secret.
+    // carries working months, plaintext PINs or the external API secret.
     const bundle = await runPublicationTask(event, input.operationId, "cloud-publication", {
-      doctors: input.doctors, pages: input.pages, accounts, appVersion: app.getVersion() });
+      version: 2, doctors: input.doctors, pages: input.pages, accounts, appVersion: app.getVersion() });
     if (input.action === "json") {
       const selected = await dialog.showSaveDialog(mainWindow, { title: "Обезличенный JSON для онлайн-КлинВекта",
         defaultPath: path.join(configStore.publicConfig().outputDir, `КлинВект-онлайн-без-пациентов-${new Date().toISOString().slice(0, 10)}.json`),

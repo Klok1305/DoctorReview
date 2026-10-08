@@ -6193,7 +6193,7 @@ function viewerAccessSettingsHtml() {
         <div class="small muted">версия ${item.pinVersion}</div></td>
       <td><button class="btn mini" type="button" onclick="saveViewerDoctorAccess(this)">Сохранить</button></td></tr>`;
   }).join("");
-  return `${pageBlockStart("settings.viewer", "👁 Публикация в Viewer", { id: "viewerAccessSettingsCard", meta: `<span class="badge ${VIEWER_ACCESS.adminPinConfigured ? "good" : "warn"}">${VIEWER_ACCESS.adminPinConfigured ? `Admin PIN настроен · v${VIEWER_ACCESS.adminPinVersion}` : "Admin PIN не задан"}</span>` })}
+  return `${pageBlockStart("settings.viewer", "🔑 PIN врачей и публикация в Viewer", { id: "viewerAccessSettingsCard", meta: `<span class="badge ${VIEWER_ACCESS.adminPinConfigured ? "good" : "warn"}">${VIEWER_ACCESS.adminPinConfigured ? `Admin PIN настроен · v${VIEWER_ACCESS.adminPinVersion}` : "Admin PIN не задан"}</span>` })}
     <p class="small muted">Viewer не получает рабочую SQLite. Он открывает только ZIP с проверкой SHA-256, готовыми страницами и комментариями.</p>
     <div class="notice blue"><b>Вход врача:</b> в Viewer врач выбирает своё имя и вводит постоянный четырёхзначный PIN. Обычный врач видит только свои страницы. Назначенный заведующий дополнительно может переключаться между всеми врачами своего отделения.</div>
     <h3>Заведующие отделениями</h3>
@@ -6217,25 +6217,26 @@ let cloudExportOperationId = null;
 
 function cloudPublicationSettingsHtml() {
   const connection = DESKTOP_STATE?.cloudConnection || {};
-  const users = DB.settings.cloudDoctorUserIds || {};
+  const pins = new Map((VIEWER_ACCESS.doctors || []).map(item => [item.doctorId, item.pin]));
   const heads = new Set(DB.settings.cloudSpecializationHeadDoctorIds || []);
   const rows = sortDoctorIdsAlphabetically(Object.keys(DB.doctors)).map(doctorId => {
     const specialization = resolvedSpecializationName(doctorId) || "";
     const managed = viewerManagedDepartments(doctorId);
     return `<tr data-cloud-doctor="${esc(doctorId)}"><td><b>${esc(doctorName(doctorId))}</b>
       <div class="small muted">${esc(doctorStructureLabel(doctorId))}${managed.length ? ` · заведующий: ${esc(managed.join(", "))}` : ""}</div></td>
-      <td><input data-cloud-user-id type="text" inputmode="numeric" maxlength="20" value="${esc(users[doctorId] || "")}" aria-label="ID Битрикса ${esc(doctorName(doctorId))}"></td>
+      <td><code data-cloud-pin>${esc(pins.get(doctorId) || "—")}</code></td>
       <td><label><input data-cloud-specialization-head type="checkbox" ${heads.has(doctorId) ? "checked" : ""} ${specialization ? "" : "disabled"}> ${specialization ? esc(specialization) : "Нет специализации"}</label></td></tr>`;
   }).join("");
   return `${pageBlockStart("settings.cloud", "☁ Онлайн-КлинВект в Битрикс24", { id: "cloudPublicationSettingsCard" })}
     <p class="small muted">Сохраните обезличенный JSON и загрузите его в онлайн-КлинВект через Битрикс. В файл входят все рассчитанные месяцы, готовые показатели, графики и комментарии. ФИО/ID пациентов, их отдельные строки, исходники и рабочая база в пакет не входят.</p>
-    <div class="notice blue">Врач видит себя. Заведующий специализацией — свою специализацию и себя. Заведующий отделением — своё отделение, его специализации и врачей. Администратор — всю клинику. Вход привязан к ID сотрудника Битрикса; роли складываются.</div>
-    <label class="fld"><span>ID администраторов КлинВекта в Битриксе (через запятую)</span><input id="cloudAdminUserIds" value="${esc((DB.settings.cloudAdminUserIds || []).join(", "))}" inputmode="numeric"></label>
-    <p class="small muted">ID указан в карточке сотрудника Битрикса. Пустой ID врача означает отсутствие онлайн-доступа. Заведующие отделениями берутся из назначений Viewer выше; здесь дополнительно назначаются заведующие специализациями.</p>
-    <div class="scroll-y"><table class="data"><tr><th>Врач</th><th>ID Битрикса</th><th>Заведующий специализацией</th></tr>${rows}</table></div>
+    <div class="notice blue">Вход как в HTML: выберите ФИО и введите существующий PIN врача. Администратор входит с PIN Viewer. Врач видит себя; заведующий специализацией — свою специализацию и себя; заведующий отделением — своё отделение, его специализации и врачей; администратор — всё. Роли складываются.</div>
+    <p class="small muted">PIN врачей показаны ниже. Изменить их и выгрузить таблицу в Excel можно в блоке «PIN врачей и публикация в Viewer». Заведующие отделениями берутся из назначений выше; здесь дополнительно назначаются заведующие специализациями. ID сотрудников вводить не нужно.</p>
+    <p class="small muted">${VIEWER_ACCESS.adminPinConfigured ? "Администраторский PIN Viewer настроен." : "Перед выгрузкой задайте администраторский PIN Viewer (6–12 цифр) в блоке выше."}</p>
+    <div class="toolbar"><button class="btn mini" type="button" onclick="exportViewerPinsTable()" ${pins.size ? "" : "disabled"}>📊 Выгрузить все PIN в Excel</button></div>
+    <div class="scroll-y"><table class="data"><tr><th>Врач</th><th>PIN врача</th><th>Заведующий специализацией</th></tr>${rows}</table></div>
     <div class="toolbar"><button class="btn" type="button" onclick="saveCloudPublicationSettings()" ${DESKTOP_API ? "" : "disabled"}>Сохранить онлайн-доступ</button>
       <button id="btnExportCloudJson" class="btn primary" type="button" onclick="exportCloudPublications('json')" ${!DESKTOP_API || cloudExportRunning ? "disabled" : ""}>Выгрузить обезличенный JSON</button></div>
-    <p class="small muted">Для ручной загрузки ключ API не нужен. Первый файл загружает администратор портала; укажите его ID среди администраторов КлинВекта. Следующие файлы загружают назначенные администраторы КлинВекта. Загрузка заменяет отчёты и права целиком.</p>
+    <p class="small muted">Для ручной загрузки ключ API не нужен. Первый файл загружает администратор портала. Следующие файлы может загрузить администратор портала или вошедший с PIN администратор КлинВекта. Загрузка заменяет отчёты и права целиком; после неё нужно войти снова.</p>
     <details><summary>Дополнительно: автоматическая отправка через API</summary><div class="grid cols-2"><label class="fld"><span>ID приложения Вайбкод</span><input id="cloudApplicationId" value="${esc(connection.applicationId || "")}" placeholder="ID существующего приложения"></label>
       <label class="fld"><span>Ключ внешнего API приложения</span><input id="cloudApiKey" type="password" autocomplete="new-password" placeholder="${connection.keyConfigured ? "Ключ сохранён; оставьте пустым для сохранения" : "Введите ключ внешнего API"}"></label></div>
       <button id="btnPublishCloud" class="btn" type="button" onclick="exportCloudPublications('publish')" ${!DESKTOP_API || cloudExportRunning ? "disabled" : ""}>Отправить всё в облако</button>
@@ -6245,16 +6246,11 @@ function cloudPublicationSettingsHtml() {
 
 async function saveCloudPublicationSettings({ silent = false } = {}) {
   try {
-    const users = {}, heads = [];
+    const heads = [];
     for (const row of document.querySelectorAll("[data-cloud-doctor]")) {
-      const id = row.dataset.cloudDoctor, userId = row.querySelector("[data-cloud-user-id]").value.trim();
-      if (userId && !/^[1-9]\d{0,19}$/.test(userId)) throw new Error(`Некорректный ID Битрикса у врача ${doctorName(id)}`);
-      if (userId) users[id] = userId;
+      const id = row.dataset.cloudDoctor;
       if (row.querySelector("[data-cloud-specialization-head]").checked) heads.push(id);
     }
-    if (new Set(Object.values(users)).size !== Object.keys(users).length) throw new Error("Один ID Битрикса указан у нескольких врачей");
-    const adminIds = document.getElementById("cloudAdminUserIds").value.split(/[,;\s]+/).filter(Boolean);
-    if (adminIds.some(id => !/^[1-9]\d{0,19}$/.test(id))) throw new Error("Некорректный ID администратора Битрикса");
     const applicationId = document.getElementById("cloudApplicationId").value.trim();
     const apiKey = document.getElementById("cloudApiKey").value.trim();
     if (applicationId || apiKey) {
@@ -6262,9 +6258,7 @@ async function saveCloudPublicationSettings({ silent = false } = {}) {
       document.getElementById("cloudApiKey").value = "";
       document.getElementById("cloudApiKey").placeholder = "Ключ сохранён; оставьте пустым для сохранения";
     }
-    DB.settings.cloudDoctorUserIds = users;
     DB.settings.cloudSpecializationHeadDoctorIds = heads;
-    DB.settings.cloudAdminUserIds = [...new Set(adminIds)];
     if (!await saveLocal({ settings: true })) throw new Error("Не удалось сохранить онлайн-доступ в рабочую базу");
     if (!silent) toast("Онлайн-доступ сохранён");
     return true;
@@ -6282,8 +6276,8 @@ async function exportCloudPublications(action) {
   try {
     await saveCloudPublicationSettings({ silent: true });
     if (action === "publish" && !DESKTOP_STATE?.cloudConnection?.keyConfigured) throw new Error("Сначала сохраните подключение к Битриксу");
-    if (!DB.settings.cloudAdminUserIds?.length) throw new Error("Укажите ID администратора КлинВекта в Битриксе");
     await refreshViewerPublicationAccess();
+    if (!VIEWER_ACCESS.adminPinConfigured) throw new Error("Задайте администраторский PIN Viewer в блоке «PIN врачей и публикация в Viewer»");
     cloudExportRunning = true; cloudExportCanceled = false;
     cloudExportOperationId = crypto.randomUUID();
     progressDialog = document.createElement("dialog");
