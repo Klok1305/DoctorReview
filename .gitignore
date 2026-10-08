@@ -38,6 +38,7 @@
 !/desktop/*.cjs
 !/desktop/services/
 /desktop/services/*
+# Локальная проверка обезличивания и строгий контракт JSON — только исходники.
 !/desktop/services/*.cjs
 !/desktop/services/background-task-queue.cjs
 !/desktop/services/background-task-worker.cjs

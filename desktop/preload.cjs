@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   getCloudConnection: () => invoke("cloud-publication:connection"),
   saveCloudConnection: payload => invoke("cloud-publication:save-connection", payload),
   exportCloudPublication: payload => invoke("cloud-publication:export", payload),
+  chooseCloudExportFile: () => invoke("cloud-publication:choose-file"),
+  discardCloudExportFile: token => invoke("cloud-publication:discard-file", token),
   cancelBackgroundOperation: operationId => invoke("background:cancel", operationId),
   onBackgroundProgress: callback => {
     if (typeof callback !== "function") return () => {};

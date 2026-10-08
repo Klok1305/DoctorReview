@@ -1,4 +1,10 @@
 "use strict";
+for (const select of document.querySelectorAll(".cloud-data-report [data-chart-series]")) {
+  select.addEventListener("change", () => {
+    const card = select.closest(".report-chart"), chart = JSON.parse(card.dataset.chart);
+    card.querySelector(".chart-plot").innerHTML = window.klinvektReportCharts.chartPlot(chart, select.value);
+  });
+}
 for (const table of document.querySelectorAll(".viewer-dashboard-snapshot table.data")) {
   const heads = [...table.querySelectorAll("tr.grp-head[data-g]")];
   if (!heads.length) continue;

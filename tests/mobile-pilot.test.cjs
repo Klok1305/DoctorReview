@@ -133,14 +133,15 @@ test("mobile pilot contains a complete installable static app shell", () => {
 });
 
 test("mobile pilot scripts parse and use only bundled relative assets", () => {
-  for (const file of ["mobile-pilot/app.js", "mobile-pilot/demo-data.js", "mobile-pilot/service-worker.js", "scripts/serve-mobile-pilot.cjs"]) {
+  for (const file of ["mobile-pilot/app.js", "mobile-pilot/report-charts.js", "mobile-pilot/demo-data.js", "mobile-pilot/service-worker.js", "scripts/serve-mobile-pilot.cjs"]) {
     assert.doesNotThrow(() => new vm.Script(read(file), { filename: file }));
   }
 
   const html = read("mobile-pilot/index.html");
   assert.match(html, /rel="manifest" href="\.\/manifest\.webmanifest"/);
   assert.match(html, /src="\.\/demo-data\.js\?v=10"/);
-  assert.match(html, /src="\.\/app\.js\?v=17"/);
+  assert.match(html, /src="\.\/report-charts\.js\?v=1"/);
+  assert.match(html, /src="\.\/app\.js\?v=18"/);
   assert.match(html, /id="cancelBundleButton"/);
   assert.match(html, /href="\.\/app\.css\?v=14"/);
   assert.doesNotMatch(html, /https?:\/\//i);
@@ -369,7 +370,8 @@ test("mobile visual schema rejects malformed trees, unsafe colors and invalid nu
 
 function mobileVisualContext() {
   const app = read("mobile-pilot/app.js");
-  const context = vm.createContext({ Intl });
+  const charts = require("../mobile-pilot/report-charts.js");
+  const context = vm.createContext({ Intl, window: { klinvektReportCharts: charts } });
   vm.runInContext(`const escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');\n`
     + app.slice(app.indexOf("  function legacyRevenueTree"), app.indexOf("  function renderSection")), context);
   return context;
@@ -389,7 +391,7 @@ test("mobile chart typography excludes icon strokes and keeps moderate font weig
     assert.match(rule(selector), /font-weight:\s*500/);
   }
   assert.match(rule(".report-chart h5"), /font-weight:\s*600/);
-  assert.match(read("mobile-pilot/service-worker.js"), /klinvekt-mobile-pilot-v24/);
+  assert.match(read("mobile-pilot/service-worker.js"), /klinvekt-mobile-pilot-v25/);
   assert.match(read("mobile-pilot/service-worker.js"), /app\.css\?v=14/);
 });
 

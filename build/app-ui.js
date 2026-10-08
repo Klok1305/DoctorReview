@@ -3628,7 +3628,7 @@ function mobilePublicationClientWindows(result, profile) {
   }).filter(Boolean);
 }
 
-function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult, comments = []) {
+function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult, comments = [], { includeDynamics = true } = {}) {
   const profile = profileForDoctor(doctorId);
   const product = result.product;
   const ownRevenue = Number(result.extras && result.extras.vy && result.extras.vy.ownSum || result.econ.sales || 0);
@@ -3850,7 +3850,7 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
     vectors,
     goalsSource: doctorGoalsSource(doctorId),
     goals: mobilePublicationGoals(doctorId, result, profile),
-    dynamics: mobilePublicationDynamics(doctorId, monthKey),
+    dynamics: includeDynamics ? mobilePublicationDynamics(doctorId, monthKey) : null,
     comments: mobilePublicationComments(comments, doctorId, monthKey),
   };
 }
@@ -5342,74 +5342,34 @@ async function buildCloudPublicationPayload(onProgress = () => {}, isCanceled = 
     department: resolvedDepartmentName(doctorId) || "", specialization: resolvedSpecializationName(doctorId) || "" }));
   const periods = monthKeysSorted().filter(periodKey => doctorIds.some(id => doctorHasDashboardData(id, periodKey)));
   if (!periods.length) throw new Error("Нет рассчитанных периодов с личной «Выработкой»");
-  const previousUi = { tab: UI.tab, departmentMonth: UI.departmentMonth, departmentFilter: UI.departmentFilter,
-    deptMonth: UI.deptMonth, deptFilter: UI.deptFilter, subFilter: UI.subFilter,
-    docMonth: UI.docMonth, docId: UI.docId, showLabels: UI.showLabels };
-  const pages = [];
-  UI.showLabels = true;
-  try {
-    await saveVisibleCommentDrafts();
-    if (!await saveLocal()) throw new Error("Не удалось сохранить текущую рабочую базу");
-    for (const periodKey of periods) {
+  await saveVisibleCommentDrafts();
+  if (!await saveLocal()) throw new Error("Не удалось сохранить текущую рабочую базу");
+  const pages = [], plans = periods.map(periodKey => {
+    const subjects = doctors.filter(doctor => doctorHasDashboardData(doctor.doctorId, periodKey));
+    return { periodKey, targets: [
+      { kind: "clinic", department: "", specialization: "", doctorId: "", title: "Вся клиника", context: { scopeType: "department", scopeId: "all" } },
+      ...[...new Set(subjects.map(doctor => doctor.department).filter(Boolean))].map(department => ({
+        kind: "department", department, specialization: "", doctorId: "", title: `Отделение ${department}`, context: { scopeType: "department", scopeId: department } })),
+      ...[...new Set(subjects.map(doctor => doctor.specialization).filter(Boolean))].map(specialization => ({
+        kind: "specialization", department: "", specialization, doctorId: "", title: `Специализация ${specialization}`, context: { scopeType: "specialization", scopeId: specialization } })),
+      ...subjects.map(doctor => ({ kind: "doctor", ...doctor, title: doctor.displayName })),
+    ] };
+  });
+  const total = plans.reduce((sum, plan) => sum + plan.targets.length, 0);
+  for (const { periodKey, targets } of plans) {
+    const comments = await DESKTOP_API.listComments({ periodKey });
+    for (const item of targets) {
       if (isCanceled()) throw new DOMException("Операция отменена", "AbortError");
-      const comments = await DESKTOP_API.listComments({ periodKey });
-      const subjects = doctors.filter(doctor => doctorHasDashboardData(doctor.doctorId, periodKey));
-      const targets = [
-        { kind: "clinic", department: "", specialization: "", doctorId: "", title: "Вся клиника",
-          target: { tab: "department", departmentName: "all" }, context: { scopeType: "department", scopeId: "all" } },
-        ...[...new Set(subjects.map(doctor => doctor.department).filter(Boolean))].map(department => ({
-          kind: "department", department, specialization: "", doctorId: "", title: `Отделение ${department}`,
-          target: { tab: "department", departmentName: department }, context: { scopeType: "department", scopeId: department } })),
-        ...[...new Set(subjects.map(doctor => doctor.specialization).filter(Boolean))].map(specialization => ({
-          kind: "specialization", department: "", specialization, doctorId: "", title: `Специализация ${specialization}`,
-          target: { tab: "dept", deptFilter: specialization }, context: { scopeType: "specialization", scopeId: specialization } })),
-        ...subjects.map(doctor => ({ kind: "doctor", ...doctor, title: doctor.displayName,
-          target: { tab: "doctor", doctorId: doctor.doctorId }, context: { scopeType: "doctor", scopeId: doctor.doctorId } })),
-      ];
-      for (const item of targets) {
-        if (isCanceled()) throw new DOMException("Операция отменена", "AbortError");
-        const html = await composeViewerDashboardHtml(item.target, periodKey,
-          { ...item.context, periodKey, pageType: item.kind === "clinic" ? "department" : item.kind }, comments, { patientRegistry: false });
-        pages.push({ kind: item.kind, periodKey, doctorId: item.doctorId,
-          department: item.department, specialization: item.specialization,
-          title: `${item.title} · ${monthLabel(periodKey)}`, html: viewerHtmlSanitizer.sanitizeReportHtml(html) });
-        onProgress(`Формируются отчёты: ${pages.length} · ${monthLabel(periodKey)}`);
-        await new Promise(resolve => setTimeout(resolve, 0));
-      }
-    }
-    assertCloudPatientPrivacy(pages);
-    return { doctors, pages };
-  } finally {
-    Object.assign(UI, previousUi);
-    renderAll();
-    switchTab(previousUi.tab);
-  }
-}
-
-function assertCloudPatientPrivacy(pages) {
-  const names = new Set();
-  const identifiers = new Set();
-  for (const month of Object.values(DB.months)) {
-    for (const windows of Object.values(month.kb || {})) {
-      for (const base of Object.values(windows || {})) {
-        for (const patient of base.clients || []) {
-          const name = String(patient.name || "").trim();
-          const id = String(patient.patientId || "").trim();
-          if (name.length >= 4) names.add(name);
-          if (id.length >= 4) identifiers.add(id);
-        }
-      }
+      const report = item.kind === "doctor" ? cloudDoctorReport(item.doctorId, periodKey, comments)
+        : cloudGroupReport(item, periodKey, comments, doctors);
+      pages.push({ kind: item.kind, periodKey, doctorId: item.doctorId,
+        department: item.department, specialization: item.specialization,
+        title: `${item.title} · ${monthLabel(periodKey)}`, report });
+      onProgress(`Подготовлены показатели: ${pages.length} из ${total} · ${monthLabel(periodKey)}`);
+      await new Promise(resolve => setTimeout(resolve, 0));
     }
   }
-  const html = pages.map(page => page.html).join("\n");
-  for (const name of names) {
-    if (html.includes(esc(name)) || html.includes(name)) throw new Error("В отчёте найдено имя пациента. Проверьте комментарии перед публикацией в облако");
-  }
-  for (const id of identifiers) {
-    // Numeric patient IDs can coincide with an aggregate amount. Structured
-    // patient fields/blocks are prohibited separately; opaque IDs are checked here.
-    if (!/^\d+$/.test(id) && (html.includes(esc(id)) || html.includes(id))) throw new Error("В отчёте найден идентификатор пациента. Публикация остановлена");
-  }
+  return { doctors, pages };
 }
 
 let viewerExportRunning = false;
@@ -6214,6 +6174,7 @@ function viewerAccessSettingsHtml() {
 let cloudExportRunning = false;
 let cloudExportCanceled = false;
 let cloudExportOperationId = null;
+let cloudExportStatus = "";
 
 function cloudPublicationSettingsHtml() {
   const connection = DESKTOP_STATE?.cloudConnection || {};
@@ -6228,7 +6189,7 @@ function cloudPublicationSettingsHtml() {
       <td><label><input data-cloud-specialization-head type="checkbox" ${heads.has(doctorId) ? "checked" : ""} ${specialization ? "" : "disabled"}> ${specialization ? esc(specialization) : "Нет специализации"}</label></td></tr>`;
   }).join("");
   return `${pageBlockStart("settings.cloud", "☁ Онлайн-КлинВект в Битрикс24", { id: "cloudPublicationSettingsCard" })}
-    <p class="small muted">Сохраните обезличенный JSON и загрузите его в онлайн-КлинВект через Битрикс. В файл входят все рассчитанные месяцы, готовые показатели, графики и комментарии. ФИО/ID пациентов, их отдельные строки, исходники и рабочая база в пакет не входят.</p>
+    <p class="small muted">Сохраните обезличенный JSON и загрузите его в онлайн-КлинВект через Битрикс. В файл входят все рассчитанные месяцы, показатели, данные графиков и комментарии. HTML и картинки при выгрузке не создаются. ФИО/ID пациентов, их отдельные строки, исходники и рабочая база в пакет не входят.</p>
     <div class="notice blue">Вход как в HTML: выберите ФИО и введите существующий PIN врача. Администратор входит с PIN Viewer. Врач видит себя; заведующий специализацией — свою специализацию и себя; заведующий отделением — своё отделение, его специализации и врачей; администратор — всё. Роли складываются.</div>
     <p class="small muted">PIN врачей показаны ниже. Изменить их и выгрузить таблицу в Excel можно в блоке «PIN врачей и публикация в Viewer». Заведующие отделениями берутся из назначений выше; здесь дополнительно назначаются заведующие специализациями. ID сотрудников вводить не нужно.</p>
     <p class="small muted">${VIEWER_ACCESS.adminPinConfigured ? "Администраторский PIN Viewer настроен." : "Перед выгрузкой задайте администраторский PIN Viewer (6–12 цифр) в блоке выше."}</p>
@@ -6236,6 +6197,7 @@ function cloudPublicationSettingsHtml() {
     <div class="scroll-y"><table class="data"><tr><th>Врач</th><th>PIN врача</th><th>Заведующий специализацией</th></tr>${rows}</table></div>
     <div class="toolbar"><button class="btn" type="button" onclick="saveCloudPublicationSettings()" ${DESKTOP_API ? "" : "disabled"}>Сохранить онлайн-доступ</button>
       <button id="btnExportCloudJson" class="btn primary" type="button" onclick="exportCloudPublications('json')" ${!DESKTOP_API || cloudExportRunning ? "disabled" : ""}>Выгрузить обезличенный JSON</button></div>
+    <p id="cloudExportStatus" role="status" class="notice blue" ${cloudExportStatus ? "" : "hidden"}>${esc(cloudExportStatus)}</p>
     <p class="small muted">Для ручной загрузки ключ API не нужен. Первый файл загружает администратор портала. Следующие файлы может загрузить администратор портала или вошедший с PIN администратор КлинВекта. Загрузка заменяет отчёты и права целиком; после неё нужно войти снова.</p>
     <details><summary>Дополнительно: автоматическая отправка через API</summary><div class="grid cols-2"><label class="fld"><span>ID приложения Вайбкод</span><input id="cloudApplicationId" value="${esc(connection.applicationId || "")}" placeholder="ID существующего приложения"></label>
       <label class="fld"><span>Ключ внешнего API приложения</span><input id="cloudApiKey" type="password" autocomplete="new-password" placeholder="${connection.keyConfigured ? "Ключ сохранён; оставьте пустым для сохранения" : "Введите ключ внешнего API"}"></label></div>
@@ -6272,32 +6234,42 @@ function cancelCloudPublication() {
 
 async function exportCloudPublications(action) {
   if (cloudExportRunning) return;
-  let progressDialog, unsubscribe = () => {};
+  let progressDialog, selectedFile, unsubscribe = () => {};
   try {
     await saveCloudPublicationSettings({ silent: true });
     if (action === "publish" && !DESKTOP_STATE?.cloudConnection?.keyConfigured) throw new Error("Сначала сохраните подключение к Битриксу");
     await refreshViewerPublicationAccess();
     if (!VIEWER_ACCESS.adminPinConfigured) throw new Error("Задайте администраторский PIN Viewer в блоке «PIN врачей и публикация в Viewer»");
     cloudExportRunning = true; cloudExportCanceled = false;
+    if (action === "json") {
+      selectedFile = await DESKTOP_API.chooseCloudExportFile();
+      if (selectedFile.canceled) return;
+    }
     cloudExportOperationId = crypto.randomUUID();
     progressDialog = document.createElement("dialog");
-    progressDialog.innerHTML = '<h3>Онлайн-КлинВект</h3><p role="status">Формируются отчёты…</p><button class="btn" type="button">Отмена</button>';
+    progressDialog.innerHTML = '<h3>Онлайн-КлинВект</h3><p class="small" data-export-path></p><p role="status">Подготавливаются показатели…</p><button class="btn" type="button">Отмена</button>';
+    progressDialog.querySelector("[data-export-path]").textContent = selectedFile ? `Файл: ${selectedFile.path}` : "Публикация в облако";
     progressDialog.querySelector("button").addEventListener("click", cancelCloudPublication);
     progressDialog.addEventListener("cancel", event => { event.preventDefault(); cancelCloudPublication(); });
     document.body.appendChild(progressDialog); progressDialog.showModal();
-    const progress = message => { progressDialog.querySelector("p").textContent = message; };
+    const progress = message => { progressDialog.querySelector('[role="status"]').textContent = message; };
     const payload = await buildCloudPublicationPayload(progress, () => cloudExportCanceled);
     if (cloudExportCanceled) throw new DOMException("Операция отменена", "AbortError");
     unsubscribe = DESKTOP_API.onBackgroundProgress(event => {
       if (event.operationId !== cloudExportOperationId) return;
-      progress(event.stage === "upload" ? `Отправляется в облако: ${event.completed} из ${event.total} порций` : "Проверяется и упаковывается обезличенный JSON…");
+      progress(event.stage === "upload" ? `Отправляется в облако: ${event.completed} из ${event.total} порций` : event.stage === "privacy" ? "Проверяются комментарии и отсутствие данных пациентов…" : "Проверяется и сохраняется обезличенный JSON…");
     });
-    const result = await DESKTOP_API.exportCloudPublication({ ...payload, action, operationId: cloudExportOperationId });
-    if (!result.canceled) toast(action === "publish" ? `Облако обновлено: ${result.doctors} врачей, ${result.pages} отчётов` : `Обезличенный JSON сохранён: ${result.path}`);
+    const result = await DESKTOP_API.exportCloudPublication({ ...payload, action, operationId: cloudExportOperationId, fileToken: selectedFile?.token });
+    if (!result.canceled) {
+      cloudExportStatus = action === "publish" ? `Облако обновлено: ${result.doctors} врачей, ${result.pages} отчётов` : `Обезличенный JSON сохранён: ${result.path} · ${result.doctors} врачей, ${result.pages} отчётов`;
+      toast(cloudExportStatus);
+    }
   } catch (error) {
-    toast(error.name === "AbortError" || cloudExportCanceled ? "Отправка остановлена; полученные порции можно продолжить" : error.message, !(error.name === "AbortError" || cloudExportCanceled));
+    cloudExportStatus = error.name === "AbortError" || cloudExportCanceled ? "Выгрузка отменена" : `Не удалось сохранить JSON: ${error.message}`;
+    toast(cloudExportStatus, !(error.name === "AbortError" || cloudExportCanceled));
   } finally {
     unsubscribe(); progressDialog?.close(); progressDialog?.remove();
+    if (selectedFile?.token) await DESKTOP_API.discardCloudExportFile(selectedFile.token).catch(console.error);
     cloudExportRunning = false; cloudExportOperationId = null;
     renderSettings();
   }

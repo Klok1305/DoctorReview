@@ -26,7 +26,7 @@ $allowedPatterns = @(
   '^build/installer\.nsh$',
   '^build/viewer-html-sanitizer\.js$',
   '^desktop/[^/]+\.cjs$',
-  '^desktop/services/[^/]+\.cjs$',
+  '^desktop/services/[^/]+\.cjs$', # Includes cloud-privacy and cloud-report-model; clinical fixtures stay outside Git.
   '^desktop/services/background-task-(queue|worker)\.cjs$',
   '^viewer/[^/]+\.(cjs|js|css|html|json)$',
   '^mobile-pilot/[^/]+\.(html|css|js|webmanifest)$',

@@ -12,7 +12,8 @@ async function main() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "klinvekt-cloud-webkit-"));
   const samplePath = path.join(root, "tmp", "cloud-publication-smoke.kvcloud");
   const sample = fs.existsSync(samplePath) ? JSON.parse(fs.readFileSync(samplePath, "utf8")) : null;
-  const html = sample?.pages.find(page => page.kind === "doctor")?.html
+  const samplePage = sample?.pages.find(page => page.kind === "doctor");
+  const html = (samplePage?.report ? require("../mobile-server/cloud-report-renderer.cjs").renderCloudReport(samplePage.report, samplePage.title) : samplePage?.html)
     || '<div class="viewer-dashboard-snapshot"><div class="card"><h2>Синтетический отчёт</h2><p>43 визита</p><p>Комментарий администратора</p></div></div>';
   const publication = createCloudPublication({ appVersion: "test", doctors: [
     { doctorId: "a", displayName: "Врач А", department: "A", specialization: "X" },
@@ -121,6 +122,41 @@ async function main() {
     assert.equal(await pinPage.locator("#onlinePeriod option").count(), 1);
     await pinPage.locator("#onlineUploadPanel summary").click();
     await pinPage.screenshot({ path: path.join(root, "tmp", "cloud-online-pin-admin.png") });
+    const numericReport = structuredClone(samplePage?.report || { id: "2026-03", label: "Март 2026", shortLabel: "Март",
+      overall: 80, assessment: "Синтетический отчёт", summary: "Проверка числового JSON", headlineMetrics: [],
+      vectors: Array.from({ length: 6 }, (_, i) => ({ id: `v${i + 1}`, number: i + 1, title: `Вектор ${i + 1}`, score: 80, sections: [] })), goals: [], comments: [] });
+    numericReport.id = "2026-03";
+    numericReport.vectors[0].sections.push({ title: "Точные данные графика", charts: [{ id: "precision", title: "Проверка графика", type: "line",
+      labels: ["Январь", "Февраль", "Март"], unit: "₽", series: [
+        { label: "Первая серия", color: "#2563eb", values: [25.25, null, 31.375] },
+        { label: "Вторая серия", color: "#16a34a", values: [100, null, 150] },
+      ] }] });
+    const dataPublication = createCloudPublication({ ...pinPublication, version: 3, pages: pinUpdated.pages.map(({ html, id, ...metadata }) => ({ ...metadata, report: numericReport })) });
+    if (!await pinPage.locator("#onlineUploadPanel").evaluate(element => element.open)) await pinPage.locator("#onlineUploadPanel summary").click();
+    await pinPage.locator("#onlineUploadFile").setInputFiles({ name: "numeric-json.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(dataPublication)) });
+    await pinPage.locator("#onlineUploadButton").click();
+    await pinPage.locator("#onlineLoginForm").waitFor({ state: "visible" });
+    await pinPage.locator("#onlineAccount").selectOption("doctor:a");
+    await pinPage.locator("#onlinePin").fill("0123"); await pinPage.locator("#onlineLoginButton").click();
+    const numericFrame = pinPage.frameLocator("#onlineFrame");
+    await numericFrame.locator(".cloud-data-report").waitFor();
+    assert.equal(await pinPage.locator("#onlineScope option").count(), 1);
+    assert.equal(await numericFrame.locator("[data-viewer-patient-register], canvas, img").count(), 0);
+    assert.ok(await numericFrame.locator("svg").count() > 0);
+    const chart = numericFrame.locator('.report-chart').filter({ has: numericFrame.locator('h5', { hasText: "Проверка графика" }) });
+    await chart.locator("[data-chart-series]").selectOption("0");
+    const expectedPlot = require("../mobile-pilot/report-charts.js").chartPlot(JSON.parse(await chart.getAttribute("data-chart")), "0");
+    const expectedPath = expectedPlot.match(/<path d="([^"]*)"/)[1];
+    assert.equal(await chart.locator(".line-wide path").first().getAttribute("d"), expectedPath, "selection uses exact JSON values and keeps February as a gap");
+    for (const viewport of [{ width: 390, height: 844 }, { width: 844, height: 390 }]) {
+      await pinPage.setViewportSize(viewport);
+      assert.ok(await pinPage.evaluate(() => document.documentElement.scrollWidth - innerWidth <= 2));
+      const reportFrame = pinPage.frames().find(frame => frame.parentFrame() === pinPage.mainFrame());
+      assert.ok(await reportFrame.evaluate(() => document.documentElement.scrollWidth - innerWidth <= 2), "numeric report fits the phone viewport");
+      assert.ok(await numericFrame.locator(".cloud-kpis .kpi").evaluateAll(elements => elements.every(element => element.getBoundingClientRect().right <= innerWidth + 2)));
+      await pinPage.screenshot({ path: path.join(root, "tmp", `cloud-json-${viewport.width === 390 ? "iphone" : "landscape"}.png`) });
+      await chart.screenshot({ path: path.join(root, "tmp", `cloud-json-chart-${viewport.width === 390 ? "iphone" : "landscape"}.png`) });
+    }
     await pinContext.close();
     // Model the HTTPS app inside a different Bitrix origin with production
     // Secure cookies. WebKit blocks these third-party cookies by default.
@@ -160,7 +196,7 @@ async function main() {
     assert.deepEqual(errors, []);
     await admin.close();
     process.stdout.write(JSON.stringify({ online: true, browser: "WebKit", device: "iPhone 13 emulation", narrow, admin: true,
-      pinLogin: true, noEmployeeIdMapping: true, bitrixIframeWithBlockedCookies: true, realAdminSnapshot: Boolean(sample), errors: 0 }) + "\n");
+      pinLogin: true, numericJson: true, exactChartValues: true, noEmployeeIdMapping: true, bitrixIframeWithBlockedCookies: true, realAdminSnapshot: Boolean(sample), errors: 0 }) + "\n");
   } finally {
     await browser?.close(); if (iframeServer) await new Promise(resolve => iframeServer.close(resolve));
     await new Promise(resolve => server.close(resolve)); fs.rmSync(dataDir, { recursive: true, force: true });

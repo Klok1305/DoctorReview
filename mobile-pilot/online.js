@@ -154,7 +154,7 @@ document.getElementById("onlineUploadForm").addEventListener("submit", async eve
     uploadStatus.textContent = "Проверяется файл…";
     const bytes = new Uint8Array(await file.arrayBuffer());
     const value = JSON.parse(new TextDecoder().decode(bytes));
-    if (value.format !== "klinvekt-cloud-publication" || ![1, 2].includes(value.version)) throw new Error("Нужен файл из кнопки «Выгрузить обезличенный JSON» в Admin. Полная копия базы сюда не подходит");
+    if (value.format !== "klinvekt-cloud-publication" || ![1, 2, 3].includes(value.version)) throw new Error("Нужен файл из кнопки «Выгрузить обезличенный JSON» в Admin. Полная копия базы сюда не подходит");
     const sha256 = await hash(bytes);
     if (signal.aborted) throw new DOMException("Отменено", "AbortError");
     const headers = { "X-Klinvekt-Cloud-Upload": "1" };

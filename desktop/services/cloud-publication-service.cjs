@@ -6,6 +6,7 @@ const path = require("node:path");
 const sanitizerPath = fs.existsSync(path.join(__dirname, "viewer-html-sanitizer.js"))
   ? "./viewer-html-sanitizer.js" : "../../build/viewer-html-sanitizer.js";
 const { sanitizeReportHtml } = require(sanitizerPath);
+const { validateCloudReport } = require("./cloud-report-model.cjs");
 
 const CLOUD_FORMAT = "klinvekt-cloud-publication";
 const MAX_CLOUD_BYTES = 100 * 1024 * 1024;
@@ -32,7 +33,7 @@ function unique(values, label) {
 }
 function pageId(page) {
   return crypto.createHash("sha256").update(JSON.stringify([
-    page.kind, page.periodKey, page.doctorId, page.department, page.specialization, page.title, page.html,
+    page.kind, page.periodKey, page.doctorId, page.department, page.specialization, page.title, page.report || page.html,
   ])).digest("hex");
 }
 
@@ -40,7 +41,7 @@ function pageId(page) {
 // from an aggregate dashboard snapshot, never from a portable database/Viewer file.
 function validateCloudPublication(value) {
   object(value, ["format", "version", "createdAt", "appVersion", "security", "doctors", "pages", "accounts"], "публикация");
-  if (value.format !== CLOUD_FORMAT || ![1, 2].includes(value.version)) fail("формат/версия");
+  if (value.format !== CLOUD_FORMAT || ![1, 2, 3].includes(value.version)) fail("формат/версия");
   text(value.createdAt, "дата", 50);
   if (!Number.isFinite(Date.parse(value.createdAt))) fail("дата");
   text(value.appVersion, "версия приложения", 50);
@@ -74,7 +75,7 @@ function validateCloudPublication(value) {
     text(account.doctorId, "ID врача учётной записи", 240, true);
     if (account.doctorId && !ids.has(account.doctorId)) fail("неизвестный врач учётной записи");
     if (typeof account.admin !== "boolean") fail("роль администратора");
-    if (value.version === 2 && (account.admin ? account.doctorId !== "" || account.accountId !== "admin"
+    if (value.version >= 2 && (account.admin ? account.doctorId !== "" || account.accountId !== "admin"
       : !account.doctorId || account.accountId !== `doctor:${account.doctorId}`)) fail("область учётной записи PIN");
     for (const [key, known] of [["departments", departments], ["specializations", specializations]]) {
       list(account[key], key, 100).forEach(name => { text(name, key); if (!known.has(name)) fail(`неизвестная область ${key}`); });
@@ -82,11 +83,11 @@ function validateCloudPublication(value) {
     }
   });
   unique(value.accounts.map(account => value.version === 1 ? account.userId : account.accountId), "учётной записи");
-  if (value.version === 2 && value.accounts.filter(account => account.admin).length !== 1) fail("нужен администраторский PIN Viewer");
+  if (value.version >= 2 && value.accounts.filter(account => account.admin).length !== 1) fail("нужен администраторский PIN Viewer");
   const pages = list(value.pages, "страницы", 50000);
   if (!pages.length) fail("нет отчётов");
   pages.forEach(page => {
-    object(page, ["pageId", "kind", "periodKey", "doctorId", "department", "specialization", "title", "html"], "страница");
+    object(page, ["pageId", "kind", "periodKey", "doctorId", "department", "specialization", "title", value.version === 3 ? "report" : "html"], "страница");
     if (!PAGE_KINDS.has(page.kind)) fail("тип страницы");
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(page.periodKey)) fail("период");
     text(page.doctorId, "врач страницы", 240, true);
@@ -99,10 +100,15 @@ function validateCloudPublication(value) {
     if (page.kind === "department" && (!departments.has(page.department) || page.specialization)) fail("область отделения");
     if (page.kind === "specialization" && (!specializations.has(page.specialization) || page.department)) fail("область специализации");
     text(page.title, "название отчёта", 600);
+    if (value.version === 3) {
+      validateCloudReport(page.report, page);
+      if (Buffer.byteLength(JSON.stringify(page.report), "utf8") > MAX_CLOUD_PAGE_BYTES) fail("JSON отчёта превышает 4 МиБ");
+    } else {
     text(page.html, "HTML отчёта", 8 * 1024 * 1024);
     if (Buffer.byteLength(page.html, "utf8") > MAX_CLOUD_PAGE_BYTES) fail(`отчёт «${page.title}» превышает предел страницы внешнего API (4 МиБ)`);
     if (/data-(?:viewer-patient|patient-search|patient-groups)|viewer-patient-(?:register|table)|clientSegment(?:Patients|Rows)|data-viewer-client-base/i.test(page.html)) fail("пациентский блок в HTML");
     if (sanitizeReportHtml(page.html) !== page.html) fail("неочищенный HTML");
+    }
     if (page.pageId !== pageId(page)) fail("контрольная сумма страницы");
   });
   unique(pages.map(page => page.pageId), "страницы");
@@ -114,7 +120,7 @@ function validateCloudPublication(value) {
 function createCloudPublication({ doctors, pages, accounts = [], appVersion, version = 1 }) {
   const publication = { format: CLOUD_FORMAT, version, createdAt: new Date().toISOString(), appVersion,
     security: { patientRegistryIncluded: false, rawExportsIncluded: false }, doctors, accounts,
-    pages: pages.map(page => { const cleaned = { ...page, html: sanitizeReportHtml(page.html) }; return { ...cleaned, pageId: pageId(cleaned) }; }),
+    pages: pages.map(page => { const cleaned = version === 3 ? { ...page } : { ...page, html: sanitizeReportHtml(page.html) }; return { ...cleaned, pageId: pageId(cleaned) }; }),
   };
   return validateCloudPublication(publication);
 }

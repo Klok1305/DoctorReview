@@ -71,6 +71,7 @@ const replacements = {
   "/*__CORE__*/": "app-core.js",
   "/*__PARSERS__*/": "app-parsers.js",
   "/*__METRICS__*/": "app-metrics.js",
+  "/*__CLOUD_REPORT_DATA__*/": "cloud-report-data.js",
   "/*__UI__*/": "app-ui.js",
 };
 
@@ -1062,7 +1063,7 @@ test("Admin exports a patient-free mobile publication for the selected doctor", 
   assert.match(ui, /function buildMobilePublication\(doctorId, commentsByPeriod = \{\}\)/);
   assert.match(ui, /function exportAllMobilePublications\(\)/);
   assert.match(ui, /goals: mobilePublicationGoals\(doctorId, result, profile\)/);
-  assert.match(ui, /dynamics: mobilePublicationDynamics\(doctorId, monthKey\)/);
+  assert.match(ui, /dynamics: includeDynamics \? mobilePublicationDynamics\(doctorId, monthKey\) : null/);
   assert.match(ui, /comments: mobilePublicationComments\(comments, doctorId, monthKey\)/);
   assert.match(ui, /await DESKTOP_API\.listComments\(\{ periodKey \}\)/);
   assert.doesNotMatch(ui, /Комментарий руководителя|комментарий руководителя/i);

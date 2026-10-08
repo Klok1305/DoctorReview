@@ -1,6 +1,6 @@
 {
   "name": "doctor-performance-app",
-  "version": "3.1.1",
+  "version": "3.1.2",
   "description": "Административное приложение «КлинВект Щербатова» для аналитики врачей и отделений",
   "main": "desktop/main.cjs",
   "author": "Nikita",

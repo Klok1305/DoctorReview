@@ -15,6 +15,7 @@ $html = $html.Replace("/*__VIEWER_HTML_SANITIZER__*/", (& $read "viewer-html-san
 $html = $html.Replace("/*__CORE__*/",    (& $read "app-core.js"))
 $html = $html.Replace("/*__PARSERS__*/", (& $read "app-parsers.js"))
 $html = $html.Replace("/*__METRICS__*/", (& $read "app-metrics.js"))
+$html = $html.Replace("/*__CLOUD_REPORT_DATA__*/", (& $read "cloud-report-data.js"))
 $ui = & $read "app-ui.js"
 $ui = [System.Text.RegularExpressions.Regex]::Replace(
   $ui,

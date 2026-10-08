@@ -14,7 +14,9 @@ fs.cpSync(path.join(root, "mobile-pilot"), publicOutput, { recursive: true });
 fs.copyFileSync(path.join(root, "mobile-server", "server.cjs"), path.join(output, "server.cjs"));
 fs.copyFileSync(path.join(root, "mobile-server", "cloud-routes.cjs"), path.join(output, "cloud-routes.cjs"));
 fs.copyFileSync(path.join(root, "mobile-server", "cloud-auth.cjs"), path.join(output, "cloud-auth.cjs"));
+fs.copyFileSync(path.join(root, "mobile-server", "cloud-report-renderer.cjs"), path.join(output, "cloud-report-renderer.cjs"));
 fs.copyFileSync(path.join(root, "desktop", "services", "cloud-publication-service.cjs"), path.join(output, "cloud-publication-service.cjs"));
+fs.copyFileSync(path.join(root, "desktop", "services", "cloud-report-model.cjs"), path.join(output, "cloud-report-model.cjs"));
 fs.copyFileSync(path.join(root, "build", "viewer-html-sanitizer.js"), path.join(output, "viewer-html-sanitizer.js"));
 fs.writeFileSync(path.join(publicOutput, "online-report.css"), fs.readFileSync(path.join(root, "build", "app.css"), "utf8")
   + "\n" + fs.readFileSync(path.join(root, "viewer", "viewer.css"), "utf8")

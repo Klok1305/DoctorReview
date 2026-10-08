@@ -6,6 +6,7 @@ const crypto = require("node:crypto");
 const servicePath = fs.existsSync(path.join(__dirname, "cloud-publication-service.cjs"))
   ? "./cloud-publication-service.cjs" : "../desktop/services/cloud-publication-service.cjs";
 const { validateCloudPublication, visibleCloudPages, MAX_CLOUD_BYTES } = require(servicePath);
+const { renderCloudReport } = require("./cloud-report-renderer.cjs");
 const CHUNK_BYTES = 512 * 1024;
 const TTL = 20 * 60 * 1000;
 const sha256 = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
@@ -41,8 +42,8 @@ function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, 
   };
   const accountFor = (request, identity) => {
     if (!publication) return null;
-    const id = publication.version === 2 ? auth.current(request, identity) : identity.userId;
-    return publication.accounts.find(account => (publication.version === 2 ? account.accountId : account.userId) === id);
+    const id = publication.version >= 2 ? auth.current(request, identity) : identity.userId;
+    return publication.accounts.find(account => (publication.version >= 2 ? account.accountId : account.userId) === id);
   };
   const canUpload = (request, identity) => publication?.version === 1
     ? Boolean(accountFor(request, identity)?.admin)
@@ -151,7 +152,7 @@ function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, 
       if (url.pathname.endsWith("/logout")) {
         auth.logout(request, response, identity); sendJson(response, 200, { ok: true }); return;
       }
-      if (!publication || publication.version !== 2) throw error("Сначала загрузите JSON с PIN из обновлённого Admin", 409);
+      if (!publication || publication.version < 2) throw error("Сначала загрузите JSON с PIN из обновлённого Admin", 409);
       const input = await readJson(request, 4096);
       if (!input || typeof input !== "object" || Array.isArray(input)) throw error("Некорректная форма входа");
       const { account, sessionToken } = await auth.login(request, response, identity, input, () => publication);
@@ -162,20 +163,20 @@ function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, 
       sendJson(response, 200, { ok: true, userId: identity.userId, userName: identity.userName,
         canUpload: canUpload(request, identity), publicationAvailable: Boolean(publication),
         authMode: publication?.version === 1 ? "bitrix" : "pin",
-        account: publication?.version === 2 && account ? { accountId: account.accountId, displayName: account.displayName, admin: account.admin } : null,
-        accounts: publication?.version === 2 ? publication.accounts.map(({ accountId, displayName }) => ({ accountId, displayName })) : [] }); return;
+        account: publication?.version >= 2 && account ? { accountId: account.accountId, displayName: account.displayName, admin: account.admin } : null,
+        accounts: publication?.version >= 2 ? publication.accounts.map(({ accountId, displayName }) => ({ accountId, displayName })) : [] }); return;
     }
     if (!publication) throw error("Администратор ещё не загрузил отчёты", 409);
     const account = accountFor(request, identity);
-    if (publication.version === 2 && !account) throw error("Выберите ФИО и введите PIN", 401);
-    const pages = visibleCloudPages(publication, publication.version === 2 ? account.accountId : identity.userId);
+    if (publication.version >= 2 && !account) throw error("Выберите ФИО и введите PIN", 401);
+    const pages = visibleCloudPages(publication, publication.version >= 2 ? account.accountId : identity.userId);
     if (!pages.length) throw error("Доступ не назначен. Обратитесь к администратору КлинВекта", 403);
     if (request.method === "GET" && url.pathname === "/api/cloud/context") {
       const cursor = Number(url.searchParams.get("cursor") || 0);
       if (!Number.isInteger(cursor) || cursor < 0 || cursor >= pages.length) throw error("Некорректная позиция каталога");
       const end = Math.min(cursor + 128, pages.length);
-      sendJson(response, 200, { ok: true, userName: publication.version === 2 ? account.displayName : identity.userName, createdAt: publication.createdAt,
-        pages: pages.slice(cursor, end).map(({ html, ...descriptor }) => descriptor),
+      sendJson(response, 200, { ok: true, userName: publication.version >= 2 ? account.displayName : identity.userName, createdAt: publication.createdAt,
+        pages: pages.slice(cursor, end).map(({ html, report, ...descriptor }) => descriptor),
         nextCursor: end < pages.length ? end : null }); return;
     }
     const pageMatch = /^\/api\/cloud\/pages\/([a-f0-9]{64})$/.exec(url.pathname);
@@ -186,8 +187,8 @@ function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, 
       response.setHeader("Cache-Control", "no-store");
       response.setHeader("Content-Type", "text/html; charset=utf-8");
       response.end('<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
-        + '<link rel="stylesheet" href="/mobile/online-report.css?v=2"><script src="/mobile/online-report.js?v=1" defer></script></head><body class="online-report">'
-        + page.html + "</body></html>"); return;
+        + '<link rel="stylesheet" href="/mobile/online-report.css?v=3"><script src="/mobile/report-charts.js?v=1" defer></script><script src="/mobile/online-report.js?v=2" defer></script></head><body class="online-report">'
+        + (publication.version === 3 ? renderCloudReport(page.report, page.title) : page.html) + "</body></html>"); return;
     }
     throw error("API не найден", 404);
   }

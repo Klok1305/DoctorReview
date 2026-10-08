@@ -36,6 +36,9 @@ async function execute() {
   }
   if (task === "cloud-publication") {
     const { createCloudPublication } = require("./cloud-publication-service.cjs");
+    const { assertCloudPatientPrivacy } = require("./cloud-privacy.cjs");
+    progress({ stage: "privacy", completed: 0, total: 1 });
+    assertCloudPatientPrivacy(payload.pages, payload.privacyPatterns, { doctorNames: payload.doctors.map(doctor => doctor.displayName) });
     progress({ stage: "cloud", completed: 0, total: 1 });
     const publication = createCloudPublication(payload);
     const serialized = JSON.stringify(publication);

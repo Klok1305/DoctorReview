@@ -191,7 +191,7 @@ function validateVector(vector, index) {
 function validatePublicationDynamics(dynamics, periodId) {
   if (dynamics == null) return;
   const value = plainObject(dynamics, `динамика периода ${periodId}`);
-  if (!Array.isArray(value.columns) || !value.columns.length || value.columns.length > 6) fail(`месяцы динамики ${periodId}`);
+  if (!Array.isArray(value.columns) || !value.columns.length || value.columns.length > 12) fail(`месяцы динамики ${periodId}`);
   value.columns.forEach((column, index) => shortText(column, `месяц динамики ${periodId}.${index + 1}`, 100));
   if (!Array.isArray(value.rows) || !value.rows.length || value.rows.length > 30) fail(`показатели динамики ${periodId}`);
   value.rows.forEach((row, index) => {

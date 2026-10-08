@@ -12,6 +12,8 @@ const {
 } = require("electron");
 const { CloudConnectionStore, publishCloudPublication } = require("./services/cloud-publisher.cjs");
 const { cloudAccountsFromViewer, createCloudPublication } = require("./services/cloud-publication-service.cjs");
+const { cloudPrivacyPatterns } = require("./services/cloud-privacy.cjs");
+const cloudExportFiles = new Map();
 const { ConfigStore, isUnsupportedStoragePath } = require("./services/config-store.cjs");
 const { DatabaseService } = require("./services/database.cjs");
 const { BackgroundTaskQueue } = require("./services/background-task-queue.cjs");
@@ -1165,19 +1167,17 @@ function createWindow() {
           database.viewerAccessSnapshot();
           const cloudDoctorIds = cloudPayload.doctors.map(doctor => doctor.doctorId);
           const cloudCredentials = database.viewerExportCredentials(cloudDoctorIds, { allowInactiveDoctorIds: cloudDoctorIds });
-          const cloudPublication = createCloudPublication({ ...cloudPayload, version: 2, appVersion: app.getVersion(),
+          const cloudPublication = createCloudPublication({ ...cloudPayload, version: 3, appVersion: app.getVersion(),
             accounts: cloudAccountsFromViewer(cloudPayload.doctors, database.loadSnapshot().settings, cloudCredentials) });
-          const cloudDoctorHtml = cloudPublication.pages.find(page => page.kind === "doctor" && page.doctorId === "d1" && page.periodKey === "2026-02")?.html || "";
-          const cloudPatientText = await mainWindow.webContents.executeJavaScript(`(() => {
-            const root = document.createElement('div'); root.innerHTML = ${JSON.stringify(cloudDoctorHtml)};
-            return root.querySelector('.kpi .val')?.textContent.trim();
-          })()`);
+          const cloudReport = cloudPublication.pages.find(page => page.kind === "doctor" && page.doctorId === "d1" && page.periodKey === "2026-02")?.report;
+          const cloudPatientText = String(cloudReport?.numbers.metrics.find(metric => metric.id === "traffic.patients")?.value);
           const cloudSerialized = JSON.stringify(cloudPublication);
           result.cloudPublicationValid = cloudPatientText === "3"
             && cloudPublication.pages.some(page => page.kind === "clinic")
             && cloudPublication.pages.some(page => page.kind === "department")
             && cloudPublication.pages.some(page => page.kind === "specialization")
             && !/data-viewer-patient|clientSegmentPatients/.test(cloudSerialized)
+            && !/data:image|"html":/.test(cloudSerialized)
             && !/pinCode|userId/.test(cloudSerialized)
             && cloudSerialized.includes("Комментарий smoke-теста");
           result.cloudPinsVisible = await mainWindow.webContents.executeJavaScript(`(async () => {
@@ -1847,10 +1847,29 @@ function registerIpc() {
   ipcMain.handle("cloud-publication:save-connection", (_event, payload) => {
     localAdminActor(); return cloudConnectionStore.save(ensureObject(payload, "подключение к облаку"));
   });
+  ipcMain.handle("cloud-publication:choose-file", async event => {
+    localAdminActor();
+    for (const [token, item] of cloudExportFiles) if (item.expiresAt <= Date.now()) cloudExportFiles.delete(token);
+    const selected = await dialog.showSaveDialog(mainWindow, { title: "Сохранить обезличенный JSON для онлайн-КлинВекта",
+      defaultPath: path.join(configStore.publicConfig().outputDir, `КлинВект-онлайн-без-пациентов-${new Date().toISOString().slice(0, 10)}.json`),
+      filters: [{ name: "Обезличенный пакет JSON", extensions: ["json"] }] });
+    if (selected.canceled || !selected.filePath) return { canceled: true };
+    const token = require("node:crypto").randomUUID();
+    cloudExportFiles.set(token, { filePath: selected.filePath, senderId: event.sender.id, expiresAt: Date.now() + 60 * 60 * 1000 });
+    return { canceled: false, token, path: selected.filePath };
+  });
+  ipcMain.handle("cloud-publication:discard-file", (event, token) => {
+    localAdminActor();
+    if (cloudExportFiles.get(String(token))?.senderId === event.sender.id) cloudExportFiles.delete(String(token));
+  });
   ipcMain.handle("cloud-publication:export", async (event, payload) => {
     const session = localAdminActor();
     const input = ensureObject(payload, "облачная публикация");
     if (!["json", "publish"].includes(input.action)) throw new Error("Некорректная операция облачной публикации");
+    const file = input.action === "json" ? cloudExportFiles.get(String(input.fileToken)) : null;
+    if (input.action === "json" && (!file || file.senderId !== event.sender.id || file.expiresAt <= Date.now())) {
+      throw new Error("Сначала выберите файл для сохранения обезличенного JSON");
+    }
     const snapshot = database.loadSnapshot() || {};
     if (!Array.isArray(input.doctors) || input.doctors.length !== Object.keys(snapshot.doctors || {}).length
       || input.doctors.some(doctor => !snapshot.doctors?.[doctor.doctorId])) throw new Error("Некорректный список врачей облачной публикации");
@@ -1861,14 +1880,14 @@ function registerIpc() {
     // Access settings come from the committed local database. The package never
     // carries working months, plaintext PINs or the external API secret.
     const bundle = await runPublicationTask(event, input.operationId, "cloud-publication", {
-      version: 2, doctors: input.doctors, pages: input.pages, accounts, appVersion: app.getVersion() });
+      version: 3, doctors: input.doctors, pages: input.pages, accounts, appVersion: app.getVersion(), privacyPatterns: cloudPrivacyPatterns(snapshot) });
     if (input.action === "json") {
-      const selected = await dialog.showSaveDialog(mainWindow, { title: "Обезличенный JSON для онлайн-КлинВекта",
-        defaultPath: path.join(configStore.publicConfig().outputDir, `КлинВект-онлайн-без-пациентов-${new Date().toISOString().slice(0, 10)}.json`),
-        filters: [{ name: "Обезличенный пакет JSON", extensions: ["json"] }] });
-      if (selected.canceled || !selected.filePath) return { canceled: true };
-      await fs.promises.writeFile(selected.filePath, bundle.serialized, "utf8");
-      return { canceled: false, path: selected.filePath, doctors: bundle.doctors, pages: bundle.pages };
+      const temporary = `${file.filePath}.${String(input.operationId).replace(/[^a-z0-9-]/gi, "")}.tmp`;
+      try {
+        await fs.promises.writeFile(temporary, bundle.serialized, "utf8");
+        await fs.promises.rename(temporary, file.filePath);
+      } finally { await fs.promises.rm(temporary, { force: true }); cloudExportFiles.delete(String(input.fileToken)); }
+      return { canceled: false, path: file.filePath, doctors: bundle.doctors, pages: bundle.pages };
     }
     const operationId = String(input.operationId || "");
     if ([...activePublicationOperations.values()].some(operation => operation.cloudUpload)) throw new Error("Отправка в облако уже выполняется");
