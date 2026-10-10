@@ -49,6 +49,10 @@ jobs:
       - name: Установить зависимости
         run: pnpm install --frozen-lockfile
 
+      - name: Подготовить каталог результатов проверок
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path tmp | Out-Null
+
       - name: Проверить состав репозитория
         run: pnpm run audit:repo
 

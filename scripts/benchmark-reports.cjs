@@ -16,6 +16,7 @@ async function responsiveTiming(action) {
   return { ms, maxEventGapMs: maxGap, ticks };
 }
 async function main() {
+  fs.mkdirSync(path.join(root, "tmp"), { recursive: true });
   const c = context();
   vm.runInContext(`
     DB.doctors={};DB.months={};
