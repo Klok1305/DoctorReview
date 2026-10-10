@@ -6,6 +6,51 @@ const { createMobileServer } = require("../mobile-server/server.cjs");
 const crypto = require("node:crypto");
 const { createCloudPublication, cloudAccountsFromViewer, PIN_PARAMS } = require("../desktop/services/cloud-publication-service.cjs");
 const root = path.resolve(__dirname, "..");
+const layoutResults = [];
+async function auditLayout(page, state, report = false) {
+  const originalViewport = page.viewportSize();
+  const originalName = await page.locator("#onlineUser").textContent();
+  const selectedScope = page.locator("#onlineScope option:checked");
+  const originalScope = await selectedScope.count() ? await selectedScope.textContent() : null;
+  if (originalName) await page.locator("#onlineUser").evaluate(element => {
+    element.textContent = "Александрова-Константинопольская Александра Александровна";
+  });
+  if (originalScope) await page.locator("#onlineScope option:checked").evaluate(element => {
+    element.textContent = "Александрова-Константинопольская Александра Александровна";
+  });
+  const viewports = process.argv.includes("--layout")
+    ? [[320,720],[360,800],[390,844],[430,932],[768,1024],[1040,900],[1280,800],[1440,1000],[1920,1080],[844,390],[568,320]] : [[320,720],[568,320]];
+  for (const [width, height] of viewports) {
+    await page.setViewportSize({ width, height });
+    const geometry = await page.evaluate(() => {
+      const visible = element => element.getBoundingClientRect().height > 0 && getComputedStyle(element).visibility !== "hidden";
+      const outside = [...document.querySelectorAll("header,header button,.controls select,#onlineLoginForm,#onlineUploadPanel")]
+        .filter(visible).filter(element => { const rect = element.getBoundingClientRect(); return rect.left < -2 || rect.right > innerWidth + 2; })
+        .map(element => element.id || element.tagName);
+      return { overflow: document.documentElement.scrollWidth - innerWidth, outside, frameHeight: document.getElementById("onlineFrame").clientHeight,
+        shellOverflowing: [...document.querySelectorAll("body *")].filter(element => element.getBoundingClientRect().right > innerWidth + 2 && !element.closest(".pins-scroll"))
+          .slice(0,12).map(element => ({ tag: element.tagName, id: element.id, className: element.className, width: element.getBoundingClientRect().width })) };
+    });
+    const reportFrame = report && page.frames().find(frame => frame.parentFrame() === page.mainFrame());
+    const reportGeometry = reportFrame ? await reportFrame.evaluate(() => ({ reportOverflow: document.documentElement.scrollWidth - innerWidth,
+      overflowing: [...document.querySelectorAll("body *")].filter(element => element.getBoundingClientRect().right > innerWidth + 2 && !element.closest(".cloud-table-scroll,.chart-data-scroll,.department-year-scroll,.reputation-table-scroll,.specialization-table-scroll"))
+        .slice(0,12).map(element => ({ tag: element.tagName, className: element.className, width: element.getBoundingClientRect().width }))
+    })) : { reportOverflow: 0 };
+    layoutResults.push({ state, width, height, ...geometry, ...reportGeometry });
+    await page.screenshot({ path: path.join(root,"tmp",`online-layout-${state}-${width}.png`) });
+  }
+  if (report) {
+    await page.locator("#onlineFrame").scrollIntoViewIfNeeded();
+    assert.ok(await page.locator("#onlineFrame").evaluate(element => {
+      const rect = element.getBoundingClientRect(); return Math.min(rect.bottom, innerHeight) - Math.max(rect.top, 0) >= 180;
+    }), "report remains reachable by scrolling the shell on a short landscape screen");
+    await page.screenshot({ path: path.join(root,"tmp",`online-layout-${state}-landscape-report.png`) });
+    await page.evaluate(() => scrollTo(0, 0));
+  }
+  await page.locator("#onlineUser").evaluate((element, name) => { element.textContent = name; }, originalName);
+  if (originalScope) await page.locator("#onlineScope option:checked").evaluate((element, name) => { element.textContent = name; }, originalScope);
+  await page.setViewportSize(originalViewport);
+}
 
 async function main() {
   require("./build-mobile-server-package.cjs");
@@ -56,6 +101,7 @@ async function main() {
       const rect = element.getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth;
     }));
     assert.ok(headerKpisFit, "doctor header KPI cards must fit the phone report viewport");
+    await auditLayout(page, "legacy-report", true);
     await page.locator("#onlinePeriod").selectOption("2026-01");
     await page.waitForFunction(() => document.getElementById("onlineStatus").textContent.includes("2026-01"));
     await page.setViewportSize({ width: 844, height: 390 });
@@ -96,6 +142,7 @@ async function main() {
       "X-Vibe-User-Id": "999", "X-Vibe-Portal-Id": "test-portal" } });
     const pinPage = await pinContext.newPage(); pinPage.on("pageerror", error => errors.push(error.message));
     await pinPage.goto(base); await pinPage.locator("#onlineLoginForm").waitFor({ state: "visible" });
+    await auditLayout(pinPage, "login");
     assert.equal(await pinPage.locator("#onlineAccount option").count(), 3);
     await pinPage.locator("#onlineAccount").selectOption("doctor:a");
     await pinPage.locator("#onlinePin").fill("9999"); await pinPage.locator("#onlineLoginButton").click();
@@ -145,6 +192,7 @@ async function main() {
     await pinPage.locator("#onlinePin").fill("0123"); await pinPage.locator("#onlineLoginButton").click();
     const numericFrame = pinPage.frameLocator("#onlineFrame");
     await numericFrame.locator(".cloud-data-report").waitFor();
+    await auditLayout(pinPage, "numeric-report", true);
     assert.equal(await pinPage.locator("#onlineScope option").count(), 1);
     assert.equal(await numericFrame.locator("[data-viewer-patient-register], canvas, img").count(), 0);
     const headerTable = numericFrame.locator(".cloud-section").filter({ has: numericFrame.locator("h3", { hasText: "Годовая таблица показателей" }) });
@@ -159,15 +207,16 @@ async function main() {
     const expectedPlot = require("../mobile-pilot/report-charts.js").chartPlot(JSON.parse(await chart.getAttribute("data-chart")), "0");
     const expectedPath = expectedPlot.match(/<path d="([^"]*)"/)[1];
     assert.equal(await chart.locator(".line-wide path").first().getAttribute("d"), expectedPath, "selection uses exact JSON values and keeps February as a gap");
-    for (const viewport of [{ width: 390, height: 844 }, { width: 844, height: 390 }]) {
+    for (const viewport of [{ width: 320, height: 720 }, { width: 390, height: 844 }, { width: 844, height: 390 }]) {
       await pinPage.setViewportSize(viewport);
       assert.ok(await pinPage.evaluate(() => document.documentElement.scrollWidth - innerWidth <= 2));
       const reportFrame = pinPage.frames().find(frame => frame.parentFrame() === pinPage.mainFrame());
       assert.ok(await reportFrame.evaluate(() => document.documentElement.scrollWidth - innerWidth <= 2), "numeric report fits the phone viewport");
       assert.ok(await numericFrame.locator(".cloud-kpis .kpi").evaluateAll(elements => elements.every(element => element.getBoundingClientRect().right <= innerWidth + 2)));
-      await pinPage.screenshot({ path: path.join(root, "tmp", `cloud-json-${viewport.width === 390 ? "iphone" : "landscape"}.png`) });
-      await chart.screenshot({ path: path.join(root, "tmp", `cloud-json-chart-${viewport.width === 390 ? "iphone" : "landscape"}.png`) });
-      await headerTable.screenshot({ path: path.join(root, "tmp", `cloud-table-headers-${viewport.width === 390 ? "iphone" : "landscape"}.png`) });
+      const screenName = viewport.width === 320 ? "compact" : viewport.width === 390 ? "iphone" : "landscape";
+      await pinPage.screenshot({ path: path.join(root, "tmp", `cloud-json-${screenName}.png`) });
+      await chart.screenshot({ path: path.join(root, "tmp", `cloud-json-chart-${screenName}.png`) });
+      await headerTable.screenshot({ path: path.join(root, "tmp", `cloud-table-headers-${screenName}.png`) });
     }
     await chart.evaluate(element => {
       window.dispatchEvent(new Event("beforeprint"));
@@ -222,6 +271,7 @@ async function main() {
     const pinFile = { name: "online-pins.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(pinUpdate)) };
     await adminPage.locator("#onlinePinsFile").setInputFiles(pinFile); await adminPage.locator("#onlinePinsPreviewButton").click();
     await adminPage.locator("#onlinePinsApply").waitFor(); assert.equal(await adminPage.locator("[data-pin-source]").count(), 2);
+    await auditLayout(adminPage, "pin-comparison", true);
     assert.equal(await adminPage.locator("[data-pin-source]").first().inputValue(), "a");
     await adminPage.screenshot({ path: path.join(root, "tmp", "pin-transfer-online-pc.png") });
     await adminPage.locator("#onlinePinsComparison button", { hasText: "Закрыть сравнение" }).click();
@@ -244,8 +294,13 @@ async function main() {
     await migrationContext.close();
     assert.deepEqual(errors, []);
     await admin.close();
+    if (layoutResults.length) {
+      fs.writeFileSync(path.join(root,"tmp","online-layout-results.json"), JSON.stringify(layoutResults,null,2));
+      const failures = layoutResults.filter(item => item.overflow > 2 || item.outside.length || item.reportOverflow > 2 || (item.state !== "login" && item.frameHeight < 180));
+      assert.deepEqual(failures, [], "online layout must fit all tested viewports with long physician names");
+    }
     process.stdout.write(JSON.stringify({ online: true, browser: "WebKit", device: "iPhone 13 emulation", narrow, admin: true,
-      pinLogin: true, pinMigrationPcAndPhone: true, numericJson: true, exactChartValues: true, noEmployeeIdMapping: true, bitrixIframeWithBlockedCookies: true, realAdminSnapshot: Boolean(sample), errors: 0 }) + "\n");
+      pinLogin: true, pinMigrationPcAndPhone: true, numericJson: true, exactChartValues: true, noEmployeeIdMapping: true, bitrixIframeWithBlockedCookies: true, realAdminSnapshot: Boolean(sample), layoutCases: layoutResults.length, errors: 0 }) + "\n");
   } finally {
     await browser?.close(); if (iframeServer) await new Promise(resolve => iframeServer.close(resolve));
     await new Promise(resolve => server.close(resolve)); fs.rmSync(dataDir, { recursive: true, force: true });

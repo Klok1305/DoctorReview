@@ -7,6 +7,9 @@ body.online-report{display:block;padding:16px;margin:0;overflow:auto;background:
 .online-report .card h2{flex-wrap:wrap;overflow-wrap:anywhere}
 .cloud-data-report{max-width:1400px;margin:auto;min-width:0;font-family:Segoe UI,Arial,sans-serif;color:#172438;font-size:15px}
 .cloud-heading{display:flex;gap:16px;align-items:center;justify-content:space-between;background:white;padding:20px;border-radius:14px;min-width:0}
+.cloud-heading>div:first-child{min-width:0;flex:1}
+.cloud-data-report .chart-picker{display:flex;align-items:center;gap:8px;min-width:0;max-width:100%}
+.cloud-data-report .chart-picker select{min-width:0;flex:1}
 .cloud-heading h1{font-size:24px;margin:0;overflow-wrap:anywhere}.cloud-heading p{margin:6px 0}.cloud-score{font-size:36px;font-weight:700;flex-shrink:0;text-align:center}.cloud-score small{display:block;font-size:12px;font-weight:400}
 .cloud-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:12px 0}.cloud-kpis .kpi{display:flex;flex-direction:column;gap:7px;padding:16px;background:white;border:1px solid #dbe3ee;border-radius:12px;min-width:0;overflow-wrap:anywhere}.cloud-kpis .val{font-size:23px}.cloud-kpis small,.cloud-kpis em{font-size:13px;color:#53677f}
 .cloud-vector,.cloud-comments{padding:18px;margin:14px 0;background:white;border:1px solid #dbe3ee;border-radius:14px;min-width:0}.cloud-vector>summary{display:flex;justify-content:space-between;gap:12px;cursor:pointer;font-size:18px;font-weight:600;overflow-wrap:anywhere}.cloud-vector>summary>b{flex-shrink:0}.cloud-section{margin:14px 0;padding:8px 0;border-top:1px solid #e5eaf2}.cloud-section h3{font-size:17px}.cloud-window{margin-top:12px;padding:12px;border:1px solid #dbe3ee;border-radius:10px}.cloud-window>summary{font-weight:600;cursor:pointer}

@@ -391,7 +391,7 @@ test("mobile chart typography excludes icon strokes and keeps moderate font weig
     assert.match(rule(selector), /font-weight:\s*500/);
   }
   assert.match(rule(".report-chart h5"), /font-weight:\s*600/);
-  assert.match(read("mobile-pilot/service-worker.js"), /klinvekt-mobile-pilot-v28/);
+  assert.match(read("mobile-pilot/service-worker.js"), /klinvekt-mobile-pilot-v29/);
   assert.match(read("mobile-pilot/service-worker.js"), /app\.css\?v=14/);
 });
 
