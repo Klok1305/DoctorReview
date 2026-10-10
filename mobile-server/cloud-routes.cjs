@@ -6,7 +6,8 @@ const crypto = require("node:crypto");
 const servicePath = fs.existsSync(path.join(__dirname, "cloud-publication-service.cjs"))
   ? "./cloud-publication-service.cjs" : "../desktop/services/cloud-publication-service.cjs";
 const { validateCloudPublication, visibleCloudPages, MAX_CLOUD_BYTES } = require(servicePath);
-const { renderCloudReport } = require("./cloud-report-renderer.cjs");
+const { MAX_PIN_BYTES, validatePinTransfer, previewCloudPins, applyCloudPins, assertCloudPublicationPins } = require(servicePath.replace("cloud-publication-service", "pin-transfer-service"));
+const { createReportRenderCache } = require("./cloud-report-renderer.cjs");
 const CHUNK_BYTES = 512 * 1024;
 const TTL = 20 * 60 * 1000;
 const sha256 = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
@@ -15,13 +16,15 @@ const error = (message, statusCode = 400) => Object.assign(new Error(message), {
 function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, readBody, readJson, securityHeaders, isAdminRole, trustLocal = false }) {
   const filePath = path.join(dataDir, "publications.kvcloud");
   let publication = null;
+  const reportRenderCache = createReportRenderCache();
   if (fs.existsSync(filePath)) {
     if (fs.statSync(filePath).size > MAX_CLOUD_BYTES + 1024) throw error("Сохранённая облачная публикация слишком велика");
     const stored = JSON.parse(fs.readFileSync(filePath, "utf8"));
     if (!portalId || stored.portalId !== portalId) throw error("Сохранённая облачная публикация принадлежит другому порталу");
     publication = validateCloudPublication(stored.publication);
   }
-  const uploads = new Map(), completed = new Map();
+  const uploads = new Map(), completed = new Map(), pinPreviews = new Map();
+  let commitBusy = false;
   const auth = createCloudAuth({ trustLocal });
   const allowedKeys = new Set(publisherKeyIds);
   const clean = () => {
@@ -29,6 +32,7 @@ function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, 
       fs.rmSync(upload.filePath, { force: true }); uploads.delete(id);
     }
     for (const [id, item] of completed) if (item.expiresAt <= Date.now()) completed.delete(id);
+    for (const [id, item] of pinPreviews) if (item.expiresAt <= Date.now()) pinPreviews.delete(id);
   };
   const publisher = request => {
     const headers = request.headers;
@@ -62,6 +66,25 @@ function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, 
     upload.expiresAt = Date.now() + TTL;
     return upload;
   };
+  async function persistPublication(value, previous, authorize, backupPins = false) {
+    if (commitBusy) throw error("Обновление уже сохраняется. Повторите позже", 409);
+    commitBusy = true;
+    const candidatePath = path.join(dataDir, `.cloud-commit-${crypto.randomUUID()}.tmp`);
+    try {
+      authorize();
+      if (publication !== previous) throw error("Публикация изменилась. Повторите сравнение или загрузку", 409);
+      if (backupPins) await fs.promises.writeFile(path.join(dataDir, `pin-backup-${crypto.randomUUID()}.json`),
+        JSON.stringify({ format: "klinvekt-cloud-pin-backup", createdAt: new Date().toISOString(), pinSync: previous.pinSync || null, accounts: previous.accounts }), { flag: "wx", mode: 0o600 });
+      await fs.promises.writeFile(candidatePath, JSON.stringify({ portalId, publication: value }), { flag: "wx", mode: 0o600 });
+      authorize();
+      if (publication !== previous) throw error("Публикация изменилась. Повторите сравнение или загрузку", 409);
+      await fs.promises.rename(candidatePath, filePath);
+      publication = value; reportRenderCache.clear(); auth.revoke(); pinPreviews.clear();
+    } finally {
+      await fs.promises.rm(candidatePath, { force: true }).catch(() => {});
+      commitBusy = false;
+    }
+  }
   async function handle(request, response, url, identity) {
     clean();
     const manual = url.pathname.startsWith("/api/cloud/manual/");
@@ -130,11 +153,9 @@ function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, 
           }
           // Persist first, then replace the in-memory publication. An invalid or
           // interrupted upload never discards the previous working publication.
-          const candidatePath = `${upload.filePath}.validated`;
-          await fs.promises.writeFile(candidatePath, JSON.stringify({ portalId, publication: validated }), { mode: 0o600 });
-          try { await fs.promises.rename(candidatePath, filePath); }
-          finally { await fs.promises.rm(candidatePath, { force: true }).catch(() => {}); }
-          publication = validated; auth.revoke(); uploads.delete(id);
+          assertCloudPublicationPins(publication, validated);
+          await persistPublication(validated, publication, () => manual ? manualPublisher(request, identity) : publisher(request));
+          uploads.delete(id);
           const result = { ok: true, doctors: validated.doctors.length, pages: validated.pages.length, createdAt: validated.createdAt };
           completed.set(id, { key, result, expiresAt: Date.now() + TTL });
           await fs.promises.rm(upload.filePath, { force: true }).catch(() => {});
@@ -147,6 +168,39 @@ function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, 
     // External API keys publish only. They cannot read reports or impersonate a
     // doctor, including when a caller supplies fake user headers.
     requireUser(request, identity);
+    if (request.method === "POST" && url.pathname === "/api/cloud/pins/preview") {
+      const key = manualPublisher(request, identity);
+      if (pinPreviews.size >= 4) throw error("Слишком много сравнений PIN. Повторите через 20 минут", 503);
+      const value = validatePinTransfer(await readJson(request, MAX_PIN_BYTES), true);
+      manualPublisher(request, identity);
+      for (const [token, item] of pinPreviews) if (item.key === key) pinPreviews.delete(token);
+      if (pinPreviews.size >= 4) throw error("Слишком много сравнений PIN. Повторите позже", 503);
+      const preview = previewCloudPins(publication, value), token = crypto.randomUUID();
+      pinPreviews.set(token, { key, value, publication, expiresAt: Date.now() + TTL });
+      sendJson(response, 200, { ...preview, token }); return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/cloud/pins/discard") {
+      const key = manualPublisher(request, identity), input = await readJson(request, 4096);
+      if (pinPreviews.get(input.token)?.key === key) pinPreviews.delete(input.token);
+      sendJson(response, 200, { ok: true }); return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/cloud/pins/apply") {
+      if (request.headers["x-klinvekt-cloud-upload"] !== "1") throw error("Откройте сравнение PIN", 403);
+      const input = await readJson(request, MAX_PIN_BYTES), key = `user:${identity.portalId}:${identity.userId}`;
+      const prior = completed.get(`pins:${input.token}`);
+      if (prior?.key === key) { sendJson(response, 200, { ...prior.result, repeated: true }); return; }
+      manualPublisher(request, identity);
+      const item = pinPreviews.get(input.token);
+      if (!item || item.key !== key) throw error("Сравнение PIN истекло. Выберите файл заново", 404);
+      if (publication !== item.publication) throw error("Публикация изменилась. Повторите сравнение PIN", 409);
+      const change = applyCloudPins(publication, item.value, { mapping: input.mapping, importAdmin: input.importAdmin === true, adopt: input.adopt === true });
+      validateCloudPublication(change.publication);
+      if (!change.repeated) await persistPublication(change.publication, item.publication, () => manualPublisher(request, identity), true);
+      pinPreviews.delete(input.token);
+      const result = { ok: true, updated: change.updated, adminChanged: Boolean(change.adminChanged), repeated: change.repeated, pinSync: item.value.sync };
+      completed.set(`pins:${input.token}`, { key, result, expiresAt: Date.now() + TTL });
+      sendJson(response, 200, result); return;
+    }
     if (request.method === "POST" && ["/api/cloud/login", "/api/cloud/logout"].includes(url.pathname)) {
       if (request.headers["x-klinvekt-cloud-auth"] !== "1") throw error("Откройте форму входа КлинВекта", 403);
       if (url.pathname.endsWith("/logout")) {
@@ -163,6 +217,7 @@ function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, 
       sendJson(response, 200, { ok: true, userId: identity.userId, userName: identity.userName,
         canUpload: canUpload(request, identity), publicationAvailable: Boolean(publication),
         authMode: publication?.version === 1 ? "bitrix" : "pin",
+        pinSync: publication?.pinSync || null,
         account: publication?.version >= 2 && account ? { accountId: account.accountId, displayName: account.displayName, admin: account.admin } : null,
         accounts: publication?.version >= 2 ? publication.accounts.map(({ accountId, displayName }) => ({ accountId, displayName })) : [] }); return;
     }
@@ -187,8 +242,8 @@ function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, 
       response.setHeader("Cache-Control", "no-store");
       response.setHeader("Content-Type", "text/html; charset=utf-8");
       response.end('<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
-        + '<link rel="stylesheet" href="/mobile/online-report.css?v=3"><script src="/mobile/report-charts.js?v=1" defer></script><script src="/mobile/online-report.js?v=2" defer></script></head><body class="online-report">'
-        + (publication.version === 3 ? renderCloudReport(page.report, page.title) : page.html) + "</body></html>"); return;
+        + '<link rel="stylesheet" href="/mobile/online-report.css?v=4"><script src="/mobile/report-presentation.js?v=1" defer></script><script src="/mobile/report-charts.js?v=2" defer></script><script src="/mobile/online-report.js?v=4" defer></script></head><body class="online-report">'
+        + (publication.version === 3 ? reportRenderCache.render(page) : page.html) + "</body></html>"); return;
     }
     throw error("API не найден", 404);
   }

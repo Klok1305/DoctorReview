@@ -14,6 +14,8 @@ const { CloudConnectionStore, publishCloudPublication } = require("./services/cl
 const { cloudAccountsFromViewer, createCloudPublication } = require("./services/cloud-publication-service.cjs");
 const { cloudPrivacyPatterns } = require("./services/cloud-privacy.cjs");
 const cloudExportFiles = new Map();
+const pinImportFiles = new Map();
+const { cloudPinsFromTransfer, MAX_PIN_BYTES } = require("./services/pin-transfer-service.cjs");
 const { ConfigStore, isUnsupportedStoragePath } = require("./services/config-store.cjs");
 const { DatabaseService } = require("./services/database.cjs");
 const { BackgroundTaskQueue } = require("./services/background-task-queue.cjs");
@@ -462,7 +464,10 @@ function createWindow() {
                   label: input.closest('label')?.className || ''
                 }))));
               closePdfExportDialog();
+              UI.openLists.doctorSemantic2 = false;
+              UI.openLists.doctorSemantic3 = false;
               const pdfExport = await exportAllReportsToFolder([doctorTarget]);
+              if (UI.openLists.doctorSemantic2 !== false || UI.openLists.doctorSemantic3 !== false) throw Error('PDF changed saved report disclosure state');
               return {
                 title: document.title,
                 dataPage: Boolean(document.getElementById('page-data')),
@@ -597,13 +602,13 @@ function createWindow() {
               clearMetricsCache();
               UI.departmentMonth = '2026-02';
               UI.departmentFilter = 'all';
-              switchTab('department');
+              await switchTab('department');
               await new Promise(resolve => setTimeout(resolve, 300));
               const departmentPage = document.getElementById('page-department').classList.contains('active');
               const departmentCharts = Boolean(UI.charts.chDepartmentRevenue && UI.charts.chDepartmentRates && UI.charts.chDepartmentBase);
               const departmentAllLeaderboardCount = document.querySelectorAll('#departmentBody .doctor-score-leader').length;
               UI.departmentFilter = 'Косметология';
-              renderDepartment();
+              await renderDepartment();
               await new Promise(resolve => setTimeout(resolve, 150));
               const departmentFilteredLeaderboardCount = document.querySelectorAll('#departmentBody .doctor-score-leader').length;
               const departmentTotalRow = document.querySelector('#tblDepartmentSpecs .department-total-row');
@@ -611,10 +616,17 @@ function createWindow() {
                 && departmentTotalRow.cells.length === document.querySelectorAll('#tblDepartmentSpecs tr:first-child th').length
                 && departmentTotalRow.cells[0]?.textContent.includes('Итого по отделению')
                 && departmentTotalRow.cells[2]?.textContent.includes('₽');
+              const departmentYearHeaders = [...document.querySelectorAll('#tblDepartmentYear th')].slice(2);
+              const departmentYearHeadersValid = departmentYearHeaders.length === 7
+                && departmentYearHeaders.every(cell => {
+                  const lines = [...cell.querySelectorAll('.report-table-heading-line')];
+                  return lines.length === 2 && lines[1].getBoundingClientRect().top >= lines[0].getBoundingClientRect().bottom - 1;
+                })
+                && document.querySelectorAll('#departmentBody .reputation-honor-board').length === 0;
               UI.deptMonth = '2026-02';
               UI.deptFilter = 'Косметология';
               UI.subFilter = 'all';
-              switchTab('dept');
+              await switchTab('dept');
               await new Promise(resolve => setTimeout(resolve, 150));
               const specializationLeaderboardCount = document.querySelectorAll('#deptBody .doctor-score-leader').length;
               const comparisonTable = document.getElementById('tblCompare');
@@ -644,9 +656,10 @@ function createWindow() {
                 && aggregateDeptMonth('2026-02', 'Косметология').loyalty.pvSlices[3].pct === 50
                 && [...document.querySelectorAll('#tblRating tr')].slice(1).some(row => row.textContent.includes('60%'));
               const reputationReportsValid = document.querySelectorAll('#deptBody .reputation-report').length === 1
-                && document.querySelectorAll('#deptBody .reputation-honor-person').length === 2
+                && document.querySelectorAll('#deptBody .reputation-honor-board').length === 0
                 && document.querySelector('#deptBody .reputation-report').textContent.includes('42 шт.')
-                && buildDeptReport('2026-02', 'all', 'all').includes('Доска почёта · Клиника')
+                && !buildDeptReport('2026-02', 'all', 'all').includes('reputation-honor-board')
+                && !buildDepartmentReport('2026-02', 'Косметология').includes('reputation-honor-board')
                 && buildDepartmentReport('2026-02', 'Косметология').includes('42 шт.');
               const heatmapFocusWidths = [...document.querySelectorAll('#tblHeat .heatmap-focus-heading')]
                 .map(cell => Math.round(cell.getBoundingClientRect().width));
@@ -692,7 +705,7 @@ function createWindow() {
                 && !specializationGrouping;
               UI.departmentMonth = '2026-02';
               UI.departmentFilter = 'Терапия';
-              switchTab('department');
+              await switchTab('department');
               await new Promise(resolve => setTimeout(resolve, 150));
               const reportLeaderboardCount = document.querySelectorAll('#departmentBody .doctor-score-leader').length;
               const smokeCommentContext = { scopeType: 'department', scopeId: 'Терапия', periodKey: '2026-02', pageType: 'department' };
@@ -729,7 +742,10 @@ function createWindow() {
               clearMetricsCache();
               UI.docId = 'd1';
               UI.docMonth = '2026-02';
-              switchTab('doctor');
+              await switchTab('doctor');
+              if (!UI.reportTiming?.worker) throw Error('Report calculations did not use the browser Worker');
+              const reportWorkerTiming = { ...UI.reportTiming };
+              const chartsInitiallyPending = pendingReportCharts.size;
               await new Promise(resolve => setTimeout(resolve, 300));
               const fixedThreeYearBase = !document.querySelector('#kbWinSeg') && document.getElementById('blkV4').textContent.includes('База за 3 года');
               const clientBaseCards = [...document.querySelectorAll('#blkV4 .kb-summary-card')];
@@ -827,7 +843,7 @@ function createWindow() {
               };
               const primaryAppointmentCollapseValid = Object.values(primaryAppointmentCollapseChecks).every(Boolean);
               UI.docId = 'd3';
-              renderDoctor();
+              await renderDoctor();
               await new Promise(resolve => setTimeout(resolve, 0));
               const anotherDoctorAppointmentBlock = document.querySelector('#blkV3 [data-list-key="appointmentConversionBlock"]');
               const anotherDoctorAppointmentCollapseValid = Boolean(anotherDoctorAppointmentBlock)
@@ -835,7 +851,7 @@ function createWindow() {
                 && anotherDoctorAppointmentBlock.querySelector('summary')?.textContent.includes('Планы лечения и конверсия в реализацию')
                 && anotherDoctorAppointmentBlock.querySelector('.appointment-conversion-summary-value')?.textContent.includes('40%');
               UI.docId = 'd1';
-              renderDoctor();
+              await renderDoctor();
               await new Promise(resolve => setTimeout(resolve, 0));
               const appointmentTablesCollapseValid = primaryAppointmentCollapseValid && anotherDoctorAppointmentCollapseValid;
               const appointmentCollapseDetails = {
@@ -902,6 +918,7 @@ function createWindow() {
                   && reportWithNarrative.includes('Ключевой итог отчёта')
               };
               const dynamicConclusionValid = Object.values(dynamicConclusionDetails).every(Boolean);
+              flushReportCharts();
               const mirrorChart = UI.charts.chStack;
               const mirrorGap = mirrorChart ? Number(mirrorChart.options.plugins.mirrorRevenue.gap) : 0;
               const mirrorOwnDatasets = mirrorChart ? mirrorChart.data.datasets.filter(dataset => dataset.mirrorSide === 'own') : [];
@@ -1032,7 +1049,7 @@ function createWindow() {
                 && viewerPatientRegisterDetails.sourcePeriod
                 && viewerPatientRegisterDetails.legacyTableRemoved;
               UI.setDoctor = 'd1';
-              switchTab('settings');
+              await switchTab('settings');
               enableDoctorMetricSettings();
               document.getElementById('dm_bm_revenue').value = '150000';
               saveDoctorMetricSettings();
@@ -1069,7 +1086,7 @@ function createWindow() {
               renderSettings();
               const settingsCollapseRemembered = !document.getElementById('settingsExportCard').open
                 && !document.querySelector('[data-page-block="settings.staff"]').open;
-              switchTab('data');
+              await switchTab('data');
               document.getElementById('jsonDatabaseCard').querySelector('summary').click();
               renderData();
               const dataCollapseRemembered = !document.getElementById('jsonDatabaseCard').open
@@ -1078,14 +1095,14 @@ function createWindow() {
               const uniformPageBlocks = [...document.querySelectorAll('#page-data .card, #page-settings .card')]
                 .every(card => card.tagName === 'DETAILS' && card.dataset.pageBlock
                   && card.querySelector(':scope > .page-block-summary') && card.querySelector(':scope > .page-block-body'));
-              switchTab('settings');
+              await switchTab('settings');
               const pageBlockCollapseValid = settingsCollapseRemembered && dataCollapseRemembered && uniformPageBlocks
                 && !document.querySelector('[data-page-block="settings.staff"]').open
                 && getComputedStyle(document.getElementById('settingsExportCard').querySelector('.page-block-body')).display === 'none';
               openDoctorGoalSettings('d1');
               const doctorGoalBlockOpens = document.getElementById('doctorMetricSettingsCard').open;
               setPageBlockOpen('settings.export', true); setPageBlockOpen('settings.staff', true); setPageBlockOpen('data.json', true);
-              switchTab('doctor');
+              await switchTab('doctor');
               await new Promise(resolve => setTimeout(resolve, 200));
               return {
                 title: document.title,
@@ -1098,6 +1115,7 @@ function createWindow() {
                 departmentPage,
                 departmentCharts,
                 departmentTotalValid,
+                departmentYearHeadersValid,
                 reportLeaderboardsValid,
                 specializationSummaryValid,
                 specializationPrimaryReturnHeaderValid,
@@ -1123,6 +1141,8 @@ function createWindow() {
                 smokeCommentContext,
                 smokeCommentBlockKey,
                 doctorHeaderMetrics,
+                reportWorkerTiming,
+                chartsInitiallyPending,
                 doctorHeaderMetricsValid,
                 doctorHeaderCardRects,
                 doctorHeaderColumns,
@@ -1181,15 +1201,50 @@ function createWindow() {
             && !/pinCode|userId/.test(cloudSerialized)
             && cloudSerialized.includes("Комментарий smoke-теста");
           result.cloudPinsVisible = await mainWindow.webContents.executeJavaScript(`(async () => {
-            await refreshViewerPublicationAccess(); switchTab('settings');
+            await refreshViewerPublicationAccess(); await switchTab('settings');
             const pins = [...document.querySelectorAll('[data-cloud-pin]')].map(element => element.textContent);
             return pins.length === VIEWER_ACCESS.doctors.length && pins.every(pin => /^\\d{4}$/.test(pin))
               && !document.getElementById('cloudAdminUserIds') && !document.querySelector('[data-cloud-user-id]')
               && document.querySelectorAll('[data-viewer-pin]').length === VIEWER_ACCESS.doctors.length;
           })()`);
           if (!result.cloudPinsVisible) throw new Error("Онлайн-настройки: существующие PIN не видны или остались поля ID Битрикса");
+          const originalSaveDialog = dialog.showSaveDialog, originalOpenDialog = dialog.showOpenDialog;
+          const transferPath = path.join(SMOKE_ARTIFACT_ROOT, "pin-transfer-smoke.kvpins");
+          const onlinePinsPath = path.join(SMOKE_ARTIFACT_ROOT, "pin-transfer-online-smoke.json");
+          try {
+            dialog.showSaveDialog = async (_window, options) => ({ canceled: false, filePath: options.filters[0].extensions.includes("kvpins") ? transferPath : onlinePinsPath });
+            dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [transferPath] });
+            result.pinTransferUi = await mainWindow.webContents.executeJavaScript(`(async () => {
+              setPageBlockOpen('settings.viewer', true); document.getElementById('pinTransferPanel').open = true;
+              document.getElementById('pinTransferPassword').value = 'synthetic-file-password';
+              await pinTransferFileAction('export');
+              if (!PIN_TRANSFER_STATUS.includes('Сохранено')) throw new Error(PIN_TRANSFER_STATUS);
+              document.getElementById('pinTransferPassword').value = 'synthetic-file-password';
+              await pinTransferFileAction('preview');
+              if (!PIN_TRANSFER_PREVIEW || PIN_TRANSFER_PREVIEW.relation !== 'same') throw new Error(PIN_TRANSFER_STATUS);
+              const rows = document.querySelectorAll('[data-pin-source]').length;
+              const clearPassword = document.getElementById('pinTransferPassword').value === '';
+              const noOverflow = document.documentElement.scrollWidth <= innerWidth + 2;
+              loadBundledLibrary('lib-html2canvas', 'html2canvas');
+              const image = (await html2canvas(document.getElementById('pinTransferPanel'), { backgroundColor: '#ffffff', scale: 1, logging: false, windowWidth: innerWidth })).toDataURL('image/png');
+              await applyPinTransferFromSettings();
+              if (!PIN_TRANSFER_STATUS.includes('Общая версия')) throw new Error(PIN_TRANSFER_STATUS);
+              await pinTransferFileAction('cloud');
+              if (!PIN_TRANSFER_STATUS.includes('Сохранено')) throw new Error(PIN_TRANSFER_STATUS);
+              return { rows, clearPassword, noOverflow, image };
+            })()`);
+            const pinUiImagePath = path.join(SMOKE_ARTIFACT_ROOT, process.argv.includes("--smoke-narrow") ? "pin-transfer-admin-narrow.png" : "pin-transfer-admin.png");
+            fs.writeFileSync(pinUiImagePath, Buffer.from(result.pinTransferUi.image.slice("data:image/png;base64,".length), "base64"));
+            delete result.pinTransferUi.image; result.pinTransferUi.screenshot = pinUiImagePath;
+            if (result.pinTransferUi.rows !== database.viewerAccessSnapshot().doctors.length || !result.pinTransferUi.clearPassword || !result.pinTransferUi.noOverflow) throw new Error("Перенос PIN: сравнение или раскладка нарушены");
+            const exportedPins = JSON.parse(fs.readFileSync(onlinePinsPath, "utf8"));
+            if (exportedPins.format !== "klinvekt-cloud-pins" || exportedPins.doctors.some(doctor => Object.hasOwn(doctor, "pin"))) throw new Error("В онлайн-файл попал открытый PIN");
+          } finally {
+            dialog.showSaveDialog = originalSaveDialog; dialog.showOpenDialog = originalOpenDialog;
+            fs.rmSync(transferPath, { force: true }); fs.rmSync(onlinePinsPath, { force: true });
+          }
           const cloudPinsScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
-            loadBundledLibrary('lib-html2canvas', 'html2canvas'); switchTab('settings');
+            loadBundledLibrary('lib-html2canvas', 'html2canvas'); await switchTab('settings');
             setPageBlockOpen('settings.cloud', true);
             const card = document.getElementById('cloudPublicationSettingsCard');
             const canvas = await html2canvas(card, { backgroundColor: '#f4f6fa', scale: 1, logging: false, windowWidth: 1400 });
@@ -1218,7 +1273,7 @@ function createWindow() {
         if (!PDF_SMOKE_TEST) {
           const dataWorkspaceScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
             loadBundledLibrary('lib-html2canvas', 'html2canvas');
-            switchTab('data'); window.scrollTo(0, 0);
+            await switchTab('data'); window.scrollTo(0, 0);
             const canvas = await html2canvas(document.getElementById('page-data'), {
               backgroundColor: '#f4f6fa', scale: 1, logging: false, windowWidth: 1400
             });
@@ -1236,7 +1291,7 @@ function createWindow() {
           const headerUpdateScreenshotPath = path.join(artifactRoot, "header-update-smoke.png");
           fs.writeFileSync(headerUpdateScreenshotPath, Buffer.from(headerUpdateScreenshot.slice('data:image/png;base64,'.length), 'base64'));
           result.headerUpdateScreenshot = headerUpdateScreenshotPath;
-          await mainWindow.webContents.executeJavaScript(`(() => {
+          await mainWindow.webContents.executeJavaScript(`(async () => {
             document.getElementById('workspacePathsDetails').open = true;
             document.getElementById('databaseToolsDetails').open = true;
             document.getElementById('databaseToolsDetails').scrollIntoView({ block: 'start' });
@@ -1246,7 +1301,7 @@ function createWindow() {
           fs.writeFileSync(dataToolsScreenshotPath, (await mainWindow.webContents.capturePage()).toPNG());
           result.dataToolsScreenshot = dataToolsScreenshotPath;
           const settingsBlocksScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
-            switchTab('settings'); window.scrollTo(0, 0);
+            await switchTab('settings'); window.scrollTo(0, 0);
             const blocks = [...document.querySelectorAll('#page-settings details[data-page-block]')];
             const previous = blocks.map(block => [block.dataset.pageBlock, block.open]);
             blocks.forEach(block => setPageBlockOpen(block.dataset.pageBlock, block.dataset.pageBlock === 'settings.export'));
@@ -1259,10 +1314,10 @@ function createWindow() {
           const settingsBlocksScreenshotPath = path.join(artifactRoot, "settings-blocks-smoke.png");
           fs.writeFileSync(settingsBlocksScreenshotPath, Buffer.from(settingsBlocksScreenshot.slice('data:image/png;base64,'.length), 'base64'));
           result.settingsBlocksScreenshot = settingsBlocksScreenshotPath;
-          await mainWindow.webContents.executeJavaScript(`(() => {
+          await mainWindow.webContents.executeJavaScript(`(async () => {
             document.getElementById('workspacePathsDetails').open = false;
             document.getElementById('databaseToolsDetails').open = false;
-            switchTab('doctor');
+            await switchTab('doctor');
           })()`);
           const goalsScreenshotPath = path.join(artifactRoot, "doctor-goals-smoke.png");
           const goalsScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
@@ -1314,7 +1369,7 @@ function createWindow() {
           result.mirrorScreenshot = mirrorScreenshotPath;
           const leaderboardScreenshotPath = path.join(artifactRoot, "report-leaderboard-smoke.png");
           const leaderboardScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
-            UI.deptMonth = '2026-02'; UI.deptFilter = 'Косметология'; UI.subFilter = 'all'; switchTab('dept');
+            UI.deptMonth = '2026-02'; UI.deptFilter = 'Косметология'; UI.subFilter = 'all'; await switchTab('dept');
             await new Promise(resolve => setTimeout(resolve, 150));
             const element = document.querySelector('#deptBody .doctor-score-leaderboard');
             if (!element) return '';
@@ -1324,16 +1379,19 @@ function createWindow() {
           if (!leaderboardScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок лидерборда врачей');
           fs.writeFileSync(leaderboardScreenshotPath, Buffer.from(leaderboardScreenshot.slice('data:image/png;base64,'.length), 'base64'));
           result.leaderboardScreenshot = leaderboardScreenshotPath;
-          const honorScreenshotPath = path.join(artifactRoot, "reputation-honor-board-smoke.png");
-          const honorScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
-            const element = document.querySelector('#deptBody .reputation-honor-board');
+          const departmentYearScreenshotPath = path.join(artifactRoot, "department-year-headers-smoke.png");
+          const departmentYearScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            await switchTab('department');
+            await new Promise(resolve => setTimeout(resolve, 150));
+            const element = document.getElementById('tblDepartmentYear')?.closest('.card');
             if (!element) return '';
             const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.5, logging: false, windowWidth: 1400 });
+            await switchTab('dept');
             return canvas.toDataURL('image/png');
           })()`);
-          if (!honorScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок доски почёта');
-          fs.writeFileSync(honorScreenshotPath, Buffer.from(honorScreenshot.slice('data:image/png;base64,'.length), 'base64'));
-          result.honorScreenshot = honorScreenshotPath;
+          if (!departmentYearScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок годовой таблицы отделения');
+          fs.writeFileSync(departmentYearScreenshotPath, Buffer.from(departmentYearScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.departmentYearScreenshot = departmentYearScreenshotPath;
           const specializationRatingScreenshotPath = path.join(artifactRoot, "specialization-rating-summary-smoke.png");
           const specializationRatingScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
             const table = document.getElementById('tblRating');
@@ -1378,7 +1436,7 @@ function createWindow() {
           result.comparisonScreenshot = comparisonScreenshotPath;
           const semanticSectionsScreenshotPath = path.join(artifactRoot, "doctor-semantic-sections-smoke.png");
           const semanticSectionsScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
-            UI.docId = 'd1'; UI.docMonth = '2026-02'; switchTab('doctor');
+            UI.docId = 'd1'; UI.docMonth = '2026-02'; await switchTab('doctor');
             await new Promise(resolve => setTimeout(resolve, 150));
             setDoctorSemanticSections(false);
             await new Promise(resolve => setTimeout(resolve, 50));
@@ -1392,7 +1450,7 @@ function createWindow() {
           result.semanticSectionsScreenshot = semanticSectionsScreenshotPath;
           const dynamicConclusionScreenshotPath = path.join(artifactRoot, "dynamic-conclusion-smoke.png");
           const dynamicConclusionScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
-            UI.docId = 'd1'; UI.docMonth = '2026-02'; switchTab('doctor');
+            UI.docId = 'd1'; UI.docMonth = '2026-02'; await switchTab('doctor');
             await new Promise(resolve => setTimeout(resolve, 150));
             setDoctorSemanticSections(true);
             await new Promise(resolve => setTimeout(resolve, 100));
@@ -1420,7 +1478,7 @@ function createWindow() {
             try {
               DB.months['2026-12'] = JSON.parse(JSON.stringify(DB.months['2026-02']));
               clearMetricsCache();
-              UI.docId = 'd1'; UI.docMonth = '2026-12'; switchTab('doctor');
+              UI.docId = 'd1'; UI.docMonth = '2026-12'; await switchTab('doctor');
               setDoctorSemanticSections(true);
               const conversion = document.querySelector('#blkV3 [data-list-key="appointmentConversionBlock"]');
               conversion.open = true;
@@ -1428,7 +1486,7 @@ function createWindow() {
               const completed = document.querySelector('#blkV3 [data-list-key="completedReferralDetails"]');
               completed.open = true;
               document.querySelectorAll('#tblRef .grp-head[data-g]').forEach(row => { if (!UI.openGroups[row.dataset.g]) toggleGroup(row.dataset.g); });
-              for (const instance of Object.values(UI.charts)) { instance.stop(); instance.update('none'); }
+              flushReportCharts(); for (const instance of Object.values(UI.charts)) { instance.stop(); instance.update('none'); }
               await new Promise(resolve => setTimeout(resolve, 100));
               const table = document.getElementById('blkDyn_tbl');
               const otherChart = UI.charts.chSegments;
@@ -1454,7 +1512,7 @@ function createWindow() {
               const v3Image = await capture(document.getElementById('blkV3'));
               const baseImage = await capture(document.getElementById('chSegments').parentElement.parentElement);
               // Real settings controls must persist, rerender, and leave every patient in the stack.
-              UI.setDepartment = 'Косметология'; UI.setSpecialization = 'Косметология'; switchTab('settings');
+              UI.setDepartment = 'Косметология'; UI.setSpecialization = 'Косметология'; await switchTab('settings');
               const originalPartition = { ...curSetProfile().clientBasePartition };
               const legacyFields = ['loyalVisits', 'loyalM', 'activeVisits', 'activeM', 'newRiskVisits', 'newRiskM', 'newRiskWithin', 'sleepVisits', 'sleepM', 'lostVisits', 'lostM', 'minVisits', 'riskM'];
               const originalLegacy = JSON.stringify(legacyFields.map(key => curSetProfile()[key]));
@@ -1483,22 +1541,22 @@ function createWindow() {
               saveDeptBasics();
               if (curSetProfile().clientBasePartition.loyalVisits !== 4) throw Error('Admin QA: invalid settings persisted');
               curSetProfile().clientBasePartition = originalPartition;
-              clearMetricsCache(); switchTab('doctor');
+              clearMetricsCache(); await switchTab('doctor');
               const source36 = DB.months['2026-12'].kb.d1['36'];
               delete DB.months['2026-12'].kb.d1['36'];
-              clearMetricsCache(); renderDoctor();
+              clearMetricsCache(); await renderDoctor();
               if (UI.charts.chSegments.$clientBaseTotals[11] !== null || UI.charts.chSegments.$clientBaseTotals[0] !== source36.clients.length) throw Error('Admin QA: missing latest 36-month source erases history or uses short window');
               DB.months['2026-12'].kb.d1['36'] = source36;
-              clearMetricsCache(); renderDoctor();
+              clearMetricsCache(); await renderDoctor();
               UI.departmentFilter = 'Косметология'; UI.departmentMonth = '2026-02';
-              renderDepartment(); renderDepartment();
+              await renderDepartment(); await renderDepartment();
               const profileNames = [...document.querySelectorAll('#tblDepartmentSpecs tr')].slice(2).map(row => row.cells[0].textContent.trim());
               if (new Set(profileNames).size !== profileNames.length) throw Error('Admin QA: duplicate profile after rerender');
               let coverageImage;
               try {
                 DB.doctors.coverageQa = { name: 'Synthetic coverage doctor', aliases: [], department: 'Косметология', specialization: 'Косметология', structureManual: true };
                 DB.months['2026-12'].vyrabotka.coverageQa = { items: [{ n: 'Synthetic', q: 1, sOwn: 1000, sRef: 0, goods: false }] };
-                clearMetricsCache(); UI.departmentMonth = '2026-12'; switchTab('department');
+                clearMetricsCache(); UI.departmentMonth = '2026-12'; await switchTab('department');
                 const partial = aggregateDeptMonth('2026-12', ['Косметология']);
                 const coverageNotice = document.querySelector('#departmentBody [data-aggregate-coverage]');
                 if (partial.econ.avgClient !== null || partial.traffic.patients !== null || partial.coverage.avgClient.coveredDoctors !== 1 || !coverageNotice || !coverageNotice.textContent.includes('1 из ' + partial.doctors + ' врачей')) throw Error('Admin QA: partial department ratios are misleading: ' + JSON.stringify(partial.coverage.avgClient));
@@ -1507,13 +1565,13 @@ function createWindow() {
               } finally {
                 delete DB.doctors.coverageQa;
                 delete DB.months['2026-12'].vyrabotka.coverageQa;
-                clearMetricsCache(); UI.departmentMonth = '2026-02'; renderDepartment();
+                clearMetricsCache(); UI.departmentMonth = '2026-02'; await renderDepartment();
               }
               return { yearImage, v3Image, baseImage, settingsImage, coverageImage, monthWidths: monthCells.map(cell => Math.round(cell.getBoundingClientRect().width)), profileNames, details: leaves.length };
             } finally {
               if (previousDecember) DB.months['2026-12'] = previousDecember; else delete DB.months['2026-12'];
               UI.docMonth = previousMonth;
-              clearMetricsCache(); switchTab('doctor');
+              clearMetricsCache(); await switchTab('doctor');
             }
           })()`);
           for (const key of ['yearImage', 'v3Image', 'baseImage', 'settingsImage', 'coverageImage']) {
@@ -1524,7 +1582,7 @@ function createWindow() {
           result.adminFeedbackQa = adminFeedbackQa;
           const viewerPatientScreenshotPath = path.join(artifactRoot, "viewer-patient-register-smoke.png");
           const viewerPatientScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
-            UI.docId = 'd1'; UI.docMonth = '2026-02'; UI.kbWinByDoctor.d1 = 36; switchTab('doctor');
+            UI.docId = 'd1'; UI.docMonth = '2026-02'; UI.kbWinByDoctor.d1 = 36; await switchTab('doctor');
             await new Promise(resolve => setTimeout(resolve, 150));
             const html = await composeViewerDashboardHtml(
               { tab: 'doctor', doctorId: 'd1', departmentName: 'Косметология', specializationName: 'Косметология' },
@@ -1546,8 +1604,8 @@ function createWindow() {
           if (!viewerPatientScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок реестра пациентов Viewer');
           fs.writeFileSync(viewerPatientScreenshotPath, Buffer.from(viewerPatientScreenshot.slice('data:image/png;base64,'.length), 'base64'));
           result.viewerPatientScreenshot = viewerPatientScreenshotPath;
-          await mainWindow.webContents.executeJavaScript(`(() => {
-            UI.docId = 'd1'; UI.docMonth = '2026-02'; switchTab('doctor');
+          await mainWindow.webContents.executeJavaScript(`(async () => {
+            UI.docId = 'd1'; UI.docMonth = '2026-02'; await switchTab('doctor');
             document.getElementById('blkHead')?.scrollIntoView({ block: 'start' });
           })()`);
           await new Promise(resolve => setTimeout(resolve, 200));
@@ -1584,7 +1642,7 @@ function createWindow() {
         const passed = result.dataPage && result.optionalLibrariesDeferred && result.xlsx && result.chart && result.desktop
           && result.rendererErrors.length === 0
           && (PDF_SMOKE_TEST || (result.pageBlockCollapseValid && result.exportSpacingValid && result.doctorGoalBlockOpens && result.headerUpdateControlsValid))
-          && (PDF_SMOKE_TEST || (result.primaryReturnValuesValid && result.reputationReportsValid && result.reviewCountsValid && result.separateVectorChartsValid))
+          && (PDF_SMOKE_TEST || (result.primaryReturnValuesValid && result.reputationReportsValid && result.reviewCountsValid && result.separateVectorChartsValid && result.departmentYearHeadersValid))
           && (PDF_SMOKE_TEST || (result.xlsxWorkerValid && result.crossClientGoldenValid && result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.specializationFocusBlockValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.viewerPatientRegisterValid && result.viewerChartsValid && result.viewerRatingsValid && result.doctorMetricSettings && result.commentWorkflowValid))
           && (!PDF_SMOKE_TEST || (result.pdfSelectionDialogValid && result.pdfExport && result.pdfExport.saved === 1
             && result.pdfExport.chartImages >= 1 && result.pdfFiles.length === 1));
@@ -1809,6 +1867,78 @@ function registerIpc() {
       details: { doctorCount, fileName: path.basename(selected.filePath) } });
     return { canceled: false, path: selected.filePath, doctorCount };
   });
+  const cleanPinImports = () => {
+    for (const [token, item] of pinImportFiles) if (item.expiresAt <= Date.now() || item.sender.isDestroyed()) pinImportFiles.delete(token);
+  };
+  const savePinFile = async (filePath, serialized) => {
+    const temporary = `${filePath}.${require("node:crypto").randomUUID()}.tmp`;
+    try {
+      await fs.promises.writeFile(temporary, serialized, { encoding: "utf8", flag: "wx", mode: 0o600 });
+      await fs.promises.rename(temporary, filePath);
+    } finally { await fs.promises.rm(temporary, { force: true }).catch(() => {}); }
+  };
+  ipcMain.handle("pins:export", async (event, payload) => {
+    localAdminActor();
+    const input = ensureObject(payload, "перенос PIN");
+    const selected = await dialog.showSaveDialog(mainWindow, { title: "Сохранить защищённый файл PIN",
+      defaultPath: path.join(configStore.publicConfig().outputDir, "КлинВект-PIN.kvpins"), filters: [{ name: "Защищённые PIN КлинВект", extensions: ["kvpins"] }] });
+    if (selected.canceled || !selected.filePath) return { canceled: true };
+    const value = database.viewerPinTransferPayload({ appVersion: app.getVersion(), includeAdmin: input.includeAdmin === true });
+    const serialized = await runPublicationTask(event, input.operationId, "pin-transfer-encrypt", { value, password: input.password });
+    await savePinFile(selected.filePath, serialized);
+    return { path: selected.filePath, doctors: value.doctors.length, sync: value.sync };
+  });
+  ipcMain.handle("pins:export-cloud", async (_event, payload) => {
+    localAdminActor();
+    const input = ensureObject(payload, "онлайн PIN");
+    const selected = await dialog.showSaveDialog(mainWindow, { title: "Сохранить обновление PIN для онлайн",
+      defaultPath: path.join(configStore.publicConfig().outputDir, "КлинВект-PIN-онлайн.json"), filters: [{ name: "PIN для онлайн-КлинВекта", extensions: ["json"] }] });
+    if (selected.canceled || !selected.filePath) return { canceled: true };
+    const value = cloudPinsFromTransfer(database.viewerPinTransferPayload({ appVersion: app.getVersion(), includeAdmin: input.includeAdmin === true }));
+    await savePinFile(selected.filePath, JSON.stringify(value));
+    return { path: selected.filePath, doctors: value.doctors.length, sync: value.sync };
+  });
+  ipcMain.handle("pins:preview", async (event, payload) => {
+    localAdminActor(); cleanPinImports();
+    if (pinImportFiles.size >= 4) throw new Error("Закройте предыдущее сравнение PIN");
+    const input = ensureObject(payload, "импорт PIN");
+    const selected = await dialog.showOpenDialog(mainWindow, { title: "Выбрать защищённый файл PIN", properties: ["openFile"],
+      filters: [{ name: "Защищённые PIN КлинВект", extensions: ["kvpins"] }] });
+    if (selected.canceled || !selected.filePaths[0]) return { canceled: true };
+    const filePath = selected.filePaths[0];
+    if ((await fs.promises.stat(filePath)).size > MAX_PIN_BYTES * 2) throw new Error("Файл PIN слишком велик");
+    const serialized = await fs.promises.readFile(filePath, "utf8");
+    const value = await runPublicationTask(event, input.operationId, "pin-transfer-decrypt", { serialized, password: input.password });
+    if (event.sender.isDestroyed()) throw new Error("Окно импорта закрыто");
+    const preview = database.previewViewerPinTransfer(value);
+    const token = require("node:crypto").randomUUID();
+    cleanPinImports();
+    if (pinImportFiles.size >= 4) throw new Error("Закройте предыдущее сравнение PIN");
+    pinImportFiles.set(token, { value, expectedState: preview.expectedState, sender: event.sender, expiresAt: Date.now() + 20 * 60 * 1000 });
+    const { expectedState, ...visible } = preview;
+    return { ...visible, token, fileName: path.basename(filePath) };
+  });
+  ipcMain.handle("pins:discard", (event, token) => {
+    if (pinImportFiles.get(token)?.sender === event.sender) pinImportFiles.delete(token);
+    return { ok: true };
+  });
+  ipcMain.handle("pins:apply", (event, payload) => {
+    const actor = localAdminActor(); cleanPinImports();
+    const input = ensureObject(payload, "применение PIN"), item = pinImportFiles.get(input.token);
+    if (!item || item.sender !== event.sender) throw new Error("Сравнение PIN истекло. Откройте файл заново");
+    const result = database.applyViewerPinTransfer(item.value, { mapping: input.mapping, importAdmin: input.importAdmin === true,
+      adopt: input.adopt === true, expectedState: item.expectedState });
+    pinImportFiles.delete(input.token);
+    database.audit({ actorUserId: actor.userId, action: "pins.imported", targetType: "viewer", targetId: result.pinSync.setId,
+      details: { updated: result.updated, skipped: result.skipped, revision: result.pinSync.revision, adminChanged: result.adminChanged } });
+    return result;
+  });
+  ipcMain.handle("pins:restore", () => {
+    const actor = localAdminActor();
+    const result = database.restoreViewerPinTransferBackup(); pinImportFiles.clear();
+    database.audit({ actorUserId: actor.userId, action: "pins.restored", targetType: "viewer", targetId: result.pinSync.setId, details: { restored: result.restored } });
+    return result;
+  });
   ipcMain.handle("mobile-publication:export", async (_event, payload) => {
     const session = localAdminActor();
     const input = ensureObject(payload, "мобильная публикация");
@@ -1876,11 +2006,14 @@ function registerIpc() {
     database.viewerAccessSnapshot();
     const doctorIds = input.doctors.map(doctor => doctor.doctorId);
     const credentials = database.viewerExportCredentials(doctorIds, { allowInactiveDoctorIds: doctorIds });
-    const accounts = cloudAccountsFromViewer(input.doctors, snapshot.settings || {}, credentials);
+    const pinSync = database.viewerPinTransferPayload({ appVersion: app.getVersion(), includeAdmin: false }).sync;
+    const pinIds = database.viewerPinSyncState().ids;
+    const accounts = cloudAccountsFromViewer(input.doctors, snapshot.settings || {}, credentials)
+      .map(account => account.admin ? account : { ...account, pinSyncId: pinIds[account.doctorId] });
     // Access settings come from the committed local database. The package never
     // carries working months, plaintext PINs or the external API secret.
     const bundle = await runPublicationTask(event, input.operationId, "cloud-publication", {
-      version: 3, doctors: input.doctors, pages: input.pages, accounts, appVersion: app.getVersion(), privacyPatterns: cloudPrivacyPatterns(snapshot) });
+      version: 3, doctors: input.doctors, pages: input.pages, accounts, pinSync, appVersion: app.getVersion(), privacyPatterns: cloudPrivacyPatterns(snapshot) });
     if (input.action === "json") {
       const temporary = `${file.filePath}.${String(input.operationId).replace(/[^a-z0-9-]/gi, "")}.tmp`;
       try {

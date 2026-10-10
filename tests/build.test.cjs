@@ -71,7 +71,11 @@ const replacements = {
   "/*__CORE__*/": "app-core.js",
   "/*__PARSERS__*/": "app-parsers.js",
   "/*__METRICS__*/": "app-metrics.js",
+  "/*__REPORT_WORKER__*/": "report-worker.js",
+  "/*__REPORT_PERFORMANCE__*/": "report-performance.js",
+  "/*__REPORT_PRESENTATION__*/": "../mobile-pilot/report-presentation.js",
   "/*__CLOUD_REPORT_DATA__*/": "cloud-report-data.js",
+  "/*__PIN_TRANSFER_UI__*/": "pin-transfer-ui.js",
   "/*__UI__*/": "app-ui.js",
 };
 

@@ -14,6 +14,8 @@ const state = {
   reportKey: "",
   failures: new Map(),
   lockedUntil: new Map(),
+  reportLoader: null,
+  loadNumber: 0,
 };
 
 function esc(value) {
@@ -227,26 +229,40 @@ async function decryptSharedStandalonePage(record, pageKey, reportRevision) {
   return page;
 }
 
-async function reportsFromSharedPages(payload) {
+function sharedReportSession(payload) {
   const records = new Map((BUNDLE.sharedPages || []).map(record => [String(record.pageId), record]));
-  const decrypted = new Map();
+  const cache = new Map(), pending = new Map();
+  let bytes = 0, decryptions = 0;
   const reports = [];
   for (const binding of payload.bindings) {
     const pageId = String(binding.pageId || "");
     const record = records.get(pageId);
     const pageKey = payload.pageKeys && payload.pageKeys[pageId];
     if (!record || !pageKey) throw new Error("Для отчёта отсутствует общая страница или ключ доступа.");
-    let page = decrypted.get(pageId);
-    if (!page) {
-      page = await decryptSharedStandalonePage(record, pageKey, payload.reportRevision);
-      decrypted.set(pageId, page);
-    }
-    if (page.periodKey !== binding.periodKey || page.pageType !== binding.pageType) {
-      throw new Error("Привязка отчёта не соответствует общей странице.");
-    }
-    reports.push({ ...page, doctorId: String(binding.doctorId) });
+    reports.push({ pageId, periodKey: binding.periodKey, pageType: binding.pageType, doctorId: String(binding.doctorId) });
   }
-  return reports;
+  const load = async report => {
+    if (!reports.includes(report)) throw new Error("Нет доступа к этому отчёту.");
+    const id = report.pageId;
+    let entry = cache.get(id);
+    if (entry) { cache.delete(id); cache.set(id, entry); }
+    else {
+      if (!pending.has(id)) pending.set(id, decryptSharedStandalonePage(records.get(id), payload.pageKeys[id], payload.reportRevision));
+      let page;
+      try { page = await pending.get(id); } finally { pending.delete(id); }
+      if (page.periodKey !== report.periodKey || page.pageType !== report.pageType) throw new Error("Привязка отчёта не соответствует общей странице.");
+      entry = { page, bytes: page.html.length * 2 };
+      if (!cache.has(id)) {
+        decryptions++;
+        if (entry.bytes <= 12 * 1024 * 1024) { cache.set(id, entry); bytes += entry.bytes; }
+        while (cache.size > 6 || bytes > 12 * 1024 * 1024) { const key = cache.keys().next().value; bytes -= cache.get(key).bytes; cache.delete(key); }
+      }
+    }
+    if (entry.page.periodKey !== report.periodKey || entry.page.pageType !== report.pageType) throw new Error("Привязка отчёта не соответствует общей странице.");
+    return { ...entry.page, doctorId: report.doctorId };
+  };
+  load.stats = () => ({ pages: cache.size, bytes, decryptions });
+  return { reports, reportLoader: load };
 }
 
 async function decryptStandaloneAccess(access, pin, { role = "doctor", doctorId = access && access.doctorId } = {}) {
@@ -285,7 +301,7 @@ async function decryptStandaloneAccess(access, pin, { role = "doctor", doctorId 
     || !Array.isArray(payload.subjects) || !contentMatches) {
     throw new Error("Нарушена целостность автономной публикации.");
   }
-  return formatVersion >= 4 ? { ...payload, reports: await reportsFromSharedPages(payload) } : payload;
+  return formatVersion >= 4 ? { ...payload, ...sharedReportSession(payload) } : payload;
 }
 
 function decryptDoctor(doctor, pin) {
@@ -316,6 +332,7 @@ function openReportSession(actor, payload, role = "doctor") {
   state.role = role;
   state.doctor = actor;
   state.reports = payload.reports;
+  state.reportLoader = payload.reportLoader || null;
   state.subjects = sortDoctorsAlphabetically(payload.subjects).map(subject => ({
     ...subject,
     periods: periodsFromReports(state.reports, subject.doctorId),
@@ -508,7 +525,8 @@ function initializePatientRegisters(root) {
   }
 }
 
-function loadReport() {
+async function loadReport() {
+  const number = ++state.loadNumber;
   const period = state.periods.find(item => item.periodKey === state.periodKey);
   if (!period) return;
   const options = availableReportScopes(state.periodKey);
@@ -534,11 +552,20 @@ function loadReport() {
   const report = state.reports.find(item => String(item.doctorId) === String(selected.subjectDoctorId)
     && item.periodKey === state.periodKey && item.pageType === selected.pageType);
   const reportBody = document.getElementById("viewerReportBody");
-  reportBody.innerHTML = report && report.html
-    ? report.html : '<div class="card"><p class="muted">Для этого периода страница не опубликована.</p></div>';
-  initializePatientRegisters(reportBody);
   document.getElementById("viewerPeriod").value = state.periodKey;
   updatePeriodButtons();
+  let content = report;
+  if (report && state.reportLoader) {
+    reportBody.innerHTML = '<div class="card" role="status">Открывается отчёт…</div>';
+    try { content = await state.reportLoader(report); }
+    catch (error) { if (number === state.loadNumber) reportBody.innerHTML = `<div class="card"><p class="notice bad">${esc(error.message)}</p></div>`; return; }
+    if (number !== state.loadNumber) return;
+  }
+  const template = document.createElement("template");
+  template.innerHTML = content?.html || '<div class="card"><p class="muted">Для этого периода страница не опубликована.</p></div>';
+  for (const image of template.content.querySelectorAll("img")) { image.loading = "lazy"; image.decoding = "async"; }
+  reportBody.replaceChildren(template.content);
+  initializePatientRegisters(reportBody);
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -561,6 +588,8 @@ function changePeriod(direction) {
 }
 
 function logoutDoctor() {
+  state.loadNumber++;
+  state.reportLoader = null;
   state.role = "doctor";
   state.doctor = null;
   state.subjects = [];
@@ -576,6 +605,9 @@ function logoutDoctor() {
 }
 
 function initialize() {
+  window.addEventListener("beforeprint", () => {
+    for (const image of document.getElementById("viewerReportBody").querySelectorAll("img")) image.loading = "eager";
+  });
   if (BUNDLE.format !== "pulse-clinic-standalone-viewer" || ![2, 3, 4].includes(Number(BUNDLE.formatVersion)) || !Array.isArray(BUNDLE.doctors)
     || (Number(BUNDLE.formatVersion) >= 4 && !Array.isArray(BUNDLE.sharedPages))) {
     showLoginError("Формат автономного Viewer не поддерживается.");
@@ -600,7 +632,16 @@ function initialize() {
   document.getElementById("viewerSubject").addEventListener("change", event => changeSubject(event.target.value));
   document.getElementById("btnPreviousPeriod").addEventListener("click", () => changePeriod(1));
   document.getElementById("btnNextPeriod").addEventListener("click", () => changePeriod(-1));
-  document.getElementById("btnPrintReport").addEventListener("click", () => window.print());
+  document.getElementById("btnPrintReport").addEventListener("click", async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      const images = [...document.getElementById("viewerReportBody").querySelectorAll("img")];
+      for (const image of images) image.loading = "eager";
+      await Promise.all(images.map(image => image.decode().catch(() => {})));
+      window.print();
+    } finally { button.disabled = false; }
+  });
 }
 
 initialize();

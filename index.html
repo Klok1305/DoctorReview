@@ -856,10 +856,6 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .reputation-count-note { display: block; font-weight: 400; font-size: 12px; }
 .reputation-table-scroll { overflow-x: auto; margin-top: 12px; }
 .reputation-table-scroll table { min-width: 1000px; }
-.reputation-honor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
-.reputation-honor-person { border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
-.reputation-honor-person[data-honor-place="1"] { border-color: #d4a017; background: #fff9e6; }
-.reputation-honor-medal { font-size: 26px; }
 .doctor-vector-score-history { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
 .doctor-vector-score-history .chart-box.score-chart { height: 240px; }
 .rating-platform-card span { color: var(--muted); font-size: 12px; font-weight: 700; }
@@ -872,7 +868,7 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
   .viewer-patient-table { min-width: 0; }
   .reputation-table-scroll { overflow: visible; }
   .reputation-table-scroll table { min-width: 0; width: 100%; font-size: 10px; }
-  .reputation-honor-person, .doctor-vector-score-history { break-inside: avoid; page-break-inside: avoid; }
+  .doctor-vector-score-history { break-inside: avoid; page-break-inside: avoid; }
 }
 .dyn-target-badges { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-left: 4px; vertical-align: middle; }
 .dyn-target-value { font-weight: 700; }
@@ -925,6 +921,12 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .data td.compare-goal-cell.goal-good { background: var(--good-soft); color: var(--good); font-weight: 800; }
 .data td.compare-goal-cell.goal-bad { background: var(--bad-soft); color: var(--bad); font-weight: 800; }
 .department-profiles-scroll { overflow-x: auto; }
+.report-table-heading-line { display: block; white-space: nowrap; line-height: 1.3; }
+.department-year-scroll { max-width: 100%; overflow-x: auto; }
+.department-year-table td.num { white-space: nowrap; }
+@media print {
+  .department-year-scroll { overflow: visible; }
+}
 .department-profiles-table { min-width: 1760px; table-layout: fixed; }
 .department-profiles-table .department-profile-name-col { width: 190px; }
 .department-profiles-table .department-profile-value-col { width: 120px; }
@@ -1250,6 +1252,13 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
   .viewer-export-dialog { height: calc(100vh - 12px); max-height: calc(100vh - 12px); }
   .viewer-export-dialog .viewer-doctor-list { min-height: 150px; }
 }
+.pin-transfer-scroll { max-height: 380px; overflow: auto; max-width: 100%; }
+.pin-transfer-table { min-width: 740px; }
+.pin-transfer-table td:first-child { width: 30%; }
+.pin-transfer-table select { width: 100%; min-width: 220px; }
+#pinTransferPanel { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+#pinTransferStatus { overflow-wrap: anywhere; }
+#pinTransferPassword { font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-height: 34px; max-width: 100%; }
 
 </style>
 </head>
@@ -2022,7 +2031,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
 });
 
 </script>
-<script>
+<script id="report-core-source">
 "use strict";
 /* ============================================================
  * ЯДРО: состояние, хранилище, утилиты, сопоставление ФИО
@@ -4122,7 +4131,7 @@ function updateHeaderStatus() {
 }
 
 </script>
-<script>
+<script id="report-parsers-source">
 "use strict";
 /* ============================================================
  * ПАРСЕРЫ выгрузок 1С
@@ -5300,7 +5309,7 @@ async function handleFilesBatch(fileList, options = {}) {
 }
 
 </script>
-<script>
+<script id="report-metrics-source">
 "use strict";
 /* ============================================================
  * МЕТРИКИ: векторы развития врача (по шаблону заведующей и ТЗ)
@@ -6130,6 +6139,8 @@ function reputationSummary(raw) {
 /* Кэши ограничены LRU и инвалидируются только для затронутых данных. */
 const METRICS_CACHE_LIMITS = Object.freeze({ metrics: 480, kbSummary: 720, kbDetails: 48, adminBase: 120, department: 180 });
 let _mcCache = new Map();
+let metricsCalculationRevision = 0;
+let preparedMetricsForRender = null;
 let _kbSummaryCache = new Map();
 let _kbDetailsCache = new Map();
 let _adminBaseCache = new Map();
@@ -6158,6 +6169,7 @@ function metricsCacheSet(cache, key, value, limit) {
 }
 
 function clearMetricsCache() {
+  metricsCalculationRevision++;
   _mcCache = new Map();
   _kbSummaryCache = new Map();
   _kbDetailsCache = new Map();
@@ -6183,6 +6195,7 @@ function invalidateMetricsCache(change = null) {
   const doctors = change.doctors === true
     ? null
     : new Set([...(change.doctors || []), ...(change.deleteDoctors || [])].map(String));
+  if (months.size || change.departmentScope || change.doctors === true || doctors.size) metricsCalculationRevision++;
   if (change.doctors === true) {
     _mcCache.clear();
     _kbSummaryCache.clear();
@@ -6209,9 +6222,11 @@ function metricsCacheStats() {
 
 function computeMetrics(docId, monthKey) {
   const ck = JSON.stringify([String(docId), String(monthKey)]);
+  if (preparedMetricsForRender?.has(ck)) return preparedMetricsForRender.get(ck);
   const cached = metricsCacheGet(_mcCache, ck, "metrics");
   if (cached !== undefined) return cached;
   const r = computeMetricsRaw(docId, monthKey);
+  preparedMetricsForRender?.set(ck, r);
   return metricsCacheSet(_mcCache, ck, r, METRICS_CACHE_LIMITS.metrics);
 }
 
@@ -6933,6 +6948,259 @@ function computeDeptDynamics(endMk, deptFilter, subFilter = "all") {
 }
 
 </script>
+<script id="report-worker-source">
+"use strict";
+// This source follows the unchanged core/parsers/metrics inside a dedicated Worker.
+function reportWorkerSnapshot(source, ids) {
+  const pick = entries => Object.fromEntries(ids.filter(id => Object.hasOwn(entries || {}, id)).map(id => [id, entries[id]]));
+  const months = {};
+  for (const [key, month] of Object.entries(source.months)) {
+    const copy = emptyMonth();
+    for (const field of ["vyrabotka", "kb", "naznach", "prostoy", "zapis", "manual6"]) {
+      copy[field] = pick(month[field]);
+      // Preserve implicit import coverage from old databases, including other doctors.
+      copy.importedReports[field] = monthReportImported(month, field);
+    }
+    copy.pervichka = Object.fromEntries(Object.entries(month.pervichka || {}).map(([window, value]) =>
+      [window, { ...value, perDoc: pick(value.perDoc) }]));
+    months[key] = copy;
+  }
+  return { settings: source.settings, doctors: source.doctors, months };
+}
+
+function prepareReportCalculations(job) {
+  preparedMetricsForRender = new Map();
+  const months = Object.keys(DB.months).sort();
+  const yearMonths = months.filter(key => key.startsWith(job.month.slice(0, 4)) && key <= job.month);
+  const keys = [...new Set([...yearMonths, job.month, prevMonthKey(job.month)])];
+  if (job.tab === "doctor") {
+    for (const key of keys) { computeMetrics(job.doctorId, key); adminClientBaseSummary(job.doctorId, key); }
+  } else {
+    // Summaries need their entire cohort; never substitute a partially computed sum.
+    for (const key of keys) {
+      for (const id of doctorsInMonth(key)) computeMetrics(id, key);
+      aggregateDeptMonth(key, job.filter, job.subFilter || "all");
+    }
+  }
+  const metrics = [...preparedMetricsForRender];
+  preparedMetricsForRender = null;
+  // Large patient registries are not needed to paint a summary or historical chart.
+  // Keep them in the worker; restore their lazy getters only when a list/export asks.
+  for (const [, result] of _deptCache) {
+    for (const base of [result?.akb?.primary, ...Object.values(result?.akb?.wins || {})]) {
+      if (base?.clientRows) Object.defineProperty(base, "clientRows", { enumerable: false });
+    }
+  }
+  for (const [key, base] of _adminBaseCache) {
+    if (base && JSON.parse(key)[1] !== job.month) Object.defineProperty(base, "clientRows", { enumerable: false });
+  }
+  return { metrics, kbSummary: [..._kbSummaryCache], adminBase: [..._adminBaseCache], department: [..._deptCache] };
+}
+
+function adoptReportCalculations(prepared) {
+  const attachRows = (value, id, month, window) => {
+    if (value) Object.defineProperty(value, "clientRows", { configurable: true, enumerable: false,
+      get() { return kbClientRows(id, month, window, value); } });
+  };
+  for (const [key, value] of prepared.kbSummary) {
+    const [id, month, window] = JSON.parse(key);
+    attachRows(value, id, month, window);
+    metricsCacheSet(_kbSummaryCache, key, value, METRICS_CACHE_LIMITS.kbSummary);
+  }
+  for (const [key, value] of prepared.metrics) {
+    const [id, month] = JSON.parse(key);
+    for (const [window, base] of Object.entries(value?.akb?.wins || {})) attachRows(base, id, month, Number(window));
+    if (value?.akb?.primary) attachRows(value.akb.primary, id, month, value.akb.primary.window);
+    metricsCacheSet(_mcCache, key, value, METRICS_CACHE_LIMITS.metrics);
+  }
+  for (const [name, cache] of [["adminBase", _adminBaseCache], ["department", _deptCache]]) {
+    for (const [key, value] of prepared[name]) {
+      if (value && name === "adminBase" && !Object.hasOwn(value, "clientRows")) {
+        const [id, month] = JSON.parse(key);
+        Object.defineProperty(value, "clientRows", { enumerable: true, configurable: true,
+          get() { const rows = partitionClientBase(kbSummary(id, month, 36), deptParams(id))?.clientRows || [];
+            Object.defineProperty(value, "clientRows", { value: rows, enumerable: true, configurable: true }); return rows; } });
+      }
+      if (value && name === "department") {
+        let details = null;
+        const [month, filter, subFilter, ids] = JSON.parse(key);
+        const bind = (base, window) => {
+          if (base && !Object.hasOwn(base, "clientRows")) Object.defineProperty(base, "clientRows", { enumerable: true, configurable: true,
+            get() { details ||= aggregateDeptMonthRaw(month, filter, subFilter, ids);
+              return (window === "primary" ? details?.akb?.primary : details?.akb?.wins[window])?.clientRows || []; } });
+        };
+        bind(value.akb?.primary, "primary");
+        for (const [window, base] of Object.entries(value.akb?.wins || {})) bind(base, window);
+      }
+      metricsCacheSet(cache, key, value, METRICS_CACHE_LIMITS[name]);
+    }
+  }
+}
+
+</script>
+<script>
+"use strict";
+let reportTask = null, reportTaskNumber = 0;
+const preparedReportKeys = new Map();
+
+function cancelReportPreparation() {
+  reportTaskNumber++;
+  if (reportTask) { reportTask.worker.terminate(); reportTask.resolve(false); reportTask = null; }
+}
+
+function reportCalculationJob(tab) {
+  const months = monthKeysSorted();
+  if (!months.length) return null;
+  const monthField = tab === "doctor" ? "docMonth" : tab === "department" ? "departmentMonth" : "deptMonth";
+  if (!DB.months[UI[monthField]]) UI[monthField] = months.at(-1);
+  const month = UI[monthField];
+  const select = document.getElementById(monthField);
+  select.innerHTML = months.map(key => `<option value="${key}" ${key === month ? "selected" : ""}>${monthLabel(key)}</option>`).join("");
+  select.disabled = false;
+  if (tab === "doctor") {
+    const core = coreDoctorsInMonth(month), ids = sortDoctorIdsAlphabetically(core.length ? core : doctorsInMonth(month));
+    if (!ids.includes(UI.docId)) UI.docId = ids[0];
+    const doctors = document.getElementById("docSelect");
+    doctors.innerHTML = ids.map(id => `<option value="${esc(id)}" ${id === UI.docId ? "selected" : ""}>${esc(doctorName(id))}</option>`).join("");
+    doctors.disabled = !ids.length;
+    return UI.docId ? { tab, month, doctorId: UI.docId } : null;
+  }
+  if (tab === "department") {
+    const groups = departmentGroups();
+    if (UI.departmentFilter !== "all" && !groups[UI.departmentFilter]) UI.departmentFilter = "all";
+    const select = document.getElementById("departmentFilter");
+    select.innerHTML = '<option value="all">все отделения</option>' + Object.keys(groups).map(name => `<option value="${esc(name)}" ${name === UI.departmentFilter ? "selected" : ""}>${esc(name)}</option>`).join("");
+    select.disabled = false;
+    return { tab, month, filter: departmentSpecializations(UI.departmentFilter), department: UI.departmentFilter };
+  }
+  const names = deptListForMonth(month, doctorsForScopeInMonth(month, UI.deptFilter !== "all"));
+  if (!names.includes(UI.deptFilter)) UI.deptFilter = "all";
+  const selectFilter = document.getElementById("deptFilter");
+  selectFilter.innerHTML = '<option value="all">все специализации</option>' + names.map(name => `<option value="${esc(name)}" ${name === UI.deptFilter ? "selected" : ""}>${esc(name)}</option>`).join("");
+  selectFilter.disabled = false;
+  const subs = UI.deptFilter === "all" ? [] : deptProfile(UI.deptFilter).subdivisions || [];
+  if (UI.subFilter !== "all" && !subs.includes(UI.subFilter)) UI.subFilter = "all";
+  return { tab, month, filter: UI.deptFilter, subFilter: UI.subFilter };
+}
+
+function renderPreparedReport(tab, draw) {
+  cancelReportPreparation();
+  if (!UI.reportEager) document.getElementById(tab === "doctor" ? "doctorBody" : tab === "department" ? "departmentBody" : "deptBody")?.removeAttribute?.("data-report-export");
+  if (UI.reportEager || typeof Worker !== "function") return draw();
+  const job = reportCalculationJob(tab);
+  if (!job) return draw();
+  const key = JSON.stringify([metricsCalculationRevision, job]);
+  const cached = preparedReportKeys.get(key);
+  if (cached && cached.every(([name, keys]) => keys.every(key => ({ metrics: _mcCache, kbSummary: _kbSummaryCache, adminBase: _adminBaseCache, department: _deptCache })[name].has(key)))) return draw();
+  const body = document.getElementById(tab === "doctor" ? "doctorBody" : tab === "department" ? "departmentBody" : "deptBody");
+  body.innerHTML = '<div class="card" role="status">Подготавливается отчёт…</div>';
+  const number = reportTaskNumber, revision = metricsCalculationRevision;
+  const ids = tab === "doctor" ? [job.doctorId] : Object.keys(DB.doctors);
+  const snapshot = reportWorkerSnapshot(DB, ids);
+  const sources = ["report-core-source", "report-parsers-source", "report-metrics-source", "report-worker-source"].map(id => document.getElementById(id)?.textContent);
+  if (sources.some(source => !source)) return draw();
+  const bootstrap = 'const window = {}; const localStorage = {getItem(){return null},setItem(){}};\n';
+  const handler = '\nonmessage = event => { try { const m=event.data; if(m.type==="start") { DB=m.snapshot;clearMetricsCache(); } else if(m.type==="month") DB.months[m.key]=m.month; else if(m.type==="calculate") postMessage({prepared:prepareReportCalculations(m.job)}); } catch(error) { postMessage({error:error.message}); } };';
+  const url = URL.createObjectURL(new Blob([bootstrap, ...sources.map(source => source + "\n"), handler], { type: "text/javascript" }));
+  let worker;
+  try { worker = new Worker(url); } catch (error) { URL.revokeObjectURL(url); return draw(); }
+  URL.revokeObjectURL(url);
+  return new Promise((resolve, reject) => {
+    const started = performance.now();
+    reportTask = { worker, resolve };
+    const finish = message => {
+      worker.terminate();
+      if (number !== reportTaskNumber) return resolve(false);
+      reportTask = null;
+      if (revision !== metricsCalculationRevision) { resolve(false); renderPreparedReport(tab, draw); return; }
+      if (message.prepared) {
+        adoptReportCalculations(message.prepared);
+        preparedReportKeys.set(key, Object.entries(message.prepared).map(([name, entries]) => [name, entries.map(([key]) => key)]));
+        while (preparedReportKeys.size > 6) preparedReportKeys.delete(preparedReportKeys.keys().next().value);
+      } else console.warn("Report worker fallback:", message.error);
+      const drawAt = performance.now();
+      preparedMetricsForRender = message.prepared ? new Map(message.prepared.metrics) : null;
+      try { draw(); } catch (error) { reject(error); return; } finally { preparedMetricsForRender = null; }
+      UI.reportTiming = { tab, backgroundMs: drawAt - started, renderMs: performance.now() - drawAt, worker: Boolean(message.prepared) };
+      resolve(true);
+    };
+    worker.onmessage = event => finish(event.data);
+    worker.onerror = event => { event.preventDefault(); finish({ error: event.message }); };
+    // Let the loading state paint before copying the selected doctor's data.
+    requestAnimationFrame(async () => {
+      if (number !== reportTaskNumber) return;
+      try {
+        worker.postMessage({ type: "start", snapshot: { ...snapshot, months: {} } });
+        // A single large structured clone can itself stall the caller. Copy months
+        // separately and return control between messages; the worker processes them in order.
+        for (const [key, month] of Object.entries(snapshot.months)) {
+          if (number !== reportTaskNumber) return;
+          worker.postMessage({ type: "month", key, month });
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+        if (number === reportTaskNumber) worker.postMessage({ type: "calculate", job });
+      } catch (error) { if (number === reportTaskNumber) finish({ error: error.message }); }
+    });
+  });
+}
+
+const pendingReportCharts = new Map();
+let reportChartObserver = null;
+function createPendingReportChart(id) {
+  const pending = pendingReportCharts.get(id);
+  if (!pending) return;
+  pendingReportCharts.delete(id);
+  reportChartObserver?.unobserve(pending.element);
+  if (!pending.element.isConnected) { delete UI.charts[id]; return; }
+  const metadata = UI.charts[id];
+  const instance = new Chart(pending.element.getContext("2d"), pending.config);
+  for (const key of Object.keys(metadata || {})) if (key.startsWith("$")) instance[key] = metadata[key];
+  UI.charts[id] = instance;
+}
+function flushReportCharts() { for (const id of [...pendingReportCharts.keys()]) createPendingReportChart(id); }
+function queueReportChart(id, element, config) {
+  if (UI.reportEager || typeof IntersectionObserver !== "function") { UI.charts[id] = new Chart(element.getContext("2d"), config); return; }
+  if (!reportChartObserver) reportChartObserver = new IntersectionObserver(entries => {
+    for (const entry of entries) if (entry.isIntersecting) createPendingReportChart(entry.target.id);
+  }, { rootMargin: "150px" });
+  pendingReportCharts.set(id, { element, config });
+  UI.charts[id] = { config, data: config.data, options: config.options, stop() {},
+    destroy() { pendingReportCharts.delete(id); reportChartObserver.unobserve(element); }, update() {}, resize() {} };
+  reportChartObserver.observe(element);
+}
+
+</script>
+<script>
+(function (root) {
+  "use strict";
+  const headings = {
+    "Выручка с перенаправлениями": ["Выручка", "с перенаправлениями"],
+    "Доля перенаправлений от выручки": ["Доля перенаправлений", "от выручки"],
+    "Возвращаемость первички за 3 месяца": ["Возвращаемость первички", "за 3 месяца"],
+    "Возвращаемость первички за 6 месяцев": ["Возвращаемость первички", "за 6 месяцев"],
+    "Активные пациенты": ["Активные", "пациенты"],
+    "Потерянные пациенты": ["Потерянные", "пациенты"],
+    "Загрузка отделения за месяц": ["Загрузка отделения", "за месяц"],
+    "К прошлому месяцу": ["К прошлому", "месяцу"],
+  };
+  function tableHeaderLines(value) {
+    const label = String(value == null ? "" : value).replace(/\s+/g, " ").trim();
+    if (Object.prototype.hasOwnProperty.call(headings, label)) return headings[label];
+    const month = /^(Январь|Февраль|Март|Апрель|Май|Июнь|Июль|Август|Сентябрь|Октябрь|Ноябрь|Декабрь) (\d{4})$/.exec(label);
+    return month ? [month[1], month[2]] : [label];
+  }
+  const escape = value => value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+  function tableHeaderHtml(value) {
+    const lines = tableHeaderLines(value);
+    return lines.length === 1 ? escape(lines[0])
+      : lines.map(line => `<span class="report-table-heading-line">${escape(line)}</span>`).join("\n");
+  }
+  const api = { tableHeaderLines, tableHeaderHtml };
+  if (typeof module === "object" && module.exports) module.exports = api;
+  root.klinvektReportPresentation = api;
+})(typeof globalThis === "object" ? globalThis : this);
+
+</script>
 <script>
 "use strict";
 
@@ -7092,6 +7360,102 @@ function cloudGroupReport(item, monthKey, comments, doctors) {
 
 </script>
 <script>
+/* PIN-only migration; no report calculations or analytical database writes. */
+let PIN_TRANSFER_PREVIEW = null, PIN_TRANSFER_STATUS = "", pinTransferBusy = false;
+function pinTransferSettingsHtml() {
+  const sync = VIEWER_ACCESS.pinSync;
+  return `<details id="pinTransferPanel"><summary>Перенос и синхронизация PIN</summary>
+    <p class="small muted">Сохраните PIN из основного Admin, откройте файл во втором Admin, затем выгрузите отдельный JSON PIN для онлайн-КлинВекта.</p>
+    <p class="small">${sync ? `Набор ${esc(sync.setId.slice(0, 8))} · версия ${sync.revision}${sync.partial ? " · перенесён частично" : ""}` : "Набор появится после загрузки доступов"}</p>
+    <div class="toolbar"><label>Пароль файла <input id="pinTransferPassword" type="password" autocomplete="new-password" minlength="8" maxlength="128" placeholder="Не менее 8 символов"></label>
+    <label><input id="pinTransferIncludeAdmin" type="checkbox"> Добавить администраторский PIN</label></div>
+    <div class="toolbar"><button class="btn" type="button" onclick="pinTransferFileAction('export')">Сохранить PIN для другого Admin</button>
+      <button class="btn" type="button" onclick="pinTransferFileAction('preview')">Открыть файл PIN и сравнить</button>
+      <button class="btn" type="button" onclick="pinTransferFileAction('cloud')">Выгрузить PIN для онлайн</button>
+      <button class="btn mini" type="button" onclick="pinTransferFileAction('restore')">Откатить последний перенос</button></div>
+    <p class="small muted">Пароль защищает .kvpins. Онлайн-JSON содержит проверочные хеши. Отчёты, комментарии и роли сохраняются. Для уже выданных HTML/ZIP нужна новая обычная публикация.</p>
+    <p id="pinTransferStatus" class="small" role="status">${esc(PIN_TRANSFER_STATUS)}</p><div id="pinTransferComparison">${pinTransferComparisonHtml()}</div>
+  </details>`;
+}
+function pinTransferComparisonHtml() {
+  const preview = PIN_TRANSFER_PREVIEW;
+  if (!preview) return "";
+  const relation = { different: "Другой набор PIN", conflict: "Версии совпадают, но PIN различаются", stale: "Устаревшая версия: нужен свежий файл", same: "Тот же набор и версия", newer: "Более новая версия общего набора" }[preview.relation];
+  const rows = preview.rows.map(row => `<tr><td><b>${esc(row.sourceName)}</b><div class="small muted">${esc([row.department, row.specialization].filter(Boolean).join(" · "))}</div></td>
+    <td><select data-pin-source="${esc(row.syncId)}" onchange="updatePinTransferTarget(this)" aria-label="Сопоставление ${esc(row.sourceName)}"><option value="">Пропустить</option>${preview.targets.map(target => `<option value="${esc(target.doctorId)}" ${target.doctorId === row.targetId ? "selected" : ""}>${esc(target.displayName)} · ${esc(target.department)}</option>`).join("")}</select></td>
+    <td><code>${esc(row.currentPin || "—")} → ${esc(row.pin)}</code>${!row.targetId ? '<div class="small muted">Выберите врача или пропустите</div>' : ""}</td></tr>`).join("");
+  return `<h3>Сравнение PIN · версия ${preview.sync.revision}</h3><p class="small">${esc(relation)}. Проверьте каждое сопоставление.</p>
+    <div class="pin-transfer-scroll"><table class="data pin-transfer-table"><thead><tr><th>Врач в файле</th><th>Врач в этой базе</th><th>PIN: сейчас → из файла</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${["different", "conflict"].includes(preview.relation) ? '<p><label><input id="pinTransferAdopt" type="checkbox"> Использовать файл как общий набор PIN</label></p>' : ""}
+    ${preview.hasAdmin ? '<p><label><input id="pinTransferImportAdmin" type="checkbox"> Также заменить администраторский PIN</label></p>' : ""}
+    <div class="toolbar"><button class="btn primary" type="button" onclick="applyPinTransferFromSettings()" ${preview.relation === "stale" ? "disabled" : ""}>Применить выбранные PIN</button>
+    <button class="btn" type="button" onclick="discardPinTransferFromSettings()">Закрыть сравнение</button></div>`;
+}
+function updatePinTransferTarget(select) {
+  const source = PIN_TRANSFER_PREVIEW?.rows.find(row => row.syncId === select.dataset.pinSource);
+  const target = (VIEWER_ACCESS.doctors || []).find(doctor => doctor.doctorId === select.value);
+  if (source) select.closest("tr").querySelector("code").textContent = `${target?.pin || "—"} → ${source.pin}`;
+}
+function showPinTransferStatus(message) {
+  PIN_TRANSFER_STATUS = message;
+  const element = document.getElementById("pinTransferStatus");
+  if (element) element.textContent = message;
+}
+function setPinTransferBusy(value) {
+  pinTransferBusy = value;
+  document.querySelectorAll("#pinTransferPanel button, #pinTransferPanel input, #pinTransferPanel select").forEach(element => element.disabled = value);
+  if (!value && PIN_TRANSFER_PREVIEW?.relation === "stale") document.querySelector('#pinTransferPanel button[onclick="applyPinTransferFromSettings()"]')?.setAttribute("disabled", "");
+}
+async function discardPinTransferFromSettings() {
+  if (pinTransferBusy) return;
+  if (PIN_TRANSFER_PREVIEW) await DESKTOP_API.discardViewerPinImport(PIN_TRANSFER_PREVIEW.token);
+  PIN_TRANSFER_PREVIEW = null;
+  document.getElementById("pinTransferComparison").innerHTML = "";
+}
+async function pinTransferFileAction(action) {
+  if (pinTransferBusy || !DESKTOP_API) return;
+  const passwordInput = document.getElementById("pinTransferPassword"), password = passwordInput.value;
+  const includeAdmin = document.getElementById("pinTransferIncludeAdmin").checked;
+  passwordInput.value = "";
+  if (["export", "preview"].includes(action) && (password.length < 8 || password.length > 128)) { showPinTransferStatus("Введите пароль файла: от 8 до 128 символов"); return; }
+  if (action === "restore" && !confirm("Вернуть PIN из резервного набора перед последним переносом? Отчёты и роли сохранятся.")) return;
+  if (action === "preview") await discardPinTransferFromSettings();
+  setPinTransferBusy(true); showPinTransferStatus("Обрабатываются PIN…");
+  try {
+    const options = { password, includeAdmin, operationId: crypto.randomUUID() };
+    const result = action === "export" ? await DESKTOP_API.exportViewerPinTransfer(options)
+      : action === "preview" ? await DESKTOP_API.prepareViewerPinImport(options)
+      : action === "cloud" ? await DESKTOP_API.exportCloudPins({ includeAdmin }) : await DESKTOP_API.restoreViewerPinBackup();
+    if (result.canceled) { showPinTransferStatus("Выбор файла отменён"); return; }
+    if (action === "preview") {
+      PIN_TRANSFER_PREVIEW = result;
+      document.getElementById("pinTransferComparison").innerHTML = pinTransferComparisonHtml();
+      showPinTransferStatus(`Открыт ${result.fileName}. PIN ещё не изменены.`);
+    } else if (action === "restore") {
+      PIN_TRANSFER_PREVIEW = null; await refreshViewerPublicationAccess(); renderSettings();
+      document.getElementById("pinTransferPanel").open = true;
+      showPinTransferStatus(`Восстановлены PIN: ${result.restored} врачей. Для синхронизации выгрузите новый общий набор.`);
+    } else showPinTransferStatus(`Сохранено ${result.doctors} PIN: ${result.path}`);
+  } catch (error) { showPinTransferStatus(error.message); }
+  finally { setPinTransferBusy(false); }
+}
+async function applyPinTransferFromSettings() {
+  if (pinTransferBusy || !PIN_TRANSFER_PREVIEW) return;
+  const mapping = Array.from(document.querySelectorAll("[data-pin-source]"), select => ({ syncId: select.dataset.pinSource, targetId: select.value }));
+  const input = { token: PIN_TRANSFER_PREVIEW.token, mapping, importAdmin: document.getElementById("pinTransferImportAdmin")?.checked === true,
+    adopt: document.getElementById("pinTransferAdopt")?.checked === true };
+  setPinTransferBusy(true); showPinTransferStatus("Сохраняются выбранные PIN…");
+  try {
+    const result = await DESKTOP_API.applyViewerPinImport(input);
+    PIN_TRANSFER_PREVIEW = null; await refreshViewerPublicationAccess(); renderSettings();
+    document.getElementById("pinTransferPanel").open = true;
+    showPinTransferStatus(`Перенесено: ${result.matched}; изменено: ${result.updated}; пропущено: ${result.skipped}.${result.partial ? " Набор перенесён частично: завершите сопоставление до дальнейшей выгрузки." : " Общая версия PIN сохранена."}`);
+  } catch (error) { showPinTransferStatus(error.message); }
+  finally { setPinTransferBusy(false); }
+}
+
+</script>
+<script>
 "use strict";
 /* ============================================================
  * ИНТЕРФЕЙС
@@ -7189,7 +7553,7 @@ function setControlsDisabled(ids, disabled) {
 }
 
 function collapsibleListAttrs(key, defaultOpen = true) {
-  const isOpen = Object.prototype.hasOwnProperty.call(UI.openLists, key) ? UI.openLists[key] : defaultOpen;
+  const isOpen = UI.reportEager || (Object.prototype.hasOwnProperty.call(UI.openLists, key) ? UI.openLists[key] : defaultOpen);
   return `class="collapsible-list" data-list-key="${esc(key)}" ${isOpen ? "open" : ""}`;
 }
 
@@ -7472,10 +7836,11 @@ function chart(id, cfg) {
   if (UI.charts[id]) { UI.charts[id].destroy(); delete UI.charts[id]; }
   const el = document.getElementById(id);
   if (!el) return;
-  UI.charts[id] = new Chart(el.getContext("2d"), cfg);
+  queueReportChart(id, el, cfg);
 }
 
 function switchTab(tab) {
+  cancelReportPreparation();
   UI.tab = tab;
   document.querySelectorAll("nav.tabs button").forEach(b => {
     const active = b.dataset.tab === tab;
@@ -7484,7 +7849,7 @@ function switchTab(tab) {
     else b.removeAttribute("aria-current");
   });
   document.querySelectorAll(".page").forEach(p => p.classList.toggle("active", p.id === "page-" + tab));
-  renderAll();
+  return renderAll();
 }
 
 /* сегментный переключатель периодов */
@@ -7519,6 +7884,9 @@ async function copyTable(id) {
   }
 }
 function copyChart(id) {
+  createPendingReportChart(id);
+  UI.charts[id]?.stop();
+  UI.charts[id]?.update("none");
   const cv = document.getElementById(id);
   if (!cv) return;
   const tmp = document.createElement("canvas");
@@ -7814,7 +8182,8 @@ function aggregateCoverageHtml(result) {
   return issues.length ? `<div class="notice" data-aggregate-coverage><b>Неполные сводные данные.</b> ${issues.map(esc).join("; ")}. Несопоставимые показатели не рассчитываются и показаны как «—».</div>` : "";
 }
 
-function renderDepartment() {
+function renderDepartment() { return renderPreparedReport("department", renderDepartmentNow); }
+function renderDepartmentNow() {
   const months = monthKeysSorted();
   const monthSelect = document.getElementById("departmentMonth");
   const filterSelect = document.getElementById("departmentFilter");
@@ -7888,9 +8257,9 @@ function renderDepartment() {
     <div class="card"><h2>Возвращаемость, перенаправления и загрузка <span class="spacer"></span>${copyBtn("copyChart", "chDepartmentRates", "график")}</h2><div class="chart-box"><canvas id="chDepartmentRates"></canvas></div></div></div>
     <div class="card"><h2>Клиентская база за ${year} год <span class="spacer"></span>${copyBtn("copyChart", "chDepartmentBase", "график")}</h2><div class="chart-box"><canvas id="chDepartmentBase"></canvas></div></div>`;
 
-  html += `<div class="card"><h2>Годовая таблица показателей <span class="spacer"></span>${copyBtn("copyTable", "tblDepartmentYear")}</h2><table class="data" id="tblDepartmentYear"><tr><th>Месяц</th>${defs.map(d => `<th class="num">${d.label}</th>`).join("")}</tr>`;
+  html += `<div class="card"><h2>Годовая таблица показателей <span class="spacer"></span>${copyBtn("copyTable", "tblDepartmentYear")}</h2><div class="department-year-scroll"><table class="data department-year-table" id="tblDepartmentYear"><tr><th>Месяц</th>${defs.map(d => `<th class="num">${klinvektReportPresentation.tableHeaderHtml(d.label)}</th>`).join("")}</tr>`;
   for (const point of history) html += `<tr><td>${monthLabel(point.mk)}</td>${defs.map(d => `<td class="num">${d.fmt(d.get(point.r))}</td>`).join("")}</tr>`;
-  html += "</table></div>";
+  html += "</table></div></div>";
 
   document.getElementById("departmentBody").innerHTML = html;
   renderDepartmentCharts(history, defs);
@@ -8013,24 +8382,6 @@ function reputationReportHtml(rows, mk, scopeLabel, { slide = false } = {}) {
   const total = complete.length === rows.length ? complete.reduce((sum, item) => sum + item.r.rep.totalReviews, 0) : null;
   const sorted = [...rows].sort((a, b) => Number(Boolean(b.r.scores?.rankEligible)) - Number(Boolean(a.r.scores?.rankEligible))
     || (b.r.scores?.total ?? -1) - (a.r.scores?.total ?? -1) || doctorName(a.id).localeCompare(doctorName(b.id), "ru"));
-  let rank = 0, previousScore = null, eligibleIndex = 0;
-  const board = sorted.map(item => {
-    const score = item.r.scores;
-    let place = null;
-    if (score?.rankEligible && score.total != null) {
-      eligibleIndex++;
-      if (score.total !== previousScore) rank = eligibleIndex;
-      place = rank;
-      previousScore = score.total;
-    }
-    const medal = place != null && place <= 3 ? ["🥇", "🥈", "🥉"][place - 1] : "";
-    return `<div class="reputation-honor-person" data-doctor-id="${esc(item.id)}"${place != null ? ` data-honor-place="${place}"` : ""}>
-      <div class="reputation-honor-medal">${medal || (place != null ? `№ ${place}` : "—")}</div>
-      <b>${esc(doctorName(item.id))}</b>
-      <div>Общий балл: <strong>${score?.total != null ? fmtNum(score.total, 0) + " / 100" : "—"}</strong>${score?.total != null && !score.rankEligible ? ' <span class="badge warn">предварительный</span>' : ""}</div>
-      <div>Отзывы на 4 площадках: <strong>${reputationReviewCountMarkup(item.r.rep)}</strong></div>
-    </div>`;
-  }).join("");
   return `<section class="${cardClass} reputation-report" data-analytics-block-key="reputation">
     <h2>Репутация · ${esc(scopeLabel)} <span class="small muted">· ${monthLabel(mk)}</span></h2>
     <div class="kpi"><div class="lbl">Всего отзывов на четырёх площадках</div><div class="val">${total != null ? fmtNum(total) + " шт." : "—"}</div>
@@ -8040,10 +8391,7 @@ function reputationReportHtml(rows, mk, scopeLabel, { slide = false } = {}) {
         const value = item.r.rep?.platforms.find(p => p.key === platform.key);
         return `<td class="num">${value?.rating != null ? fmtNum(value.rating, 1) + " ★" : "—"}<br><span class="small muted">${value?.reviews != null ? fmtNum(value.reviews) + " шт." : "—"}</span></td>`;
       }).join("")}<td class="num">${reputationReviewCountMarkup(item.r.rep)}</td><td class="num">${item.r.rep?.avgRating != null ? fmtNum(item.r.rep.avgRating, 2) + " ★" : "—"}</td><td class="num">${fmtPct(item.r.rep?.nps)}</td><td class="num">${fmtNum(item.r.rep?.reviews)}</td>${DB.settings.showScores ? `<td class="num">${scoreBadge(item.r.scores?.total, item.r.scores?.rankEligible, item.r.scores?.coveragePct)}</td>` : ""}</tr>`).join("")}
-    </table></div></section>
-    ${DB.settings.showScores ? `<section class="${cardClass} reputation-honor-board" data-analytics-block-key="honor-board"><h2>Доска почёта · ${esc(scopeLabel)}</h2>
-      <p class="small muted">Места и медали — по общему баллу врача за ${monthLabel(mk)}. При равном балле место одинаковое. Предварительные оценки не получают место.</p>
-      <div class="reputation-honor-grid">${board}</div></section>` : ""}`;
+    </table></div></section>`;
 }
 
 function compactBaseTrend(current, previous, lowerBetter = false) {
@@ -8162,7 +8510,8 @@ function specializationInterdisciplinaryHtml(rows, mk, specializationName, optio
   return html + "</div>";
 }
 
-function renderDept() {
+function renderDept() { return renderPreparedReport("dept", renderDeptNow); }
+function renderDeptNow() {
   const months = monthKeysSorted();
   const sel = document.getElementById("deptMonth");
   setControlsDisabled(["btnXlsx", "deptMonth", "deptFilter", "subFilter"], !months.length);
@@ -9188,6 +9537,16 @@ function pdfReportTargets(monthKey) {
 }
 
 function pdfTargetSource(target, monthKey) {
+  UI.reportEager = true;
+  try {
+    const source = pdfTargetSourceNow(target, monthKey);
+    source.dataset.reportExport = "true";
+    return source;
+  }
+  finally { UI.reportEager = false; }
+}
+
+function pdfTargetSourceNow(target, monthKey) {
   if (target.tab === "department") {
     UI.departmentMonth = monthKey;
     UI.departmentFilter = target.departmentName;
@@ -9208,6 +9567,7 @@ function pdfTargetSource(target, monthKey) {
 }
 
 async function settlePdfCharts(source, { waitForPaint = true } = {}) {
+  flushReportCharts();
   if (document.fonts && document.fonts.ready) await document.fonts.ready;
   if (waitForPaint) await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   for (const canvas of source.querySelectorAll("canvas")) {
@@ -11168,7 +11528,7 @@ function doctorMetricsHeaderHtml(docId, mk, r, { blockId = "blkHead", slide = fa
 
 function doctorSemanticSectionOpen(number, title, subtitle, defaultOpen = true) {
   const key = `doctorSemantic${number}`;
-  const isOpen = Object.prototype.hasOwnProperty.call(UI.openLists, key) ? UI.openLists[key] : defaultOpen;
+  const isOpen = UI.reportEager || (Object.prototype.hasOwnProperty.call(UI.openLists, key) ? UI.openLists[key] : defaultOpen);
   return `<details id="doctorSemanticSection${number}" class="doctor-semantic-section" data-list-key="${key}" ${isOpen ? "open" : ""}>
     <summary class="doctor-semantic-summary">
       <span class="doctor-semantic-number">${number}</span>
@@ -11204,7 +11564,8 @@ function setDoctorSemanticSections(open) {
   if (open) resizeDoctorSectionCharts();
 }
 
-function renderDoctor() {
+function renderDoctor() { return renderPreparedReport("doctor", renderDoctorNow); }
+function renderDoctorNow() {
   const months = monthKeysSorted();
   const body = document.getElementById("doctorBody");
   setControlsDisabled(["docMonth", "docSelect", "btnExportMobilePublication"], !months.length);
@@ -13251,6 +13612,7 @@ function viewerAccessSettingsHtml() {
     <p class="small muted">Viewer не получает рабочую SQLite. Он открывает только ZIP с проверкой SHA-256, готовыми страницами и комментариями.</p>
     <div class="notice blue"><b>Вход врача:</b> в Viewer врач выбирает своё имя и вводит постоянный четырёхзначный PIN. Обычный врач видит только свои страницы. Назначенный заведующий дополнительно может переключаться между всеми врачами своего отделения.</div>
     <h3>Заведующие отделениями</h3>
+    ${pinTransferSettingsHtml()}
     <p class="small muted">Назначение сохраняется один раз в администраторской базе. При выборе заведующего доступ к Viewer для него включается автоматически.</p>
     <div class="scroll-y"><table class="data viewer-heads-table"><tr><th>Отделение</th><th>Заведующий</th></tr>${headRows || '<tr><td colspan="2" class="muted">Сначала настройте структуру отделений и врачей.</td></tr>'}</table></div>
     <div class="toolbar"><label>Новый администраторский PIN Viewer: <input id="viewerAdminPin" type="password" inputmode="numeric" minlength="6" maxlength="12" placeholder="6–12 цифр"></label>
@@ -14486,9 +14848,9 @@ async function mergeSelected() {
 function renderAll() {
   updateHeaderStatus();
   if (UI.tab === "data") renderData();
-  if (UI.tab === "department") renderDepartment();
-  if (UI.tab === "dept") renderDept();
-  if (UI.tab === "doctor") renderDoctor();
+  if (UI.tab === "department") return renderDepartment();
+  if (UI.tab === "dept") return renderDept();
+  if (UI.tab === "doctor") return renderDoctor();
   if (UI.tab === "settings") renderSettings();
 }
 
@@ -14594,6 +14956,7 @@ async function initApp() {
 document.addEventListener("toggle", event => {
   const details = event.target;
   if (!(details instanceof HTMLDetailsElement)) return;
+  if (details.closest('[data-report-export="true"]')) return;
   if (details.dataset.pageBlock && details.isConnected) {
     UI.openPageBlocks[details.dataset.pageBlock] = details.open;
   }

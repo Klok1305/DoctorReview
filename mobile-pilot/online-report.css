@@ -2,6 +2,8 @@ body.online-report{display:block;padding:16px;margin:0;overflow:auto;background:
 .online-report .viewer-dashboard-snapshot{max-width:1600px;margin:auto;min-width:0}
 .online-report .pdf-chart-image{display:block;max-width:100%;height:auto}
 .online-report .no-print{display:none}
+.online-report .reputation-honor-board{display:none}
+.report-table-heading-line{display:block;white-space:nowrap;line-height:1.3}
 .online-report .card h2{flex-wrap:wrap;overflow-wrap:anywhere}
 .cloud-data-report{max-width:1400px;margin:auto;min-width:0;font-family:Segoe UI,Arial,sans-serif;color:#172438;font-size:15px}
 .cloud-heading{display:flex;gap:16px;align-items:center;justify-content:space-between;background:white;padding:20px;border-radius:14px;min-width:0}

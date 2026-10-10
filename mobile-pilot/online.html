@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="ru">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>КлинВект — онлайн</title><link rel="icon" href="/_gw/icon"><link rel="stylesheet" href="/mobile/online.css?v=3"><script src="/mobile/online.js?v=6" defer></script></head>
+<title>КлинВект — онлайн</title><link rel="icon" href="/_gw/icon"><link rel="stylesheet" href="/mobile/online.css?v=4"><script src="/mobile/online.js?v=7" defer></script></head>
 <body>
 <header><div><strong>КлинВект</strong><span id="onlineUser"></span></div><div class="header-actions"><button id="onlineLogout" type="button" hidden>Выйти</button><button id="onlineRefresh" type="button">Обновить</button></div></header>
 <p class="privacy">В облаке — готовые показатели и комментарии. Реестра пациентов и исходных выгрузок здесь нет.</p>
@@ -9,10 +9,16 @@
 <label>ФИО / администратор<select id="onlineAccount" required></select></label>
 <label>PIN<input id="onlinePin" type="password" inputmode="numeric" autocomplete="off" required minlength="4" maxlength="12" pattern="[0-9]{4,12}"></label>
 <button id="onlineLoginButton" type="submit">Войти</button><p id="onlineLoginStatus" role="status"></p></form>
-<details id="onlineUploadPanel" hidden><summary>Загрузить обезличенный JSON</summary>
+<details id="onlineUploadPanel" hidden><summary>Обновить отчёты или PIN</summary>
+<p id="onlinePinVersion"></p>
 <form id="onlineUploadForm"><p id="onlineUploadHelp"></p><label>Файл из Admin<input id="onlineUploadFile" type="file" accept=".json,application/json" required></label>
 <div class="upload-actions"><button id="onlineUploadButton" type="submit">Загрузить отчёты</button><button id="onlineUploadCancel" type="button" hidden>Отмена</button></div>
-<progress id="onlineUploadProgress" max="100" value="0" hidden></progress><p id="onlineUploadStatus" role="status"></p></form></details>
+<progress id="onlineUploadProgress" max="100" value="0" hidden></progress><p id="onlineUploadStatus" role="status"></p></form>
+<details id="onlinePinsPanel"><summary>Обновить только PIN</summary>
+<form id="onlinePinsForm"><p>Выберите JSON из кнопки «Выгрузить PIN для онлайн» в Admin. Отчёты, комментарии и роли сохранятся.</p>
+<label>Файл PIN<input id="onlinePinsFile" type="file" accept=".json,application/json" required></label>
+<div class="upload-actions"><button id="onlinePinsPreviewButton" type="submit">Сравнить PIN</button></div></form>
+<p id="onlinePinsStatus" role="status"></p><div id="onlinePinsComparison"></div></details></details>
 <div class="controls"><label>Период<select id="onlinePeriod" disabled></select></label><label>Отчёт<select id="onlineScope" disabled></select></label></div>
 <p id="onlineStatus" role="status">Загружаются доступные отчёты…</p>
 <iframe id="onlineFrame" title="Отчёт КлинВекта" sandbox="allow-scripts allow-same-origin" hidden></iframe>

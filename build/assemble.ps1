@@ -15,7 +15,11 @@ $html = $html.Replace("/*__VIEWER_HTML_SANITIZER__*/", (& $read "viewer-html-san
 $html = $html.Replace("/*__CORE__*/",    (& $read "app-core.js"))
 $html = $html.Replace("/*__PARSERS__*/", (& $read "app-parsers.js"))
 $html = $html.Replace("/*__METRICS__*/", (& $read "app-metrics.js"))
+$html = $html.Replace("/*__REPORT_WORKER__*/", (& $read "report-worker.js"))
+$html = $html.Replace("/*__REPORT_PERFORMANCE__*/", (& $read "report-performance.js"))
+$html = $html.Replace("/*__REPORT_PRESENTATION__*/", [System.IO.File]::ReadAllText((Join-Path (Split-Path $dir -Parent) "mobile-pilot/report-presentation.js"), [System.Text.Encoding]::UTF8))
 $html = $html.Replace("/*__CLOUD_REPORT_DATA__*/", (& $read "cloud-report-data.js"))
+$html = $html.Replace("/*__PIN_TRANSFER_UI__*/", (& $read "pin-transfer-ui.js"))
 $ui = & $read "app-ui.js"
 $ui = [System.Text.RegularExpressions.Regex]::Replace(
   $ui,

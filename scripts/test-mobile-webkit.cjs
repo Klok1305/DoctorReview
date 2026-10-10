@@ -12,6 +12,7 @@ const assets = new Map([
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
   ["/app.js", ["app.js", "text/javascript; charset=utf-8"]],
   ["/report-charts.js", ["report-charts.js", "text/javascript; charset=utf-8"]],
+  ["/report-presentation.js", ["report-presentation.js", "text/javascript; charset=utf-8"]],
   ["/app.css", ["app.css", "text/css; charset=utf-8"]],
   ["/online.html", ["online.html", "text/html; charset=utf-8"]],
   ["/online.js", ["online.js", "text/javascript; charset=utf-8"]],

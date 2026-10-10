@@ -58,6 +58,9 @@ jobs:
       - name: Проверить воспроизводимый benchmark
         run: pnpm run benchmark:architecture
 
+      - name: Проверить вычисления отчётов вне основного потока
+        run: pnpm run benchmark:reports
+
       - name: Проверить задержку событий в фоновых операциях
         run: pnpm run benchmark:background
 

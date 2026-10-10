@@ -136,11 +136,14 @@ test("desktop JSON chooses a destination first, validates its owner and writes t
   const handlers = new Map(), queue = new BackgroundTaskQueue();
   t.after(() => { queue.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   let chosen = false, canceled = false;
+  const pinIds = Object.fromEntries(payload.doctors.map(doctor => [doctor.doctorId, crypto.randomUUID()]));
+  const pinSync = { setId: crypto.randomUUID(), revision: 1, digest: "a".repeat(64) };
   const context = vm.createContext({ require, fs, path, Date, mainWindow: {}, cloudExportFiles: new Map(),
     ipcMain: { handle: (name, callback) => handlers.set(name, callback) }, localAdminActor: () => ({ userId: "admin" }),
     dialog: { showSaveDialog: async () => { chosen = true; return { canceled, filePath }; } },
     configStore: { publicConfig: () => ({ outputDir: dir }) }, ensureObject: value => value, app: { getVersion: () => "test" },
     database: { loadSnapshot: () => ({ doctors: Object.fromEntries(payload.doctors.map(doctor => [doctor.doctorId, {}])), months: {}, settings: {} }),
+      viewerPinTransferPayload: () => ({ sync: pinSync }), viewerPinSyncState: () => ({ ...pinSync, ids: pinIds }),
       viewerAccessSnapshot() {}, viewerExportCredentials: () => ({ admin: verifier("654321"), doctors: payload.doctors.map(doctor => ({ doctorId: doctor.doctorId, headDepartments: [], ...verifier("0123") })) }) },
     cloudAccountsFromViewer, cloudPrivacyPatterns,
     runPublicationTask: (_event, _id, task, value) => { assert.equal(chosen, true); return queue.run(task, value); },

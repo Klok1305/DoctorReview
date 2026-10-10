@@ -23,6 +23,8 @@
 !/pnpm-workspace.yaml
 
 # Исходники веб-интерфейса и сборщик единого index.html.
+# pin-transfer-ui.js — интерфейс переноса PIN без клинических данных.
+# report-worker.js/report-performance.js — расчёты и отложенные графики отчётов.
 !/build/
 /build/*
 !/build/*.js
@@ -39,6 +41,7 @@
 !/desktop/services/
 /desktop/services/*
 # Локальная проверка обезличивания и строгий контракт JSON — только исходники.
+# pin-transfer-service.cjs — защищённый обмен PIN; .kvpins и пользовательские JSON не добавлять.
 !/desktop/services/*.cjs
 !/desktop/services/background-task-queue.cjs
 !/desktop/services/background-task-worker.cjs
@@ -53,6 +56,7 @@
 !/viewer/package.json
 
 # Изолированный мобильный PWA-пилот только с синтетическими данными.
+# report-presentation.js — общие переносы заголовков Admin и онлайн-отчётов.
 !/mobile-pilot/
 /mobile-pilot/*
 !/mobile-pilot/*.html

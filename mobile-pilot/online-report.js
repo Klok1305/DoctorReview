@@ -1,10 +1,42 @@
 "use strict";
-for (const select of document.querySelectorAll(".cloud-data-report [data-chart-series]")) {
-  select.addEventListener("change", () => {
-    const card = select.closest(".report-chart"), chart = JSON.parse(card.dataset.chart);
-    card.querySelector(".chart-plot").innerHTML = window.klinvektReportCharts.chartPlot(chart, select.value);
-  });
+for (const board of document.querySelectorAll(".reputation-honor-board")) board.remove();
+for (const table of document.querySelectorAll("#tblDepartmentYear")) {
+  table.classList.add("department-year-table");
+  if (!table.parentElement.classList.contains("department-year-scroll")) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "department-year-scroll";
+    table.parentElement.insertBefore(wrapper, table);
+    wrapper.appendChild(table);
+  }
+  for (const cell of table.querySelectorAll("th")) {
+    cell.innerHTML = window.klinvektReportPresentation.tableHeaderHtml(cell.textContent);
+  }
 }
+const chartCards = [...document.querySelectorAll(".cloud-data-report .report-chart")];
+const preparedCharts = new WeakMap();
+const drawChart = card => {
+  let chart = preparedCharts.get(card);
+  if (!chart) { chart = JSON.parse(card.dataset.chart); preparedCharts.set(card, chart); }
+  const plot = card.querySelector(".chart-plot");
+  plot.innerHTML = window.klinvektReportCharts.chartPlot(chart, card.querySelector("[data-chart-series]")?.value || (chart.id === "scores" ? "0" : "all"));
+  plot.style.minHeight = ""; delete card.dataset.chartDeferred;
+};
+for (const card of chartCards) card.querySelector("[data-chart-series]")?.addEventListener("change", () => drawChart(card));
+if (typeof IntersectionObserver === "function") {
+  const observer = new IntersectionObserver(entries => {
+    for (const entry of entries) if (entry.isIntersecting) {
+      if (entry.target.dataset.chartDeferred) drawChart(entry.target);
+      observer.unobserve(entry.target);
+    }
+  }, { rootMargin: "150px" });
+  chartCards.filter(card => card.dataset.chartDeferred).forEach(card => observer.observe(card));
+} else chartCards.filter(card => card.dataset.chartDeferred).forEach(drawChart);
+window.addEventListener("beforeprint", () => {
+  for (const details of document.querySelectorAll(".cloud-data-report details")) details.open = true;
+  chartCards.filter(card => card.dataset.chartDeferred).forEach(drawChart);
+  for (const image of document.images) image.loading = "eager";
+});
+for (const image of document.images) { image.loading = "lazy"; image.decoding = "async"; }
 for (const table of document.querySelectorAll(".viewer-dashboard-snapshot table.data")) {
   const heads = [...table.querySelectorAll("tr.grp-head[data-g]")];
   if (!heads.length) continue;

@@ -7,8 +7,9 @@
   const escapeHtml = value => String(value == null ? "" : value).replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
   const chartPalette = ["#2563eb", "#7c3aed", "#16a34a", "#d97706", "#db2777", "#0891b2", "#64748b"];
   const chartColor = (value, index = 0) => /^#[0-9a-f]{6}$/i.test(value || "") ? value : chartPalette[index % chartPalette.length];
-  const chartNumber = (value, compact = false) => Number.isFinite(value)
-    ? new Intl.NumberFormat("ru-RU", { maximumFractionDigits: compact ? 1 : 2, ...(compact ? { notation: "compact" } : {}) }).format(value) : "—";
+  const numberFormats = [new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }),
+    new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1, notation: "compact" })];
+  const chartNumber = (value, compact = false) => Number.isFinite(value) ? numberFormats[compact ? 1 : 0].format(value) : "—";
 
   function chartTable(chart) {
     return `<details class="chart-data"><summary>Точные значения${chart.unit ? ` · ${escapeHtml(chart.unit)}` : ""}</summary><div class="chart-data-scroll"><table>
@@ -89,8 +90,8 @@
     return `<div class="line-plot">${lineSvg(false)}${lineSvg(true)}</div>${chartLegend(chart, series)}`;
   }
 
-  function renderCharts(charts = []) {
-    return charts.map(chart => `<article class="report-chart" data-chart="${escapeHtml(JSON.stringify(chart))}"><header><h5>${escapeHtml(chart.title)}</h5>${chart.type === "line" && chart.series.length > 1 ? `<label class="chart-picker">Показать<select data-chart-series><option value="all">Все показатели</option>${chart.series.map((series, i) => `<option value="${i}"${chart.id === "scores" && i === 0 ? " selected" : ""}>${escapeHtml(series.label)}</option>`).join("")}</select></label>` : ""}</header><div class="chart-plot">${chartPlot(chart, chart.id === "scores" ? "0" : "all")}</div>${chartTable(chart)}</article>`).join("");
+  function renderCharts(charts = [], { deferred = false } = {}) {
+    return charts.map(chart => `<article class="report-chart" data-chart="${escapeHtml(JSON.stringify(chart))}"${deferred ? ' data-chart-deferred="true"' : ""}><header><h5>${escapeHtml(chart.title)}</h5>${chart.type === "line" && chart.series.length > 1 ? `<label class="chart-picker">Показать<select data-chart-series><option value="all">Все показатели</option>${chart.series.map((series, i) => `<option value="${i}"${chart.id === "scores" && i === 0 ? " selected" : ""}>${escapeHtml(series.label)}</option>`).join("")}</select></label>` : ""}</header><div class="chart-plot"${deferred ? ' style="min-height:235px"' : ""}>${deferred ? '<p class="chart-note">График появится при открытии раздела.</p>' : chartPlot(chart, chart.id === "scores" ? "0" : "all")}</div>${chartTable(chart)}</article>`).join("");
   }
 
   return Object.freeze({ renderCharts, chartPlot, chartNumber, chartTable });

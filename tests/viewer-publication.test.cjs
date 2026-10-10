@@ -541,7 +541,10 @@ test("standalone HTML encrypts doctor access and a complete administrator catalo
   vm.runInContext(`${standaloneSource}\n;globalThis.__decryptStandaloneDoctor = decryptDoctor;`, browserContext);
   const browserPayload = await browserContext.__decryptStandaloneDoctor(bundle.doctors[0], "1357");
   assert.equal(browserPayload.reports.length, 1);
-  assert.match(browserPayload.reports[0].html, /Секретный отчёт|Секретный Пациент/);
+  assert.equal(browserPayload.reportLoader.stats().decryptions, 0);
+  assert.match((await browserPayload.reportLoader(browserPayload.reports[0])).html, /Секретный отчёт|Секретный Пациент/);
+  await browserPayload.reportLoader(browserPayload.reports[0]);
+  assert.equal(browserPayload.reportLoader.stats().decryptions, 1);
 });
 
 test("department head report switcher lists the department and every published specialization", () => {

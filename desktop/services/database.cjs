@@ -4,6 +4,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { backup, DatabaseSync } = require("node:sqlite");
+const { pinDigest, validatePinSync, validatePinTransfer, previewPinTransfer, resolvePinMappings, assertPinSyncTransition } = require("./pin-transfer-service.cjs");
 
 const SCHEMA_VERSION = 5;
 const SNAPSHOT_VERSION = 4;
@@ -673,6 +674,7 @@ class DatabaseService {
       snapshot,
       tables,
       counts,
+      viewerPinSync: this.viewerPinSyncState(),
     };
   }
 
@@ -690,6 +692,16 @@ class DatabaseService {
       throw new Error("Полная JSON-копия не содержит совместимого снимка базы");
     }
     const inputTables = portable.tables;
+    if (portable.viewerPinSync != null) {
+      if (typeof portable.viewerPinSync !== "object" || Array.isArray(portable.viewerPinSync)
+        || Object.keys(portable.viewerPinSync).some(key => !["setId", "revision", "digest", "ids", "partial", "adminDigest"].includes(key))
+        || typeof portable.viewerPinSync.partial !== "boolean"
+        || (portable.viewerPinSync.adminDigest != null && !/^[a-f0-9]{64}$/.test(portable.viewerPinSync.adminDigest))) throw new Error("Некорректные данные набора PIN");
+      validatePinSync({ setId: portable.viewerPinSync.setId, revision: portable.viewerPinSync.revision, digest: portable.viewerPinSync.digest });
+      if (!portable.viewerPinSync.ids || typeof portable.viewerPinSync.ids !== "object" || Array.isArray(portable.viewerPinSync.ids)
+        || Object.values(portable.viewerPinSync.ids).some(value => typeof value !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value))
+        || new Set(Object.values(portable.viewerPinSync.ids)).size !== Object.keys(portable.viewerPinSync.ids).length) throw new Error("Некорректные идентификаторы набора PIN");
+    }
     if (!inputTables || typeof inputTables !== "object" || Array.isArray(inputTables)) {
       throw new Error("Полная JSON-копия не содержит служебных таблиц");
     }
@@ -730,6 +742,8 @@ class DatabaseService {
         const insert = this.db.prepare(`INSERT INTO ${table}(${columns.join(", ")}) VALUES (${placeholders})`);
         for (const row of rows) insert.run(...columns.map(column => row[column]));
       }
+      this.db.prepare("DELETE FROM app_meta WHERE key = 'viewerPinSync'").run();
+      if (portable.viewerPinSync) this.#storePinMeta("viewerPinSync", portable.viewerPinSync);
     });
     this.ensureLocalAdministrator();
     this.viewerAccessSnapshot();
@@ -1095,6 +1109,7 @@ class DatabaseService {
     return {
       adminPinConfigured: Boolean(settings && settings.admin_pin_hash),
       adminPinVersion: settings ? Number(settings.admin_pin_version) : 0,
+      pinSync: this.viewerPinSyncState(),
       departmentHeads,
       doctors: doctors.map(row => {
         const doctor = parseJson(row.data_json, {});
@@ -1111,6 +1126,133 @@ class DatabaseService {
         };
       }),
     };
+  }
+
+  #storePinMeta(key, value) {
+    const json = JSON.stringify(value);
+    this.db.prepare(`INSERT INTO app_meta(key, data_json, content_hash, updated_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET data_json=excluded.data_json, content_hash=excluded.content_hash, updated_at=excluded.updated_at`)
+      .run(key, json, contentHash(json), new Date().toISOString());
+  }
+
+  viewerPinTransferRecords(ids = {}) {
+    return this.db.prepare(`SELECT d.id, d.data_json, a.* FROM doctors d
+      JOIN viewer_doctor_access a ON a.doctor_id=d.id ORDER BY d.id`).all().map(row => {
+      const doctor = parseJson(row.data_json, {});
+      return { doctorId: row.id, syncId: ids[row.id], displayName: String(doctor.name || row.id),
+        department: String(doctor.department || ""), specialization: String(doctor.specialization || doctor.dept || ""),
+        pin: row.pin_code, pinHash: row.pin_hash, pinSalt: row.pin_salt, pinParams: parseJson(row.pin_params, {}) };
+    });
+  }
+
+  viewerPinSyncState() {
+    const stored = this.db.prepare("SELECT data_json FROM app_meta WHERE key='viewerPinSync'").get();
+    const current = stored ? parseJson(stored.data_json, null) : null;
+    const records = this.viewerPinTransferRecords();
+    const ids = Object.fromEntries(records.map(record => [record.doctorId, current?.ids?.[record.doctorId] || crypto.randomUUID()]));
+    const digest = pinDigest(records.map(record => ({ ...record, syncId: ids[record.doctorId] })));
+    const admin = this.db.prepare("SELECT admin_pin_hash,admin_pin_salt FROM viewer_settings WHERE id=1").get();
+    const adminDigest = contentHash(JSON.stringify(admin || null));
+    const changed = current && (current.digest !== digest || (current.adminDigest && current.adminDigest !== adminDigest));
+    const state = { setId: current?.setId || crypto.randomUUID(), revision: current ? current.revision + (changed ? 1 : 0) : 1,
+      digest, ids, partial: current?.partial === true, adminDigest };
+    if (!current || JSON.stringify(current) !== JSON.stringify(state)) this.#storePinMeta("viewerPinSync", state);
+    return state;
+  }
+
+  viewerPinTransferPayload({ appVersion = "", includeAdmin = true } = {}) {
+    this.viewerAccessSnapshot();
+    const state = this.viewerPinSyncState();
+    if (state.partial) throw new Error("PIN перенесены частично. Завершите сопоставление исходного файла перед дальнейшей выгрузкой");
+    const settings = this.db.prepare("SELECT * FROM viewer_settings WHERE id=1").get();
+    const payload = { format: "klinvekt-pin-transfer", version: 1, createdAt: new Date().toISOString(), appVersion: appVersion || "local",
+      sync: { setId: state.setId, revision: state.revision, digest: state.digest }, doctors: this.viewerPinTransferRecords(state.ids),
+      admin: includeAdmin && settings?.admin_pin_hash ? { pinHash: settings.admin_pin_hash, pinSalt: settings.admin_pin_salt, pinParams: parseJson(settings.admin_pin_params, {}) } : null };
+    return validatePinTransfer(payload);
+  }
+
+  viewerPinStateToken() {
+    const state = this.viewerPinSyncState();
+    const settings = this.db.prepare("SELECT * FROM viewer_settings WHERE id=1").get();
+    return contentHash(JSON.stringify([state, this.viewerPinTransferRecords(state.ids), settings || null]));
+  }
+
+  previewViewerPinTransfer(payload) {
+    validatePinTransfer(payload);
+    this.viewerAccessSnapshot();
+    const state = this.viewerPinSyncState();
+    return { ...previewPinTransfer(payload, this.viewerPinTransferRecords(state.ids), state), expectedState: this.viewerPinStateToken() };
+  }
+
+  applyViewerPinTransfer(payload, { mapping, importAdmin = false, adopt = false, expectedState } = {}) {
+    validatePinTransfer(payload);
+    if (!expectedState || expectedState !== this.viewerPinStateToken()) throw new Error("Доступы изменились после сравнения. Откройте файл PIN заново");
+    const state = this.viewerPinSyncState();
+    assertPinSyncTransition(state, payload.sync, adopt);
+    if (importAdmin && !payload.admin) throw new Error("В файле нет администраторского PIN");
+    const targets = this.viewerPinTransferRecords(state.ids);
+    const changes = resolvePinMappings(payload, targets, mapping);
+    const selected = new Map(changes.map(change => [change.target.doctorId, change.source]));
+    const allPins = targets.map(target => selected.get(target.doctorId)?.pin || target.pin);
+    if (new Set(allPins).size !== allPins.length) throw new Error("PIN из файла совпадает с PIN другого врача, который не выбран для переноса");
+    const ids = { ...state.ids };
+    for (const { target, source } of changes) ids[target.doctorId] = source.syncId;
+    if (new Set(Object.values(ids)).size !== Object.keys(ids).length) throw new Error("Идентификатор общего набора уже связан с другим врачом");
+    const updated = changes.filter(({ target, source }) => target.pin !== source.pin || target.pinHash !== source.pinHash || target.pinSalt !== source.pinSalt).length;
+    const settings = this.db.prepare("SELECT * FROM viewer_settings WHERE id=1").get();
+    const adminChanged = importAdmin && (settings?.admin_pin_hash !== payload.admin.pinHash || settings?.admin_pin_salt !== payload.admin.pinSalt);
+    const partial = changes.length !== payload.doctors.length || targets.length !== changes.length;
+    const nextDigest = pinDigest(targets.map(target => ({ ...(selected.get(target.doctorId) || target), syncId: ids[target.doctorId] })));
+    const adminDigest = importAdmin ? contentHash(JSON.stringify({ admin_pin_hash: payload.admin.pinHash, admin_pin_salt: payload.admin.pinSalt })) : state.adminDigest;
+    const nextState = { ...payload.sync, digest: nextDigest, ids, partial, adminDigest };
+    const repeated = !updated && !adminChanged && JSON.stringify(nextState) === JSON.stringify(state);
+    let backupId = null;
+    if (!repeated) this.#transaction(() => {
+      if (expectedState !== this.viewerPinStateToken()) throw new Error("Доступы изменились после сравнения. Откройте файл PIN заново");
+      backupId = `viewerPinBackup:${Date.now()}:${crypto.randomUUID()}`;
+      this.#storePinMeta(backupId, { sync: state, doctors: this.db.prepare("SELECT a.* FROM viewer_doctor_access a JOIN doctors d ON d.id=a.doctor_id").all(), admin: settings || null });
+      const update = this.db.prepare(`UPDATE viewer_doctor_access SET pin_code=?, pin_hash=?, pin_salt=?, pin_params=?,
+        pin_version=pin_version+?, updated_at=? WHERE doctor_id=?`);
+      const now = new Date().toISOString();
+      for (const { target, source } of changes) update.run(source.pin, source.pinHash, source.pinSalt, JSON.stringify(source.pinParams),
+        target.pin !== source.pin ? 1 : 0, now, target.doctorId);
+      if (adminChanged) this.db.prepare(`INSERT INTO viewer_settings(id,admin_pin_hash,admin_pin_salt,admin_pin_params,admin_pin_version,updated_at)
+        VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET admin_pin_hash=excluded.admin_pin_hash, admin_pin_salt=excluded.admin_pin_salt,
+        admin_pin_params=excluded.admin_pin_params, admin_pin_version=excluded.admin_pin_version, updated_at=excluded.updated_at`)
+        .run(payload.admin.pinHash, payload.admin.pinSalt, JSON.stringify(payload.admin.pinParams), Number(settings?.admin_pin_version || 0) + 1, now);
+      this.#storePinMeta("viewerPinSync", nextState);
+    });
+    return { updated, matched: changes.length, skipped: payload.doctors.length - changes.length, partial, adminChanged: Boolean(adminChanged), repeated, backupId,
+      pinSync: this.viewerPinSyncState() };
+  }
+
+  restoreViewerPinTransferBackup() {
+    const row = this.db.prepare("SELECT key,data_json FROM app_meta WHERE key LIKE 'viewerPinBackup:%' ORDER BY rowid DESC LIMIT 1").get();
+    if (!row) throw new Error("Нет сохранённого переноса PIN для отката");
+    if (parseJson(this.db.prepare("SELECT data_json FROM app_meta WHERE key='viewerPinLastRollback'").get()?.data_json, null) === row.key) throw new Error("Последний перенос PIN уже отменён");
+    const saved = parseJson(row.data_json, null);
+    if (!saved || !Array.isArray(saved.doctors)) throw new Error("Резервный набор PIN повреждён");
+    const expectedState = this.viewerPinStateToken();
+    const targets = this.viewerPinTransferRecords();
+    const known = new Map(targets.map(target => [target.doctorId, target]));
+    if (saved.doctors.some(doctor => !known.has(doctor.doctor_id))) throw new Error("Состав врачей изменился. Для отката используйте исходный файл PIN");
+    const prior = new Map(saved.doctors.map(doctor => [doctor.doctor_id, doctor]));
+    const pins = targets.map(target => prior.get(target.doctorId)?.pin_code || target.pin);
+    if (new Set(pins).size !== pins.length) throw new Error("Откат конфликтует с PIN нового врача");
+    this.#transaction(() => {
+      if (expectedState !== this.viewerPinStateToken()) throw new Error("Доступы изменились. Повторите откат PIN");
+      const update = this.db.prepare("UPDATE viewer_doctor_access SET pin_code=?,pin_hash=?,pin_salt=?,pin_params=?,pin_version=pin_version+1,updated_at=? WHERE doctor_id=?");
+      const now = new Date().toISOString();
+      for (const doctor of saved.doctors) update.run(doctor.pin_code, doctor.pin_hash, doctor.pin_salt, doctor.pin_params, now, doctor.doctor_id);
+      if (saved.admin) this.db.prepare(`INSERT INTO viewer_settings(id,admin_pin_hash,admin_pin_salt,admin_pin_params,admin_pin_version,updated_at)
+        VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET admin_pin_hash=excluded.admin_pin_hash,admin_pin_salt=excluded.admin_pin_salt,
+        admin_pin_params=excluded.admin_pin_params,admin_pin_version=excluded.admin_pin_version,updated_at=excluded.updated_at`)
+        .run(saved.admin.admin_pin_hash, saved.admin.admin_pin_salt, saved.admin.admin_pin_params, Number(saved.admin.admin_pin_version || 0) + 1, now);
+      else this.db.prepare("DELETE FROM viewer_settings WHERE id=1").run();
+      this.db.prepare("DELETE FROM app_meta WHERE key='viewerPinSync'").run();
+      this.#storePinMeta("viewerPinLastRollback", row.key);
+    });
+    return { restored: saved.doctors.length, pinSync: this.viewerPinSyncState() };
   }
 
   setViewerAdminPin(pin) {

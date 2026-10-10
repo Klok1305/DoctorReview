@@ -1366,7 +1366,7 @@ test("platform review totals preserve zero, missing values and existing vector 6
   assert.equal(result.oldScore, result.newScore);
 });
 
-test("honor board ranks by overall score, shares tied medals and leaves preliminary scores unranked", () => {
+test("reputation report retains review counts without honor boards or medals", () => {
   const context = createContext();
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   vm.runInContext(ui.slice(ui.indexOf("function reputationReviewCountMarkup"), ui.indexOf("function compactBaseTrend")), context);
@@ -1382,10 +1382,7 @@ test("honor board ranks by overall score, shares tied medals and leaves prelimin
       { id: 'd4', r: { rep: reputationSummary({ reviews: 1 }), scores: { total: 99, rankEligible: false } } },
     ], '2026-09', 'Клиника');
   })()`, context);
-  assert.match(html, /data-doctor-id="d2" data-honor-place="1"/);
-  assert.match(html, /data-doctor-id="d3" data-honor-place="1"/);
-  assert.match(html, /data-doctor-id="d1" data-honor-place="3"/);
-  assert.doesNotMatch(html, /data-doctor-id="d4" data-honor-place/);
+  assert.doesNotMatch(html, /reputation-honor|data-honor-place|Доска почёта|🥇|🥈|🥉/);
   assert.match(html, /35 шт\./);
   assert.match(html, /Полностью заполнено у 3 из 4/);
 });

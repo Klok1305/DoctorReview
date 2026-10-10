@@ -1,6 +1,6 @@
 {
   "name": "doctor-performance-app",
-  "version": "3.1.2",
+  "version": "3.1.3",
   "description": "Административное приложение «КлинВект Щербатова» для аналитики врачей и отделений",
   "main": "desktop/main.cjs",
   "author": "Nikita",
@@ -27,9 +27,10 @@
     "test": "node --test tests/*.test.cjs",
     "benchmark:architecture": "node ./scripts/benchmark-architecture.cjs",
     "benchmark:background": "node ./scripts/benchmark-background.cjs",
+    "benchmark:reports": "node ./scripts/benchmark-reports.cjs",
     "test:smoke": "pnpm run assemble && electron . --smoke-test",
     "test:pdf": "pnpm run assemble && electron . --pdf-smoke",
-    "test:webkit": "node ./scripts/test-mobile-webkit.cjs && node ./scripts/test-cloud-webkit.cjs",
+    "test:webkit": "node ./scripts/test-mobile-webkit.cjs && node ./scripts/test-cloud-webkit.cjs && node ./scripts/benchmark-reports.cjs --webkit",
     "dist": "pnpm run assemble && electron-builder --win nsis --publish never",
     "dist:viewer": "electron-builder --config electron-builder.viewer.json --win nsis --publish never",
     "dist:all": "pnpm run dist && pnpm run dist:viewer"

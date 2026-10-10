@@ -95,7 +95,7 @@ function setControlsDisabled(ids, disabled) {
 }
 
 function collapsibleListAttrs(key, defaultOpen = true) {
-  const isOpen = Object.prototype.hasOwnProperty.call(UI.openLists, key) ? UI.openLists[key] : defaultOpen;
+  const isOpen = UI.reportEager || (Object.prototype.hasOwnProperty.call(UI.openLists, key) ? UI.openLists[key] : defaultOpen);
   return `class="collapsible-list" data-list-key="${esc(key)}" ${isOpen ? "open" : ""}`;
 }
 
@@ -378,10 +378,11 @@ function chart(id, cfg) {
   if (UI.charts[id]) { UI.charts[id].destroy(); delete UI.charts[id]; }
   const el = document.getElementById(id);
   if (!el) return;
-  UI.charts[id] = new Chart(el.getContext("2d"), cfg);
+  queueReportChart(id, el, cfg);
 }
 
 function switchTab(tab) {
+  cancelReportPreparation();
   UI.tab = tab;
   document.querySelectorAll("nav.tabs button").forEach(b => {
     const active = b.dataset.tab === tab;
@@ -390,7 +391,7 @@ function switchTab(tab) {
     else b.removeAttribute("aria-current");
   });
   document.querySelectorAll(".page").forEach(p => p.classList.toggle("active", p.id === "page-" + tab));
-  renderAll();
+  return renderAll();
 }
 
 /* сегментный переключатель периодов */
@@ -425,6 +426,9 @@ async function copyTable(id) {
   }
 }
 function copyChart(id) {
+  createPendingReportChart(id);
+  UI.charts[id]?.stop();
+  UI.charts[id]?.update("none");
   const cv = document.getElementById(id);
   if (!cv) return;
   const tmp = document.createElement("canvas");
@@ -720,7 +724,8 @@ function aggregateCoverageHtml(result) {
   return issues.length ? `<div class="notice" data-aggregate-coverage><b>Неполные сводные данные.</b> ${issues.map(esc).join("; ")}. Несопоставимые показатели не рассчитываются и показаны как «—».</div>` : "";
 }
 
-function renderDepartment() {
+function renderDepartment() { return renderPreparedReport("department", renderDepartmentNow); }
+function renderDepartmentNow() {
   const months = monthKeysSorted();
   const monthSelect = document.getElementById("departmentMonth");
   const filterSelect = document.getElementById("departmentFilter");
@@ -794,9 +799,9 @@ function renderDepartment() {
     <div class="card"><h2>Возвращаемость, перенаправления и загрузка <span class="spacer"></span>${copyBtn("copyChart", "chDepartmentRates", "график")}</h2><div class="chart-box"><canvas id="chDepartmentRates"></canvas></div></div></div>
     <div class="card"><h2>Клиентская база за ${year} год <span class="spacer"></span>${copyBtn("copyChart", "chDepartmentBase", "график")}</h2><div class="chart-box"><canvas id="chDepartmentBase"></canvas></div></div>`;
 
-  html += `<div class="card"><h2>Годовая таблица показателей <span class="spacer"></span>${copyBtn("copyTable", "tblDepartmentYear")}</h2><table class="data" id="tblDepartmentYear"><tr><th>Месяц</th>${defs.map(d => `<th class="num">${d.label}</th>`).join("")}</tr>`;
+  html += `<div class="card"><h2>Годовая таблица показателей <span class="spacer"></span>${copyBtn("copyTable", "tblDepartmentYear")}</h2><div class="department-year-scroll"><table class="data department-year-table" id="tblDepartmentYear"><tr><th>Месяц</th>${defs.map(d => `<th class="num">${klinvektReportPresentation.tableHeaderHtml(d.label)}</th>`).join("")}</tr>`;
   for (const point of history) html += `<tr><td>${monthLabel(point.mk)}</td>${defs.map(d => `<td class="num">${d.fmt(d.get(point.r))}</td>`).join("")}</tr>`;
-  html += "</table></div>";
+  html += "</table></div></div>";
 
   document.getElementById("departmentBody").innerHTML = html;
   renderDepartmentCharts(history, defs);
@@ -919,24 +924,6 @@ function reputationReportHtml(rows, mk, scopeLabel, { slide = false } = {}) {
   const total = complete.length === rows.length ? complete.reduce((sum, item) => sum + item.r.rep.totalReviews, 0) : null;
   const sorted = [...rows].sort((a, b) => Number(Boolean(b.r.scores?.rankEligible)) - Number(Boolean(a.r.scores?.rankEligible))
     || (b.r.scores?.total ?? -1) - (a.r.scores?.total ?? -1) || doctorName(a.id).localeCompare(doctorName(b.id), "ru"));
-  let rank = 0, previousScore = null, eligibleIndex = 0;
-  const board = sorted.map(item => {
-    const score = item.r.scores;
-    let place = null;
-    if (score?.rankEligible && score.total != null) {
-      eligibleIndex++;
-      if (score.total !== previousScore) rank = eligibleIndex;
-      place = rank;
-      previousScore = score.total;
-    }
-    const medal = place != null && place <= 3 ? ["🥇", "🥈", "🥉"][place - 1] : "";
-    return `<div class="reputation-honor-person" data-doctor-id="${esc(item.id)}"${place != null ? ` data-honor-place="${place}"` : ""}>
-      <div class="reputation-honor-medal">${medal || (place != null ? `№ ${place}` : "—")}</div>
-      <b>${esc(doctorName(item.id))}</b>
-      <div>Общий балл: <strong>${score?.total != null ? fmtNum(score.total, 0) + " / 100" : "—"}</strong>${score?.total != null && !score.rankEligible ? ' <span class="badge warn">предварительный</span>' : ""}</div>
-      <div>Отзывы на 4 площадках: <strong>${reputationReviewCountMarkup(item.r.rep)}</strong></div>
-    </div>`;
-  }).join("");
   return `<section class="${cardClass} reputation-report" data-analytics-block-key="reputation">
     <h2>Репутация · ${esc(scopeLabel)} <span class="small muted">· ${monthLabel(mk)}</span></h2>
     <div class="kpi"><div class="lbl">Всего отзывов на четырёх площадках</div><div class="val">${total != null ? fmtNum(total) + " шт." : "—"}</div>
@@ -946,10 +933,7 @@ function reputationReportHtml(rows, mk, scopeLabel, { slide = false } = {}) {
         const value = item.r.rep?.platforms.find(p => p.key === platform.key);
         return `<td class="num">${value?.rating != null ? fmtNum(value.rating, 1) + " ★" : "—"}<br><span class="small muted">${value?.reviews != null ? fmtNum(value.reviews) + " шт." : "—"}</span></td>`;
       }).join("")}<td class="num">${reputationReviewCountMarkup(item.r.rep)}</td><td class="num">${item.r.rep?.avgRating != null ? fmtNum(item.r.rep.avgRating, 2) + " ★" : "—"}</td><td class="num">${fmtPct(item.r.rep?.nps)}</td><td class="num">${fmtNum(item.r.rep?.reviews)}</td>${DB.settings.showScores ? `<td class="num">${scoreBadge(item.r.scores?.total, item.r.scores?.rankEligible, item.r.scores?.coveragePct)}</td>` : ""}</tr>`).join("")}
-    </table></div></section>
-    ${DB.settings.showScores ? `<section class="${cardClass} reputation-honor-board" data-analytics-block-key="honor-board"><h2>Доска почёта · ${esc(scopeLabel)}</h2>
-      <p class="small muted">Места и медали — по общему баллу врача за ${monthLabel(mk)}. При равном балле место одинаковое. Предварительные оценки не получают место.</p>
-      <div class="reputation-honor-grid">${board}</div></section>` : ""}`;
+    </table></div></section>`;
 }
 
 function compactBaseTrend(current, previous, lowerBetter = false) {
@@ -1068,7 +1052,8 @@ function specializationInterdisciplinaryHtml(rows, mk, specializationName, optio
   return html + "</div>";
 }
 
-function renderDept() {
+function renderDept() { return renderPreparedReport("dept", renderDeptNow); }
+function renderDeptNow() {
   const months = monthKeysSorted();
   const sel = document.getElementById("deptMonth");
   setControlsDisabled(["btnXlsx", "deptMonth", "deptFilter", "subFilter"], !months.length);
@@ -2094,6 +2079,16 @@ function pdfReportTargets(monthKey) {
 }
 
 function pdfTargetSource(target, monthKey) {
+  UI.reportEager = true;
+  try {
+    const source = pdfTargetSourceNow(target, monthKey);
+    source.dataset.reportExport = "true";
+    return source;
+  }
+  finally { UI.reportEager = false; }
+}
+
+function pdfTargetSourceNow(target, monthKey) {
   if (target.tab === "department") {
     UI.departmentMonth = monthKey;
     UI.departmentFilter = target.departmentName;
@@ -2114,6 +2109,7 @@ function pdfTargetSource(target, monthKey) {
 }
 
 async function settlePdfCharts(source, { waitForPaint = true } = {}) {
+  flushReportCharts();
   if (document.fonts && document.fonts.ready) await document.fonts.ready;
   if (waitForPaint) await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   for (const canvas of source.querySelectorAll("canvas")) {
@@ -4074,7 +4070,7 @@ function doctorMetricsHeaderHtml(docId, mk, r, { blockId = "blkHead", slide = fa
 
 function doctorSemanticSectionOpen(number, title, subtitle, defaultOpen = true) {
   const key = `doctorSemantic${number}`;
-  const isOpen = Object.prototype.hasOwnProperty.call(UI.openLists, key) ? UI.openLists[key] : defaultOpen;
+  const isOpen = UI.reportEager || (Object.prototype.hasOwnProperty.call(UI.openLists, key) ? UI.openLists[key] : defaultOpen);
   return `<details id="doctorSemanticSection${number}" class="doctor-semantic-section" data-list-key="${key}" ${isOpen ? "open" : ""}>
     <summary class="doctor-semantic-summary">
       <span class="doctor-semantic-number">${number}</span>
@@ -4110,7 +4106,8 @@ function setDoctorSemanticSections(open) {
   if (open) resizeDoctorSectionCharts();
 }
 
-function renderDoctor() {
+function renderDoctor() { return renderPreparedReport("doctor", renderDoctorNow); }
+function renderDoctorNow() {
   const months = monthKeysSorted();
   const body = document.getElementById("doctorBody");
   setControlsDisabled(["docMonth", "docSelect", "btnExportMobilePublication"], !months.length);
@@ -6157,6 +6154,7 @@ function viewerAccessSettingsHtml() {
     <p class="small muted">Viewer не получает рабочую SQLite. Он открывает только ZIP с проверкой SHA-256, готовыми страницами и комментариями.</p>
     <div class="notice blue"><b>Вход врача:</b> в Viewer врач выбирает своё имя и вводит постоянный четырёхзначный PIN. Обычный врач видит только свои страницы. Назначенный заведующий дополнительно может переключаться между всеми врачами своего отделения.</div>
     <h3>Заведующие отделениями</h3>
+    ${pinTransferSettingsHtml()}
     <p class="small muted">Назначение сохраняется один раз в администраторской базе. При выборе заведующего доступ к Viewer для него включается автоматически.</p>
     <div class="scroll-y"><table class="data viewer-heads-table"><tr><th>Отделение</th><th>Заведующий</th></tr>${headRows || '<tr><td colspan="2" class="muted">Сначала настройте структуру отделений и врачей.</td></tr>'}</table></div>
     <div class="toolbar"><label>Новый администраторский PIN Viewer: <input id="viewerAdminPin" type="password" inputmode="numeric" minlength="6" maxlength="12" placeholder="6–12 цифр"></label>
@@ -7392,9 +7390,9 @@ async function mergeSelected() {
 function renderAll() {
   updateHeaderStatus();
   if (UI.tab === "data") renderData();
-  if (UI.tab === "department") renderDepartment();
-  if (UI.tab === "dept") renderDept();
-  if (UI.tab === "doctor") renderDoctor();
+  if (UI.tab === "department") return renderDepartment();
+  if (UI.tab === "dept") return renderDept();
+  if (UI.tab === "doctor") return renderDoctor();
   if (UI.tab === "settings") renderSettings();
 }
 
@@ -7500,6 +7498,7 @@ async function initApp() {
 document.addEventListener("toggle", event => {
   const details = event.target;
   if (!(details instanceof HTMLDetailsElement)) return;
+  if (details.closest('[data-report-export="true"]')) return;
   if (details.dataset.pageBlock && details.isConnected) {
     UI.openPageBlocks[details.dataset.pageBlock] = details.open;
   }

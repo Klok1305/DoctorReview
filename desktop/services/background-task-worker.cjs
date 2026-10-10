@@ -45,6 +45,15 @@ async function execute() {
     progress({ stage: "cloud", completed: 1, total: 1 });
     return { serialized, doctors: publication.doctors.length, pages: publication.pages.length };
   }
+  if (task === "pin-transfer-encrypt" || task === "pin-transfer-decrypt") {
+    const service = require("./pin-transfer-service.cjs");
+    progress({ stage: "pins", completed: 0, total: 1 });
+    const result = task === "pin-transfer-encrypt"
+      ? await service.encryptPinTransfer(payload.value, payload.password)
+      : await service.decryptPinTransfer(payload.serialized, payload.password);
+    progress({ stage: "pins", completed: 1, total: 1 });
+    return result;
+  }
   throw new Error("Неизвестная фоновая операция");
 }
 

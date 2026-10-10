@@ -827,6 +827,8 @@ function reputationSummary(raw) {
 /* Кэши ограничены LRU и инвалидируются только для затронутых данных. */
 const METRICS_CACHE_LIMITS = Object.freeze({ metrics: 480, kbSummary: 720, kbDetails: 48, adminBase: 120, department: 180 });
 let _mcCache = new Map();
+let metricsCalculationRevision = 0;
+let preparedMetricsForRender = null;
 let _kbSummaryCache = new Map();
 let _kbDetailsCache = new Map();
 let _adminBaseCache = new Map();
@@ -855,6 +857,7 @@ function metricsCacheSet(cache, key, value, limit) {
 }
 
 function clearMetricsCache() {
+  metricsCalculationRevision++;
   _mcCache = new Map();
   _kbSummaryCache = new Map();
   _kbDetailsCache = new Map();
@@ -880,6 +883,7 @@ function invalidateMetricsCache(change = null) {
   const doctors = change.doctors === true
     ? null
     : new Set([...(change.doctors || []), ...(change.deleteDoctors || [])].map(String));
+  if (months.size || change.departmentScope || change.doctors === true || doctors.size) metricsCalculationRevision++;
   if (change.doctors === true) {
     _mcCache.clear();
     _kbSummaryCache.clear();
@@ -906,9 +910,11 @@ function metricsCacheStats() {
 
 function computeMetrics(docId, monthKey) {
   const ck = JSON.stringify([String(docId), String(monthKey)]);
+  if (preparedMetricsForRender?.has(ck)) return preparedMetricsForRender.get(ck);
   const cached = metricsCacheGet(_mcCache, ck, "metrics");
   if (cached !== undefined) return cached;
   const r = computeMetricsRaw(docId, monthKey);
+  preparedMetricsForRender?.set(ck, r);
   return metricsCacheSet(_mcCache, ck, r, METRICS_CACHE_LIMITS.metrics);
 }
 

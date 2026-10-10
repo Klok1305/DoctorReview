@@ -7,6 +7,7 @@ const sanitizerPath = fs.existsSync(path.join(__dirname, "viewer-html-sanitizer.
   ? "./viewer-html-sanitizer.js" : "../../build/viewer-html-sanitizer.js";
 const { sanitizeReportHtml } = require(sanitizerPath);
 const { validateCloudReport } = require("./cloud-report-model.cjs");
+const { validatePinSync } = require("./pin-transfer-service.cjs");
 
 const CLOUD_FORMAT = "klinvekt-cloud-publication";
 const MAX_CLOUD_BYTES = 100 * 1024 * 1024;
@@ -40,8 +41,9 @@ function pageId(page) {
 // Unknown fields are rejected rather than carried into the cloud. HTML comes only
 // from an aggregate dashboard snapshot, never from a portable database/Viewer file.
 function validateCloudPublication(value) {
-  object(value, ["format", "version", "createdAt", "appVersion", "security", "doctors", "pages", "accounts"], "публикация");
+  object(value, ["format", "version", "createdAt", "appVersion", "security", "doctors", "pages", "accounts", "pinSync"], "публикация");
   if (value.format !== CLOUD_FORMAT || ![1, 2, 3].includes(value.version)) fail("формат/версия");
+  if (value.pinSync != null) { if (value.version < 2) fail("версия PIN"); validatePinSync(value.pinSync); }
   text(value.createdAt, "дата", 50);
   if (!Number.isFinite(Date.parse(value.createdAt))) fail("дата");
   text(value.appVersion, "версия приложения", 50);
@@ -59,7 +61,7 @@ function validateCloudPublication(value) {
   const specializations = new Set(doctors.map(doctor => doctor.specialization).filter(Boolean));
   list(value.accounts, "учётные записи").forEach(account => {
     object(account, value.version === 1 ? ["userId", "doctorId", "admin", "departments", "specializations"]
-      : ["accountId", "displayName", "doctorId", "admin", "departments", "specializations", "pinHash", "pinSalt", "pinParams"], "доступ");
+      : ["accountId", "displayName", "doctorId", "admin", "departments", "specializations", "pinHash", "pinSalt", "pinParams", "pinSyncId"], "доступ");
     if (value.version === 1) {
       if (!/^[1-9]\d{0,19}$/.test(text(account.userId, "ID Битрикса", 20))) fail("ID Битрикса");
     } else {
@@ -77,12 +79,16 @@ function validateCloudPublication(value) {
     if (typeof account.admin !== "boolean") fail("роль администратора");
     if (value.version >= 2 && (account.admin ? account.doctorId !== "" || account.accountId !== "admin"
       : !account.doctorId || account.accountId !== `doctor:${account.doctorId}`)) fail("область учётной записи PIN");
+    if (account.pinSyncId != null || (value.pinSync && !account.admin)) {
+      if (account.admin || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(account.pinSyncId || "")) fail("ID общего набора PIN");
+    }
     for (const [key, known] of [["departments", departments], ["specializations", specializations]]) {
       list(account[key], key, 100).forEach(name => { text(name, key); if (!known.has(name)) fail(`неизвестная область ${key}`); });
       unique(account[key], key);
     }
   });
   unique(value.accounts.map(account => value.version === 1 ? account.userId : account.accountId), "учётной записи");
+  unique(value.accounts.filter(account => account.pinSyncId).map(account => account.pinSyncId), "ID общего набора PIN");
   if (value.version >= 2 && value.accounts.filter(account => account.admin).length !== 1) fail("нужен администраторский PIN Viewer");
   const pages = list(value.pages, "страницы", 50000);
   if (!pages.length) fail("нет отчётов");
@@ -117,9 +123,9 @@ function validateCloudPublication(value) {
   return value;
 }
 
-function createCloudPublication({ doctors, pages, accounts = [], appVersion, version = 1 }) {
+function createCloudPublication({ doctors, pages, accounts = [], appVersion, version = 1, pinSync }) {
   const publication = { format: CLOUD_FORMAT, version, createdAt: new Date().toISOString(), appVersion,
-    security: { patientRegistryIncluded: false, rawExportsIncluded: false }, doctors, accounts,
+    security: { patientRegistryIncluded: false, rawExportsIncluded: false }, doctors, accounts, ...(pinSync ? { pinSync } : {}),
     pages: pages.map(page => { const cleaned = version === 3 ? { ...page } : { ...page, html: sanitizeReportHtml(page.html) }; return { ...cleaned, pageId: pageId(cleaned) }; }),
   };
   return validateCloudPublication(publication);
