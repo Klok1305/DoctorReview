@@ -518,6 +518,48 @@ test("mobile appointment tree aggregates full paths without double counting and 
   assert.equal(fallback[0].children[0].label, "Товар");
 });
 
+test("specialization, clinic, doctor and mobile dynamics cover January through the selected month", () => {
+  const context = createContext();
+  loadMobilePublicationRenderer(context);
+  const actual = JSON.parse(JSON.stringify(vm.runInContext(`(() => {
+    DB.doctors = { d1: { name: 'Тестов Врач', aliases: [], department: 'Косметология', specialization: 'Косметология', structureManual: true } };
+    DB.months = Object.fromEntries(['2025-12', '2026-01', '2026-03', '2026-08', '2026-09', '2026-12'].map(key => [key, emptyMonth()]));
+    for (const [key, month] of Object.entries(DB.months)) {
+      month.vyrabotka.d1 = { items: [{ n: 'Приём', q: 1, sOwn: Number(key.slice(5)) * 100, sRef: 0 }] };
+    }
+    const summary = dynamics => ({ months: dynamics.months, ...dynamics.rows.find(row => row.key === 'sales') });
+    const doctor = computeDoctorDynamics('d1', '2026-09');
+    const result = {
+      specialization: summary(computeDeptDynamics('2026-09', 'Косметология')),
+      clinic: summary(computeDeptDynamics('2026-09', 'all')),
+      doctor: summary(doctor),
+      mobile: mobilePublicationHistoryCharts('d1', '2026-09', doctor).find(chart => chart.id === 'money'),
+      december: summary(computeDeptDynamics('2026-12', 'all')),
+      january: summary(computeDoctorDynamics('d1', '2026-01')),
+    };
+    delete DB.months['2026-01']; clearMetricsCache();
+    result.lateStart = summary(computeDeptDynamics('2026-09', 'all'));
+    return result;
+  })()`, context)));
+  const expectedMonths = Array.from({ length: 9 }, (_, index) => `2026-${String(index + 1).padStart(2, '0')}`);
+  const expectedValues = [100, null, 300, null, null, null, null, 800, 900];
+  for (const scope of [actual.specialization, actual.clinic, actual.doctor]) {
+    assert.deepEqual(scope.months, expectedMonths);
+    assert.deepEqual(scope.values, expectedValues);
+    assert.equal(scope.prevKey, '2026-08');
+    assert.equal(scope.delta, 12.5);
+    assert.equal(scope.prevAvg, 400);
+    assert.equal(scope.deltaAvg, 125);
+  }
+  assert.equal(actual.mobile.labels.length, 9);
+  assert.deepEqual(actual.mobile.series[0].values, expectedValues);
+  assert.equal(actual.december.months.length, 12);
+  assert.deepEqual(actual.january.months, ['2026-01']);
+  assert.equal(actual.january.prev, null);
+  assert.deepEqual(actual.lateStart.months, expectedMonths);
+  assert.deepEqual(actual.lateStart.values, [null, ...expectedValues.slice(1)]);
+});
+
 test("Admin, department and mobile dynamics preserve a fully absent calendar month", () => {
   const context = createContext();
   loadMobilePublicationRenderer(context);

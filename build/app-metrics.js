@@ -1240,6 +1240,10 @@ function calendarMonthKeys(startMk, endMk) {
   return Array.from({ length: end - start + 1 }, (_, index) => monthKeyFromOrdinal(start + index));
 }
 
+function calendarYearMonthKeys(endMk) {
+  return calendarMonthKeys(`${String(endMk).slice(0, 4)}-01`, endMk);
+}
+
 function dynamicsMonthKeys(monthsAll, endMk, maxMonths = 6) {
   const end = monthKeyOrdinal(endMk);
   if (end == null) return [];
@@ -1391,10 +1395,10 @@ function buildDynamics(monthsAll, endMk, getResult, maxMonths, profile) {
 
 function computeDoctorDynamics(docId, endMk) {
   return buildDynamics(
-    monthKeysSorted(),
+    calendarYearMonthKeys(endMk),
     endMk,
     k => doctorHasDashboardData(docId, k) ? computeMetrics(docId, k) : null,
-    6,
+    12,
     profileForDoctor(docId)
   );
 }
@@ -1632,5 +1636,5 @@ function aggregateDeptMonthRaw(mk, deptFilter, subFilter = "all", doctorIds = nu
 
 function computeDeptDynamics(endMk, deptFilter, subFilter = "all") {
   const profile = typeof deptFilter === "string" && deptFilter !== "all" ? deptProfile(deptFilter) : deptProfile("По умолчанию");
-  return buildDynamics(monthKeysSorted(), endMk, k => aggregateDeptMonth(k, deptFilter || "all", subFilter), 6, profile);
+  return buildDynamics(calendarYearMonthKeys(endMk), endMk, k => aggregateDeptMonth(k, deptFilter || "all", subFilter), 12, profile);
 }

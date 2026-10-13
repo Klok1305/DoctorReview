@@ -73,6 +73,25 @@ test("cloud JSON exports all periods without DOM/charts, retains numeric Admin r
   assert.match(html, /<svg/); assert.match(html, /Ручной вывод/); assert.match(html, /&lt;script&gt;/); assert.doesNotMatch(html, /<script>/);
 });
 
+test("online doctor and group graphs keep the entire calendar year even when January has no data", async () => {
+  const context = fixtureContext();
+  vm.runInContext(`
+    DB.months['2026-09'] = DB.months['2026-03'];
+    delete DB.months['2026-01'];
+    clearMetricsCache();
+  `, context);
+  const payload = JSON.parse(JSON.stringify(await vm.runInContext("buildCloudPublicationPayload()", context)));
+  for (const page of payload.pages.filter(page => page.periodKey === '2026-09')) {
+    const chart = page.report.dynamics.charts.find(chart => chart.id === 'money');
+    assert.equal(chart.labels.length, 9, page.kind);
+    assert.match(chart.labels[0], /Январь 2026/);
+    const sales = page.kind === 'department' || page.kind === 'clinic' ? 3000 : page.doctorId === 'd2' || page.specialization === 'Y' ? 2000 : 1000;
+    assert.deepEqual(chart.series[0].values, [null, null, sales, null, null, null, null, null, sales], page.title);
+    assert.equal(page.report.dynamics.rows.find(row => row.key === 'sales').values[0], '·');
+  }
+  assert.equal(payload.pages.filter(page => page.periodKey === '2026-09').length, 6);
+});
+
 test("cloud privacy permits a labelled doctor who is also a patient but still rejects that name in free text", () => {
   const page = { title: "Доктор Первый · март", report: { sections: [{ columns: ["Врач", "Балл"], rows: [["Доктор Первый", "80"]] }] } };
   const options = { doctorNames: ["Доктор Первый"] };

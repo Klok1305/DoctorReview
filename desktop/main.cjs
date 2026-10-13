@@ -1474,6 +1474,7 @@ function createWindow() {
           result.doctorDynamicsTableScreenshot = doctorDynamicsTableScreenshotPath;
           const adminFeedbackQa = await mainWindow.webContents.executeJavaScript(`(async () => {
             const previousMonth = UI.docMonth;
+            const previousSpecializationMonth = UI.deptMonth;
             const previousDecember = DB.months['2026-12'];
             try {
               DB.months['2026-12'] = JSON.parse(JSON.stringify(DB.months['2026-02']));
@@ -1511,6 +1512,14 @@ function createWindow() {
               const yearImage = await capture(table);
               const v3Image = await capture(document.getElementById('blkV3'));
               const baseImage = await capture(document.getElementById('chSegments').parentElement.parentElement);
+              UI.deptMonth = '2026-12'; UI.deptFilter = 'Косметология'; UI.subFilter = 'all';
+              await switchTab('dept'); flushReportCharts();
+              const specializationCharts = ['money', 'traffic', 'pct', 'base'].map(key => UI.charts['blkDeptDyn_' + key]).filter(Boolean);
+              if (specializationCharts.length < 2 || specializationCharts.some(instance => instance.data.labels.length !== 12 || !instance.data.labels[0].includes('Январь') || !instance.data.labels[11].includes('Декабрь'))) throw Error('Admin QA: specialization graphs omit calendar months');
+              if (specializationCharts.some(instance => instance.data.datasets.some(series => series.data[2] !== null || series.spanGaps !== false))) throw Error('Admin QA: specialization graphs connect missing months');
+              if (UI.charts.chDeptScores && UI.charts.chDeptScores.data.labels.length !== 12) throw Error('Admin QA: specialization score graph omits calendar months');
+              await settlePdfCharts(document.getElementById('deptBody'));
+              const specializationYearImage = await capture(document.getElementById('blkDeptDyn'));
               // Real settings controls must persist, rerender, and leave every patient in the stack.
               UI.setDepartment = 'Косметология'; UI.setSpecialization = 'Косметология'; await switchTab('settings');
               const originalPartition = { ...curSetProfile().clientBasePartition };
@@ -1557,6 +1566,11 @@ function createWindow() {
                 DB.doctors.coverageQa = { name: 'Synthetic coverage doctor', aliases: [], department: 'Косметология', specialization: 'Косметология', structureManual: true };
                 DB.months['2026-12'].vyrabotka.coverageQa = { items: [{ n: 'Synthetic', q: 1, sOwn: 1000, sRef: 0, goods: false }] };
                 clearMetricsCache(); UI.departmentMonth = '2026-12'; await switchTab('department');
+                flushReportCharts();
+                for (const key of ['chDepartmentRevenue', 'chDepartmentRates', 'chDepartmentBase']) {
+                  const instance = UI.charts[key];
+                  if (!instance || instance.data.labels.length !== 12 || !instance.data.labels[0].includes('Январь') || !instance.data.labels[11].includes('Декабрь') || instance.data.datasets.some(series => series.data[2] !== null || series.spanGaps === true)) throw Error('Admin QA: department graph omits calendar gaps: ' + key);
+                }
                 const partial = aggregateDeptMonth('2026-12', ['Косметология']);
                 const coverageNotice = document.querySelector('#departmentBody [data-aggregate-coverage]');
                 if (partial.econ.avgClient !== null || partial.traffic.patients !== null || partial.coverage.avgClient.coveredDoctors !== 1 || !coverageNotice || !coverageNotice.textContent.includes('1 из ' + partial.doctors + ' врачей')) throw Error('Admin QA: partial department ratios are misleading: ' + JSON.stringify(partial.coverage.avgClient));
@@ -1567,14 +1581,15 @@ function createWindow() {
                 delete DB.months['2026-12'].vyrabotka.coverageQa;
                 clearMetricsCache(); UI.departmentMonth = '2026-02'; await renderDepartment();
               }
-              return { yearImage, v3Image, baseImage, settingsImage, coverageImage, monthWidths: monthCells.map(cell => Math.round(cell.getBoundingClientRect().width)), profileNames, details: leaves.length };
+              return { yearImage, v3Image, baseImage, settingsImage, coverageImage, specializationYearImage, monthWidths: monthCells.map(cell => Math.round(cell.getBoundingClientRect().width)), profileNames, details: leaves.length };
             } finally {
               if (previousDecember) DB.months['2026-12'] = previousDecember; else delete DB.months['2026-12'];
               UI.docMonth = previousMonth;
+              UI.deptMonth = previousSpecializationMonth;
               clearMetricsCache(); await switchTab('doctor');
             }
           })()`);
-          for (const key of ['yearImage', 'v3Image', 'baseImage', 'settingsImage', 'coverageImage']) {
+          for (const key of ['yearImage', 'v3Image', 'baseImage', 'settingsImage', 'coverageImage', 'specializationYearImage']) {
             const imagePath = path.join(artifactRoot, 'admin-feedback-' + key + '.png');
             fs.writeFileSync(imagePath, Buffer.from(adminFeedbackQa[key].split(',')[1], 'base64'));
             adminFeedbackQa[key] = imagePath;

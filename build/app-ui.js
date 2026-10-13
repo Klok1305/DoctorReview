@@ -694,18 +694,18 @@ function renderDepartmentCharts(history, defs) {
   chart("chDepartmentRates", {
     type: "line",
     data: { labels, datasets: [
-      { label: "Первичка 3 мес.", data: vals("pv3"), borderColor: "#2563eb", backgroundColor: "#2563eb", tension: .25, spanGaps: true },
-      { label: "Первичка 6 мес.", data: vals("pv6"), borderColor: "#7c3aed", backgroundColor: "#7c3aed", tension: .25, spanGaps: true },
-      { label: "Доля перенаправлений", data: vals("refShare"), borderColor: "#d97706", backgroundColor: "#d97706", tension: .25, spanGaps: true },
-      { label: "Загрузка", data: vals("sched"), borderColor: "#059669", backgroundColor: "#059669", tension: .25, spanGaps: true },
+      { label: "Первичка 3 мес.", data: vals("pv3"), borderColor: "#2563eb", backgroundColor: "#2563eb", tension: .25, spanGaps: false },
+      { label: "Первичка 6 мес.", data: vals("pv6"), borderColor: "#7c3aed", backgroundColor: "#7c3aed", tension: .25, spanGaps: false },
+      { label: "Доля перенаправлений", data: vals("refShare"), borderColor: "#d97706", backgroundColor: "#d97706", tension: .25, spanGaps: false },
+      { label: "Загрузка", data: vals("sched"), borderColor: "#059669", backgroundColor: "#059669", tension: .25, spanGaps: false },
     ] },
     options: { ...common, scales: { y: { beginAtZero: true, suggestedMax: 100, ticks: { callback: v => v + "%" } } } },
   });
   chart("chDepartmentBase", {
     type: "line",
     data: { labels, datasets: [
-      { label: "Активная база", data: vals("active"), borderColor: "#059669", backgroundColor: "rgba(5,150,105,.15)", fill: true, tension: .25, spanGaps: true },
-      { label: "Потерянная база", data: vals("lost"), borderColor: "#dc2626", backgroundColor: "rgba(220,38,38,.1)", fill: true, tension: .25, spanGaps: true },
+      { label: "Активная база", data: vals("active"), borderColor: "#059669", backgroundColor: "rgba(5,150,105,.15)", fill: true, tension: .25, spanGaps: false },
+      { label: "Потерянная база", data: vals("lost"), borderColor: "#dc2626", backgroundColor: "rgba(220,38,38,.1)", fill: true, tension: .25, spanGaps: false },
     ] },
     options: { ...common, scales: { y: { beginAtZero: true } } },
   });
@@ -747,7 +747,7 @@ function renderDepartmentNow() {
   const mk = UI.departmentMonth;
   const specs = departmentSpecializations(UI.departmentFilter);
   const year = mk.slice(0, 4);
-  const yearMonths = months.filter(k => k.startsWith(year + "-") && k <= mk);
+  const yearMonths = calendarYearMonthKeys(mk);
   const history = yearMonths.map(k => ({ mk: k, r: aggregateDeptMonth(k, specs) }));
   const current = history.find(x => x.mk === mk).r;
   const previousKey = prevMonthKey(mk);
@@ -1250,7 +1250,7 @@ function renderDeptNow() {
         <div class="chart-box score-chart"><canvas id="chDeptScores"></canvas></div></div>`
       : "";
     html += dynamicsHtml(deptDyn, "blkDeptDyn", "Динамика специализации: точки роста и риска",
-      `${UI.deptFilter === "all" ? "Все врачи с данными" : "Специализация «" + esc(UI.deptFilter) + "»"} · последние ${deptDyn.months.length} мес. по ${monthLabel(mk)}. Последний месяц сравнивается с прошлым и со средним предыдущих месяцев. Деньги и визиты суммируются, пациенты дедуплицируются, доли и конверсии взвешиваются; средний балл включает только врачей с полнотой данных от 80%.`,
+      `${UI.deptFilter === "all" ? "Все врачи с данными" : "Специализация «" + esc(UI.deptFilter) + "»"} · с января по ${monthLabel(mk)}. Месяцы без данных оставлены пустыми. Последний месяц сравнивается с прошлым и со средним предыдущих месяцев года. Деньги и визиты суммируются, пациенты дедуплицируются, доли и конверсии взвешиваются; средний балл включает только врачей с полнотой данных от 80%.`,
       `dept|${mk}|${UI.deptFilter}|${UI.subFilter}`,
       deptScoresHtml);
     html += "</div>";
@@ -2451,7 +2451,7 @@ function renderDynCharts(dyn, blkId) {
   const mk = (canvas, series, fmt, tickCb) => {
     const datasets = series.filter(s => s.data && s.data.some(v => v != null)).map(s => ({
       label: s.label, data: s.data, borderColor: s.color, backgroundColor: s.color,
-      borderWidth: 2, pointRadius: 3, spanGaps: true, tension: 0.25, borderDash: s.dash || [],
+      borderWidth: 2, pointRadius: 3, spanGaps: false, tension: 0.25, borderDash: s.dash || [],
     }));
     if (!datasets.length) return;
     // fmt держим в замыкании: если положить его в options, Chart.js трактует функцию
@@ -2763,7 +2763,7 @@ function dynamicsOutcomeHtml(dyn, blkId, noteKey, narrative, copyBlockId = "") {
 }
 
 function adminYearMonths(endMk) {
-  return calendarMonthKeys(`${endMk.slice(0, 4)}-01`, endMk);
+  return calendarYearMonthKeys(endMk);
 }
 
 function adminDoctorDynamics(docId, endMk) {

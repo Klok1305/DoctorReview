@@ -176,14 +176,15 @@ async function main() {
     const numericReport = structuredClone(samplePage?.report || { id: "2026-03", label: "Март 2026", shortLabel: "Март",
       overall: 80, assessment: "Синтетический отчёт", summary: "Проверка числового JSON", headlineMetrics: [],
       vectors: Array.from({ length: 6 }, (_, i) => ({ id: `v${i + 1}`, number: i + 1, title: `Вектор ${i + 1}`, score: 80, sections: [] })), goals: [], comments: [] });
-    numericReport.id = "2026-03";
+    numericReport.id = "2026-09";
+    numericReport.label = "Сентябрь 2026"; numericReport.shortLabel = "Сентябрь";
     numericReport.vectors[0].sections.push({ title: "Годовая таблица показателей", columns: ["Выручка с перенаправлениями", "Доля перенаправлений от выручки", "Возвращаемость первички за 3 месяца"], rows: [["3 000 ₽", "20%", "50%"]] });
     numericReport.vectors[0].sections.push({ title: "Точные данные графика", charts: [{ id: "precision", title: "Проверка графика", type: "line",
-      labels: ["Январь", "Февраль", "Март"], unit: "₽", series: [
-        { label: "Первая серия", color: "#2563eb", values: [25.25, null, 31.375] },
-        { label: "Вторая серия", color: "#16a34a", values: [100, null, 150] },
+      labels: ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь"], unit: "₽", series: [
+        { label: "Первая серия", color: "#2563eb", values: [25.25, null, 31.375, 35, 36, 37, 38, 39, 40] },
+        { label: "Вторая серия", color: "#16a34a", values: [100, null, 150, 160, 170, 180, 190, 200, 210] },
       ] }] });
-    const dataPublication = createCloudPublication({ ...pinPublication, version: 3, pages: pinUpdated.pages.map(({ html, id, ...metadata }) => ({ ...metadata, report: numericReport })) });
+    const dataPublication = createCloudPublication({ ...pinPublication, version: 3, pages: pinUpdated.pages.map(({ html, id, ...metadata }) => ({ ...metadata, periodKey: '2026-09', report: numericReport })) });
     if (!await pinPage.locator("#onlineUploadPanel").evaluate(element => element.open)) await pinPage.locator("#onlineUploadPanel > summary").click();
     await pinPage.locator("#onlineUploadFile").setInputFiles({ name: "numeric-json.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(dataPublication)) });
     await pinPage.locator("#onlineUploadButton").click();
@@ -203,6 +204,7 @@ async function main() {
     const chart = numericFrame.locator('.report-chart').filter({ has: numericFrame.locator('h5', { hasText: "Проверка графика" }) });
     await chart.scrollIntoViewIfNeeded();
     await chart.locator(".chart-plot svg:visible").first().waitFor();
+    assert.equal(JSON.parse(await chart.getAttribute("data-chart")).labels.length, 9, "online September graph contains January through September");
     await chart.locator("[data-chart-series]").selectOption("0");
     const expectedPlot = require("../mobile-pilot/report-charts.js").chartPlot(JSON.parse(await chart.getAttribute("data-chart")), "0");
     const expectedPath = expectedPlot.match(/<path d="([^"]*)"/)[1];

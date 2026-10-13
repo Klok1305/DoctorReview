@@ -19,7 +19,7 @@ function cloudReportNumbers(result, report) {
 }
 
 function cloudReportDynamics(monthKey, getResult, profile, noteKey) {
-  const dynamics = buildDynamics(monthKeysSorted(), monthKey, getResult, Number(monthKey.slice(5)), profile);
+  const dynamics = buildDynamics(calendarYearMonthKeys(monthKey), monthKey, getResult, 12, profile);
   if (!dynamics.rows.length) return null;
   const notes = DB.dynamicNotes || {}, manual = Object.prototype.hasOwnProperty.call(notes, noteKey);
   const narrative = manual ? notes[noteKey] : buildDynamicsCommentary(dynamics);
