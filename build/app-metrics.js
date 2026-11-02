@@ -536,6 +536,90 @@ function kbWindow(docId, monthKey, win) {
   const kb = m && m.kb[docId] && m.kb[docId][String(win)];
   return kb || null;
 }
+
+// Совпадение полных ФИО; инициалы и похожие фамилии не объединяются.
+function primaryPatientNameKey(name) {
+  return String(name || "").normalize("NFKC").toLocaleLowerCase("ru").replace(/ё/g, "е").replace(/\s+/g, " ").trim();
+}
+function primaryPatientMonth(docId, monthKey) {
+  const source = DB.months[monthKey]?.primaryPatients;
+  if (!source?.perDoc) return null;
+  return source.perDoc[docId] || { patients: [], totals: {} };
+}
+function primaryPatientRows(rows) {
+  const unique = new Map();
+  for (const row of rows || []) {
+    const key = primaryPatientNameKey(row.name);
+    if (!key) continue;
+    const old = unique.get(key);
+    if (!old) unique.set(key, { ...row, key });
+    else {
+      for (const field of ["visits", "revenue"]) old[field] = old[field] != null && row[field] != null ? old[field] + row[field] : null;
+      for (const field of ["primary", "primaryClinic"]) old[field] = old[field] != null && row[field] != null ? Math.max(old[field], row[field]) : null;
+      if (!old.source) old.source = row.source;
+    }
+  }
+  return [...unique.values()];
+}
+function primaryPatientReferrals(docId, monthKey, patientName) {
+  // Окна 3/6/12 перекрываются и не определяют месяц назначения. Берём только 1 мес.
+  const source = DB.months[monthKey]?.naznach?.[docId]?.["1"];
+  const available = source?.patientDetailsAvailable === true && Array.isArray(source.patientAssignments);
+  const nameKey = primaryPatientNameKey(patientName), doctorKey = primaryPatientNameKey(doctorName(docId));
+  const matches = (source?.patientAssignments || []).filter(row => primaryPatientNameKey(row.name) === nameKey
+    && !row.goods && (!row.executor || primaryPatientNameKey(row.executor) !== doctorKey));
+  const assignments = [...new Map(matches.filter(row => row.assigned > 0).map(row =>
+    [`${row.n}\u0000${row.executor}`, { n: row.n, executor: row.executor }])).values()];
+  const complete = available && matches.every(row => Number.isFinite(row.assigned) && row.assigned >= 0);
+  return { status: available && assignments.length ? true : complete ? false : null, assignments: available ? assignments : [] };
+}
+function doctorPrimaryPatients(docId, endMonth) {
+  const months = calendarYearMonthKeys(endMonth);
+  const monthly = new Map(months.map(month => [month, primaryPatientMonth(docId, month)]));
+  const rowsByMonth = new Map([...monthly].map(([month, data]) => [month, data ? primaryPatientRows(data.patients) : null]));
+  const missingMonths = months.filter(month => !monthly.get(month));
+  const currentRows = rowsByMonth.get(endMonth);
+  const primaryValid = rows => rows != null && rows.every(row => Number.isSafeInteger(row.primary) && row.primary >= 0);
+  const current = currentRows == null ? null : {
+    total: currentRows.length, count: primaryValid(currentRows) ? currentRows.filter(row => row.primary > 0).length : null,
+    patients: currentRows.filter(row => row.primary > 0).map(row => ({ ...row, referral: primaryPatientReferrals(docId, endMonth, row.name) })),
+  };
+  if (current) current.share = current.total && current.count != null ? current.count / current.total * 100 : null;
+  const cohort = new Map();
+  for (const month of months) for (const row of rowsByMonth.get(month) || []) {
+    if (row.primary > 0 && !cohort.has(row.key)) cohort.set(row.key, { ...row, firstMonth: month });
+  }
+  const patients = [...cohort.values()].map(patient => {
+    let observedVisits = 0, observedRevenue = 0, completeVisits = true, completeRevenue = true, referralsComplete = true;
+    const assignments = new Map();
+    for (const month of months.filter(key => key >= patient.firstMonth)) {
+      const rows = rowsByMonth.get(month);
+      if (!rows) { completeVisits = false; completeRevenue = false; }
+      const row = rows?.find(row => row.key === patient.key);
+      if (row) {
+        if (!Number.isSafeInteger(row.visits) || row.visits < 0) completeVisits = false;
+        else observedVisits += row.visits;
+        if (!Number.isFinite(row.revenue)) completeRevenue = false;
+        else observedRevenue += row.revenue;
+      }
+      const referral = primaryPatientReferrals(docId, month, patient.name);
+      if (referral.status == null) referralsComplete = false;
+      for (const item of referral.assignments) assignments.set(`${item.n}\u0000${item.executor}`, item);
+    }
+    return { name: patient.name, source: patient.source, firstMonth: patient.firstMonth,
+      visits: completeVisits ? observedVisits : null, revenue: completeRevenue ? observedRevenue : null,
+      observedVisits, observedRevenue, referral: { status: assignments.size ? true : referralsComplete ? false : null, assignments: [...assignments.values()] } };
+  }).sort((a, b) => a.firstMonth.localeCompare(b.firstMonth) || a.name.localeCompare(b.name, "ru"));
+  const buckets = [1, 2, 3].map(min => {
+    const count = patients.filter(patient => patient.visits != null && (min === 3 ? patient.visits >= 3 : patient.visits === min)).length;
+    return { visits: min, count, share: patients.length ? count / patients.length * 100 : null };
+  });
+  const hasData = months.some(month => monthly.get(month) != null);
+  if (!hasData) for (const bucket of buckets) bucket.count = null;
+  return { months, missingMonths, current, patients, buckets, yearCount: hasData ? patients.length : null,
+    incompletePrimaryMonths: months.filter(month => !primaryValid(rowsByMonth.get(month))),
+    unknownVisits: patients.filter(patient => patient.visits == null || patient.visits < 1).length };
+}
 function kbAvailableWindows(docId, monthKey) {
   const m = DB.months[monthKey];
   if (!m || !m.kb[docId]) return [];

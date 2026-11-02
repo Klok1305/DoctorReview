@@ -510,7 +510,7 @@ function renderData() {
   if (!months.length) {
     el.innerHTML = '<p class="muted">После загрузки здесь появится список месяцев и комплектность данных по каждому типу отчёта.</p>';
   } else {
-    let html = '<table class="data"><tr><th>Месяц</th><th class="num">Выработка</th><th class="num">Давность посещений<br><span class="small muted">окна, мес.</span></th><th class="num">Назначения<br><span class="small muted">срезы, мес.</span></th><th class="num">Первичка<br><span class="small muted">срезы, мес.</span></th><th class="num">Загрузка расписания</th><th class="num">Запись в 1С</th></tr>';
+    let html = '<table class="data"><tr><th>Месяц</th><th class="num">Выработка</th><th class="num">Давность посещений<br><span class="small muted">окна, мес.</span></th><th class="num">Назначения<br><span class="small muted">срезы, мес.</span></th><th class="num">Первичка<br><span class="small muted">срезы, мес.</span></th><th class="num">Пациенты по врачам</th><th class="num">Загрузка расписания</th><th class="num">Запись в 1С</th></tr>';
     for (const k of [...months].reverse()) {
       const m = DB.months[k];
       const kbWins = new Set();
@@ -524,6 +524,7 @@ function renderData() {
         <td class="num">${kbWins.size ? [...kbWins].sort((a, b) => a - b).join(", ") : '<span class="muted">—</span>'}</td>
         <td class="num">${nazSlices.size ? [...nazSlices].sort().join(", ") : '<span class="muted">—</span>'}</td>
         <td class="num">${pv || '<span class="muted">—</span>'}</td>
+        <td class="num">${m.primaryPatients?.perDoc ? Object.keys(m.primaryPatients.perDoc).length + " вр." : '<span class="muted">—</span>'}</td>
         <td class="num">${Object.keys(m.prostoy).length || '<span class="muted">—</span>'}</td>
         <td class="num">${monthReportImported(m, "zapis") ? zapisCount : '<span class="muted">—</span>'}</td></tr>`;
     }
@@ -539,7 +540,7 @@ function renderData() {
   if (!DB.fileLog.length) {
     logEl.innerHTML = '<p class="muted small">Журнал пуст.</p>';
   } else {
-    const typeNames = { vyrabotka: "Выработка", kb: "Давность посещений", naznach: "Назначения", pervichka: "Первичка", prostoy: "Загрузка расписания", zapis: "Запись в 1С" };
+    const typeNames = { vyrabotka: "Выработка", kb: "Давность посещений", naznach: "Назначения", pervichka: "Первичка", primaryPatients: "Пациенты по врачам", prostoy: "Загрузка расписания", zapis: "Запись в 1С" };
     let html = '<table class="data"><tr><th>Файл</th><th>Тип</th><th>Врач</th><th>Период</th><th>Статус</th><th></th></tr>';
     DB.fileLog.slice(0, 60).forEach((l, i) => {
       const ok = l.status === "загружено";
@@ -562,6 +563,7 @@ function removeFileData(i) {
   else if (s.t === "naznach" && m.naznach[s.doc]) { delete m.naznach[s.doc][s.sl]; if (!Object.keys(m.naznach[s.doc]).length) delete m.naznach[s.doc]; }
   else if (s.t === "kb" && m.kb[s.doc]) { delete m.kb[s.doc][s.sl]; if (!Object.keys(m.kb[s.doc]).length) delete m.kb[s.doc]; }
   else if (s.t === "pervichka") delete m.pervichka[s.sl];
+  else if (s.t === "primaryPatients") m.primaryPatients = {};
   else if (s.t === "prostoy") m.prostoy = {};
   else if (s.t === "zapis") { m.zapis = {}; setMonthReportImported(m, "zapis", false); }
   if (!Object.values(m).some(o => o && Object.keys(o).length)) delete DB.months[s.mk]; // месяц опустел
@@ -2841,6 +2843,48 @@ function adminClientBaseSeries(docId, endMk) {
     datasets: defs.map(([key, color]) => ({ label: adminClientBaseGroupLabel(key), backgroundColor: color, stack: "base", borderWidth: 0,
       maxBarThickness: 32, data: bases.map(base => base ? base.seg[key] : null) })) };
 }
+function clientBaseShareMovement(current, previous) {
+  if (current == null || previous == null) return "Нет данных за предыдущий месяц";
+  const delta = current - previous;
+  if (Math.abs(delta) < .0001) return "Доля не изменилась";
+  return `Доля ${delta > 0 ? "выросла" : "снизилась"} на ${fmtNum(Math.abs(delta), 1)} п.п.`;
+}
+function clientBaseShareHistoryHtml(series) {
+  return `<div class="kb-share-history"><h3>Как меняется доля каждой аудитории</h3>
+    <p class="small muted">Процент от всей базы врача за 36 месяцев. Пропущенные месяцы остаются пустыми. Рост активных лояльных и снижение потерянных — положительная динамика.</p>
+    <div class="chart-box"><canvas id="chClientShares"></canvas></div>
+    <div class="primary-patients-scroll"><table class="data"><thead><tr><th>Аудитория</th>${series.months.map(month => `<th class="num">${esc(monthLabel(month))}</th>`).join("")}</tr></thead>
+    <tbody>${["active", "loyalSleep", "newRisk", "lost"].map(group => `<tr><td>${esc(adminClientBaseGroupLabel(group))}</td>${series.bases.map(base => `<td class="num">${fmtPct(base ? clientBaseGroupPct(base, group) : null)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></div>`;
+}
+function primaryReferralText(referral) {
+  return referral.status === true ? "Да" : referral.status === false ? "Нет" : "Нет данных";
+}
+function primaryReferralItemsText(referral) {
+  return referral.assignments.map(item => item.n + (item.executor ? ` → ${item.executor}` : "")).join("; ");
+}
+function primaryPatientsReportHtml(docId, monthKey, { registry = true } = {}) {
+  const summary = doctorPrimaryPatients(docId, monthKey), current = summary.current;
+  const referralNote = 'Направления: отчёт «Назначения» ровно за месяц, трудовая роль «Назначение»: «Направление». Совпадение по полному ФИО (без учёта регистра, ё/е и лишних пробелов). Товары и назначения себе исключены. Старые выгрузки нужно переобработать на вкладке «Данные».';
+  const tile = (label, value, note = "") => `<div class="primary-patient-kpi"><span>${esc(label)}</span><b>${value}</b><small>${esc(note)}</small></div>`;
+  const missing = summary.incompletePrimaryMonths;
+  let html = `<section class="primary-patients-report" data-primary-patients-summary><h3>Первичные пациенты врача</h3>
+    <p class="small muted">Первичный — по колонке «Количество первичных», впервые у этого врача. Посещения и выручка — у выбранного врача по итоговым строкам пациентов, без сложения вложенных услуг.</p>
+    <div class="primary-patient-kpis">${tile("Первичных за месяц", fmtNum(current?.count), monthLabel(monthKey))}${tile("Доля от всех пациентов месяца", fmtPct(current?.share), current ? `${fmtNum(current.count)} из ${fmtNum(current.total)} пациентов` : "Загрузите отчёт «Пациенты по врачам»")}${tile(`Первичных за ${monthKey.slice(0, 4)} год`, fmtNum(summary.yearCount), `Январь — ${monthLabel(monthKey)}`)}</div>
+    ${missing.length ? `<p class="notice blue">Годовой список неполный. Нет корректных данных первичности: ${esc(missing.map(monthLabel).join(", "))}. Пропуски не считаются нулевыми визитами.</p>` : ""}`;
+  const breakdown = `<h3>Посещения первичных пациентов за год</h3><div class="primary-patient-kpis">${summary.buckets.map(bucket => tile(bucket.visits === 3 ? "3 и более посещений" : `${bucket.visits} ${bucket.visits === 1 ? "посещение" : "посещения"}`, `${fmtNum(bucket.count)} чел. · ${fmtPct(bucket.share)}`, "Доля от всех первичных в годовом списке")).join("")}</div>
+    ${summary.unknownVisits ? `<p class="small muted">У ${fmtNum(summary.unknownVisits)} пациентов нет полного числа посещений. Они учтены в общем количестве первичных, но не отнесены к группам 1 / 2 / 3+.</p>` : ""}
+    <p class="small muted">Наблюдение — с первого месяца пациента до ${esc(monthLabel(monthKey))} включительно. У поздних первичных было меньше времени вернуться.</p>`;
+  if (registry) {
+    html += `<div data-primary-patient-register><p class="small muted">${esc(referralNote)}</p>
+    <details class="primary-patients-details" open><summary>Первичные за ${esc(monthLabel(monthKey))} · ${fmtNum(current?.patients.length)}</summary>
+      <div class="primary-patients-scroll"><table class="data" id="tblPrimaryMonth"><thead><tr><th>ФИО пациента</th><th>Источник</th><th class="num">Посещений за месяц</th><th>Направлялся</th><th>Какие назначения</th></tr></thead><tbody>
+      ${current ? current.patients.map(patient => `<tr><td>${esc(patient.name)}</td><td>${esc(patient.source || "Не указан")}</td><td class="num">${fmtNum(patient.visits)}</td><td>${primaryReferralText(patient.referral)}</td><td>${esc(primaryReferralItemsText(patient.referral) || "—")}</td></tr>`).join("") || '<tr><td colspan="5">Первичных пациентов в этом месяце нет.</td></tr>' : '<tr><td colspan="5">Загрузите месячный отчёт «Пациенты по врачам».</td></tr>'}</tbody></table></div></details>
+    <details class="primary-patients-details" open><summary>Все первичные за ${monthKey.slice(0, 4)} год · ${fmtNum(summary.patients.length)}</summary>
+      <div class="primary-patients-scroll"><table class="data" id="tblPrimaryYear"><thead><tr><th>ФИО пациента</th><th>Источник</th><th>Первый месяц</th><th class="num">Посещений с первого месяца</th><th class="num">Выручка с первого месяца</th><th>Направлялся к другим специалистам</th></tr></thead><tbody>
+      ${summary.patients.map(patient => `<tr><td>${esc(patient.name)}</td><td>${esc(patient.source || "Не указан")}</td><td>${esc(monthLabel(patient.firstMonth))}</td><td class="num">${patient.visits == null ? `${fmtNum(patient.observedVisits)} · неполные данные` : fmtNum(patient.visits)}</td><td class="num">${patient.revenue == null ? `${fmtMoney(patient.observedRevenue)} · неполные данные` : fmtMoney(patient.revenue)}</td><td>${primaryReferralText(patient.referral)}${patient.referral.status ? `<div class="small muted">${esc(primaryReferralItemsText(patient.referral))}</div>` : ""}</td></tr>`).join("") || '<tr><td colspan="6">Первичных пациентов в загруженных месяцах нет.</td></tr>'}</tbody></table></div></details></div>`;
+  }
+  return html + breakdown + "</section>";
+}
 function dynamicsHtml(dyn, blkId, title, subtitle, noteKey, detailTailHtml = "", includeOutcome = true) {
   if (!dyn || dyn.months.length < 1) return "";
   const single = dyn.months.length < 2;
@@ -4506,6 +4550,8 @@ function renderDoctorNow() {
       return `<div class="kb-summary-card ${cls}${keyIndicator ? " key-indicator" : ""}" data-client-base-group="${group}">
         <div class="kb-summary-label">${esc(adminClientBaseGroupLabel(group))}${keyIndicator ? '<span class="kb-key-badge">ключевой показатель</span>' : ""}</div>
         <div class="kb-summary-value-line"><div class="kb-summary-value">${fmtNum(kb.seg[group])} чел.</div><div class="kb-summary-share">${fmtPct(share)}</div></div>
+        <div class="kb-share-movement">${esc(clientBaseShareMovement(share, previousShare))}</div>
+        <div class="kb-share-comparison"><span>${esc(monthLabel(kbDyn.prevKey))}: <b>${fmtPct(previousShare)}</b></span><span>${esc(monthLabel(mk))}: <b>${fmtPct(share)}</b></span></div>
         <div class="kb-summary-meta">${esc(clientBaseGroupDescription(kb, group))}</div>
         <div class="kb-summary-trends">
           <div><span>К предыдущему месяцу</span>${kbTrendMarkup(share, previousShare, lowerBetter, "pp")}</div>
@@ -4529,6 +4575,7 @@ function renderDoctorNow() {
       </div>
       ${groupCards}
     </div>
+    ${clientBaseShareHistoryHtml(kbSeries)}
     <div class="kb-group-rules"><b>Что означает каждая показанная группа:</b><ul>${rulesMarkup}</ul><p class="small muted">Процент каждой группы считается от общей базы — ${fmtNum(kb.total)} уникальных пациентов.</p></div>
     <div class="kb-action">
       <div><div class="kb-action-title">Что сделать сейчас</div><div class="kb-action-text">${actionText}</div></div>
@@ -4581,7 +4628,7 @@ function renderDoctorNow() {
       ${metricHighlight(`Курсовое лечение: ≥${L.courseX} виз. за ${L.courseM} мес.`, fmtPct(courseValue), courseValue != null ? `${fmtNum(L.courseCnt)} чел. · точное окно ${L.courseM} мес.` : `нужна выгрузка «Давности» ровно за ${L.courseM} мес.`, trackedMetricState(courseValue, B5.courseIdx), metricGoalText(B5.courseIdx, fmtPct), metricHistoryMarkup(courseValue, courseDyn, "pp", "", 1, fmtPct))}
       ${metricHighlight("Индекс возвращаемости за 12 мес.", freqValue != null ? fmtNum(freqValue, 2) : "—", "визитов на пациента", trackedMetricState(freqValue, null), metricGoalText(null, fmtNum), metricHistoryMarkup(freqValue, freqDyn, "absolute", "", 2, v => fmtNum(v, 2)))}
       ${metricHighlight(`Возвращаемость первички (${pvCur != null ? pvCur : "—"} мес.)`, fmtPct(pvValue), pv ? (pv.valid === false ? `ошибка данных: ${pv.issue}` : `первичных: ${fmtNum(pv.first)}, вернулось: ${fmtNum(pv.ret)}, не вернулось: ${fmtNum(pv.notRet)}`) : "нет выгрузки первички", trackedMetricState(pvValue, B5.pervichka), metricGoalText(B5.pervichka, fmtPct), metricHistoryMarkup(pvValue, pvDyn, "pp", "", 1, fmtPct))}
-    </div></div>`;
+    </div>${primaryPatientsReportHtml(UI.docId, mk)}</div>`;
 
   /* ---- В6 Репутация ---- */
   const man6 = r.extras.man6 || {};
@@ -4775,6 +4822,15 @@ function renderDoctorNow() {
   }
   {
     const series = kbSeries;
+    chart("chClientShares", {
+      type: "line", data: { labels: series.months.map(monthLabel), datasets: series.datasets.map((dataset, index) => ({
+        label: dataset.label, borderColor: ["#16a34a", "#64748b", "#d97706", "#dc2626"][index],
+        backgroundColor: ["#16a34a", "#64748b", "#d97706", "#dc2626"][index], spanGaps: false, tension: 0,
+        data: series.bases.map(base => base ? clientBaseGroupPct(base, ["active", "loyalSleep", "newRisk", "lost"][index]) : null) })) },
+      options: { maintainAspectRatio: false, plugins: { legend: { position: "bottom" }, datalabels: { display: false },
+        tooltip: { callbacks: { label: item => `${item.dataset.label}: ${fmtPct(item.raw)}` } } },
+        scales: { y: { min: 0, max: 100, ticks: { callback: value => value + "%" } } } },
+    });
     chart("chSegments", {
       type: "bar", data: { labels: series.months.map(monthLabel), datasets: series.datasets },
       options: { indexAxis: "y", maintainAspectRatio: false, layout: { padding: { right: 65 } },
@@ -5322,6 +5378,7 @@ async function composeViewerDashboardHtml(target, periodKey, context, comments, 
   const { clone } = await cloneDashboardForViewer(source);
   const root = document.createElement("div");
   root.innerHTML = composeViewerReportHtml(clone.innerHTML, context, comments);
+  if (!patientRegistry) root.querySelectorAll("[data-primary-patient-register]").forEach(element => element.remove());
   // Keep the Admin V3 snapshot: its nested 1C hierarchy, goals, focus charts and
   // referral sections all belong to the same selected appointment window.
   // The Viewer binds the retained data-g rows without inline event handlers.

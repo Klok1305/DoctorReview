@@ -12,6 +12,7 @@ function reportWorkerSnapshot(source, ids) {
     }
     copy.pervichka = Object.fromEntries(Object.entries(month.pervichka || {}).map(([window, value]) =>
       [window, { ...value, perDoc: pick(value.perDoc) }]));
+    copy.primaryPatients = month.primaryPatients?.perDoc ? { ...month.primaryPatients, perDoc: pick(month.primaryPatients.perDoc) } : {};
     months[key] = copy;
   }
   return { settings: source.settings, doctors: source.doctors, months };

@@ -437,6 +437,10 @@ function createWindow() {
                 ] } };
               }
               UI.repMonth = '2026-03';
+              for (const mk of Object.keys(DB.months)) DB.months[mk].primaryPatients = { perDoc: { d1: { patients: Array.from({ length: 45 }, (_, i) => ({
+                name: 'Синтетический Первичный Пациент ' + String(i + 1).padStart(2, '0'), source: 'Рекомендация пациента',
+                primary: mk.endsWith('01') ? 1 : 0, primaryClinic: 0, visits: 1, revenue: 1000
+              })) } } };
               for (const mk of Object.keys(DB.months)) DB.months[mk].manual6.d1 = { prodoctorov: 5, napopravku: 4.5, doctu: 4, sberhealth: 4.5, reviews: 5,
                 prodoctorovReviews: 15, napopravkuReviews: 20, doctuReviews: 0, sberhealthReviews: 7 };
               clearMetricsCache();
@@ -597,6 +601,18 @@ function createWindow() {
               const primaryFixture = parsePervichka(primaryParsed.rows, extractHeaderInfo(primaryParsed.rows), primaryParsed.ws);
               DB.months['2026-02'].pervichka['3'] = { perDoc: Object.fromEntries(primaryFixture.perDoc.map(row =>
                 [row.raw === 'Тестов Косметолог' ? 'd1' : row.raw === 'Примерова Косметолог' ? 'd3' : 'd2', row])) };
+              for (const mk of Object.keys(DB.months)) {
+                const january = mk.endsWith('01');
+                DB.months[mk].primaryPatients = { perDoc: { d1: { patients: [
+                  { name: 'Первичный Синтетический Один', source: 'Рекомендация пациента', primary: january ? 1 : 0, primaryClinic: 1, visits: 1, revenue: 1000 },
+                  { name: 'Первичный Синтетический Два', source: 'Сайт клиники', primary: january ? 1 : 0, primaryClinic: 0, visits: january ? 1 : 2, revenue: 2000 },
+                  ...(!january ? [{ name: 'Первичный Синтетический Три', source: 'По рекомендации к доктору', primary: 1, primaryClinic: 1, visits: 1, revenue: 3000 }] : [])
+                ] } } };
+                DB.months[mk].naznach.d1['1'].patientDetailsAvailable = true;
+                DB.months[mk].naznach.d1['1'].patientAssignments = [
+                  { name: 'Первичный Синтетический Два', n: 'Приём кардиолога', executor: 'Тестов Терапевт', assigned: 1, goods: false }
+                ];
+              }
               DB.months['2026-02'].manual6.d1 = { prodoctorov: 5, napopravku: 4, doctu: 4.5, sberhealth: 4.5, reviews: 5,
                 prodoctorovReviews: 15, napopravkuReviews: 20, doctuReviews: 0, sberhealthReviews: 7 };
               clearMetricsCache();
@@ -761,6 +777,15 @@ function createWindow() {
                 && lostBaseCard?.classList.contains('key-indicator')
                 && activeBaseCard?.querySelector('.kb-summary-trends .kb-trend.good')?.textContent.includes('▲')
                 && lostBaseCard?.querySelector('.kb-summary-trends .kb-trend.good')?.textContent.includes('▼');
+              const primaryPatients = doctorPrimaryPatients('d1', '2026-02');
+              const primaryPatientsValid = primaryPatients.current.count === 1 && primaryPatients.current.share === 1 / 3 * 100
+                && primaryPatients.patients.length === 3 && primaryPatients.buckets.every(bucket => bucket.count === 1)
+                && document.querySelectorAll('#tblPrimaryMonth tbody tr').length === 1
+                && document.querySelectorAll('#tblPrimaryYear tbody tr').length === 3
+                && document.getElementById('tblPrimaryYear').textContent.includes('Приём кардиолога')
+                && document.querySelectorAll('#blkV4 .kb-share-movement').length === 4;
+              flushReportCharts();
+              const clientShareChartValid = UI.charts.chClientShares?.data.datasets[0].data.join(',') === '20,40';
               const riskActionButton = [...document.querySelectorAll('.kb-action-controls button')].find(button => button.textContent.includes('Новые, риск'));
               if (riskActionButton) riskActionButton.click();
               await new Promise(resolve => setTimeout(resolve, 100));
@@ -1048,6 +1073,8 @@ function createWindow() {
                 && viewerPatientRegisterDetails.adminAppointmentParity
                 && viewerPatientRegisterDetails.sourcePeriod
                 && viewerPatientRegisterDetails.legacyTableRemoved;
+              const viewerPrimaryPatientsValid = viewerDoctorRoot.querySelectorAll('[data-primary-patient-register] .primary-patients-details:last-child tbody tr').length === 3
+                && viewerDoctorRoot.querySelectorAll('[data-primary-patient-register]').length === 1;
               UI.setDoctor = 'd1';
               await switchTab('settings');
               enableDoctorMetricSettings();
@@ -1120,6 +1147,8 @@ function createWindow() {
                 specializationSummaryValid,
                 specializationPrimaryReturnHeaderValid,
                 primaryReturnValuesValid,
+                primaryPatientsValid,
+                clientShareChartValid,
                 reputationReportsValid,
                 reviewCountsValid,
                 separateVectorChartsValid,
@@ -1165,6 +1194,7 @@ function createWindow() {
                 interdisciplinaryFocus,
                 interdisciplinaryFocusDetails,
                 viewerPatientRegisterValid,
+                viewerPrimaryPatientsValid,
                 viewerPatientRegisterDetails,
                 viewerChartsValid,
                 viewerChartImages: viewerChartImages.length,
@@ -1336,12 +1366,24 @@ function createWindow() {
           const clientBaseScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
             const element = document.getElementById('blkV4');
             if (!element) return '';
-            const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.25, logging: false, windowWidth: 1400 });
+            await settlePdfCharts(element);
+            const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.25, logging: false, windowWidth: innerWidth });
             return canvas.toDataURL('image/png');
           })()`);
           if (!clientBaseScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок Вектора 4');
           fs.writeFileSync(clientBaseScreenshotPath, Buffer.from(clientBaseScreenshot.slice('data:image/png;base64,'.length), 'base64'));
           result.clientBaseScreenshot = clientBaseScreenshotPath;
+          const primaryPatientsScreenshotPath = path.join(artifactRoot, "primary-patients-vector-smoke.png");
+          const primaryPatientsScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
+            const element = document.getElementById('blkV5');
+            if (!element) return '';
+            await settlePdfCharts(element);
+            const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.25, logging: false, windowWidth: innerWidth });
+            return canvas.toDataURL('image/png');
+          })()`);
+          if (!primaryPatientsScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок Вектора 5');
+          fs.writeFileSync(primaryPatientsScreenshotPath, Buffer.from(primaryPatientsScreenshot.slice('data:image/png;base64,'.length), 'base64'));
+          result.primaryPatientsScreenshot = primaryPatientsScreenshotPath;
           const reputationScreenshotPath = path.join(artifactRoot, "reputation-vector-smoke.png");
           const reputationScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
             const element = document.getElementById('blkV6');
@@ -1657,7 +1699,7 @@ function createWindow() {
         const passed = result.dataPage && result.optionalLibrariesDeferred && result.xlsx && result.chart && result.desktop
           && result.rendererErrors.length === 0
           && (PDF_SMOKE_TEST || (result.pageBlockCollapseValid && result.exportSpacingValid && result.doctorGoalBlockOpens && result.headerUpdateControlsValid))
-          && (PDF_SMOKE_TEST || (result.primaryReturnValuesValid && result.reputationReportsValid && result.reviewCountsValid && result.separateVectorChartsValid && result.departmentYearHeadersValid))
+          && (PDF_SMOKE_TEST || (result.primaryReturnValuesValid && result.primaryPatientsValid && result.clientShareChartValid && result.viewerPrimaryPatientsValid && result.reputationReportsValid && result.reviewCountsValid && result.separateVectorChartsValid && result.departmentYearHeadersValid))
           && (PDF_SMOKE_TEST || (result.xlsxWorkerValid && result.crossClientGoldenValid && result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.specializationFocusBlockValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.viewerPatientRegisterValid && result.viewerChartsValid && result.viewerRatingsValid && result.doctorMetricSettings && result.commentWorkflowValid))
           && (!PDF_SMOKE_TEST || (result.pdfSelectionDialogValid && result.pdfExport && result.pdfExport.saved === 1
             && result.pdfExport.chartImages >= 1 && result.pdfFiles.length === 1));
@@ -2233,7 +2275,7 @@ function registerIpc() {
   ipcMain.handle("files:list-imported", (_event, reportType) => {
     localAdminActor();
     const type = String(reportType || "");
-    if (!new Set(["vyrabotka", "kb", "naznach", "pervichka", "prostoy", "zapis"]).has(type)) {
+    if (!new Set(["vyrabotka", "kb", "naznach", "pervichka", "primaryPatients", "prostoy", "zapis"]).has(type)) {
       throw new Error("Неподдерживаемый тип ранее импортированных данных");
     }
     return fileService.listImportedSources(type);

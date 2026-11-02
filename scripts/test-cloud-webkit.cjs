@@ -57,7 +57,10 @@ async function main() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "klinvekt-cloud-webkit-"));
   const samplePath = path.join(root, "tmp", "cloud-publication-smoke.kvcloud");
   const sample = fs.existsSync(samplePath) ? JSON.parse(fs.readFileSync(samplePath, "utf8")) : null;
-  const samplePage = sample?.pages.find(page => page.kind === "doctor");
+  const samplePage = sample?.pages.find(page => page.kind === "doctor"
+    && page.report?.numbers?.metrics.some(metric => metric.id === "primary.year.count" && metric.value > 0)
+    && page.report.vectors[3]?.windows?.some(window => window.sections.some(section => section.charts?.some(chart => chart.id === "partition-shares"))))
+    || sample?.pages.find(page => page.kind === "doctor");
   const html = ((samplePage?.report ? require("../mobile-server/cloud-report-renderer.cjs").renderCloudReport(samplePage.report, samplePage.title) : samplePage?.html)
     || '<div class="viewer-dashboard-snapshot"><div class="card"><h2>Синтетический отчёт</h2><p>43 визита</p><p>Комментарий администратора</p></div></div>')
     + '<section class="reputation-honor-board"><h2>Доска почёта · старый HTML</h2></section>'
@@ -195,7 +198,18 @@ async function main() {
     await numericFrame.locator(".cloud-data-report").waitFor();
     await auditLayout(pinPage, "numeric-report", true);
     assert.equal(await pinPage.locator("#onlineScope option").count(), 1);
-    assert.equal(await numericFrame.locator("[data-viewer-patient-register], canvas, img").count(), 0);
+    assert.equal(await numericFrame.locator("[data-viewer-patient-register], [data-primary-patient-register], canvas, img").count(), 0);
+    if (samplePage?.report) {
+      const primarySection = numericFrame.locator(".cloud-section").filter({ has: numericFrame.locator("h3", { hasText: "Первичные пациенты врача" }) });
+      assert.equal(await primarySection.count(), 1);
+      const primaryTotal = samplePage.report.numbers.metrics.find(metric => metric.id === "primary.year.count");
+      assert.ok(primaryTotal, "new online reports retain numeric primary cohort");
+      assert.match(await primarySection.textContent(), /1[\s\S]*2[\s\S]*3 и более/);
+      const primaryShares = numericFrame.locator('[data-vector-key="v4"] .report-chart').filter({ has: numericFrame.locator('h5', { hasText: "Доли аудиторий по месяцам" }) });
+      await primaryShares.scrollIntoViewIfNeeded();
+      await primaryShares.locator(".chart-plot svg:visible").first().waitFor();
+      await primarySection.screenshot({ path: path.join(root, "tmp", "cloud-primary-patients.png") });
+    }
     const headerTable = numericFrame.locator(".cloud-section").filter({ has: numericFrame.locator("h3", { hasText: "Годовая таблица показателей" }) });
     assert.ok(await headerTable.locator("th").evaluateAll(cells => cells.length === 3 && cells.every(cell => {
       const lines = [...cell.querySelectorAll(".report-table-heading-line")];
@@ -219,6 +233,10 @@ async function main() {
       await pinPage.screenshot({ path: path.join(root, "tmp", `cloud-json-${screenName}.png`) });
       await chart.screenshot({ path: path.join(root, "tmp", `cloud-json-chart-${screenName}.png`) });
       await headerTable.screenshot({ path: path.join(root, "tmp", `cloud-table-headers-${screenName}.png`) });
+      if (samplePage?.report) {
+        const primarySection = numericFrame.locator(".cloud-section").filter({ has: numericFrame.locator("h3", { hasText: "Первичные пациенты врача" }) });
+        await primarySection.screenshot({ path: path.join(root, "tmp", `cloud-primary-${screenName}.png`) });
+      }
     }
     await chart.evaluate(element => {
       window.dispatchEvent(new Event("beforeprint"));

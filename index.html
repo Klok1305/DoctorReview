@@ -782,6 +782,27 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .kb-summary-value-line { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .kb-summary-share { color: var(--ink); font-size: 20px; font-weight: 800; line-height: 1.1; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .kb-summary-meta { color: var(--muted); font-size: 11px; line-height: 1.35; }
+.kb-share-movement { margin: 8px 0; color: var(--ink); font-size: 15px; font-weight: 750; line-height: 1.4; }
+.kb-share-comparison { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; margin-bottom: 10px; font-size: 12px; }
+.kb-share-history { margin: 18px 0; }
+.primary-patient-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
+.primary-patient-kpi { display: grid; align-content: start; gap: 6px; min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.primary-patient-kpi > span { font-weight: 650; }
+.primary-patient-kpi > b { font-size: 22px; font-variant-numeric: tabular-nums; }
+.primary-patient-kpi > small { color: var(--muted); }
+.primary-patients-scroll { overflow-x: auto; max-width: 100%; }
+.primary-patients-scroll table.data th { white-space: normal; min-width: 105px; overflow-wrap: anywhere; }
+.primary-patients-scroll td { overflow-wrap: anywhere; }
+.primary-patients-details { margin: 14px 0; }
+.primary-patients-details > summary { cursor: pointer; font-size: 15px; font-weight: 700; margin-bottom: 8px; }
+@media (max-width: 680px) { .primary-patient-kpis { grid-template-columns: 1fr; } }
+@media print {
+  .primary-patients-scroll { overflow: visible; }
+  .primary-patients-scroll table { width: 100%; table-layout: fixed; }
+  .primary-patients-scroll table.data th { min-width: 0; }
+  .primary-patients-details, [data-primary-patient-register] { break-inside: auto; }
+  .primary-patients-scroll tr { break-inside: avoid; }
+}
 .kb-summary-meta .kb-trend { margin-left: 4px; font-size: 11px; }
 .kb-summary-trends { display: grid; gap: 4px; margin-top: 9px; padding-top: 7px; border-top: 1px dashed rgba(100, 116, 139, .28); }
 .kb-summary-trends > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 10px; line-height: 1.25; }
@@ -1290,7 +1311,7 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
   <div class="notice blue">
     Загружайте сюда выгрузки из 1С (.xls / .xlsx) — можно <b>пачкой, папкой или ZIP-архивом</b>, сразу за несколько месяцев.
     Поддерживаются отчёты: <b>выработка</b> и <b>возвращаемость пациентов и КБ</b> (по врачу),
-    <b>возвращаемость первички</b>, <b>простой сотрудников</b>, <b>собственная запись в 1С</b> (общие).
+    <b>возвращаемость первички</b>, <b>пациенты по врачам с источником и первичностью</b>, <b>простой сотрудников</b>, <b>собственная запись в 1С</b> (общие).
     Тип отчёта, врач и период определяются автоматически по содержимому — имена файлов не важны.
   </div>
   <div class="dropzone" id="dropzone">
@@ -3075,12 +3096,12 @@ function doctorName(id) {
 /* ---------- хранилище ---------- */
 
 function emptyMonth() {
-  return { vyrabotka: {}, kb: {}, naznach: {}, pervichka: {}, prostoy: {}, zapis: {}, manual6: {}, importedReports: {} };
+  return { vyrabotka: {}, kb: {}, naznach: {}, pervichka: {}, primaryPatients: {}, prostoy: {}, zapis: {}, manual6: {}, importedReports: {} };
 }
 function ensureMonth(key) {
   if (!DB.months[key]) DB.months[key] = emptyMonth();
   const m = DB.months[key];
-  for (const k of ["vyrabotka", "kb", "naznach", "pervichka", "prostoy", "zapis", "manual6"]) {
+  for (const k of ["vyrabotka", "kb", "naznach", "pervichka", "primaryPatients", "prostoy", "zapis", "manual6"]) {
     if (!m[k]) m[k] = {};
   }
   if (!m.importedReports || typeof m.importedReports !== "object" || Array.isArray(m.importedReports)) m.importedReports = {};
@@ -3172,6 +3193,7 @@ function migrateDB(parsed) {
         nm.kb[docId][win] = { clients: kb.clients, period: kb.period };
       }
       nm.pervichka = m.pervichka || {};
+      nm.primaryPatients = m.primaryPatients || {};
       nm.prostoy = m.prostoy || {};
       nm.zapis = m.zapis || {};
       nm.manual6 = m.manual6 || {};
@@ -3811,10 +3833,23 @@ function mergeDoctors(ids) {
       if (m.naznach && m.naznach[id]) {
         if (!m.naznach[target]) m.naznach[target] = {};
         for (const [sl, data] of Object.entries(m.naznach[id])) {
-          if (m.naznach[target][sl]) m.naznach[target][sl].items.push(...data.items);
+          if (m.naznach[target][sl]) {
+            const targetData = m.naznach[target][sl];
+            targetData.items.push(...data.items);
+            targetData.patientAssignments = [...(targetData.patientAssignments || []), ...(data.patientAssignments || [])];
+            targetData.patientDetailsAvailable = targetData.patientDetailsAvailable === true && data.patientDetailsAvailable === true;
+          }
           else m.naznach[target][sl] = data;
         }
         delete m.naznach[id];
+      }
+      if (m.primaryPatients?.perDoc?.[id]) {
+        const source = m.primaryPatients.perDoc[id], dest = m.primaryPatients.perDoc[target];
+        if (dest) {
+          dest.patients.push(...source.patients);
+          for (const key of Object.keys(dest.totals || {})) dest.totals[key] = dest.totals[key] != null && source.totals?.[key] != null ? dest.totals[key] + source.totals[key] : null;
+        } else m.primaryPatients.perDoc[target] = source;
+        delete m.primaryPatients.perDoc[id];
       }
       if (m.prostoy[id]) {
         if (m.prostoy[target]) {
@@ -4179,6 +4214,7 @@ function getRowLevels(ws) {
 
 function detectReportType(rows) {
   const head = rows.slice(0, 60).map(rowText).join("\n").toLowerCase();
+  if (head.includes("количество первичных") && head.includes("источник информации") && head.includes("количество итого")) return "primaryPatients";
   if (head.includes("посещение и возвращаемость")) return "pervichka";
   if (head.includes("направивший врач") && head.includes("количество назначено")) return "naznach";
   if (head.includes("форма участия")) return "vyrabotka";
@@ -4197,8 +4233,10 @@ function extractHeaderInfo(rows) {
       if (p) period = p;
     }
     if (/Отбор/i.test(t)) {
-      const q = t.match(/"([^"]+)"/) || t.match(/«([^»]+)»/);
-      if (q) otborName = q[1];
+      const q = t.match(/(?:Направивший врач|Сотрудник|Врач)\s*(?::|=|Равно)?\s*["«]([^"»]+)["»]/i);
+      const names = [...t.matchAll(/["«]([^"»]+)["»]/g)].map(match => match[1])
+        .filter(value => !/^(Назначение|Направление|Сотрудник|По направлению)$/i.test(value));
+      if (q || names.length) otborName = q ? q[1] : names[0];
     }
     // июньская выработка: «Сотрудник: Пудовкина Юлия Геннадьевна»
     if (!otborName) {
@@ -4552,10 +4590,22 @@ function parseNaznacheniya(rows, info, ws) {
   const sub = (rows[hIdx + 1] || []).map(cellStr);
   const subQ = sub.findIndex((v, i) => i >= cP && v === "Количество");
   if (subQ >= 0) { cPQ = subQ; cPS = sub.findIndex((v, i) => i > subQ && v === "Сумма"); if (cPS < 0) cPS = subQ + 1; }
-  let cDetailNomen = -1;
-  for (let i = hIdx; i <= Math.min(hIdx + 3, rows.length - 1) && cDetailNomen < 0; i++) {
-    cDetailNomen = (rows[i] || []).map(cellStr).findIndex(v => v === "Номенклатура");
+  let cDetailNomen = -1, cPatient = -1, cPatientId = -1, cExecutor = -1;
+  for (let i = hIdx; i <= Math.min(hIdx + 3, rows.length - 1); i++) {
+    const labels = (rows[i] || []).map(cellStr);
+    const nomenclature = labels.findIndex(v => v === "Номенклатура");
+    if (nomenclature >= 0) cDetailNomen = nomenclature;
+    const patient = labels.findIndex(v => /^(Клиент|Пациент|ФИО пациента)$/i.test(v));
+    if (patient >= 0) cPatient = patient;
+    const patientId = labels.findIndex(v => /^(ID|Идентификатор|Код) (клиента|пациента)$/i.test(v));
+    if (patientId >= 0) cPatientId = patientId;
+    const executor = labels.findIndex(v => /врач\s*[-–]?\s*исполнитель/i.test(v));
+    if (executor >= 0) cExecutor = executor;
   }
+  const patientAssignments = [];
+  let missingPatientNames = false;
+  const roleText = rows.slice(0, hIdx).map(rowText).join(" ").toLowerCase();
+  const referralRole = /трудовая роль/.test(roleText) ? /трудовая роль[^|]*назначени[^|]*направление/.test(roleText) : false;
 
   const detailRe = /^(Прием|Оказание услуг|Заявка|Событие|Документ|Обращение|Чек|Счет|Лист)\s/;
   let doctorRaw = info.otborName || null;
@@ -4589,6 +4639,11 @@ function parseNaznacheniya(rows, info, ws) {
     const detailNomen = cDetailNomen >= 0 ? cellStr(r[cDetailNomen]) : "";
     if (detailNomen) {
       const goods = inGoodsGroup();
+      const name = cPatient >= 0 ? cellStr(r[cPatient]) : "";
+      if (!name && (parseRuNumber(r[cA]) > 0 || (cellStr(r[cA]) && parseRuNumber(r[cA]) == null))) missingPatientNames = true;
+      if (name) patientAssignments.push({ name, patientId: cPatientId >= 0 ? cellStr(r[cPatientId]) || null : null,
+        n: detailNomen, executor: cExecutor >= 0 ? cellStr(r[cExecutor]) : "",
+        assigned: parseRuNumber(r[cA]), goods: Boolean(goods || isNaznachGoodsNomenclature(detailNomen, parseRuNumber(r[cD]) || 0)) });
       const groupPath = sourceGroupPath(detailNomen);
       const detailKey = `${goods ? "goods" : "service"}\u0000${groupPath.join("\u0001")}\u0000${detailNomen}`;
       let item = detailItems.get(detailKey);
@@ -4625,7 +4680,44 @@ function parseNaznacheniya(rows, info, ws) {
   }
   if (!items.length) throw new Error("не найдено ни одной позиции назначений");
   const checked = naznachTotalsMatch(items, docTotals);
-  return { doctorRaw, items, totals: docTotals, checked };
+  return { doctorRaw, items, totals: docTotals, checked, patientAssignments,
+    patientDetailsAvailable: cPatient >= 0 && cDetailNomen >= 0 && referralRole && !missingPatientNames };
+}
+
+/* Пациенты по врачам: только строки пациентов, без итогов клиники/врача и услуг. */
+function parsePrimaryPatients(rows, info, ws) {
+  const hIdx = findRowIdx(rows, row => row.some(value => cellStr(value) === "Количество первичных"));
+  if (hIdx < 0) throw new Error("не найдена шапка первичных пациентов");
+  const headers = rows[hIdx].map(cellStr);
+  const col = label => headers.indexOf(label);
+  const C = { primary: col("Количество первичных"), primaryClinic: col("Количество первичных клиника"),
+    visits: col("Количество итого"), revenue: col("Сумма") };
+  const sourceHeader = rows.slice(hIdx, hIdx + 5).find(row => row.some(value => cellStr(value) === "Источник информации"));
+  const sourceCol = sourceHeader ? sourceHeader.findIndex(value => cellStr(value) === "Источник информации") : -1;
+  const levels = getRowLevels(ws || {});
+  if (!levels || sourceCol < 0 || Object.values(C).some(index => index < 0)) throw new Error("для отчёта первичных пациентов нужны уровни Клиника → Врач → Клиент → Услуга и подписанные колонки");
+  const numeric = (row, index) => cellStr(row[index]) === "" ? 0 : parseRuNumber(row[index]);
+  const perDoc = [];
+  let doctor = null;
+  for (let i = hIdx + 1; i < rows.length; i++) {
+    const row = rows[i] || [], name = cellStr(row[0]), level = levels[i] || 0;
+    if (!name || ["Врач", "Клиент", "Услуга", "Итого"].includes(name)) continue;
+    if (level === 0) {
+      doctor = null;
+    } else if (level === 1) {
+      doctor = { raw: name, patients: [], totals: Object.fromEntries(Object.entries(C).map(([key, index]) => [key, numeric(row, index)])) };
+      perDoc.push(doctor);
+    } else if (level === 2 && doctor) {
+      doctor.patients.push({ name, source: cellStr(row[sourceCol]),
+        ...Object.fromEntries(Object.entries(C).map(([key, index]) => [key, numeric(row, index)])) });
+    }
+  }
+  if (!perDoc.length || !perDoc.some(doctor => doctor.patients.length)) throw new Error("не найдены пациенты по врачам");
+  // Итог клиники считает уникальных людей и не складывается по врачам.
+  const checked = perDoc.every(doctor => Object.keys(C).every(key => doctor.totals[key] != null
+    && doctor.patients.every(patient => patient[key] != null)
+    && Math.abs(doctor.patients.reduce((sum, patient) => sum + patient[key], 0) - doctor.totals[key]) < .02));
+  return { perDoc, checked };
 }
 
 /* ---------- КЛИЕНТСКАЯ БАЗА / ДАВНОСТЬ ПОСЕЩЕНИЙ (по врачу, любое окно) ---------- */
@@ -4982,7 +5074,8 @@ async function processFile(file, options = {}) {
       const slice = String(nMonths);
       const m = ensureMonth(monthKey);
       if (!m.naznach[docId]) m.naznach[docId] = {};
-      const nextValue = { period: info.period, items: res.items, totals: res.totals };
+      const nextValue = { period: info.period, items: res.items, totals: res.totals,
+        patientAssignments: res.patientAssignments, patientDetailsAvailable: res.patientDetailsAvailable };
       if (!acceptSlotReplacement(`Назначения · ${log.doctor} · ${monthKey} · ${slice} мес.`, m.naznach[docId][slice], nextValue, log, options)) return finalizeFileLog(log);
       m.naznach[docId][slice] = nextValue;
       log.slot = { t: "naznach", mk: monthKey, doc: docId, sl: slice };
@@ -5016,6 +5109,23 @@ async function processFile(file, options = {}) {
       log.status = "загружено";
       log.doctor = "все (" + res.perDoc.length + ")";
       log.note = `срез ${slice} мес.` + (res.checked ? " ✓ сверено с «Итого»" : "");
+    } else if (type === "primaryPatients") {
+      if (nMonths !== 1) throw new Error("отчёт первичных пациентов нужен за один календарный месяц");
+      const res = parsePrimaryPatients(rows, info, ws);
+      const perDoc = {};
+      for (const doctor of res.perDoc) {
+        const id = resolveDoctor(doctor.raw);
+        if (!perDoc[id]) perDoc[id] = { patients: [], totals: { primary: 0, primaryClinic: 0, visits: 0, revenue: 0 } };
+        perDoc[id].patients.push(...doctor.patients);
+        for (const key of Object.keys(perDoc[id].totals)) perDoc[id].totals[key] = perDoc[id].totals[key] != null && doctor.totals[key] != null ? perDoc[id].totals[key] + doctor.totals[key] : null;
+      }
+      const m = ensureMonth(monthKey), nextValue = { period: info.period, perDoc, checked: res.checked };
+      if (!acceptSlotReplacement(`Пациенты по врачам · ${monthKey}`, m.primaryPatients?.perDoc ? m.primaryPatients : null, nextValue, log, options)) return finalizeFileLog(log);
+      m.primaryPatients = nextValue;
+      log.slot = { t: "primaryPatients", mk: monthKey };
+      log.status = "загружено";
+      log.doctor = `все (${res.perDoc.length})`;
+      log.note = `пациентов: ${res.perDoc.reduce((sum, doctor) => sum + doctor.patients.length, 0)}` + (res.checked ? " ✓ сверено с итогами врачей" : " ⚠ проверьте итоги");
     } else if (type === "prostoy") {
       const res = parseProstoy(rows);
       const m = ensureMonth(monthKey);
@@ -5847,6 +5957,90 @@ function kbWindow(docId, monthKey, win) {
   const m = DB.months[monthKey];
   const kb = m && m.kb[docId] && m.kb[docId][String(win)];
   return kb || null;
+}
+
+// Совпадение полных ФИО; инициалы и похожие фамилии не объединяются.
+function primaryPatientNameKey(name) {
+  return String(name || "").normalize("NFKC").toLocaleLowerCase("ru").replace(/ё/g, "е").replace(/\s+/g, " ").trim();
+}
+function primaryPatientMonth(docId, monthKey) {
+  const source = DB.months[monthKey]?.primaryPatients;
+  if (!source?.perDoc) return null;
+  return source.perDoc[docId] || { patients: [], totals: {} };
+}
+function primaryPatientRows(rows) {
+  const unique = new Map();
+  for (const row of rows || []) {
+    const key = primaryPatientNameKey(row.name);
+    if (!key) continue;
+    const old = unique.get(key);
+    if (!old) unique.set(key, { ...row, key });
+    else {
+      for (const field of ["visits", "revenue"]) old[field] = old[field] != null && row[field] != null ? old[field] + row[field] : null;
+      for (const field of ["primary", "primaryClinic"]) old[field] = old[field] != null && row[field] != null ? Math.max(old[field], row[field]) : null;
+      if (!old.source) old.source = row.source;
+    }
+  }
+  return [...unique.values()];
+}
+function primaryPatientReferrals(docId, monthKey, patientName) {
+  // Окна 3/6/12 перекрываются и не определяют месяц назначения. Берём только 1 мес.
+  const source = DB.months[monthKey]?.naznach?.[docId]?.["1"];
+  const available = source?.patientDetailsAvailable === true && Array.isArray(source.patientAssignments);
+  const nameKey = primaryPatientNameKey(patientName), doctorKey = primaryPatientNameKey(doctorName(docId));
+  const matches = (source?.patientAssignments || []).filter(row => primaryPatientNameKey(row.name) === nameKey
+    && !row.goods && (!row.executor || primaryPatientNameKey(row.executor) !== doctorKey));
+  const assignments = [...new Map(matches.filter(row => row.assigned > 0).map(row =>
+    [`${row.n}\u0000${row.executor}`, { n: row.n, executor: row.executor }])).values()];
+  const complete = available && matches.every(row => Number.isFinite(row.assigned) && row.assigned >= 0);
+  return { status: available && assignments.length ? true : complete ? false : null, assignments: available ? assignments : [] };
+}
+function doctorPrimaryPatients(docId, endMonth) {
+  const months = calendarYearMonthKeys(endMonth);
+  const monthly = new Map(months.map(month => [month, primaryPatientMonth(docId, month)]));
+  const rowsByMonth = new Map([...monthly].map(([month, data]) => [month, data ? primaryPatientRows(data.patients) : null]));
+  const missingMonths = months.filter(month => !monthly.get(month));
+  const currentRows = rowsByMonth.get(endMonth);
+  const primaryValid = rows => rows != null && rows.every(row => Number.isSafeInteger(row.primary) && row.primary >= 0);
+  const current = currentRows == null ? null : {
+    total: currentRows.length, count: primaryValid(currentRows) ? currentRows.filter(row => row.primary > 0).length : null,
+    patients: currentRows.filter(row => row.primary > 0).map(row => ({ ...row, referral: primaryPatientReferrals(docId, endMonth, row.name) })),
+  };
+  if (current) current.share = current.total && current.count != null ? current.count / current.total * 100 : null;
+  const cohort = new Map();
+  for (const month of months) for (const row of rowsByMonth.get(month) || []) {
+    if (row.primary > 0 && !cohort.has(row.key)) cohort.set(row.key, { ...row, firstMonth: month });
+  }
+  const patients = [...cohort.values()].map(patient => {
+    let observedVisits = 0, observedRevenue = 0, completeVisits = true, completeRevenue = true, referralsComplete = true;
+    const assignments = new Map();
+    for (const month of months.filter(key => key >= patient.firstMonth)) {
+      const rows = rowsByMonth.get(month);
+      if (!rows) { completeVisits = false; completeRevenue = false; }
+      const row = rows?.find(row => row.key === patient.key);
+      if (row) {
+        if (!Number.isSafeInteger(row.visits) || row.visits < 0) completeVisits = false;
+        else observedVisits += row.visits;
+        if (!Number.isFinite(row.revenue)) completeRevenue = false;
+        else observedRevenue += row.revenue;
+      }
+      const referral = primaryPatientReferrals(docId, month, patient.name);
+      if (referral.status == null) referralsComplete = false;
+      for (const item of referral.assignments) assignments.set(`${item.n}\u0000${item.executor}`, item);
+    }
+    return { name: patient.name, source: patient.source, firstMonth: patient.firstMonth,
+      visits: completeVisits ? observedVisits : null, revenue: completeRevenue ? observedRevenue : null,
+      observedVisits, observedRevenue, referral: { status: assignments.size ? true : referralsComplete ? false : null, assignments: [...assignments.values()] } };
+  }).sort((a, b) => a.firstMonth.localeCompare(b.firstMonth) || a.name.localeCompare(b.name, "ru"));
+  const buckets = [1, 2, 3].map(min => {
+    const count = patients.filter(patient => patient.visits != null && (min === 3 ? patient.visits >= 3 : patient.visits === min)).length;
+    return { visits: min, count, share: patients.length ? count / patients.length * 100 : null };
+  });
+  const hasData = months.some(month => monthly.get(month) != null);
+  if (!hasData) for (const bucket of buckets) bucket.count = null;
+  return { months, missingMonths, current, patients, buckets, yearCount: hasData ? patients.length : null,
+    incompletePrimaryMonths: months.filter(month => !primaryValid(rowsByMonth.get(month))),
+    unknownVisits: patients.filter(patient => patient.visits == null || patient.visits < 1).length };
 }
 function kbAvailableWindows(docId, monthKey) {
   const m = DB.months[monthKey];
@@ -6967,6 +7161,7 @@ function reportWorkerSnapshot(source, ids) {
     }
     copy.pervichka = Object.fromEntries(Object.entries(month.pervichka || {}).map(([window, value]) =>
       [window, { ...value, perDoc: pick(value.perDoc) }]));
+    copy.primaryPatients = month.primaryPatients?.perDoc ? { ...month.primaryPatients, perDoc: pick(month.primaryPatients.perDoc) } : {};
     months[key] = copy;
   }
   return { settings: source.settings, doctors: source.doctors, months };
@@ -7270,19 +7465,40 @@ function cloudDoctorReport(doctorId, monthKey, comments) {
     doctorHasDashboardData(doctorId, prevMonthKey(monthKey)) ? computeMetrics(doctorId, prevMonthKey(monthKey)) : null, comments, { includeDynamics: false });
   const base = adminClientBaseSummary(doctorId, monthKey);
   const groups = ["active", "loyalSleep", "newRisk", "lost"];
+  const baseSeries = adminClientBaseSeries(doctorId, monthKey);
+  const previousBase = adminClientBaseSummary(doctorId, prevMonthKey(monthKey));
+  const share = (value, group) => value?.total ? value.seg[group] / value.total * 100 : null;
+  const shareMetrics = groups.map(group => {
+    const current = share(base, group), previous = share(previousBase, group);
+    return mobilePublicationMetric(adminClientBaseGroupLabel(group), fmtPct(current),
+      `${clientBaseShareMovement(current, previous)}. ${monthLabel(prevMonthKey(monthKey))}: ${fmtPct(previous)} → ${monthLabel(monthKey)}: ${fmtPct(current)}. ${fmtNum(base?.seg[group])} чел.`,
+      "", current == null || previous == null || Math.abs(current - previous) < .0001 ? "neutral" : (group === "active" ? current > previous : current < previous) ? "good" : "bad");
+  });
   Object.assign(report.vectors[3], {
     methodologyId: "partition-v1-36m", scoreMethodologyId: "legacy-overlap-v1",
     methodologyLabel: "Четыре непересекающиеся группы за 36 месяцев, как в Admin и HTML. Балл В4 сохраняет прежнюю методику.",
     detail: "Клиентская база за три года: только количества и показатели.",
     windows: [{ id: "36", label: "3 года", period: "Точное окно 36 месяцев", methodologyId: "partition-v1-36m",
       sections: base ? [{ title: "Клиентская база", note: adminClientBaseQualityNote(base),
-        metrics: [mobilePublicationMetric("Общая база", fmtNum(base.total)), mobilePublicationMetric("Активные лояльные", fmtNum(base.seg.active)),
+        metrics: [mobilePublicationMetric("Общая база", fmtNum(base.total)), ...shareMetrics,
           mobilePublicationMetric("Кандидаты на реактивацию", fmtNum(base.reactivationCandidates)), mobilePublicationMetric("Выручка кандидатов", fmtMoney(base.reactivationSum))],
         columns: ["Группа", "Пациенты", "Доля", "Условие"],
         rows: groups.map(group => [adminClientBaseGroupLabel(group), fmtNum(base.seg[group]), fmtPct(base.total ? base.seg[group] / base.total * 100 : null), adminClientBaseGroupDescription(base.partition, group)]),
-        charts: [mobilePublicationChart("partition", "Группы клиентской базы", "donut", groups.map(adminClientBaseGroupLabel),
+        charts: [mobilePublicationChart("partition-shares", "Доли аудиторий по месяцам", "line", baseSeries.months.map(monthLabel), groups.map((group, index) => ({
+          label: adminClientBaseGroupLabel(group), color: ["#16a34a", "#64748b", "#d97706", "#dc2626"][index], values: baseSeries.bases.map(value => share(value, group)),
+        })), "%"), mobilePublicationChart("partition", "Группы клиентской базы", "donut", groups.map(adminClientBaseGroupLabel),
           [{ label: "Пациенты", values: groups.map(group => base.seg[group]), colors: ["#16a34a", "#94a3b8", "#d97706", "#dc2626"] }], "чел.")].filter(Boolean),
       }] : [{ title: "Клиентская база", metrics: [mobilePublicationMetric("Данные", "Нет точной выгрузки за 36 месяцев")] }] }],
+  });
+  const primary = doctorPrimaryPatients(doctorId, monthKey);
+  report.vectors[4].sections.push({ title: "Первичные пациенты врача",
+    note: `Первичные у выбранного врача. Посещения — с первого месяца пациента; доли — от всех первичных за год. ${primary.incompletePrimaryMonths.length ? `Неполные данные: ${primary.incompletePrimaryMonths.map(monthLabel).join(", ")}.` : "Загружены все месяцы с начала года."} Списки пациентов — в Админ и защищённом Viewer.`,
+    metrics: [mobilePublicationMetric("Первичных за месяц", fmtNum(primary.current?.count)),
+      mobilePublicationMetric("Доля от всех пациентов месяца", fmtPct(primary.current?.share), primary.current ? `${fmtNum(primary.current.count)} из ${fmtNum(primary.current.total)} пациентов` : "Нет отчёта «Пациенты по врачам»"),
+      mobilePublicationMetric(`Первичных за ${monthKey.slice(0, 4)} год`, fmtNum(primary.yearCount))],
+    columns: ["Посещений с первого месяца", "Чел.", "Доля первичных за год"],
+    rows: [...primary.buckets.map(bucket => [bucket.visits === 3 ? "3 и более" : String(bucket.visits), fmtNum(bucket.count), fmtPct(bucket.share)]),
+      ...(primary.unknownVisits ? [["Неполные данные", fmtNum(primary.unknownVisits), fmtPct(primary.patients.length ? primary.unknownVisits / primary.patients.length * 100 : null)]] : [])],
   });
   report.dynamics = cloudReportDynamics(monthKey, key => doctorHasDashboardData(doctorId, key) ? computeMetrics(doctorId, key) : null,
     profile, `doctor|${monthKey}|${doctorId}`);
@@ -7295,6 +7511,11 @@ function cloudDoctorReport(doctorId, monthKey, comments) {
     else vector.sections.push(section);
   }
   report.numbers = cloudReportNumbers(result, report);
+  report.numbers.metrics.push(...[
+    ["primary.month.count", primary.current?.count, "count"], ["primary.month.share", primary.current?.share, "percent"],
+    ["primary.year.count", primary.yearCount, "count"],
+    ...primary.buckets.map(bucket => [`primary.year.visits${bucket.visits}`, bucket.count, "count"]),
+  ].map(([id, value, unit]) => ({ id, value: Number.isFinite(value) ? value : null, unit, methodologyId: "doctor-primary-ytd-v1" })));
   return report;
 }
 
@@ -7972,7 +8193,7 @@ function renderData() {
   if (!months.length) {
     el.innerHTML = '<p class="muted">После загрузки здесь появится список месяцев и комплектность данных по каждому типу отчёта.</p>';
   } else {
-    let html = '<table class="data"><tr><th>Месяц</th><th class="num">Выработка</th><th class="num">Давность посещений<br><span class="small muted">окна, мес.</span></th><th class="num">Назначения<br><span class="small muted">срезы, мес.</span></th><th class="num">Первичка<br><span class="small muted">срезы, мес.</span></th><th class="num">Загрузка расписания</th><th class="num">Запись в 1С</th></tr>';
+    let html = '<table class="data"><tr><th>Месяц</th><th class="num">Выработка</th><th class="num">Давность посещений<br><span class="small muted">окна, мес.</span></th><th class="num">Назначения<br><span class="small muted">срезы, мес.</span></th><th class="num">Первичка<br><span class="small muted">срезы, мес.</span></th><th class="num">Пациенты по врачам</th><th class="num">Загрузка расписания</th><th class="num">Запись в 1С</th></tr>';
     for (const k of [...months].reverse()) {
       const m = DB.months[k];
       const kbWins = new Set();
@@ -7986,6 +8207,7 @@ function renderData() {
         <td class="num">${kbWins.size ? [...kbWins].sort((a, b) => a - b).join(", ") : '<span class="muted">—</span>'}</td>
         <td class="num">${nazSlices.size ? [...nazSlices].sort().join(", ") : '<span class="muted">—</span>'}</td>
         <td class="num">${pv || '<span class="muted">—</span>'}</td>
+        <td class="num">${m.primaryPatients?.perDoc ? Object.keys(m.primaryPatients.perDoc).length + " вр." : '<span class="muted">—</span>'}</td>
         <td class="num">${Object.keys(m.prostoy).length || '<span class="muted">—</span>'}</td>
         <td class="num">${monthReportImported(m, "zapis") ? zapisCount : '<span class="muted">—</span>'}</td></tr>`;
     }
@@ -8001,7 +8223,7 @@ function renderData() {
   if (!DB.fileLog.length) {
     logEl.innerHTML = '<p class="muted small">Журнал пуст.</p>';
   } else {
-    const typeNames = { vyrabotka: "Выработка", kb: "Давность посещений", naznach: "Назначения", pervichka: "Первичка", prostoy: "Загрузка расписания", zapis: "Запись в 1С" };
+    const typeNames = { vyrabotka: "Выработка", kb: "Давность посещений", naznach: "Назначения", pervichka: "Первичка", primaryPatients: "Пациенты по врачам", prostoy: "Загрузка расписания", zapis: "Запись в 1С" };
     let html = '<table class="data"><tr><th>Файл</th><th>Тип</th><th>Врач</th><th>Период</th><th>Статус</th><th></th></tr>';
     DB.fileLog.slice(0, 60).forEach((l, i) => {
       const ok = l.status === "загружено";
@@ -8024,6 +8246,7 @@ function removeFileData(i) {
   else if (s.t === "naznach" && m.naznach[s.doc]) { delete m.naznach[s.doc][s.sl]; if (!Object.keys(m.naznach[s.doc]).length) delete m.naznach[s.doc]; }
   else if (s.t === "kb" && m.kb[s.doc]) { delete m.kb[s.doc][s.sl]; if (!Object.keys(m.kb[s.doc]).length) delete m.kb[s.doc]; }
   else if (s.t === "pervichka") delete m.pervichka[s.sl];
+  else if (s.t === "primaryPatients") m.primaryPatients = {};
   else if (s.t === "prostoy") m.prostoy = {};
   else if (s.t === "zapis") { m.zapis = {}; setMonthReportImported(m, "zapis", false); }
   if (!Object.values(m).some(o => o && Object.keys(o).length)) delete DB.months[s.mk]; // месяц опустел
@@ -10303,6 +10526,48 @@ function adminClientBaseSeries(docId, endMk) {
     datasets: defs.map(([key, color]) => ({ label: adminClientBaseGroupLabel(key), backgroundColor: color, stack: "base", borderWidth: 0,
       maxBarThickness: 32, data: bases.map(base => base ? base.seg[key] : null) })) };
 }
+function clientBaseShareMovement(current, previous) {
+  if (current == null || previous == null) return "Нет данных за предыдущий месяц";
+  const delta = current - previous;
+  if (Math.abs(delta) < .0001) return "Доля не изменилась";
+  return `Доля ${delta > 0 ? "выросла" : "снизилась"} на ${fmtNum(Math.abs(delta), 1)} п.п.`;
+}
+function clientBaseShareHistoryHtml(series) {
+  return `<div class="kb-share-history"><h3>Как меняется доля каждой аудитории</h3>
+    <p class="small muted">Процент от всей базы врача за 36 месяцев. Пропущенные месяцы остаются пустыми. Рост активных лояльных и снижение потерянных — положительная динамика.</p>
+    <div class="chart-box"><canvas id="chClientShares"></canvas></div>
+    <div class="primary-patients-scroll"><table class="data"><thead><tr><th>Аудитория</th>${series.months.map(month => `<th class="num">${esc(monthLabel(month))}</th>`).join("")}</tr></thead>
+    <tbody>${["active", "loyalSleep", "newRisk", "lost"].map(group => `<tr><td>${esc(adminClientBaseGroupLabel(group))}</td>${series.bases.map(base => `<td class="num">${fmtPct(base ? clientBaseGroupPct(base, group) : null)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></div>`;
+}
+function primaryReferralText(referral) {
+  return referral.status === true ? "Да" : referral.status === false ? "Нет" : "Нет данных";
+}
+function primaryReferralItemsText(referral) {
+  return referral.assignments.map(item => item.n + (item.executor ? ` → ${item.executor}` : "")).join("; ");
+}
+function primaryPatientsReportHtml(docId, monthKey, { registry = true } = {}) {
+  const summary = doctorPrimaryPatients(docId, monthKey), current = summary.current;
+  const referralNote = 'Направления: отчёт «Назначения» ровно за месяц, трудовая роль «Назначение»: «Направление». Совпадение по полному ФИО (без учёта регистра, ё/е и лишних пробелов). Товары и назначения себе исключены. Старые выгрузки нужно переобработать на вкладке «Данные».';
+  const tile = (label, value, note = "") => `<div class="primary-patient-kpi"><span>${esc(label)}</span><b>${value}</b><small>${esc(note)}</small></div>`;
+  const missing = summary.incompletePrimaryMonths;
+  let html = `<section class="primary-patients-report" data-primary-patients-summary><h3>Первичные пациенты врача</h3>
+    <p class="small muted">Первичный — по колонке «Количество первичных», впервые у этого врача. Посещения и выручка — у выбранного врача по итоговым строкам пациентов, без сложения вложенных услуг.</p>
+    <div class="primary-patient-kpis">${tile("Первичных за месяц", fmtNum(current?.count), monthLabel(monthKey))}${tile("Доля от всех пациентов месяца", fmtPct(current?.share), current ? `${fmtNum(current.count)} из ${fmtNum(current.total)} пациентов` : "Загрузите отчёт «Пациенты по врачам»")}${tile(`Первичных за ${monthKey.slice(0, 4)} год`, fmtNum(summary.yearCount), `Январь — ${monthLabel(monthKey)}`)}</div>
+    ${missing.length ? `<p class="notice blue">Годовой список неполный. Нет корректных данных первичности: ${esc(missing.map(monthLabel).join(", "))}. Пропуски не считаются нулевыми визитами.</p>` : ""}`;
+  const breakdown = `<h3>Посещения первичных пациентов за год</h3><div class="primary-patient-kpis">${summary.buckets.map(bucket => tile(bucket.visits === 3 ? "3 и более посещений" : `${bucket.visits} ${bucket.visits === 1 ? "посещение" : "посещения"}`, `${fmtNum(bucket.count)} чел. · ${fmtPct(bucket.share)}`, "Доля от всех первичных в годовом списке")).join("")}</div>
+    ${summary.unknownVisits ? `<p class="small muted">У ${fmtNum(summary.unknownVisits)} пациентов нет полного числа посещений. Они учтены в общем количестве первичных, но не отнесены к группам 1 / 2 / 3+.</p>` : ""}
+    <p class="small muted">Наблюдение — с первого месяца пациента до ${esc(monthLabel(monthKey))} включительно. У поздних первичных было меньше времени вернуться.</p>`;
+  if (registry) {
+    html += `<div data-primary-patient-register><p class="small muted">${esc(referralNote)}</p>
+    <details class="primary-patients-details" open><summary>Первичные за ${esc(monthLabel(monthKey))} · ${fmtNum(current?.patients.length)}</summary>
+      <div class="primary-patients-scroll"><table class="data" id="tblPrimaryMonth"><thead><tr><th>ФИО пациента</th><th>Источник</th><th class="num">Посещений за месяц</th><th>Направлялся</th><th>Какие назначения</th></tr></thead><tbody>
+      ${current ? current.patients.map(patient => `<tr><td>${esc(patient.name)}</td><td>${esc(patient.source || "Не указан")}</td><td class="num">${fmtNum(patient.visits)}</td><td>${primaryReferralText(patient.referral)}</td><td>${esc(primaryReferralItemsText(patient.referral) || "—")}</td></tr>`).join("") || '<tr><td colspan="5">Первичных пациентов в этом месяце нет.</td></tr>' : '<tr><td colspan="5">Загрузите месячный отчёт «Пациенты по врачам».</td></tr>'}</tbody></table></div></details>
+    <details class="primary-patients-details" open><summary>Все первичные за ${monthKey.slice(0, 4)} год · ${fmtNum(summary.patients.length)}</summary>
+      <div class="primary-patients-scroll"><table class="data" id="tblPrimaryYear"><thead><tr><th>ФИО пациента</th><th>Источник</th><th>Первый месяц</th><th class="num">Посещений с первого месяца</th><th class="num">Выручка с первого месяца</th><th>Направлялся к другим специалистам</th></tr></thead><tbody>
+      ${summary.patients.map(patient => `<tr><td>${esc(patient.name)}</td><td>${esc(patient.source || "Не указан")}</td><td>${esc(monthLabel(patient.firstMonth))}</td><td class="num">${patient.visits == null ? `${fmtNum(patient.observedVisits)} · неполные данные` : fmtNum(patient.visits)}</td><td class="num">${patient.revenue == null ? `${fmtMoney(patient.observedRevenue)} · неполные данные` : fmtMoney(patient.revenue)}</td><td>${primaryReferralText(patient.referral)}${patient.referral.status ? `<div class="small muted">${esc(primaryReferralItemsText(patient.referral))}</div>` : ""}</td></tr>`).join("") || '<tr><td colspan="6">Первичных пациентов в загруженных месяцах нет.</td></tr>'}</tbody></table></div></details></div>`;
+  }
+  return html + breakdown + "</section>";
+}
 function dynamicsHtml(dyn, blkId, title, subtitle, noteKey, detailTailHtml = "", includeOutcome = true) {
   if (!dyn || dyn.months.length < 1) return "";
   const single = dyn.months.length < 2;
@@ -11968,6 +12233,8 @@ function renderDoctorNow() {
       return `<div class="kb-summary-card ${cls}${keyIndicator ? " key-indicator" : ""}" data-client-base-group="${group}">
         <div class="kb-summary-label">${esc(adminClientBaseGroupLabel(group))}${keyIndicator ? '<span class="kb-key-badge">ключевой показатель</span>' : ""}</div>
         <div class="kb-summary-value-line"><div class="kb-summary-value">${fmtNum(kb.seg[group])} чел.</div><div class="kb-summary-share">${fmtPct(share)}</div></div>
+        <div class="kb-share-movement">${esc(clientBaseShareMovement(share, previousShare))}</div>
+        <div class="kb-share-comparison"><span>${esc(monthLabel(kbDyn.prevKey))}: <b>${fmtPct(previousShare)}</b></span><span>${esc(monthLabel(mk))}: <b>${fmtPct(share)}</b></span></div>
         <div class="kb-summary-meta">${esc(clientBaseGroupDescription(kb, group))}</div>
         <div class="kb-summary-trends">
           <div><span>К предыдущему месяцу</span>${kbTrendMarkup(share, previousShare, lowerBetter, "pp")}</div>
@@ -11991,6 +12258,7 @@ function renderDoctorNow() {
       </div>
       ${groupCards}
     </div>
+    ${clientBaseShareHistoryHtml(kbSeries)}
     <div class="kb-group-rules"><b>Что означает каждая показанная группа:</b><ul>${rulesMarkup}</ul><p class="small muted">Процент каждой группы считается от общей базы — ${fmtNum(kb.total)} уникальных пациентов.</p></div>
     <div class="kb-action">
       <div><div class="kb-action-title">Что сделать сейчас</div><div class="kb-action-text">${actionText}</div></div>
@@ -12043,7 +12311,7 @@ function renderDoctorNow() {
       ${metricHighlight(`Курсовое лечение: ≥${L.courseX} виз. за ${L.courseM} мес.`, fmtPct(courseValue), courseValue != null ? `${fmtNum(L.courseCnt)} чел. · точное окно ${L.courseM} мес.` : `нужна выгрузка «Давности» ровно за ${L.courseM} мес.`, trackedMetricState(courseValue, B5.courseIdx), metricGoalText(B5.courseIdx, fmtPct), metricHistoryMarkup(courseValue, courseDyn, "pp", "", 1, fmtPct))}
       ${metricHighlight("Индекс возвращаемости за 12 мес.", freqValue != null ? fmtNum(freqValue, 2) : "—", "визитов на пациента", trackedMetricState(freqValue, null), metricGoalText(null, fmtNum), metricHistoryMarkup(freqValue, freqDyn, "absolute", "", 2, v => fmtNum(v, 2)))}
       ${metricHighlight(`Возвращаемость первички (${pvCur != null ? pvCur : "—"} мес.)`, fmtPct(pvValue), pv ? (pv.valid === false ? `ошибка данных: ${pv.issue}` : `первичных: ${fmtNum(pv.first)}, вернулось: ${fmtNum(pv.ret)}, не вернулось: ${fmtNum(pv.notRet)}`) : "нет выгрузки первички", trackedMetricState(pvValue, B5.pervichka), metricGoalText(B5.pervichka, fmtPct), metricHistoryMarkup(pvValue, pvDyn, "pp", "", 1, fmtPct))}
-    </div></div>`;
+    </div>${primaryPatientsReportHtml(UI.docId, mk)}</div>`;
 
   /* ---- В6 Репутация ---- */
   const man6 = r.extras.man6 || {};
@@ -12237,6 +12505,15 @@ function renderDoctorNow() {
   }
   {
     const series = kbSeries;
+    chart("chClientShares", {
+      type: "line", data: { labels: series.months.map(monthLabel), datasets: series.datasets.map((dataset, index) => ({
+        label: dataset.label, borderColor: ["#16a34a", "#64748b", "#d97706", "#dc2626"][index],
+        backgroundColor: ["#16a34a", "#64748b", "#d97706", "#dc2626"][index], spanGaps: false, tension: 0,
+        data: series.bases.map(base => base ? clientBaseGroupPct(base, ["active", "loyalSleep", "newRisk", "lost"][index]) : null) })) },
+      options: { maintainAspectRatio: false, plugins: { legend: { position: "bottom" }, datalabels: { display: false },
+        tooltip: { callbacks: { label: item => `${item.dataset.label}: ${fmtPct(item.raw)}` } } },
+        scales: { y: { min: 0, max: 100, ticks: { callback: value => value + "%" } } } },
+    });
     chart("chSegments", {
       type: "bar", data: { labels: series.months.map(monthLabel), datasets: series.datasets },
       options: { indexAxis: "y", maintainAspectRatio: false, layout: { padding: { right: 65 } },
@@ -12784,6 +13061,7 @@ async function composeViewerDashboardHtml(target, periodKey, context, comments, 
   const { clone } = await cloneDashboardForViewer(source);
   const root = document.createElement("div");
   root.innerHTML = composeViewerReportHtml(clone.innerHTML, context, comments);
+  if (!patientRegistry) root.querySelectorAll("[data-primary-patient-register]").forEach(element => element.remove());
   // Keep the Admin V3 snapshot: its nested 1C hierarchy, goals, focus charts and
   // referral sections all belong to the same selected appointment window.
   // The Viewer binds the retained data-g rows without inline event handlers.

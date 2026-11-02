@@ -38,7 +38,7 @@ $allowedPatterns = @(
   '^scripts/benchmark-background\.cjs$', # Synthetic event-loop delay measurement for background workers.
   '^scripts/test-mobile-webkit\.cjs$', # Synthetic mobile WebKit browser check.
   '^scripts/[^/]+\.(cjs|ps1|py)$',
-  '^tests/[^/]+\.test\.cjs$'
+  '^tests/[^/]+\.test\.cjs$' # Includes synthetic primary-patients regression; real XLS are blocked below.
 )
 
 $blockedPatterns = @(

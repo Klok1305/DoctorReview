@@ -45,6 +45,7 @@ function getRowLevels(ws) {
 
 function detectReportType(rows) {
   const head = rows.slice(0, 60).map(rowText).join("\n").toLowerCase();
+  if (head.includes("количество первичных") && head.includes("источник информации") && head.includes("количество итого")) return "primaryPatients";
   if (head.includes("посещение и возвращаемость")) return "pervichka";
   if (head.includes("направивший врач") && head.includes("количество назначено")) return "naznach";
   if (head.includes("форма участия")) return "vyrabotka";
@@ -63,8 +64,10 @@ function extractHeaderInfo(rows) {
       if (p) period = p;
     }
     if (/Отбор/i.test(t)) {
-      const q = t.match(/"([^"]+)"/) || t.match(/«([^»]+)»/);
-      if (q) otborName = q[1];
+      const q = t.match(/(?:Направивший врач|Сотрудник|Врач)\s*(?::|=|Равно)?\s*["«]([^"»]+)["»]/i);
+      const names = [...t.matchAll(/["«]([^"»]+)["»]/g)].map(match => match[1])
+        .filter(value => !/^(Назначение|Направление|Сотрудник|По направлению)$/i.test(value));
+      if (q || names.length) otborName = q ? q[1] : names[0];
     }
     // июньская выработка: «Сотрудник: Пудовкина Юлия Геннадьевна»
     if (!otborName) {
@@ -418,10 +421,22 @@ function parseNaznacheniya(rows, info, ws) {
   const sub = (rows[hIdx + 1] || []).map(cellStr);
   const subQ = sub.findIndex((v, i) => i >= cP && v === "Количество");
   if (subQ >= 0) { cPQ = subQ; cPS = sub.findIndex((v, i) => i > subQ && v === "Сумма"); if (cPS < 0) cPS = subQ + 1; }
-  let cDetailNomen = -1;
-  for (let i = hIdx; i <= Math.min(hIdx + 3, rows.length - 1) && cDetailNomen < 0; i++) {
-    cDetailNomen = (rows[i] || []).map(cellStr).findIndex(v => v === "Номенклатура");
+  let cDetailNomen = -1, cPatient = -1, cPatientId = -1, cExecutor = -1;
+  for (let i = hIdx; i <= Math.min(hIdx + 3, rows.length - 1); i++) {
+    const labels = (rows[i] || []).map(cellStr);
+    const nomenclature = labels.findIndex(v => v === "Номенклатура");
+    if (nomenclature >= 0) cDetailNomen = nomenclature;
+    const patient = labels.findIndex(v => /^(Клиент|Пациент|ФИО пациента)$/i.test(v));
+    if (patient >= 0) cPatient = patient;
+    const patientId = labels.findIndex(v => /^(ID|Идентификатор|Код) (клиента|пациента)$/i.test(v));
+    if (patientId >= 0) cPatientId = patientId;
+    const executor = labels.findIndex(v => /врач\s*[-–]?\s*исполнитель/i.test(v));
+    if (executor >= 0) cExecutor = executor;
   }
+  const patientAssignments = [];
+  let missingPatientNames = false;
+  const roleText = rows.slice(0, hIdx).map(rowText).join(" ").toLowerCase();
+  const referralRole = /трудовая роль/.test(roleText) ? /трудовая роль[^|]*назначени[^|]*направление/.test(roleText) : false;
 
   const detailRe = /^(Прием|Оказание услуг|Заявка|Событие|Документ|Обращение|Чек|Счет|Лист)\s/;
   let doctorRaw = info.otborName || null;
@@ -455,6 +470,11 @@ function parseNaznacheniya(rows, info, ws) {
     const detailNomen = cDetailNomen >= 0 ? cellStr(r[cDetailNomen]) : "";
     if (detailNomen) {
       const goods = inGoodsGroup();
+      const name = cPatient >= 0 ? cellStr(r[cPatient]) : "";
+      if (!name && (parseRuNumber(r[cA]) > 0 || (cellStr(r[cA]) && parseRuNumber(r[cA]) == null))) missingPatientNames = true;
+      if (name) patientAssignments.push({ name, patientId: cPatientId >= 0 ? cellStr(r[cPatientId]) || null : null,
+        n: detailNomen, executor: cExecutor >= 0 ? cellStr(r[cExecutor]) : "",
+        assigned: parseRuNumber(r[cA]), goods: Boolean(goods || isNaznachGoodsNomenclature(detailNomen, parseRuNumber(r[cD]) || 0)) });
       const groupPath = sourceGroupPath(detailNomen);
       const detailKey = `${goods ? "goods" : "service"}\u0000${groupPath.join("\u0001")}\u0000${detailNomen}`;
       let item = detailItems.get(detailKey);
@@ -491,7 +511,44 @@ function parseNaznacheniya(rows, info, ws) {
   }
   if (!items.length) throw new Error("не найдено ни одной позиции назначений");
   const checked = naznachTotalsMatch(items, docTotals);
-  return { doctorRaw, items, totals: docTotals, checked };
+  return { doctorRaw, items, totals: docTotals, checked, patientAssignments,
+    patientDetailsAvailable: cPatient >= 0 && cDetailNomen >= 0 && referralRole && !missingPatientNames };
+}
+
+/* Пациенты по врачам: только строки пациентов, без итогов клиники/врача и услуг. */
+function parsePrimaryPatients(rows, info, ws) {
+  const hIdx = findRowIdx(rows, row => row.some(value => cellStr(value) === "Количество первичных"));
+  if (hIdx < 0) throw new Error("не найдена шапка первичных пациентов");
+  const headers = rows[hIdx].map(cellStr);
+  const col = label => headers.indexOf(label);
+  const C = { primary: col("Количество первичных"), primaryClinic: col("Количество первичных клиника"),
+    visits: col("Количество итого"), revenue: col("Сумма") };
+  const sourceHeader = rows.slice(hIdx, hIdx + 5).find(row => row.some(value => cellStr(value) === "Источник информации"));
+  const sourceCol = sourceHeader ? sourceHeader.findIndex(value => cellStr(value) === "Источник информации") : -1;
+  const levels = getRowLevels(ws || {});
+  if (!levels || sourceCol < 0 || Object.values(C).some(index => index < 0)) throw new Error("для отчёта первичных пациентов нужны уровни Клиника → Врач → Клиент → Услуга и подписанные колонки");
+  const numeric = (row, index) => cellStr(row[index]) === "" ? 0 : parseRuNumber(row[index]);
+  const perDoc = [];
+  let doctor = null;
+  for (let i = hIdx + 1; i < rows.length; i++) {
+    const row = rows[i] || [], name = cellStr(row[0]), level = levels[i] || 0;
+    if (!name || ["Врач", "Клиент", "Услуга", "Итого"].includes(name)) continue;
+    if (level === 0) {
+      doctor = null;
+    } else if (level === 1) {
+      doctor = { raw: name, patients: [], totals: Object.fromEntries(Object.entries(C).map(([key, index]) => [key, numeric(row, index)])) };
+      perDoc.push(doctor);
+    } else if (level === 2 && doctor) {
+      doctor.patients.push({ name, source: cellStr(row[sourceCol]),
+        ...Object.fromEntries(Object.entries(C).map(([key, index]) => [key, numeric(row, index)])) });
+    }
+  }
+  if (!perDoc.length || !perDoc.some(doctor => doctor.patients.length)) throw new Error("не найдены пациенты по врачам");
+  // Итог клиники считает уникальных людей и не складывается по врачам.
+  const checked = perDoc.every(doctor => Object.keys(C).every(key => doctor.totals[key] != null
+    && doctor.patients.every(patient => patient[key] != null)
+    && Math.abs(doctor.patients.reduce((sum, patient) => sum + patient[key], 0) - doctor.totals[key]) < .02));
+  return { perDoc, checked };
 }
 
 /* ---------- КЛИЕНТСКАЯ БАЗА / ДАВНОСТЬ ПОСЕЩЕНИЙ (по врачу, любое окно) ---------- */
@@ -848,7 +905,8 @@ async function processFile(file, options = {}) {
       const slice = String(nMonths);
       const m = ensureMonth(monthKey);
       if (!m.naznach[docId]) m.naznach[docId] = {};
-      const nextValue = { period: info.period, items: res.items, totals: res.totals };
+      const nextValue = { period: info.period, items: res.items, totals: res.totals,
+        patientAssignments: res.patientAssignments, patientDetailsAvailable: res.patientDetailsAvailable };
       if (!acceptSlotReplacement(`Назначения · ${log.doctor} · ${monthKey} · ${slice} мес.`, m.naznach[docId][slice], nextValue, log, options)) return finalizeFileLog(log);
       m.naznach[docId][slice] = nextValue;
       log.slot = { t: "naznach", mk: monthKey, doc: docId, sl: slice };
@@ -882,6 +940,23 @@ async function processFile(file, options = {}) {
       log.status = "загружено";
       log.doctor = "все (" + res.perDoc.length + ")";
       log.note = `срез ${slice} мес.` + (res.checked ? " ✓ сверено с «Итого»" : "");
+    } else if (type === "primaryPatients") {
+      if (nMonths !== 1) throw new Error("отчёт первичных пациентов нужен за один календарный месяц");
+      const res = parsePrimaryPatients(rows, info, ws);
+      const perDoc = {};
+      for (const doctor of res.perDoc) {
+        const id = resolveDoctor(doctor.raw);
+        if (!perDoc[id]) perDoc[id] = { patients: [], totals: { primary: 0, primaryClinic: 0, visits: 0, revenue: 0 } };
+        perDoc[id].patients.push(...doctor.patients);
+        for (const key of Object.keys(perDoc[id].totals)) perDoc[id].totals[key] = perDoc[id].totals[key] != null && doctor.totals[key] != null ? perDoc[id].totals[key] + doctor.totals[key] : null;
+      }
+      const m = ensureMonth(monthKey), nextValue = { period: info.period, perDoc, checked: res.checked };
+      if (!acceptSlotReplacement(`Пациенты по врачам · ${monthKey}`, m.primaryPatients?.perDoc ? m.primaryPatients : null, nextValue, log, options)) return finalizeFileLog(log);
+      m.primaryPatients = nextValue;
+      log.slot = { t: "primaryPatients", mk: monthKey };
+      log.status = "загружено";
+      log.doctor = `все (${res.perDoc.length})`;
+      log.note = `пациентов: ${res.perDoc.reduce((sum, doctor) => sum + doctor.patients.length, 0)}` + (res.checked ? " ✓ сверено с итогами врачей" : " ⚠ проверьте итоги");
     } else if (type === "prostoy") {
       const res = parseProstoy(rows);
       const m = ensureMonth(monthKey);

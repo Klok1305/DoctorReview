@@ -55,13 +55,17 @@ function assertCloudPatientPrivacy(pages, patterns = [], { doctorNames = [] } = 
 function cloudPrivacyPatterns(snapshot) {
   const patterns = new Set();
   for (const month of Object.values(snapshot.months || {})) {
+    const remember = patient => {
+      const name = String(patient.name || "").trim(), id = String(patient.patientId || "").trim();
+      if (name.length >= 4) patterns.add(name);
+      if (id.length >= 4 && !/^\d+$/.test(id)) patterns.add(id);
+    };
+    for (const doctor of Object.values(month.primaryPatients?.perDoc || {})) (doctor.patients || []).forEach(remember);
+    for (const windows of Object.values(month.naznach || {})) for (const source of Object.values(windows || {})) (source.patientAssignments || []).forEach(remember);
     for (const windows of Object.values(month.kb || {})) {
       for (const base of Object.values(windows || {})) {
         for (const patient of base.clients || []) {
-          const name = String(patient.name || "").trim();
-          const id = String(patient.patientId || "").trim();
-          if (name.length >= 4) patterns.add(name);
-          if (id.length >= 4 && !/^\d+$/.test(id)) patterns.add(id);
+          remember(patient);
         }
       }
     }

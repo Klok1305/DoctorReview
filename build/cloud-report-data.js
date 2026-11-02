@@ -62,19 +62,40 @@ function cloudDoctorReport(doctorId, monthKey, comments) {
     doctorHasDashboardData(doctorId, prevMonthKey(monthKey)) ? computeMetrics(doctorId, prevMonthKey(monthKey)) : null, comments, { includeDynamics: false });
   const base = adminClientBaseSummary(doctorId, monthKey);
   const groups = ["active", "loyalSleep", "newRisk", "lost"];
+  const baseSeries = adminClientBaseSeries(doctorId, monthKey);
+  const previousBase = adminClientBaseSummary(doctorId, prevMonthKey(monthKey));
+  const share = (value, group) => value?.total ? value.seg[group] / value.total * 100 : null;
+  const shareMetrics = groups.map(group => {
+    const current = share(base, group), previous = share(previousBase, group);
+    return mobilePublicationMetric(adminClientBaseGroupLabel(group), fmtPct(current),
+      `${clientBaseShareMovement(current, previous)}. ${monthLabel(prevMonthKey(monthKey))}: ${fmtPct(previous)} → ${monthLabel(monthKey)}: ${fmtPct(current)}. ${fmtNum(base?.seg[group])} чел.`,
+      "", current == null || previous == null || Math.abs(current - previous) < .0001 ? "neutral" : (group === "active" ? current > previous : current < previous) ? "good" : "bad");
+  });
   Object.assign(report.vectors[3], {
     methodologyId: "partition-v1-36m", scoreMethodologyId: "legacy-overlap-v1",
     methodologyLabel: "Четыре непересекающиеся группы за 36 месяцев, как в Admin и HTML. Балл В4 сохраняет прежнюю методику.",
     detail: "Клиентская база за три года: только количества и показатели.",
     windows: [{ id: "36", label: "3 года", period: "Точное окно 36 месяцев", methodologyId: "partition-v1-36m",
       sections: base ? [{ title: "Клиентская база", note: adminClientBaseQualityNote(base),
-        metrics: [mobilePublicationMetric("Общая база", fmtNum(base.total)), mobilePublicationMetric("Активные лояльные", fmtNum(base.seg.active)),
+        metrics: [mobilePublicationMetric("Общая база", fmtNum(base.total)), ...shareMetrics,
           mobilePublicationMetric("Кандидаты на реактивацию", fmtNum(base.reactivationCandidates)), mobilePublicationMetric("Выручка кандидатов", fmtMoney(base.reactivationSum))],
         columns: ["Группа", "Пациенты", "Доля", "Условие"],
         rows: groups.map(group => [adminClientBaseGroupLabel(group), fmtNum(base.seg[group]), fmtPct(base.total ? base.seg[group] / base.total * 100 : null), adminClientBaseGroupDescription(base.partition, group)]),
-        charts: [mobilePublicationChart("partition", "Группы клиентской базы", "donut", groups.map(adminClientBaseGroupLabel),
+        charts: [mobilePublicationChart("partition-shares", "Доли аудиторий по месяцам", "line", baseSeries.months.map(monthLabel), groups.map((group, index) => ({
+          label: adminClientBaseGroupLabel(group), color: ["#16a34a", "#64748b", "#d97706", "#dc2626"][index], values: baseSeries.bases.map(value => share(value, group)),
+        })), "%"), mobilePublicationChart("partition", "Группы клиентской базы", "donut", groups.map(adminClientBaseGroupLabel),
           [{ label: "Пациенты", values: groups.map(group => base.seg[group]), colors: ["#16a34a", "#94a3b8", "#d97706", "#dc2626"] }], "чел.")].filter(Boolean),
       }] : [{ title: "Клиентская база", metrics: [mobilePublicationMetric("Данные", "Нет точной выгрузки за 36 месяцев")] }] }],
+  });
+  const primary = doctorPrimaryPatients(doctorId, monthKey);
+  report.vectors[4].sections.push({ title: "Первичные пациенты врача",
+    note: `Первичные у выбранного врача. Посещения — с первого месяца пациента; доли — от всех первичных за год. ${primary.incompletePrimaryMonths.length ? `Неполные данные: ${primary.incompletePrimaryMonths.map(monthLabel).join(", ")}.` : "Загружены все месяцы с начала года."} Списки пациентов — в Админ и защищённом Viewer.`,
+    metrics: [mobilePublicationMetric("Первичных за месяц", fmtNum(primary.current?.count)),
+      mobilePublicationMetric("Доля от всех пациентов месяца", fmtPct(primary.current?.share), primary.current ? `${fmtNum(primary.current.count)} из ${fmtNum(primary.current.total)} пациентов` : "Нет отчёта «Пациенты по врачам»"),
+      mobilePublicationMetric(`Первичных за ${monthKey.slice(0, 4)} год`, fmtNum(primary.yearCount))],
+    columns: ["Посещений с первого месяца", "Чел.", "Доля первичных за год"],
+    rows: [...primary.buckets.map(bucket => [bucket.visits === 3 ? "3 и более" : String(bucket.visits), fmtNum(bucket.count), fmtPct(bucket.share)]),
+      ...(primary.unknownVisits ? [["Неполные данные", fmtNum(primary.unknownVisits), fmtPct(primary.patients.length ? primary.unknownVisits / primary.patients.length * 100 : null)]] : [])],
   });
   report.dynamics = cloudReportDynamics(monthKey, key => doctorHasDashboardData(doctorId, key) ? computeMetrics(doctorId, key) : null,
     profile, `doctor|${monthKey}|${doctorId}`);
@@ -87,6 +108,11 @@ function cloudDoctorReport(doctorId, monthKey, comments) {
     else vector.sections.push(section);
   }
   report.numbers = cloudReportNumbers(result, report);
+  report.numbers.metrics.push(...[
+    ["primary.month.count", primary.current?.count, "count"], ["primary.month.share", primary.current?.share, "percent"],
+    ["primary.year.count", primary.yearCount, "count"],
+    ...primary.buckets.map(bucket => [`primary.year.visits${bucket.visits}`, bucket.count, "count"]),
+  ].map(([id, value, unit]) => ({ id, value: Number.isFinite(value) ? value : null, unit, methodologyId: "doctor-primary-ytd-v1" })));
   return report;
 }
 

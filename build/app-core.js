@@ -1041,12 +1041,12 @@ function doctorName(id) {
 /* ---------- хранилище ---------- */
 
 function emptyMonth() {
-  return { vyrabotka: {}, kb: {}, naznach: {}, pervichka: {}, prostoy: {}, zapis: {}, manual6: {}, importedReports: {} };
+  return { vyrabotka: {}, kb: {}, naznach: {}, pervichka: {}, primaryPatients: {}, prostoy: {}, zapis: {}, manual6: {}, importedReports: {} };
 }
 function ensureMonth(key) {
   if (!DB.months[key]) DB.months[key] = emptyMonth();
   const m = DB.months[key];
-  for (const k of ["vyrabotka", "kb", "naznach", "pervichka", "prostoy", "zapis", "manual6"]) {
+  for (const k of ["vyrabotka", "kb", "naznach", "pervichka", "primaryPatients", "prostoy", "zapis", "manual6"]) {
     if (!m[k]) m[k] = {};
   }
   if (!m.importedReports || typeof m.importedReports !== "object" || Array.isArray(m.importedReports)) m.importedReports = {};
@@ -1138,6 +1138,7 @@ function migrateDB(parsed) {
         nm.kb[docId][win] = { clients: kb.clients, period: kb.period };
       }
       nm.pervichka = m.pervichka || {};
+      nm.primaryPatients = m.primaryPatients || {};
       nm.prostoy = m.prostoy || {};
       nm.zapis = m.zapis || {};
       nm.manual6 = m.manual6 || {};
@@ -1777,10 +1778,23 @@ function mergeDoctors(ids) {
       if (m.naznach && m.naznach[id]) {
         if (!m.naznach[target]) m.naznach[target] = {};
         for (const [sl, data] of Object.entries(m.naznach[id])) {
-          if (m.naznach[target][sl]) m.naznach[target][sl].items.push(...data.items);
+          if (m.naznach[target][sl]) {
+            const targetData = m.naznach[target][sl];
+            targetData.items.push(...data.items);
+            targetData.patientAssignments = [...(targetData.patientAssignments || []), ...(data.patientAssignments || [])];
+            targetData.patientDetailsAvailable = targetData.patientDetailsAvailable === true && data.patientDetailsAvailable === true;
+          }
           else m.naznach[target][sl] = data;
         }
         delete m.naznach[id];
+      }
+      if (m.primaryPatients?.perDoc?.[id]) {
+        const source = m.primaryPatients.perDoc[id], dest = m.primaryPatients.perDoc[target];
+        if (dest) {
+          dest.patients.push(...source.patients);
+          for (const key of Object.keys(dest.totals || {})) dest.totals[key] = dest.totals[key] != null && source.totals?.[key] != null ? dest.totals[key] + source.totals[key] : null;
+        } else m.primaryPatients.perDoc[target] = source;
+        delete m.primaryPatients.perDoc[id];
       }
       if (m.prostoy[id]) {
         if (m.prostoy[target]) {

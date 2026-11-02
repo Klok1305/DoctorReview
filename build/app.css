@@ -773,6 +773,27 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .kb-summary-value-line { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .kb-summary-share { color: var(--ink); font-size: 20px; font-weight: 800; line-height: 1.1; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .kb-summary-meta { color: var(--muted); font-size: 11px; line-height: 1.35; }
+.kb-share-movement { margin: 8px 0; color: var(--ink); font-size: 15px; font-weight: 750; line-height: 1.4; }
+.kb-share-comparison { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; margin-bottom: 10px; font-size: 12px; }
+.kb-share-history { margin: 18px 0; }
+.primary-patient-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
+.primary-patient-kpi { display: grid; align-content: start; gap: 6px; min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.primary-patient-kpi > span { font-weight: 650; }
+.primary-patient-kpi > b { font-size: 22px; font-variant-numeric: tabular-nums; }
+.primary-patient-kpi > small { color: var(--muted); }
+.primary-patients-scroll { overflow-x: auto; max-width: 100%; }
+.primary-patients-scroll table.data th { white-space: normal; min-width: 105px; overflow-wrap: anywhere; }
+.primary-patients-scroll td { overflow-wrap: anywhere; }
+.primary-patients-details { margin: 14px 0; }
+.primary-patients-details > summary { cursor: pointer; font-size: 15px; font-weight: 700; margin-bottom: 8px; }
+@media (max-width: 680px) { .primary-patient-kpis { grid-template-columns: 1fr; } }
+@media print {
+  .primary-patients-scroll { overflow: visible; }
+  .primary-patients-scroll table { width: 100%; table-layout: fixed; }
+  .primary-patients-scroll table.data th { min-width: 0; }
+  .primary-patients-details, [data-primary-patient-register] { break-inside: auto; }
+  .primary-patients-scroll tr { break-inside: avoid; }
+}
 .kb-summary-meta .kb-trend { margin-left: 4px; font-size: 11px; }
 .kb-summary-trends { display: grid; gap: 4px; margin-top: 9px; padding-top: 7px; border-top: 1px dashed rgba(100, 116, 139, .28); }
 .kb-summary-trends > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 10px; line-height: 1.25; }
