@@ -7,6 +7,16 @@ const crypto = require("node:crypto");
 const { createCloudPublication, cloudAccountsFromViewer, PIN_PARAMS } = require("../desktop/services/cloud-publication-service.cjs");
 const root = path.resolve(__dirname, "..");
 const layoutResults = [];
+function legacyClientBaseHtml() {
+  const groups = require("../mobile-pilot/report-presentation.js").clientBaseGroups;
+  const current = [20,20,30,30], previous = [10,30,40,20];
+  return `<div class="viewer-dashboard-snapshot"><div class="card" data-vector-key="v4" data-client-base-methodology="partition-v1-36m" data-legacy-v4-fixture>
+    <h3>Вектор 4 · прежний HTML</h3><p data-client-base-methodology-note>Методика блока: partition-v1-36m, балл legacy-overlap-v1.</p>
+    <div class="kb-vector-key-note">Ключевые показатели Вектора 4</div><div class="kb-summary-grid">${groups.map((group,i)=>`<div class="kb-summary-card" data-client-base-group="${group.key}"><b>${group.label}</b><div class="kb-summary-value">${current[i]} чел.</div><div class="kb-share-comparison"><span>Январь 2026: ${previous[i]}%</span><span>Февраль 2026: ${current[i]}%</span></div><p class="kb-summary-meta">Прежнее пояснение группы</p></div>`).join("")}</div>
+    <div class="kb-share-history"><h3>Как меняется доля каждой аудитории</h3><div class="chart-box"><svg class="old-line-marker" viewBox="0 0 100 30"><path d="M0,0L100,30"/></svg></div>
+    <div class="primary-patients-scroll"><table class="data"><thead><tr><th>Аудитория</th><th>Январь 2026</th><th>Февраль 2026</th></tr></thead><tbody>${groups.map((group,i)=>`<tr><td>${group.label}</td><td>${previous[i]}%</td><td>${current[i]}%</td></tr>`).join("")}</tbody></table></div></div>
+    <div><h3>ДИНАМИКА КЛИЕНТСКОЙ БАЗЫ ПО МЕСЯЦАМ</h3><p class="small muted">Каждая полоса — вся база.</p><div class="chart-box"><svg class="old-line-marker"></svg></div></div></div></div>`;
+}
 async function auditLayout(page, state, report = false) {
   const originalViewport = page.viewportSize();
   const originalName = await page.locator("#onlineUser").textContent();
@@ -57,13 +67,14 @@ async function main() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "klinvekt-cloud-webkit-"));
   const samplePath = path.join(root, "tmp", "cloud-publication-smoke.kvcloud");
   const sample = fs.existsSync(samplePath) ? JSON.parse(fs.readFileSync(samplePath, "utf8")) : null;
-  const samplePage = sample?.pages.find(page => page.kind === "doctor"
+  const samplePage = sample?.pages.filter(page => page.kind === "doctor"
     && page.report?.numbers?.metrics.some(metric => metric.id === "primary.year.count" && metric.value > 0)
-    && page.report.vectors[3]?.windows?.some(window => window.sections.some(section => section.charts?.some(chart => chart.id === "partition-shares"))))
+    && page.report.vectors[3]?.windows?.some(window => window.sections.some(section => section.charts?.some(chart => chart.id === "partition-shares")))).at(-1)
     || sample?.pages.find(page => page.kind === "doctor");
   const html = ((samplePage?.report ? require("../mobile-server/cloud-report-renderer.cjs").renderCloudReport(samplePage.report, samplePage.title) : samplePage?.html)
     || '<div class="viewer-dashboard-snapshot"><div class="card"><h2>Синтетический отчёт</h2><p>43 визита</p><p>Комментарий администратора</p></div></div>')
     + '<section class="reputation-honor-board"><h2>Доска почёта · старый HTML</h2></section>'
+    + legacyClientBaseHtml()
     + '<div class="card"><table class="data" id="tblDepartmentYear"><tr><th>Выручка с перенаправлениями</th><th>Доля перенаправлений от выручки</th><th>Возвращаемость первички за 3 месяца</th></tr><tr><td>3 000 ₽</td><td>20%</td><td>50%</td></tr></table></div>';
   const publication = createCloudPublication({ appVersion: "test", doctors: [
     { doctorId: "a", displayName: "Врач А", department: "A", specialization: "X" },
@@ -100,6 +111,15 @@ async function main() {
     assert.equal(await frame.locator(".reputation-honor-board").count(), 0, "old HTML publications must also lose the honor board");
     assert.equal(await frame.locator("#tblDepartmentYear .report-table-heading-line").count(), 6);
     assert.equal(await frame.locator("[data-viewer-patient-register]").count(), 0);
+    const legacyBase = frame.locator("[data-legacy-v4-fixture]");
+    await legacyBase.locator("[data-client-base-composition] svg").waitFor();
+    assert.equal(await legacyBase.locator(".old-line-marker").count(), 0);
+    assert.equal(await legacyBase.locator("[data-client-base-methodology-note]").isVisible(), false);
+    assert.equal(await legacyBase.locator("[data-report-help]").evaluate(element => element.open), false);
+    assert.doesNotMatch(await legacyBase.innerText(), /partition-v1|legacy-overlap/);
+    assert.equal(await legacyBase.locator('tr[data-client-base-group="active"] td.period-best').textContent(), "20%");
+    assert.equal(await legacyBase.locator('tr[data-client-base-group="lost"] td.period-best').textContent(), "20%");
+    assert.equal(await legacyBase.locator('tr[data-client-base-group="lost"] td.period-worst').textContent(), "30%");
     const headerKpisFit = await frame.locator(".gauge-wrap .kpi").evaluateAll(elements => elements.every(element => {
       const rect = element.getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth;
     }));
@@ -205,10 +225,27 @@ async function main() {
       const primaryTotal = samplePage.report.numbers.metrics.find(metric => metric.id === "primary.year.count");
       assert.ok(primaryTotal, "new online reports retain numeric primary cohort");
       assert.match(await primarySection.textContent(), /1[\s\S]*2[\s\S]*3 и более/);
-      const primaryShares = numericFrame.locator('[data-vector-key="v4"] .report-chart').filter({ has: numericFrame.locator('h5', { hasText: "Доли аудиторий по месяцам" }) });
-      await primaryShares.scrollIntoViewIfNeeded();
-      await primaryShares.locator(".chart-plot svg:visible").first().waitFor();
+      const clientBase = numericFrame.locator('[data-vector-key="v4"]');
+      await clientBase.locator("[data-client-base-composition] svg").waitFor();
+      const sourceBase = samplePage.report.vectors[3].windows[0].sections[0];
+      assert.deepEqual(JSON.parse(await clientBase.locator("[data-client-base-composition]").getAttribute("data-client-base-values")), sourceBase.charts.find(chart=>chart.id==='partition').series[0].values);
+      assert.equal(await clientBase.locator("[data-report-help]").evaluate(element=>element.open), false);
+      assert.equal(await clientBase.locator("[data-client-base-share-table] tbody tr").count(), 4);
+      assert.equal(await clientBase.locator('.report-chart[data-chart*="partition-shares"]').count(), 0);
+      await clientBase.locator("[data-report-help] > summary").click();
+      assert.equal(await clientBase.locator(".report-help-body").isVisible(), true);
+      await clientBase.locator("[data-report-help] > summary").click();
       await primarySection.screenshot({ path: path.join(root, "tmp", "cloud-primary-patients.png") });
+      const preview = await pinContext.newPage();
+      const v4Html = await clientBase.evaluate(element => element.outerHTML);
+      await preview.setContent(`<meta name="viewport" content="width=device-width,initial-scale=1"><body class="online-report"><main class="cloud-data-report">${v4Html}</main></body>`);
+      await preview.addStyleTag({ content: fs.readFileSync(path.join(root,"tmp/klinvekt-mobile-server/public/online-report.css"),"utf8") });
+      for (const width of [1440,390]) {
+        await preview.setViewportSize({ width, height: 1000 });
+        assert.ok(await preview.evaluate(()=>document.documentElement.scrollWidth-innerWidth<=2));
+        await preview.screenshot({ path: path.join(root,"tmp",`client-base-online-${width}.png`), fullPage:true, scale:"css" });
+      }
+      await preview.close();
     }
     const headerTable = numericFrame.locator(".cloud-section").filter({ has: numericFrame.locator("h3", { hasText: "Годовая таблица показателей" }) });
     assert.ok(await headerTable.locator("th").evaluateAll(cells => cells.length === 3 && cells.every(cell => {

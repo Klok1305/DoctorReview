@@ -1,5 +1,62 @@
 "use strict";
 for (const board of document.querySelectorAll(".reputation-honor-board")) board.remove();
+// Older HTML snapshots receive the same presentation without changing their data.
+const presentation = window.klinvektReportPresentation;
+const displayNumber = value => {
+  const match = String(value || "").match(/-?\d[\d\s\u00a0]*(?:[.,]\d+)?/);
+  return match ? Number(match[0].replace(/[\s\u00a0]/g, "").replace(",", ".")) : null;
+};
+function reportHelpBody(section) {
+  let help = section.querySelector(":scope > [data-report-help]");
+  if (!help) {
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = presentation.reportHelpHtml("<span></span>");
+    help = wrapper.firstElementChild;
+    help.querySelector(".report-help-body").replaceChildren();
+    section.appendChild(help);
+  }
+  help.open = false;
+  return help.querySelector(".report-help-body");
+}
+for (const section of document.querySelectorAll('.viewer-dashboard-snapshot [data-vector-key="v4"][data-client-base-methodology="partition-v1-36m"]')) {
+  if (section.querySelector('.kb-summary-card[data-client-base-group="loyal"]')) continue;
+  const help = reportHelpBody(section);
+  for (const note of section.querySelectorAll('[data-client-base-methodology-note], .kb-source, .kb-vector-key-note, .kb-group-rules, .kb-action')) {
+    if (!note.closest("[data-report-help]")) help.appendChild(note);
+  }
+  for (const meta of section.querySelectorAll('.kb-summary-card:not([data-client-base-group="total"]) .kb-summary-meta')) meta.remove();
+  const history = section.querySelector(".kb-share-history");
+  const oldTable = history?.querySelector("table");
+  if (oldTable) {
+    const rows = [...oldTable.querySelectorAll("tbody tr")];
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = presentation.clientBaseShareTableHtml([...oldTable.querySelectorAll("thead th")].slice(1).map(cell => cell.textContent.trim()),
+      rows.map((row, index) => ({ ...presentation.clientBaseGroups[index], label: row.cells[0].textContent.trim(),
+        values: [...row.cells].slice(1).map(cell => displayNumber(cell.textContent)) })));
+    history.replaceWith(wrapper.firstElementChild);
+  }
+  if (!section.querySelector("[data-client-base-composition]")) {
+    const values = presentation.clientBaseGroups.map(group => displayNumber(section.querySelector(`.kb-summary-card[data-client-base-group="${group.key}"] .kb-summary-value`)?.textContent));
+    const period = section.querySelector('.kb-share-comparison span:last-child')?.textContent.match(/[А-Яа-яЁё]+ \d{4}/)?.[0]
+      || [...section.querySelectorAll("[data-client-base-share-table] thead th")].at(-1)?.textContent.replace(/\s+/g, " ").trim() || "";
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = presentation.clientBaseCompositionHtml(values, period);
+    section.querySelector(".kb-summary-grid")?.insertAdjacentElement("afterend", wrapper.firstElementChild);
+  }
+  for (const heading of section.querySelectorAll("h3")) if (/^ДИНАМИКА КЛИЕНТСКОЙ БАЗЫ ПО МЕСЯЦАМ/i.test(heading.textContent.trim())) {
+    const container = heading.parentElement;
+    if (container === section) continue;
+    for (const child of [...container.children]) {
+      if (child === heading || child.classList.contains("chart-box")) child.remove();
+      else if (child.matches("p.small")) help.appendChild(child);
+    }
+  }
+}
+for (const section of document.querySelectorAll(".viewer-dashboard-snapshot [data-primary-patients-summary]")) {
+  for (const note of [...section.querySelectorAll("p")]) {
+    if (!note.closest("[data-report-help]") && /^(Первичный —|Наблюдение —|Направления:)/.test(note.textContent.trim())) reportHelpBody(section).appendChild(note);
+  }
+}
 for (const table of document.querySelectorAll("#tblDepartmentYear")) {
   table.classList.add("department-year-table");
   if (!table.parentElement.classList.contains("department-year-scroll")) {
@@ -32,7 +89,7 @@ if (typeof IntersectionObserver === "function") {
   chartCards.filter(card => card.dataset.chartDeferred).forEach(card => observer.observe(card));
 } else chartCards.filter(card => card.dataset.chartDeferred).forEach(drawChart);
 window.addEventListener("beforeprint", () => {
-  for (const details of document.querySelectorAll(".cloud-data-report details")) details.open = true;
+  for (const details of document.querySelectorAll(".cloud-data-report details:not(.report-help)")) details.open = true;
   chartCards.filter(card => card.dataset.chartDeferred).forEach(drawChart);
   for (const image of document.images) image.loading = "eager";
 });

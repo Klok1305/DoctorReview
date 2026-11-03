@@ -435,6 +435,12 @@ function createWindow() {
                   { n: 'Фокус Б — анализы', a: 10, d: 4, sq: 3, ss: 30000 },
                   { n: 'Фокус В — диагностика', a: 8, d: 2, sq: 1, ss: 15000 }
                 ] } };
+                DB.months[mk].kb.d1 = { '36': { clients: [
+                  ...Array.from({length:index+1},(_,i)=>({name:'Синтетическая база активный '+i,v:10,r:15,s:1000})),
+                  {name:'Синтетическая база спящий',v:10,r:500,s:1000},
+                  {name:'Синтетическая база новый',v:1,r:15,s:1000},
+                  {name:'Синтетическая база потерянный',v:1,r:800,s:1000}
+                ] } };
               }
               UI.repMonth = '2026-03';
               for (const mk of Object.keys(DB.months)) DB.months[mk].primaryPatients = { perDoc: { d1: { patients: Array.from({ length: 45 }, (_, i) => ({
@@ -785,7 +791,13 @@ function createWindow() {
                 && document.getElementById('tblPrimaryYear').textContent.includes('Приём кардиолога')
                 && document.querySelectorAll('#blkV4 .kb-share-movement').length === 4;
               flushReportCharts();
-              const clientShareChartValid = UI.charts.chClientShares?.data.datasets[0].data.join(',') === '20,40';
+              const clientBasePie = document.querySelector('#blkV4 [data-client-base-composition]');
+              const activeShares = document.querySelector('#blkV4 [data-client-base-share-table] tr[data-client-base-group="active"]');
+              const clientShareChartValid = clientBasePie?.querySelectorAll('svg path').length === 4
+                && JSON.parse(clientBasePie.dataset.clientBaseValues).join(',') === '2,1,1,1'
+                && activeShares?.cells[1].classList.contains('period-worst') && activeShares?.cells[2].classList.contains('period-best')
+                && [...document.querySelectorAll('#blkV4 [data-report-help]')].every(help => !help.open)
+                && !document.querySelector('#blkV4 [data-client-base-methodology-note], #chClientShares, #chSegments');
               const riskActionButton = [...document.querySelectorAll('.kb-action-controls button')].find(button => button.textContent.includes('Новые, риск'));
               if (riskActionButton) riskActionButton.click();
               await new Promise(resolve => setTimeout(resolve, 100));
@@ -1532,11 +1544,12 @@ function createWindow() {
               flushReportCharts(); for (const instance of Object.values(UI.charts)) { instance.stop(); instance.update('none'); }
               await new Promise(resolve => setTimeout(resolve, 100));
               const table = document.getElementById('blkDyn_tbl');
-              const otherChart = UI.charts.chSegments;
-              if (otherChart.data.datasets.map(row => row.label).join('|') !== 'Активные лояльные|Лояльные спящие|Новые в риске|Потерянные') throw Error('Admin QA: expected four client-base groups');
-              if (otherChart.data.datasets.some(row => !(row.data[0] > 0))) throw Error('Admin QA: a known client-base group disappeared');
-              const stackedTotals = otherChart.data.labels.map((_label, index) => otherChart.data.datasets.reduce((sum, dataset) => sum + (dataset.data[index] || 0), 0));
-              if (stackedTotals.some((total, index) => otherChart.$clientBaseTotals[index] != null && total !== otherChart.$clientBaseTotals[index])) throw Error('Admin QA: client-base patients disappeared from stack');
+              const baseComposition = document.querySelector('#blkV4 [data-client-base-composition]');
+              const pieValues = JSON.parse(baseComposition.dataset.clientBaseValues);
+              const shareRows = [...document.querySelectorAll('#blkV4 [data-client-base-share-table] tbody tr')];
+              if (shareRows.map(row => row.dataset.clientBaseGroup).join('|') !== 'active|loyalSleep|newRisk|lost') throw Error('Admin QA: expected four client-base groups');
+              if (pieValues.some(value => !(value > 0)) || pieValues.reduce((sum, value) => sum + value, 0) !== adminClientBaseSummary('d1','2026-12').total) throw Error('Admin QA: client-base patients disappeared from pie');
+              if (shareRows.some(row => JSON.parse(row.dataset.periodValues).length !== 12)) throw Error('Admin QA: client-base year missing months');
               if ([...table.rows].some(row => row.cells[0].textContent.trim() === 'Визиты')) throw Error('Admin QA: visits row remains');
               for (const label of ['Конверсия от назначенного', 'Доля от общей базы']) {
                 const row = [...table.rows].find(row => row.cells[0].textContent.includes(label));
@@ -1549,11 +1562,11 @@ function createWindow() {
               if (monthCells.some(cell => cell.getBoundingClientRect().width < 85)) throw Error('Admin QA: month columns too narrow');
               if (document.querySelector('#tblRef').textContent.includes('Профильные услуги') || document.querySelector('#tblRef').textContent.includes('Другие услуги клиники')) throw Error('Admin QA: legacy service split remains');
               if (document.querySelector('.completed-referrals-section').textContent.toLowerCase().includes('конверсия')) throw Error('Admin QA: conversion in performed block');
-              if (UI.charts.chSegments.config.type !== 'bar' || UI.charts.chSegments.options.indexAxis !== 'y' || UI.charts.chSegments.data.labels.length !== 12) throw Error('Admin QA: client-base dynamics missing');
+              if (document.querySelector('#blkV4 [data-client-base-share-table] thead tr').cells.length !== 13 || document.querySelector('#blkV4 #chSegments, #blkV4 #chClientShares')) throw Error('Admin QA: expected pie and year table');
               const capture = async element => (await html2canvas(element, { backgroundColor: '#ffffff', scale: 1, logging: false, windowWidth: 1400 })).toDataURL('image/png');
               const yearImage = await capture(table);
               const v3Image = await capture(document.getElementById('blkV3'));
-              const baseImage = await capture(document.getElementById('chSegments').parentElement.parentElement);
+              const baseImage = await capture(document.querySelector('#blkV4 [data-client-base-composition]'));
               UI.deptMonth = '2026-12'; UI.deptFilter = 'Косметология'; UI.subFilter = 'all';
               await switchTab('dept'); flushReportCharts();
               const specializationCharts = ['money', 'traffic', 'pct', 'base'].map(key => UI.charts['blkDeptDyn_' + key]).filter(Boolean);
@@ -1596,7 +1609,8 @@ function createWindow() {
               const source36 = DB.months['2026-12'].kb.d1['36'];
               delete DB.months['2026-12'].kb.d1['36'];
               clearMetricsCache(); await renderDoctor();
-              if (UI.charts.chSegments.$clientBaseTotals[11] !== null || UI.charts.chSegments.$clientBaseTotals[0] !== source36.clients.length) throw Error('Admin QA: missing latest 36-month source erases history or uses short window');
+              const remainingHistory = JSON.parse(document.querySelector('#blkV4 [data-client-base-share-table] tbody tr').dataset.periodValues);
+              if (remainingHistory[11] !== null || remainingHistory[0] == null || document.querySelector('#blkV4 [data-client-base-composition] svg')) throw Error('Admin QA: missing latest 36-month source erases history or uses short window');
               DB.months['2026-12'].kb.d1['36'] = source36;
               clearMetricsCache(); await renderDoctor();
               UI.departmentFilter = 'Косметология'; UI.departmentMonth = '2026-02';

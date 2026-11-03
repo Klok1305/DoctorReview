@@ -14,6 +14,7 @@ function fixtureContext() {
   ], saveDatabase: async () => ({ dataRevision: 1 }) }, addEventListener() {} },
     document: { getElementById: () => null, querySelectorAll: () => [], addEventListener() {}, createElement() { throw new Error("JSON attempted dashboard rendering"); } },
     localStorage: { getItem: () => null, setItem() {} }, navigator: {}, crypto: crypto.webcrypto, TextEncoder, DOMException, Blob, Intl, setTimeout, clearTimeout });
+  vm.runInContext(fs.readFileSync(path.join(root, "mobile-pilot/report-presentation.js"), "utf8"), context);
   for (const file of ["app-core.js", "app-parsers.js", "app-metrics.js", "cloud-report-data.js", "app-ui.js"]) {
     vm.runInContext(fs.readFileSync(path.join(root, "build", file), "utf8"), context, { filename: file });
   }

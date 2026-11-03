@@ -1617,7 +1617,6 @@ function viewerClientBaseHtml(target, periodKey) {
   const kb = adminClientBaseSummary(doctorId, periodKey);
   if (!kb) return "";
   return `<div class="viewer-client-base-register" data-viewer-client-base data-client-base-methodology="partition-v1-36m">
-    <p class="kb-source"><b>Источник данных:</b> отчёт за ${esc(monthLabel(periodKey))} · период выгрузки ${esc(periodStr(kb.period))} · единая с Admin методика четырёх непересекающихся групп за 36 мес.</p>
     ${viewerPatientRowsHtml(kb)}
   </div>`;
 }
@@ -2151,7 +2150,8 @@ async function cloneDashboardSnapshot(source, { chartMimeType = "image/png", cha
     element.removeAttribute("ontoggle");
   });
   clone.querySelectorAll("script, iframe, object, embed").forEach(element => element.remove());
-  for (const details of clone.querySelectorAll("details:not(.no-print)")) details.open = true;
+  for (const details of clone.querySelectorAll("details:not(.no-print):not(.report-help)")) details.open = true;
+  clone.querySelectorAll("[data-report-help]").forEach(details => { details.open = false; });
   if (waitForPaint) await Promise.all([...clone.querySelectorAll("img")].map(image => image.complete ? Promise.resolve() : new Promise(resolve => {
     image.onload = image.onerror = resolve;
   })));
@@ -2850,11 +2850,11 @@ function clientBaseShareMovement(current, previous) {
   return `Доля ${delta > 0 ? "выросла" : "снизилась"} на ${fmtNum(Math.abs(delta), 1)} п.п.`;
 }
 function clientBaseShareHistoryHtml(series) {
-  return `<div class="kb-share-history"><h3>Как меняется доля каждой аудитории</h3>
-    <p class="small muted">Процент от всей базы врача за 36 месяцев. Пропущенные месяцы остаются пустыми. Рост активных лояльных и снижение потерянных — положительная динамика.</p>
-    <div class="chart-box"><canvas id="chClientShares"></canvas></div>
-    <div class="primary-patients-scroll"><table class="data"><thead><tr><th>Аудитория</th>${series.months.map(month => `<th class="num">${esc(monthLabel(month))}</th>`).join("")}</tr></thead>
-    <tbody>${["active", "loyalSleep", "newRisk", "lost"].map(group => `<tr><td>${esc(adminClientBaseGroupLabel(group))}</td>${series.bases.map(base => `<td class="num">${fmtPct(base ? clientBaseGroupPct(base, group) : null)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></div>`;
+  const presentation = globalThis.klinvektReportPresentation;
+  const base = series.bases[series.bases.length - 1];
+  return presentation.clientBaseCompositionHtml(presentation.clientBaseGroups.map(group => base ? base.seg[group.key] : null), monthLabel(series.months[series.months.length - 1]))
+    + presentation.clientBaseShareTableHtml(series.months.map(monthLabel), presentation.clientBaseGroups.map(group => ({ ...group,
+      values: series.bases.map(base => base ? clientBaseGroupPct(base, group.key) : null) })));
 }
 function primaryReferralText(referral) {
   return referral.status === true ? "Да" : referral.status === false ? "Нет" : "Нет данных";
@@ -2868,14 +2868,13 @@ function primaryPatientsReportHtml(docId, monthKey, { registry = true } = {}) {
   const tile = (label, value, note = "") => `<div class="primary-patient-kpi"><span>${esc(label)}</span><b>${value}</b><small>${esc(note)}</small></div>`;
   const missing = summary.incompletePrimaryMonths;
   let html = `<section class="primary-patients-report" data-primary-patients-summary><h3>Первичные пациенты врача</h3>
-    <p class="small muted">Первичный — по колонке «Количество первичных», впервые у этого врача. Посещения и выручка — у выбранного врача по итоговым строкам пациентов, без сложения вложенных услуг.</p>
     <div class="primary-patient-kpis">${tile("Первичных за месяц", fmtNum(current?.count), monthLabel(monthKey))}${tile("Доля от всех пациентов месяца", fmtPct(current?.share), current ? `${fmtNum(current.count)} из ${fmtNum(current.total)} пациентов` : "Загрузите отчёт «Пациенты по врачам»")}${tile(`Первичных за ${monthKey.slice(0, 4)} год`, fmtNum(summary.yearCount), `Январь — ${monthLabel(monthKey)}`)}</div>
     ${missing.length ? `<p class="notice blue">Годовой список неполный. Нет корректных данных первичности: ${esc(missing.map(monthLabel).join(", "))}. Пропуски не считаются нулевыми визитами.</p>` : ""}`;
   const breakdown = `<h3>Посещения первичных пациентов за год</h3><div class="primary-patient-kpis">${summary.buckets.map(bucket => tile(bucket.visits === 3 ? "3 и более посещений" : `${bucket.visits} ${bucket.visits === 1 ? "посещение" : "посещения"}`, `${fmtNum(bucket.count)} чел. · ${fmtPct(bucket.share)}`, "Доля от всех первичных в годовом списке")).join("")}</div>
     ${summary.unknownVisits ? `<p class="small muted">У ${fmtNum(summary.unknownVisits)} пациентов нет полного числа посещений. Они учтены в общем количестве первичных, но не отнесены к группам 1 / 2 / 3+.</p>` : ""}
-    <p class="small muted">Наблюдение — с первого месяца пациента до ${esc(monthLabel(monthKey))} включительно. У поздних первичных было меньше времени вернуться.</p>`;
+    `;
   if (registry) {
-    html += `<div data-primary-patient-register><p class="small muted">${esc(referralNote)}</p>
+    html += `<div data-primary-patient-register>
     <details class="primary-patients-details" open><summary>Первичные за ${esc(monthLabel(monthKey))} · ${fmtNum(current?.patients.length)}</summary>
       <div class="primary-patients-scroll"><table class="data" id="tblPrimaryMonth"><thead><tr><th>ФИО пациента</th><th>Источник</th><th class="num">Посещений за месяц</th><th>Направлялся</th><th>Какие назначения</th></tr></thead><tbody>
       ${current ? current.patients.map(patient => `<tr><td>${esc(patient.name)}</td><td>${esc(patient.source || "Не указан")}</td><td class="num">${fmtNum(patient.visits)}</td><td>${primaryReferralText(patient.referral)}</td><td>${esc(primaryReferralItemsText(patient.referral) || "—")}</td></tr>`).join("") || '<tr><td colspan="5">Первичных пациентов в этом месяце нет.</td></tr>' : '<tr><td colspan="5">Загрузите месячный отчёт «Пациенты по врачам».</td></tr>'}</tbody></table></div></details>
@@ -2883,7 +2882,7 @@ function primaryPatientsReportHtml(docId, monthKey, { registry = true } = {}) {
       <div class="primary-patients-scroll"><table class="data" id="tblPrimaryYear"><thead><tr><th>ФИО пациента</th><th>Источник</th><th>Первый месяц</th><th class="num">Посещений с первого месяца</th><th class="num">Выручка с первого месяца</th><th>Направлялся к другим специалистам</th></tr></thead><tbody>
       ${summary.patients.map(patient => `<tr><td>${esc(patient.name)}</td><td>${esc(patient.source || "Не указан")}</td><td>${esc(monthLabel(patient.firstMonth))}</td><td class="num">${patient.visits == null ? `${fmtNum(patient.observedVisits)} · неполные данные` : fmtNum(patient.visits)}</td><td class="num">${patient.revenue == null ? `${fmtMoney(patient.observedRevenue)} · неполные данные` : fmtMoney(patient.revenue)}</td><td>${primaryReferralText(patient.referral)}${patient.referral.status ? `<div class="small muted">${esc(primaryReferralItemsText(patient.referral))}</div>` : ""}</td></tr>`).join("") || '<tr><td colspan="6">Первичных пациентов в загруженных месяцах нет.</td></tr>'}</tbody></table></div></details></div>`;
   }
-  return html + breakdown + "</section>";
+  return html + breakdown + globalThis.klinvektReportPresentation.reportHelpHtml(`<p>Первичный пациент впервые пришёл к выбранному врачу. Посещения и выручка считаются только у этого врача, с первого месяца пациента до ${esc(monthLabel(monthKey))} включительно.</p><p>В итогах 1 / 2 / 3+ учитывается и первое посещение. У тех, кто пришёл недавно, было меньше времени вернуться.</p><p>${esc(referralNote)}</p>`) + "</section>";
 }
 function dynamicsHtml(dyn, blkId, title, subtitle, noteKey, detailTailHtml = "", includeOutcome = true) {
   if (!dyn || dyn.months.length < 1) return "";
@@ -4519,10 +4518,10 @@ function renderDoctorNow() {
   /* ---- В4 Клиентская база ---- */
   const kb = adminClientBaseSummary(UI.docId, mk);
   const kbSeries = adminClientBaseSeries(UI.docId, mk);
+  let clientBaseHelp = "";
   html += `<div class="card vector-card" id="blkV4" data-vector-key="v4" data-client-base-methodology="partition-v1-36m" style="border-top-color:${VECTOR_META.v4.color}">
     <div class="vhead"><h3 class="mt0">Вектор 4. Работа с клиентской базой <span class="badge ${VECTOR_META.v4.cls}">${VECTOR_META.v4.tag}</span></h3>
-    <span>${vecBadge("v4", r, docProfile)} ${blockBtn("blkV4")} <span class="badge mut">База за 3 года</span></span></div>
-    <p class="small muted" data-client-base-methodology-note><b>Методика блока:</b> partition-v1-36m — четыре непересекающиеся группы за 36 месяцев. <b>Балл В4:</b> legacy-overlap-v1 — прежние совместимые показатели и цели; изменение формулы балла не выполнялось.</p>`;
+    <span>${vecBadge("v4", r, docProfile)} ${blockBtn("blkV4")} <span class="badge mut">База за 3 года</span></span></div>`;
   if (!kb) {
     html += `<p class="notice blue">За ${esc(monthLabel(mk))} нет выгрузки «Давность посещений» за 36 месяцев. Загрузите её для полной трёхлетней базы. Данные других месяцев показаны ниже; отсутствие выгрузки не означает ноль пациентов.</p>`;
   } else {
@@ -4552,7 +4551,6 @@ function renderDoctorNow() {
         <div class="kb-summary-value-line"><div class="kb-summary-value">${fmtNum(kb.seg[group])} чел.</div><div class="kb-summary-share">${fmtPct(share)}</div></div>
         <div class="kb-share-movement">${esc(clientBaseShareMovement(share, previousShare))}</div>
         <div class="kb-share-comparison"><span>${esc(monthLabel(kbDyn.prevKey))}: <b>${fmtPct(previousShare)}</b></span><span>${esc(monthLabel(mk))}: <b>${fmtPct(share)}</b></span></div>
-        <div class="kb-summary-meta">${esc(clientBaseGroupDescription(kb, group))}</div>
         <div class="kb-summary-trends">
           <div><span>К предыдущему месяцу</span>${kbTrendMarkup(share, previousShare, lowerBetter, "pp")}</div>
           <div><span>К среднему за ${kbDyn.year}</span>${kbTrendMarkup(share, kbDyn.avgGroupPct[group], lowerBetter, "pp")}</div>
@@ -4560,9 +4558,10 @@ function renderDoctorNow() {
       </div>`;
     }).join("");
     const rulesMarkup = groupOrder.map(group => `<li><b>${esc(adminClientBaseGroupLabel(group))}:</b> ${esc(clientBaseGroupDescription(kb, group))}.</li>`).join("");
-    html += `<p class="kb-source">Период: ${periodStr(kb.period)} · база за 36 мес. · Пороги ${esc(settingsScope)}. Четыре группы без пересечений: каждый пациент учтён один раз. <a href="#" onclick="switchTab('settings');return false">Настройки</a></p>
-    ${unavailableGroups.length ? `<div class="notice blue"><b>В этом периоде не показываются:</b> ${esc(unavailableGroups.join(", "))}. Их временной порог больше ${fmtNum(kb.window)} месяцев; выберите более длинную выгрузку.</div>` : ""}
-    <div class="kb-vector-key-note"><b>Ключевые показатели Вектора 4:</b> рост доли активных пациентов и снижение доли потерянных.</div>
+    clientBaseHelp = `<p><b>Источник данных:</b> ${esc(periodStr(kb.period))}, база за 3 года. Настройки ${esc(settingsScope)}.</p>
+      <p>Каждый пациент относится к одной группе. Доля группы считается от всей базы врача.</p><ul>${rulesMarkup}</ul>
+      <p>Зелёным в таблице отмечены лучшие значения за показанный период, красным — худшие. Для активных лояльных лучше большая доля, для остальных групп — меньшая. Одинаковые значения не выделяются.</p><p>${actionText}</p>`;
+    html += `${unavailableGroups.length ? `<div class="notice blue"><b>Нет данных по группам:</b> ${esc(unavailableGroups.join(", "))}.</div>` : ""}
     <div class="kb-summary-grid">
       <div class="kb-summary-card" data-client-base-group="total">
         <div class="kb-summary-label">Общая база</div>
@@ -4576,14 +4575,10 @@ function renderDoctorNow() {
       ${groupCards}
     </div>
     ${clientBaseShareHistoryHtml(kbSeries)}
-    <div class="kb-group-rules"><b>Что означает каждая показанная группа:</b><ul>${rulesMarkup}</ul><p class="small muted">Процент каждой группы считается от общей базы — ${fmtNum(kb.total)} уникальных пациентов.</p></div>
-    <div class="kb-action">
-      <div><div class="kb-action-title">Что сделать сейчас</div><div class="kb-action-text">${actionText}</div></div>
       <div class="kb-action-controls no-print">
         ${kb.groupAvailable.newRisk && kb.seg.newRisk ? `<button class="btn mini primary" onclick="openClientSegment('newRisk')">Новые, риск · ${fmtNum(kb.seg.newRisk)}</button>` : ""}
         ${kb.groupAvailable.loyalSleep && kb.seg.loyalSleep ? `<button class="btn mini" onclick="openClientSegment('loyalSleep')">Лояльные, спящие · ${fmtNum(kb.seg.loyalSleep)}</button>` : ""}
       </div>
-    </div>
     <div class="no-print" style="margin-top:12px"><details id="clientSegmentPatients" ${collapsibleListAttrs("clientSegmentPatients", false)}><summary class="collapsible-list-summary"><span>ПАЦИЕНТЫ ДЛЯ РАБОТЫ <span class="badge mut" id="clientSegmentPatientCount">${fmtNum(selectedClients.length)}</span></span><span class="collapse-hint"></span></summary>
       <div class="collapsible-list-body"><div class="vhead"><span class="small muted">Выберите сегмент базы</span>${segToggle("clientSegmentSeg", segmentOptions, UI.clientSegment, "setClientSegment")}</div>
       <div style="overflow-x:auto;margin-top:8px"><table class="data" id="tblClientSegment"><thead><tr><th>Пациент</th><th>Признак</th><th class="num">Визитов</th><th class="num">Дней с визита</th><th class="num">Историческая выручка</th></tr></thead><tbody id="clientSegmentRows">${clientSegmentRowsMarkup(selectedClients)}</tbody>
@@ -4595,14 +4590,9 @@ function renderDoctorNow() {
     const note = adminClientBaseQualityNote(base);
     return note ? `${monthLabel(kbSeries.months[index])}: ${note}` : "";
   }).filter(Boolean);
-  html += `<div><h3 class="small muted" style="margin-bottom:6px">ДИНАМИКА КЛИЕНТСКОЙ БАЗЫ ПО МЕСЯЦАМ ${copyBtn("copyChart", "chSegments", "PNG")}</h3>
-    <p class="small muted">Каждая полоса — вся база за 36 месяцев на дату отчёта. Слева — месяцы текущего года, внутри — пациенты четырёх групп, справа — общая база. Сумма четырёх групп равна базе.</p>
-    <p class="small muted">Настройки → Нормативы специализации → Четыре группы базы за 3 года. Число визитов берётся за все 36 месяцев; давность — от даты отчёта, а не от сегодняшнего дня.</p>
-    <div class="chart-box" style="height:${Math.max(260, adminYearMonths(mk).length * 48 + 85)}px"><canvas id="chSegments"></canvas></div>
-    ${kbSeries.bases.some(base => !base) ? `<p class="small muted">Нет выгрузки за 36 месяцев: ${esc(kbSeries.months.filter((_month, index) => !kbSeries.bases[index]).map(monthLabel).join(", "))}. Эти месяцы оставлены пустыми.</p>` : ""}
-    ${kbQualityNotes.length ? `<div class="notice blue"><b>Есть строки для проверки в 1С.</b> В исходных выгрузках отсутствует корректное число визитов или давность. Это качество исходных данных, а не ошибка настроек. Такие пациенты учтены предварительно; активность и потеря не подтверждены.
-      <div class="small">Месяцы: ${esc(kbSeries.months.filter((_month, index) => kbSeries.bases[index] && Object.values(kbSeries.bases[index].provisional).some(count => count > 0)).map(monthLabel).join(", "))}</div></div>` : ""}
-    ${adminClientBaseQualityDetailsHtml(kbSeries)}</div></div>`;
+  if (!kb) html += clientBaseShareHistoryHtml(kbSeries);
+  html += `${kbQualityNotes.length ? '<p class="notice blue">Часть пациентов учтена предварительно: нужно проверить исходные данные. Подробности — в справке.</p>' : ""}
+    ${globalThis.klinvektReportPresentation.reportHelpHtml(clientBaseHelp + kbQualityNotes.map(note => `<p>${esc(note)}</p>`).join("") + adminClientBaseQualityDetailsHtml(kbSeries))}</div>`;
 
   /* ---- В5 Лояльность ---- */
   const L = r.loyalty;
@@ -4819,41 +4809,6 @@ function renderDoctorNow() {
         },
       });
     }
-  }
-  {
-    const series = kbSeries;
-    chart("chClientShares", {
-      type: "line", data: { labels: series.months.map(monthLabel), datasets: series.datasets.map((dataset, index) => ({
-        label: dataset.label, borderColor: ["#16a34a", "#64748b", "#d97706", "#dc2626"][index],
-        backgroundColor: ["#16a34a", "#64748b", "#d97706", "#dc2626"][index], spanGaps: false, tension: 0,
-        data: series.bases.map(base => base ? clientBaseGroupPct(base, ["active", "loyalSleep", "newRisk", "lost"][index]) : null) })) },
-      options: { maintainAspectRatio: false, plugins: { legend: { position: "bottom" }, datalabels: { display: false },
-        tooltip: { callbacks: { label: item => `${item.dataset.label}: ${fmtPct(item.raw)}` } } },
-        scales: { y: { min: 0, max: 100, ticks: { callback: value => value + "%" } } } },
-    });
-    chart("chSegments", {
-      type: "bar", data: { labels: series.months.map(monthLabel), datasets: series.datasets },
-      options: { indexAxis: "y", maintainAspectRatio: false, layout: { padding: { right: 65 } },
-        plugins: { legend: { position: "bottom", onClick: () => {} },
-          datalabels: {
-            labels: {
-              value: { color: ctx => [0, 2].includes(ctx.datasetIndex) ? "#17212b" : "#ffffff",
-                font: { weight: "600", size: 12 }, anchor: "center", align: "center",
-                display: ctx => { const value = ctx.dataset.data[ctx.dataIndex]; return value > 0 && Math.abs(ctx.chart.scales.x.getPixelForValue(value) - ctx.chart.scales.x.getPixelForValue(0)) >= 34; },
-                formatter: value => fmtNum(value) },
-              total: { color: "#334155", anchor: "end", align: "right", offset: 8, font: { weight: "700", size: 12 },
-                display: ctx => series.totals[ctx.dataIndex] != null && ctx.datasetIndex === series.datasets.length - 1,
-                formatter: (_value, ctx) => fmtNum(series.totals[ctx.dataIndex]) },
-            },
-          },
-          tooltip: { callbacks: { label: c => c.dataset.label + ": " + fmtNum(c.raw) + " чел.",
-            afterLabel: c => { const base = series.bases[c.dataIndex]; const group = ["active", "loyalSleep", "newRisk", "lost"][c.datasetIndex];
-              return base ? [adminClientBaseGroupDescription(base.partition, group), ...(base.provisional[group] ? [`В том числе предварительно, проверить данные: ${fmtNum(base.provisional[group])} чел.`] : [])] : []; },
-            footer: items => items.length ? "Общая база: " + fmtNum(series.totals[items[0].dataIndex]) + " чел." : "" } } },
-        scales: { x: { stacked: true, beginAtZero: true, title: { display: true, text: "Пациентов" }, ticks: { precision: 0 } },
-          y: { stacked: true, grid: { display: false }, ticks: { autoSkip: false } } } },
-    });
-    UI.charts.chSegments.$clientBaseTotals = series.totals;
   }
   // стековая по месяцам (группы — из профиля отделения врача + сиротские)
   const keys = monthKeysSorted();

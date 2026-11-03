@@ -245,7 +245,7 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /clientRowsForSegment/);
   assert.match(actual, /data-segment-value/);
   assert.match(actual, /aria-pressed/);
-  assert.match(actual, /Что сделать сейчас/);
+  assert.match(actual, /Справка о расчётах/);
   assert.match(actual, /openClientSegment/);
   for (const field of ["cb_loyalVisits", "cb_activeM", "cb_sleepVisits", "cb_sleepM", "cb_newRiskVisits", "cb_lostM", "cb_lostVisits", "cb_lostAfterM"]) assert.match(actual, new RegExp(field));
   assert.match(actual, /<th class="num">Визиты<\/th><th class="num">Длительность, мес\.<\/th>/);
@@ -676,14 +676,16 @@ test("Admin client-base vector has four configurable groups on a full three-year
   assert.match(vector[0], /kbDyn\.avgGroupPct\[group\]/);
   assert.match(vector[0], /group === "active" \|\| group === "lost"/);
   assert.match(vector[0], /group === "newRisk" \|\| group === "loyalSleep" \|\| group === "lost"/);
-  assert.match(vector[0], /рост доли активных пациентов и снижение доли потерянных/);
-  for (const label of ["Общая база", "Что сделать сейчас", "Четыре группы без пересечений", "отсутствие выгрузки не означает ноль пациентов"]) {
+  assert.match(vector[0], /reportHelpHtml\(clientBaseHelp/);
+  for (const label of ["Общая база", "Каждый пациент относится к одной группе", "отсутствие выгрузки не означает ноль пациентов"]) {
     assert.match(vector[0], new RegExp(label));
   }
   for (const label of ["Лояльные", "Активные", "Новые, риск", "Лояльные, спящие", "Потерянные"]) assert.match(ui, new RegExp(label));
   assert.match(vector[0], /openClientSegment\('newRisk'\)/);
   assert.match(vector[0], /openClientSegment\('loyalSleep'\)/);
-  assert.match(ui, /chart\("chSegments", \{\s*type: "bar"/);
+  assert.match(ui, /presentation\.clientBaseCompositionHtml/);
+  assert.match(ui, /presentation\.clientBaseShareTableHtml/);
+  assert.doesNotMatch(vector[0], /data-client-base-methodology-note|kb-vector-key-note/);
   assert.match(css, /\.kb-summary-card\.key-indicator/);
   assert.match(css, /\.kb-summary-trends > div/);
   assert.doesNotMatch(vector[0], /Потерянная \(минимум\)|"≥" \+ fmtNum\(kb\.seg\.lost\)/);
@@ -1129,7 +1131,7 @@ test("Viewer doctor HTML mirrors the Admin client-base methodology and keeps pro
   assert.match(adminUi, /target\.tab !== "doctor"/);
   assert.match(adminUi, /const kb = adminClientBaseSummary\(doctorId, periodKey\)/);
   assert.match(adminUi, /data-client-base-methodology="partition-v1-36m"/);
-  assert.match(adminUi, /единая с Admin методика четырёх непересекающихся групп за 36 мес\./);
+  assert.match(adminUi, /reportHelpHtml\(clientBaseHelp/);
   assert.match(adminUi, /originalClientBase\.insertAdjacentHTML\("beforeend", clientBase\)/);
   assert.match(adminUi, /Источник данных:[\s\S]*periodStr\(kb\.period\)/);
   assert.match(adminUi, /const groups = partitioned \? \["active", "loyalSleep", "newRisk", "lost"\]/);

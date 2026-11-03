@@ -3,7 +3,8 @@ const fs = require("node:fs"), path = require("node:path");
 const chartsPath = fs.existsSync(path.join(__dirname, "public", "report-charts.js"))
   ? "./public/report-charts.js" : "../mobile-pilot/report-charts.js";
 const { renderCharts } = require(chartsPath);
-const { tableHeaderHtml } = require(chartsPath.replace("report-charts.js", "report-presentation.js"));
+const presentation = require(chartsPath.replace("report-charts.js", "report-presentation.js"));
+const { tableHeaderHtml } = presentation;
 const esc = value => String(value == null ? "" : value).replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 const lines = value => esc(value).replace(/\r?\n/g, "<br>");
 const score = value => Number.isFinite(value) ? esc(value) : "—";
@@ -25,8 +26,36 @@ function renderTree(nodes = [], columns = []) {
   }).join("");
 }
 function renderSections(sections = [], options = {}) {
-  return sections.map(section => `<section class="cloud-section"><h3>${esc(section.title)}</h3>${section.note ? `<p>${lines(section.note)}</p>` : ""}
+  return sections.map(section => `<section class="cloud-section"><h3>${esc(section.title)}</h3>${renderSectionNote(section.note, options)}
     ${renderMetrics(section.metrics)}${section.tree?.length ? renderTree(section.tree, section.columns) : renderTable(section.columns, section.rows)}${renderCharts(section.charts, options)}</section>`).join("");
+}
+function renderSectionNote(note, options) {
+  if (!note) return "";
+  if (!options.help) return `<p>${lines(note)}</p>`;
+  options.help.push(`<p>${lines(note)}</p>`);
+  const missing = note.match(/Неполные данные:[^.]+\.?/i);
+  return missing ? `<p class="cloud-completeness">${esc(missing[0])}</p>`
+    : /учтены предварительно/i.test(note) ? '<p class="cloud-completeness">Часть пациентов учтена предварительно. Подробности — в справке.</p>' : "";
+}
+function renderClientBase(vector, report, options) {
+  const sections = vector.windows?.[0]?.sections || vector.sections || [], current = sections[0] || {};
+  const charts = current.charts || [], composition = charts.find(chart => chart.id === "partition"), history = charts.find(chart => chart.id === "partition-shares");
+  if (current.columns?.includes("Условие")) options.help.push(`<ul>${(current.rows || []).map(row => `<li><b>${esc(row[0])}:</b> ${esc(row[row.length - 1])}</li>`).join("")}</ul>`);
+  options.help.push('<p>Зелёным в таблице показаны лучшие значения за период, красным — худшие. Для активных лояльных лучше большая доля, для остальных групп — меньшая.</p>');
+  return renderSectionNote(current.note, options) + renderMetrics(current.metrics)
+    + presentation.clientBaseCompositionHtml(composition?.series[0]?.values || [null, null, null, null], report.label)
+    + (history ? presentation.clientBaseShareTableHtml(history.labels, history.series.map((series, index) => ({ ...presentation.clientBaseGroups[index], label: series.label, values: series.values }))) : "")
+    + renderCharts(charts.filter(chart => !["partition", "partition-shares"].includes(chart.id)), options)
+    + renderSections(sections.slice(1), options);
+}
+function renderVector(vector, report, options) {
+  const help = [vector.detail, vector.methodologyLabel].filter(Boolean).map(text => `<p>${lines(text)}</p>`);
+  const sectionOptions = { ...options, help };
+  const partitioned = vector.id === "v4" && vector.methodologyId === "partition-v1-36m";
+  const body = partitioned ? renderClientBase(vector, report, sectionOptions)
+    : vector.windows?.length ? vector.windows.map((window, index) => `<details class="cloud-window" ${index === 0 ? "open" : ""}><summary>${esc(vector.windowPickerLabel || "Период")}: ${esc(window.label)}</summary><p>${esc(window.period)}</p>${renderSections(window.sections, sectionOptions)}</details>`).join("")
+      : renderSections(vector.sections, sectionOptions);
+  return `<details class="cloud-vector" data-vector-key="${esc(vector.id)}" open><summary><span>В${vector.number} · ${esc(vector.title)}</span><b>${score(vector.score)}${vector.preliminary ? " · предв." : ""}</b></summary>${body}${presentation.reportHelpHtml(help.join(""))}</details>`;
 }
 function renderCloudReport(report, title, options = {}) {
   const completeness = [report.preliminary ? "Предварительная оценка" : "", report.coverage != null ? `Полнота: ${report.coverage}%` : "", ...(report.missing || [])].filter(Boolean);
@@ -34,9 +63,7 @@ function renderCloudReport(report, title, options = {}) {
     <p>${esc(report.summary)}</p>${completeness.length ? `<p class="cloud-completeness">${completeness.map(esc).join(" · ")}</p>` : ""}
     ${renderMetrics(report.headlineMetrics)}
     ${report.goals?.length ? `<details class="cloud-vector"><summary>Цели</summary>${report.goals.map(goal => `<p><b>${esc(goal.title)}</b> · ${esc(goal.description)}</p>`).join("")}</details>` : ""}
-    ${report.vectors.map(vector => `<details class="cloud-vector" data-vector-key="${esc(vector.id)}" open><summary><span>В${vector.number} · ${esc(vector.title)}</span><b>${score(vector.score)}${vector.preliminary ? " · предв." : ""}</b></summary>
-      <p>${esc(vector.detail)}</p>${vector.methodologyLabel ? `<p class="cloud-methodology">${esc(vector.methodologyLabel)}</p>` : ""}
-      ${vector.windows?.length ? vector.windows.map((window, index) => `<details class="cloud-window" ${index === 0 ? "open" : ""}><summary>${esc(vector.windowPickerLabel || "Окно анализа")}: ${esc(window.label)}</summary><p>${esc(window.period)}</p>${renderSections(window.sections, options)}</details>`).join("") : renderSections(vector.sections, options)}</details>`).join("")}
+    ${report.vectors.map(vector => renderVector(vector, report, options)).join("")}
     ${report.dynamics ? `<details class="cloud-vector" open><summary>Динамика показателей по месяцам</summary>${renderCharts(report.dynamics.charts, options)}
       ${renderTable(["Показатель", ...report.dynamics.columns, "К прошлому месяцу", "К среднему"], report.dynamics.rows.map(row => [row.label, ...row.values, row.delta, row.averageDelta || "—"]))}
       ${report.dynamics.growth.length ? `<h3>Точки роста</h3>${report.dynamics.growth.map(value => `<p>${esc(value)}</p>`).join("")}` : ""}

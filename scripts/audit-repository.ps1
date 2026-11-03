@@ -29,7 +29,7 @@ $allowedPatterns = @(
   '^desktop/services/[^/]+\.cjs$', # Includes cloud-privacy, cloud-report-model and pin-transfer-service; fixtures stay outside Git.
   '^desktop/services/background-task-(queue|worker)\.cjs$',
   '^viewer/[^/]+\.(cjs|js|css|html|json)$',
-  '^mobile-pilot/[^/]+\.(html|css|js|webmanifest)$', # Includes the shared Admin/online report-presentation.js.
+  '^mobile-pilot/[^/]+\.(html|css|js|webmanifest)$', # Shared report-presentation.js owns V4 pie, table colours, headers and collapsed help.
   '^mobile-pilot/icons/app-icon-(192|512)\.png$',
   '^mobile-server/[^/]+\.cjs$', # Includes cloud-routes/cloud-auth; online assets use the mobile-pilot source allowlist.
   '^docs/[^/]+\.md$', # Includes PROJECT_MAP.md and ARCHITECTURE_REVIEW.md; measurements use synthetic data only.

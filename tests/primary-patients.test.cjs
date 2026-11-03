@@ -6,12 +6,14 @@ const XLSX = require("../build/xlsx.full.min.js");
 const { cloudPrivacyPatterns, assertCloudPatientPrivacy } = require("../desktop/services/cloud-privacy.cjs");
 const { validateCloudReport } = require("../desktop/services/cloud-report-model.cjs");
 const { renderCloudReport } = require("../mobile-server/cloud-report-renderer.cjs");
+const presentation = require("../mobile-pilot/report-presentation.js");
 const root = path.resolve(__dirname, "..");
 function context() {
   const c = vm.createContext({ console, window: { addEventListener() {} }, navigator: {},
     document: { getElementById: () => null, querySelectorAll: () => [], addEventListener() {}, createElement: () => ({ style: {} }) },
     localStorage: { getItem: () => null, setItem() {} }, setTimeout, clearTimeout, Intl, TextDecoder, TextEncoder,
     crypto: webcrypto, Blob, File, XLSX, confirm: () => true });
+  vm.runInContext(fs.readFileSync(path.join(root, "mobile-pilot/report-presentation.js"), "utf8"), c);
   for (const file of ["app-core.js", "app-parsers.js", "app-metrics.js", "report-worker.js", "cloud-report-data.js", "app-ui.js"]) {
     vm.runInContext(fs.readFileSync(path.join(root, "build", file), "utf8"), c, { filename: file });
   }
@@ -165,4 +167,30 @@ test("V4 share series preserves missing calendar months and compares percentages
   const report=plain(vm.runInContext("cloudDoctorReport('d1','2026-03',[])",c));
   const chart=report.vectors[3].windows[0].sections[0].charts.find(c=>c.id==='partition-shares');
   assert.deepEqual(chart.series[0].values,[50,null,75]);
+  const html = renderCloudReport(report, 'Врач');
+  assert.match(html, /data-client-base-composition/);
+  assert.match(html, /data-client-base-share-table/);
+  assert.doesNotMatch(html, /data-chart="[^"]*partition-shares/);
+  assert.match(html, /class="num period-best"[^>]*>75%/);
+  assert.match(html, /class="num period-worst"[^>]*>50%/);
+  assert.match(html, /<td class="num ">—<\/td>/);
+});
+
+test("V4 period colours respect direction, ties, missing data and displayed precision", () => {
+  assert.deepEqual(presentation.periodValueStates([3.6,3.60001,null,5]), ['period-worst','period-worst','','period-best']);
+  assert.deepEqual(presentation.periodValueStates([40,20,null,20],true), ['period-worst','period-best','','period-best']);
+  assert.deepEqual(presentation.periodValueStates([0,0,null]), ['','','']);
+  assert.deepEqual(presentation.periodValueStates([null,NaN,undefined]), ['','','']);
+  assert.deepEqual(presentation.periodValueStates([0,10],true), ['period-best','period-worst']);
+});
+
+test("V4 circular composition includes exact counts/shares and handles empty, missing and single-group bases", () => {
+  const html=presentation.clientBaseCompositionHtml([25,47,70,108],'Сентябрь 2026');
+  assert.equal((html.match(/<path /g)||[]).length,4);
+  for(const share of ['10%','18,8%','28%','43,2%']) assert.ok(html.includes(share));
+  assert.match(html,/Клиентская база: 250 чел\./);
+  assert.doesNotMatch(presentation.clientBaseCompositionHtml([0,0,0,0]),/<svg/);
+  assert.match(presentation.clientBaseCompositionHtml([null,null,null,null]),/нет данных/);
+  assert.equal((presentation.clientBaseCompositionHtml([3,0,0,0]).match(/<circle /g)||[]).length,1);
+  assert.doesNotMatch(presentation.reportHelpHtml('<p>Пояснение</p>'),/<details[^>]*\sopen/);
 });

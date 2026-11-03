@@ -57,7 +57,7 @@
 !/viewer/package.json
 
 # Изолированный мобильный PWA-пилот только с синтетическими данными.
-# report-presentation.js — общие переносы заголовков Admin и онлайн-отчётов.
+# report-presentation.js — общие заголовки, круговая В4, подсветка таблиц и справка Admin/онлайн.
 !/mobile-pilot/
 /mobile-pilot/*
 !/mobile-pilot/*.html
