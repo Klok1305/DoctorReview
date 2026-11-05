@@ -24,11 +24,17 @@ function prepareReportCalculations(job) {
   const yearMonths = months.filter(key => key.startsWith(job.month.slice(0, 4)) && key <= job.month);
   const keys = [...new Set([...yearMonths, job.month, prevMonthKey(job.month)])];
   if (job.tab === "doctor") {
-    for (const key of keys) { computeMetrics(job.doctorId, key); adminClientBaseSummary(job.doctorId, key); }
+    for (const key of keys) {
+      computeMetrics(job.doctorId, key);
+      for (const window of [6, 12, 24, 36]) reportClientBaseSummary(job.doctorId, key, window);
+    }
   } else {
     // Summaries need their entire cohort; never substitute a partially computed sum.
     for (const key of keys) {
-      for (const id of doctorsInMonth(key)) computeMetrics(id, key);
+      for (const id of doctorsInMonth(key)) {
+        computeMetrics(id, key);
+        for (const window of [6, 12, 24, 36]) reportClientBaseSummary(id, key, window);
+      }
       aggregateDeptMonth(key, job.filter, job.subFilter || "all");
     }
   }

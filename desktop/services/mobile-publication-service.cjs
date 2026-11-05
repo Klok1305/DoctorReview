@@ -144,7 +144,7 @@ function validateSection(section, label) {
   if (metrics.length > 30 || rows.length > 500) fail(`${label}: слишком много данных`);
   metrics.forEach((metric, index) => validateMetric(metric, `${label}: показатель ${index + 1}`));
   if (rows.length || item.tree != null) {
-    if (!Array.isArray(item.columns) || item.columns.length < 2 || item.columns.length > 6) fail(`${label}: столбцы таблицы`);
+    if (!Array.isArray(item.columns) || item.columns.length < 2 || item.columns.length > 10) fail(`${label}: столбцы таблицы`);
     item.columns.forEach((column, index) => shortText(column, `${label}: столбец ${index + 1}`, 100));
     rows.forEach((row, rowIndex) => {
       if (!Array.isArray(row) || row.length !== item.columns.length) fail(`${label}: строка ${rowIndex + 1}`);

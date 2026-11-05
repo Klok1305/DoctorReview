@@ -556,6 +556,7 @@ function primaryPatientRows(rows) {
     else {
       for (const field of ["visits", "revenue"]) old[field] = old[field] != null && row[field] != null ? old[field] + row[field] : null;
       for (const field of ["primary", "primaryClinic"]) old[field] = old[field] != null && row[field] != null ? Math.max(old[field], row[field]) : null;
+      if (old.source && row.source && primaryPatientNameKey(old.source) !== primaryPatientNameKey(row.source)) old.sourceConflict = true;
       if (!old.source) old.source = row.source;
     }
   }
@@ -606,7 +607,7 @@ function doctorPrimaryPatients(docId, endMonth) {
       if (referral.status == null) referralsComplete = false;
       for (const item of referral.assignments) assignments.set(`${item.n}\u0000${item.executor}`, item);
     }
-    return { name: patient.name, source: patient.source, firstMonth: patient.firstMonth,
+    return { name: patient.name, source: patient.source, sourceConflict: patient.sourceConflict, firstMonth: patient.firstMonth,
       visits: completeVisits ? observedVisits : null, revenue: completeRevenue ? observedRevenue : null,
       observedVisits, observedRevenue, referral: { status: assignments.size ? true : referralsComplete ? false : null, assignments: [...assignments.values()] } };
   }).sort((a, b) => a.firstMonth.localeCompare(b.firstMonth) || a.name.localeCompare(b.name, "ru"));
@@ -619,6 +620,62 @@ function doctorPrimaryPatients(docId, endMonth) {
   return { months, missingMonths, current, patients, buckets, yearCount: hasData ? patients.length : null,
     incompletePrimaryMonths: months.filter(month => !primaryValid(rowsByMonth.get(month))),
     unknownVisits: patients.filter(patient => patient.visits == null || patient.visits < 1).length };
+}
+// Categories are explicit: unknown or conflicting labels keep their own denominator share.
+function primarySourceCategory(patient) {
+  if (patient.sourceConflict) return null;
+  const source = primaryPatientNameKey(patient.source || "");
+  const matches = [
+    /рекоменд|сарафан|знаком|родствен|друз/.test(source),
+    /интернет|сайт|поисков|google|гугл|яндекс|yandex|2гис|2gis/.test(source),
+    /агрегатор|продоктор|prodoctor|напоправку|napopravku|сберздоров|сбер здоров|sberhealth|docdoc|докдок|doctu|докту|zoon|зун/.test(source),
+    /соц[ ._-]*сет|социальн|instagram|инстаграм|вконтакте|\bvk\b|telegram|телеграм|facebook|фейсбук|youtube|ютуб|tiktok|тикток|одноклассник/.test(source),
+  ];
+  return matches.filter(Boolean).length === 1 ? matches.indexOf(true) : null;
+}
+function primarySourcesSummary(patients, available, complete = true) {
+  const counts = [0, 0, 0, 0, 0], unresolved = new Map();
+  for (const patient of patients) {
+    const category = primarySourceCategory(patient);
+    counts[category == null ? 4 : category]++;
+    if (category == null) {
+      const label = patient.sourceConflict ? "Противоречивые источники" : String(patient.source || "Не указан").trim();
+      unresolved.set(label, (unresolved.get(label) || 0) + 1);
+    }
+  }
+  const total = available ? patients.length : null;
+  return { total, complete: available && complete, counts: available ? counts : counts.map(() => null),
+    shares: counts.map(count => total ? count / total * 100 : null),
+    unresolved: [...unresolved].map(([label, count]) => ({ label, count })) };
+}
+function doctorPrimarySources(summary) {
+  return { year: primarySourcesSummary(summary.patients, summary.yearCount != null, !summary.incompletePrimaryMonths.length),
+    month: primarySourcesSummary(summary.current?.patients || [], summary.current != null, summary.current?.count != null) };
+}
+
+// The five report groups share one fixed definition; scoring retains saved profiles.
+function clientBaseReportProfile() {
+  return { loyalVisits: 4, loyalM: 12, activeVisits: 4, activeM: 6, newRiskVisits: 2,
+    newRiskM: 6, newRiskWithin: false, sleepVisits: 4, sleepM: 6, lostVisits: 2, lostM: 12 };
+}
+function kbClientIdentity(client) {
+  const id = String(client.patientId || "").trim().toLowerCase();
+  const name = normFio(client.name || "");
+  return id ? "id:" + id : name ? "name:" + name : null;
+}
+function clientBaseActiveVisits(docId, monthKey) {
+  const source = kbWindow(docId, monthKey, 6);
+  if (!source || source.clients.some(client => !kbClientIdentity(client) || !Number.isSafeInteger(client.v) || client.v < 0)) return null;
+  const visits = new Map();
+  for (const client of source.clients) { const key = kbClientIdentity(client); visits.set(key, (visits.get(key) || 0) + client.v); }
+  return visits;
+}
+function reportClientBaseSummary(docId, monthKey, windowMonths = 12) {
+  const key = JSON.stringify([String(docId), String(monthKey), Number(windowMonths), "report-overlap-v1"]);
+  const cached = metricsCacheGet(_kbSummaryCache, key, "kbSummary");
+  if (cached !== undefined) return cached;
+  return metricsCacheSet(_kbSummaryCache, key,
+    computeKbSummary(docId, monthKey, windowMonths, clientBaseReportProfile(), true), METRICS_CACHE_LIMITS.kbSummary);
 }
 function kbAvailableWindows(docId, monthKey) {
   const m = DB.months[monthKey];
@@ -729,13 +786,13 @@ function selectedClientBaseSummary(result, profile, requestedWin = null) {
   const win = recommendedClientBaseWindow(result.akb.availableWins, profile, requestedWin);
   return win == null ? null : (result.akb.wins[win] || null);
 }
-function classifyKbClient(client, profile, groupAvailable, thresholds) {
+function classifyKbClient(client, profile, groupAvailable, thresholds, activeVisits = Number(client.v) || 0) {
   const visits = Number(client.v) || 0;
   const recency = client.r == null || isNaN(client.r) ? null : Number(client.r);
   const loyal = groupAvailable.loyal && recency != null && visits >= profile.loyalVisits && recency <= thresholds.loyalDays;
   const groups = [];
   if (loyal) groups.push("loyal");
-  if (groupAvailable.active && recency != null && visits >= profile.activeVisits && recency <= thresholds.activeDays) groups.push("active");
+  if (groupAvailable.active && recency != null && activeVisits >= profile.activeVisits && recency <= thresholds.activeDays) groups.push("active");
   if (groupAvailable.newRisk && recency != null && visits >= 1 && visits <= profile.newRiskVisits && (profile.newRiskWithin ? recency <= thresholds.newRiskDays : recency > thresholds.newRiskDays)) groups.push("newRisk");
   if (groupAvailable.loyalSleep && recency != null && visits >= profile.sleepVisits && recency > thresholds.sleepDays) groups.push("loyalSleep");
   if (groupAvailable.lost && recency != null && visits >= 1 && visits <= profile.lostVisits && recency > thresholds.lostDays) groups.push("lost");
@@ -743,13 +800,15 @@ function classifyKbClient(client, profile, groupAvailable, thresholds) {
 }
 
 function kbClientRows(docId, monthKey, win, summary) {
-  const cacheKey = JSON.stringify([String(docId), String(monthKey), Number(win), summary.thresholds]);
+  const cacheKey = JSON.stringify([String(docId), String(monthKey), Number(win), summary.thresholds, summary.activeWindow || null]);
   const cached = metricsCacheGet(_kbDetailsCache, cacheKey, "kbDetails");
   if (cached !== undefined) return cached;
   const kb = kbWindow(docId, monthKey, win);
   if (!kb) return [];
+  const activeVisits = summary.activeWindow ? clientBaseActiveVisits(docId, monthKey) : null;
   const rows = kb.clients.map((client, index) => {
-    const classified = classifyKbClient(client, summary.thresholds, summary.groupAvailable, summary.thresholds);
+    const classified = classifyKbClient(client, summary.thresholds, summary.groupAvailable, summary.thresholds,
+      summary.activeWindow ? activeVisits?.get(kbClientIdentity(client)) || 0 : Number(client.v) || 0);
     const normalizedName = normFio(client.name || "");
     const normalizedId = String(client.patientId || "").trim().toLowerCase();
     return {
@@ -782,12 +841,14 @@ function kbSummary(docId, monthKey, win) {
   return summary;
 }
 
-function computeKbSummary(docId, monthKey, win) {
+function computeKbSummary(docId, monthKey, win, reportProfile = null, strictActive = false) {
   const kb = kbWindow(docId, monthKey, win);
   if (!kb) return null;
-  const p = deptParams(docId);
+  const p = reportProfile || deptParams(docId);
   const t = clientBaseThresholds(p);
   const groupAvailable = clientBaseGroupAvailability(win, p);
+  const activeVisits = strictActive ? clientBaseActiveVisits(docId, monthKey) : null;
+  if (strictActive && !activeVisits) groupAvailable.active = false;
   const sourceWindowComplete = clientBaseWindowSufficient(win, p);
   const requiredWindowM = clientBaseRequiredWindow(p);
   const dActive = Math.round(t.activeM * 30.44);
@@ -804,7 +865,7 @@ function computeKbSummary(docId, monthKey, win) {
   let reactivationCandidates = 0, reactivationSum = 0, revenueAtRisk = 0, sleepRiskCount = 0;
   for (const c of kb.clients) {
     const sum = Number(c.s) || 0;
-    const classified = classifyKbClient(c, t, groupAvailable, thresholds);
+    const classified = classifyKbClient(c, t, groupAvailable, thresholds, strictActive ? activeVisits?.get(kbClientIdentity(c)) || 0 : Number(c.v) || 0);
     const { visits, recency, loyal, groups } = classified;
     totalSum += sum;
     totalVisits += visits;
@@ -820,7 +881,7 @@ function computeKbSummary(docId, monthKey, win) {
     if (atRisk) revenueAtRisk += sum;
     if (reactivation) sleepRiskCount++;
   }
-  for (const group of ["active", "newRisk", "loyalSleep", "lost"]) {
+  for (const group of ["loyal", "active", "newRisk", "loyalSleep", "lost"]) {
     if (!groupAvailable[group]) seg[group] = null;
   }
   // Старые имена оставлены как алиасы для совместимости остальных экранов.
@@ -837,7 +898,7 @@ function computeKbSummary(docId, monthKey, win) {
   const courseCnt = kb.clients.filter(c => c.v >= p.courseX).length;
   const summary = {
     window: Number(win), period: kb.period, params: p, sourceWindowComplete, requiredWindowM, groupAvailable,
-    thresholds,
+    thresholds, ...(strictActive ? { activeWindow: 6, methodologyId: "report-overlap-v1" } : {}),
     total, known: total - seg.unknown, seg, totalSum, totalVisits,
     activeSum: groupAvailable.active ? groupSums.active : null,
     riskSum: groupAvailable.newRisk ? groupSums.newRisk : null,
@@ -852,7 +913,7 @@ function computeKbSummary(docId, monthKey, win) {
     avgClient: total ? totalSum / total : null,
     one2: total - loyalCount,
     loyalCount,
-    loyalPct: total ? loyalCount / total * 100 : null,
+    loyalPct: groupAvailable.loyal && total ? loyalCount / total * 100 : null,
     activeBase: groupAvailable.active ? seg.active : null,
     activeBasePct: groupAvailable.active && total ? seg.active / total * 100 : null,
     newRiskPct: groupAvailable.newRisk && total ? seg.newRisk / total * 100 : null,

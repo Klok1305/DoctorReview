@@ -441,7 +441,10 @@ function createWindow() {
                   {name:'Синтетическая база новый',v:1,r:15,s:1000},
                   {name:'Синтетическая база потерянный',v:1,r:800,s:1000}
                 ] } };
+                DB.months[mk].kb.d1['6'] = { clients: DB.months[mk].kb.d1['36'].clients.filter(patient => patient.r <= 183) };
               }
+              UI.kbWin = 36;
+              UI.repKbWin = 36;
               UI.repMonth = '2026-03';
               for (const mk of Object.keys(DB.months)) DB.months[mk].primaryPatients = { perDoc: { d1: { patients: Array.from({ length: 45 }, (_, i) => ({
                 name: 'Синтетический Первичный Пациент ' + String(i + 1).padStart(2, '0'), source: 'Рекомендация пациента',
@@ -565,7 +568,7 @@ function createWindow() {
                     ...(mk.endsWith('02') ? [{ name: 'Месячный пациент 3', patientId: 'm3', s: 30000, v: 1, r: 8 }] : [])
                   ] },
                   '12': { clients: [
-                    { name: 'Активный Пациент', patientId: '1', s: 50000, v: 3, r: 30 },
+                    { name: 'Активный Пациент', patientId: '1', s: 50000, v: 4, r: 30 },
                     { name: 'Пациент Риска', patientId: '2', s: 70000, v: 2, r: 210 }
                   ] },
                   '24': { clients: [
@@ -576,13 +579,14 @@ function createWindow() {
                   '36': { clients: [
                     { name: 'Новый Пациент Риска', patientId: 'n1', s: 10000, v: 2, r: 60 },
                     { name: 'Активный Пациент', patientId: '1', s: 90000, v: 5, r: 30 },
-                    { name: 'Пациент Риска', patientId: '2', s: 100000, v: 3, r: 210 },
+                    { name: 'Пациент Риска', patientId: '2', s: 100000, v: 4, r: 210 },
                     { name: 'Потерянный Пациент', patientId: '3', s: 60000, v: 1, r: 500 },
                     ...(mk.endsWith('02')
                       ? [{ name: 'Новый Активный', patientId: '4', s: 40000, v: 4, r: 20 }]
                       : [{ name: 'Второй Потерянный', patientId: '5', s: 30000, v: 1, r: 600 }])
                   ] }
                 };
+                DB.months[mk].kb.d1['6'] = { clients: DB.months[mk].kb.d1['36'].clients.filter(patient => patient.r <= 183).map(patient => ({...patient, v: Math.min(patient.v, 4)})) };
                 DB.months[mk].naznach.d1 = { '1': { items: [
                   { n: 'Фокус А услуга', a: 2, d: 1, sq: 1, ss: 10000, groupPath: ['Клиника', 'Диагностика', 'Фокусные услуги'] },
                   { n: 'Прочая услуга', a: 2, d: 0, sq: 1, ss: 10000, groupPath: ['Клиника', 'Диагностика', 'Прочие услуги'] }
@@ -648,6 +652,7 @@ function createWindow() {
               UI.deptMonth = '2026-02';
               UI.deptFilter = 'Косметология';
               UI.subFilter = 'all';
+              UI.kbWin = 36;
               await switchTab('dept');
               await new Promise(resolve => setTimeout(resolve, 150));
               const specializationLeaderboardCount = document.querySelectorAll('#deptBody .doctor-score-leader').length;
@@ -668,6 +673,8 @@ function createWindow() {
                 && comparisonHeaderWidths.length === 5
                 && Math.abs(comparisonHeaderWidths[1] - comparisonHeaderWidths[2]) <= 2
                 && Math.abs(comparisonHeaderWidths[3] - comparisonHeaderWidths[4]) <= 2;
+              const specializationBaseRow = [...document.querySelectorAll('#tblRisk tr')].find(row => row.cells[0]?.textContent.includes('Тестов Косметолог'));
+              const specializationBaseCounts = specializationBaseRow ? [...specializationBaseRow.cells].slice(2).map(cell => cell.querySelector('b')?.textContent.trim()) : [];
               const specializationPrimaryReturnHeader = [...document.querySelectorAll('#tblRating th')]
                 .find(cell => cell.textContent.includes('Возвращаемость'));
               const specializationPrimaryReturnHeaderValid = Boolean(specializationPrimaryReturnHeader)
@@ -764,18 +771,20 @@ function createWindow() {
               clearMetricsCache();
               UI.docId = 'd1';
               UI.docMonth = '2026-02';
+              UI.kbWin = 36;
               await switchTab('doctor');
               if (!UI.reportTiming?.worker) throw Error('Report calculations did not use the browser Worker');
               const reportWorkerTiming = { ...UI.reportTiming };
               const chartsInitiallyPending = pendingReportCharts.size;
               await new Promise(resolve => setTimeout(resolve, 300));
-              const fixedThreeYearBase = !document.querySelector('#kbWinSeg') && document.getElementById('blkV4').textContent.includes('База за 3 года');
+              const fixedThreeYearBase = document.querySelector('#doctorKbWin') && UI.kbWin === 36;
               const clientBaseCards = [...document.querySelectorAll('#blkV4 .kb-summary-card')];
               const clientBaseCard = group => clientBaseCards.find(card => card.dataset.clientBaseGroup === group);
               const activeBaseCard = clientBaseCard('active');
               const lostBaseCard = clientBaseCard('lost');
               const totalBaseCard = clientBaseCard('total');
-              const clientBaseDynamicsValid = clientBaseCards.length === 5
+              const clientBaseDynamicsValid = clientBaseCards.length === 6
+                && specializationBaseCounts.join('|') === clientBaseCards.map(card => card.querySelector('.kb-summary-value').textContent.replace(' чел.','').trim()).join('|')
                 && clientBaseCards.every(card => Boolean(card.querySelector('.kb-summary-share'))
                   && card.querySelectorAll('.kb-summary-trends > div').length === 2)
                 && totalBaseCard?.querySelector('.kb-summary-share')?.textContent.trim() === '100%'
@@ -789,12 +798,14 @@ function createWindow() {
                 && document.querySelectorAll('#tblPrimaryMonth tbody tr').length === 1
                 && document.querySelectorAll('#tblPrimaryYear tbody tr').length === 3
                 && document.getElementById('tblPrimaryYear').textContent.includes('Приём кардиолога')
-                && document.querySelectorAll('#blkV4 .kb-share-movement').length === 4;
+                && document.querySelectorAll('#blkV4 .kb-share-movement').length === 5
+                && document.querySelectorAll('#blkV5 [data-primary-source-composition] svg').length === 2;
               flushReportCharts();
               const clientBasePie = document.querySelector('#blkV4 [data-client-base-composition]');
               const activeShares = document.querySelector('#blkV4 [data-client-base-share-table] tr[data-client-base-group="active"]');
-              const clientShareChartValid = clientBasePie?.querySelectorAll('svg path').length === 4
-                && JSON.parse(clientBasePie.dataset.clientBaseValues).join(',') === '2,1,1,1'
+              const clientShareChartValid = !clientBasePie
+                && document.querySelectorAll('#blkV4 [data-client-base-share-table] tbody tr').length === 5
+                && document.querySelector('#blkV4 [data-client-base-definitions]')
                 && activeShares?.cells[1].classList.contains('period-worst') && activeShares?.cells[2].classList.contains('period-best')
                 && [...document.querySelectorAll('#blkV4 [data-report-help]')].every(help => !help.open)
                 && !document.querySelector('#blkV4 [data-client-base-methodology-note], #chClientShares, #chSegments');
@@ -1068,7 +1079,7 @@ function createWindow() {
                   && register.querySelector('[data-viewer-patient-segment]')),
                 kbWindows: viewerKbButtons.map(button => button.dataset.viewerKbWindow),
                 adminAppointmentParity,
-                clientBaseMethodology: viewerDoctorRoot.querySelector('[data-vector-key="v4"][data-client-base-methodology="partition-v1-36m"]') !== null,
+                clientBaseMethodology: viewerDoctorRoot.querySelector('[data-vector-key="v4"][data-client-base-methodology="report-overlap-v1"]') !== null,
                 clientBaseGroups: [...viewerDoctorRoot.querySelectorAll('[data-vector-key="v4"] [data-client-base-group]')]
                   .map(card => card.dataset.clientBaseGroup),
                 originalInterdisciplinaryBlock: viewerDoctorRoot.querySelectorAll('[data-vector-key="v3"]').length,
@@ -1081,7 +1092,7 @@ function createWindow() {
                 && viewerPatientRegisterDetails.collapsibleAndSearchable
                 && viewerPatientRegisterDetails.kbWindows.length === 0
                 && viewerPatientRegisterDetails.clientBaseMethodology
-                && ['total', 'active', 'loyalSleep', 'newRisk', 'lost'].every(group => viewerPatientRegisterDetails.clientBaseGroups.includes(group))
+                && ['total', 'loyal', 'active', 'loyalSleep', 'newRisk', 'lost'].every(group => viewerPatientRegisterDetails.clientBaseGroups.includes(group))
                 && viewerPatientRegisterDetails.adminAppointmentParity
                 && viewerPatientRegisterDetails.sourcePeriod
                 && viewerPatientRegisterDetails.legacyTableRemoved;
@@ -1544,11 +1555,9 @@ function createWindow() {
               flushReportCharts(); for (const instance of Object.values(UI.charts)) { instance.stop(); instance.update('none'); }
               await new Promise(resolve => setTimeout(resolve, 100));
               const table = document.getElementById('blkDyn_tbl');
-              const baseComposition = document.querySelector('#blkV4 [data-client-base-composition]');
-              const pieValues = JSON.parse(baseComposition.dataset.clientBaseValues);
               const shareRows = [...document.querySelectorAll('#blkV4 [data-client-base-share-table] tbody tr')];
-              if (shareRows.map(row => row.dataset.clientBaseGroup).join('|') !== 'active|loyalSleep|newRisk|lost') throw Error('Admin QA: expected four client-base groups');
-              if (pieValues.some(value => !(value > 0)) || pieValues.reduce((sum, value) => sum + value, 0) !== adminClientBaseSummary('d1','2026-12').total) throw Error('Admin QA: client-base patients disappeared from pie');
+              if (shareRows.map(row => row.dataset.clientBaseGroup).join('|') !== 'loyal|active|newRisk|loyalSleep|lost') throw Error('Admin QA: expected five client-base groups');
+              if (document.querySelector('#blkV4 [data-client-base-composition]')) throw Error('Admin QA: overlapping groups cannot form a pie');
               if (shareRows.some(row => JSON.parse(row.dataset.periodValues).length !== 12)) throw Error('Admin QA: client-base year missing months');
               if ([...table.rows].some(row => row.cells[0].textContent.trim() === 'Визиты')) throw Error('Admin QA: visits row remains');
               for (const label of ['Конверсия от назначенного', 'Доля от общей базы']) {
@@ -1566,7 +1575,7 @@ function createWindow() {
               const capture = async element => (await html2canvas(element, { backgroundColor: '#ffffff', scale: 1, logging: false, windowWidth: 1400 })).toDataURL('image/png');
               const yearImage = await capture(table);
               const v3Image = await capture(document.getElementById('blkV3'));
-              const baseImage = await capture(document.querySelector('#blkV4 [data-client-base-composition]'));
+              const baseImage = await capture(document.getElementById('blkV4'));
               UI.deptMonth = '2026-12'; UI.deptFilter = 'Косметология'; UI.subFilter = 'all';
               await switchTab('dept'); flushReportCharts();
               const specializationCharts = ['money', 'traffic', 'pct', 'base'].map(key => UI.charts['blkDeptDyn_' + key]).filter(Boolean);
@@ -1580,30 +1589,13 @@ function createWindow() {
               const originalPartition = { ...curSetProfile().clientBasePartition };
               const legacyFields = ['loyalVisits', 'loyalM', 'activeVisits', 'activeM', 'newRiskVisits', 'newRiskM', 'newRiskWithin', 'sleepVisits', 'sleepM', 'lostVisits', 'lostM', 'minVisits', 'riskM'];
               const originalLegacy = JSON.stringify(legacyFields.map(key => curSetProfile()[key]));
-              const partitionTable = document.getElementById('clientBasePartitionRules');
-              if (partitionTable.tBodies[0].rows.length !== 4 || partitionTable.querySelectorAll('input[type="number"]').length !== 8) throw Error('Admin QA: expected visits and period for each of four groups');
-              const editThreshold = (id, value) => {
-                const input = document.getElementById(id);
-                input.value = String(value);
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-              };
-              editThreshold('cb_newRiskVisits', 3);
-              editThreshold('cb_sleepM', 9);
-              editThreshold('cb_lostAfterM', 10);
-              if (document.getElementById('cb_loyalVisits').value !== '4' || document.getElementById('cb_sleepVisits').value !== '4' || document.getElementById('cb_lostVisits').value !== '3' || document.getElementById('cb_activeM').value !== '9' || document.getElementById('cb_lostM').value !== '10') throw Error('Admin QA: linked group boundaries diverged');
-              const normCard = partitionTable.closest('details.card');
-              normCard.open = true;
-              if (normCard.querySelectorAll('input[data-cb-key]').length !== 8 || normCard.querySelector('[id^="np_loyal"], [id^="np_active"], [id^="np_newRisk"], [id^="np_sleep"], [id^="np_lost"]')) throw Error('Admin QA: duplicate legacy group settings remain');
+              const definition = document.querySelector('#settingsBody [data-client-base-definitions]');
+              if (!definition || definition.querySelectorAll('li').length !== 5 || document.getElementById('clientBasePartitionRules')) throw Error('Admin QA: fixed five report groups missing');
+              const normCard = definition.closest('details.card'); normCard.open = true;
               const settingsImage = await capture(normCard);
-              document.getElementById('cb_lostAnyVisits').checked = true;
-              document.getElementById('cb_lostAnyVisits').dispatchEvent(new Event('change', { bubbles: true }));
-              if (!document.getElementById('cb_lostVisits').disabled || document.getElementById('cb_lostAnyVisitsLabel').classList.contains('hidden')) throw Error('Admin QA: any-visit loss rule is not shown');
               saveDeptBasics();
-              if (JSON.stringify(curSetProfile().clientBasePartition) !== JSON.stringify({ loyalVisits: 4, activeM: 9, lostM: 10, lostAnyVisits: true })) throw Error('Admin QA: partition settings not saved');
+              if (JSON.stringify(curSetProfile().clientBasePartition) !== JSON.stringify(originalPartition)) throw Error('Admin QA: saved partition changed');
               if (JSON.stringify(legacyFields.map(key => curSetProfile()[key])) !== originalLegacy) throw Error('Admin QA: legacy KPI settings changed');
-              document.getElementById('cb_loyalVisits').value = '0';
-              saveDeptBasics();
-              if (curSetProfile().clientBasePartition.loyalVisits !== 4) throw Error('Admin QA: invalid settings persisted');
               curSetProfile().clientBasePartition = originalPartition;
               clearMetricsCache(); await switchTab('doctor');
               const source36 = DB.months['2026-12'].kb.d1['36'];
@@ -1653,7 +1645,7 @@ function createWindow() {
           result.adminFeedbackQa = adminFeedbackQa;
           const viewerPatientScreenshotPath = path.join(artifactRoot, "viewer-patient-register-smoke.png");
           const viewerPatientScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
-            UI.docId = 'd1'; UI.docMonth = '2026-02'; UI.kbWinByDoctor.d1 = 36; await switchTab('doctor');
+            UI.docId = 'd1'; UI.docMonth = '2026-02'; UI.kbWin = 36; await switchTab('doctor');
             await new Promise(resolve => setTimeout(resolve, 150));
             const html = await composeViewerDashboardHtml(
               { tab: 'doctor', doctorId: 'd1', departmentName: 'Косметология', specializationName: 'Косметология' },

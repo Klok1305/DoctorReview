@@ -69,12 +69,13 @@ async function main() {
   const sample = fs.existsSync(samplePath) ? JSON.parse(fs.readFileSync(samplePath, "utf8")) : null;
   const samplePage = sample?.pages.filter(page => page.kind === "doctor"
     && page.report?.numbers?.metrics.some(metric => metric.id === "primary.year.count" && metric.value > 0)
-    && page.report.vectors[3]?.windows?.some(window => window.sections.some(section => section.charts?.some(chart => chart.id === "partition-shares")))).at(-1)
+    && page.report.vectors[3]?.windows?.some(window => window.sections.some(section => section.charts?.some(chart => chart.id === "overlap-shares")))).at(-1)
     || sample?.pages.find(page => page.kind === "doctor");
   const html = ((samplePage?.report ? require("../mobile-server/cloud-report-renderer.cjs").renderCloudReport(samplePage.report, samplePage.title) : samplePage?.html)
     || '<div class="viewer-dashboard-snapshot"><div class="card"><h2>Синтетический отчёт</h2><p>43 визита</p><p>Комментарий администратора</p></div></div>')
     + '<section class="reputation-honor-board"><h2>Доска почёта · старый HTML</h2></section>'
     + legacyClientBaseHtml()
+    + '<section class="reputation-report" data-legacy-reputation-fixture><table><tr><th>Сотрудник</th><th>Всего отзывов</th><th>Общий балл</th></tr><tr><td>Врач В</td><td>5 шт.</td><td>100</td></tr><tr><td>Врач Б</td><td>50 шт.</td><td>10</td></tr><tr><td>Врач А</td><td>50 шт.</td><td>1</td></tr></table></section>'
     + '<div class="card"><table class="data" id="tblDepartmentYear"><tr><th>Выручка с перенаправлениями</th><th>Доля перенаправлений от выручки</th><th>Возвращаемость первички за 3 месяца</th></tr><tr><td>3 000 ₽</td><td>20%</td><td>50%</td></tr></table></div>';
   const publication = createCloudPublication({ appVersion: "test", doctors: [
     { doctorId: "a", displayName: "Врач А", department: "A", specialization: "X" },
@@ -117,6 +118,8 @@ async function main() {
     assert.equal(await legacyBase.locator("[data-client-base-methodology-note]").isVisible(), false);
     assert.equal(await legacyBase.locator("[data-report-help]").evaluate(element => element.open), false);
     assert.doesNotMatch(await legacyBase.innerText(), /partition-v1|legacy-overlap/);
+    assert.equal(await legacyBase.locator("[data-client-base-legacy-note]").isVisible(),true);
+    assert.deepEqual(await frame.locator("[data-legacy-reputation-fixture] tr td:first-child").allTextContents(),["Врач А","Врач Б","Врач В"]);
     assert.equal(await legacyBase.locator('tr[data-client-base-group="active"] td.period-best').textContent(), "20%");
     assert.equal(await legacyBase.locator('tr[data-client-base-group="lost"] td.period-best').textContent(), "20%");
     assert.equal(await legacyBase.locator('tr[data-client-base-group="lost"] td.period-worst').textContent(), "30%");
@@ -226,16 +229,31 @@ async function main() {
       assert.ok(primaryTotal, "new online reports retain numeric primary cohort");
       assert.match(await primarySection.textContent(), /1[\s\S]*2[\s\S]*3 и более/);
       const clientBase = numericFrame.locator('[data-vector-key="v4"]');
-      await clientBase.locator("[data-client-base-composition] svg").waitFor();
+      await clientBase.locator("[data-client-base-definitions]").waitFor();
       const sourceBase = samplePage.report.vectors[3].windows[0].sections[0];
-      assert.deepEqual(JSON.parse(await clientBase.locator("[data-client-base-composition]").getAttribute("data-client-base-values")), sourceBase.charts.find(chart=>chart.id==='partition').series[0].values);
+      assert.equal(await clientBase.locator("[data-client-base-composition]").count(), 0);
+      const visibleBase = clientBase.locator('[data-client-base-window-panel="12"]');
+      const history = sourceBase.charts.find(chart=>chart.id==='overlap-shares');
+      assert.deepEqual(await visibleBase.locator("[data-client-base-share-table] tbody tr").evaluateAll(rows=>rows.map(row=>JSON.parse(row.dataset.periodValues))),history.series.map(series=>series.values));
       assert.equal(await clientBase.locator("[data-report-help]").evaluate(element=>element.open), false);
-      assert.equal(await clientBase.locator("[data-client-base-share-table] tbody tr").count(), 4);
+      assert.equal(await visibleBase.locator("[data-client-base-share-table] tbody tr").count(), 5);
+      await clientBase.locator("[data-client-base-window]").selectOption("36");
+      assert.equal(await visibleBase.isVisible(),false);
+      assert.equal(await clientBase.locator('[data-client-base-window-panel="36"]').isVisible(),true);
+      await clientBase.locator("[data-client-base-window]").selectOption("6");
+      const shortRows=clientBase.locator('[data-client-base-window-panel="6"] .cloud-section').first().locator('table').first().locator('tbody tr');
+      assert.equal(await shortRows.count(),3);
+      assert.doesNotMatch(await shortRows.allTextContents().then(rows=>rows.join("|")),/^Лояльные|Потерянные/);
+      await clientBase.locator("[data-client-base-window]").selectOption("12");
       assert.equal(await clientBase.locator('.report-chart[data-chart*="partition-shares"]').count(), 0);
       await clientBase.locator("[data-report-help] > summary").click();
       assert.equal(await clientBase.locator(".report-help-body").isVisible(), true);
       await clientBase.locator("[data-report-help] > summary").click();
       await primarySection.screenshot({ path: path.join(root, "tmp", "cloud-primary-patients.png") });
+      const sources = numericFrame.locator("[data-primary-sources]");
+      assert.equal(await sources.locator("svg").count(),2);
+      const sourceCharts=samplePage.report.vectors[4].sections.find(section=>section.title==='Источники первичных пациентов').charts;
+      assert.deepEqual(await sources.locator("[data-primary-source-composition]").evaluateAll(pies=>pies.map(pie=>JSON.parse(pie.dataset.clientBaseValues))),sourceCharts.map(chart=>chart.series[0].values));
       const preview = await pinContext.newPage();
       const v4Html = await clientBase.evaluate(element => element.outerHTML);
       await preview.setContent(`<meta name="viewport" content="width=device-width,initial-scale=1"><body class="online-report"><main class="cloud-data-report">${v4Html}</main></body>`);
@@ -244,6 +262,15 @@ async function main() {
         await preview.setViewportSize({ width, height: 1000 });
         assert.ok(await preview.evaluate(()=>document.documentElement.scrollWidth-innerWidth<=2));
         await preview.screenshot({ path: path.join(root,"tmp",`client-base-online-${width}.png`), fullPage:true, scale:"css" });
+      }
+      const sourcesHtml=await sources.evaluate(element=>element.outerHTML);
+      await preview.setContent(`<meta name="viewport" content="width=device-width,initial-scale=1"><body class="online-report"><main class="cloud-data-report">${sourcesHtml}</main></body>`);
+      await preview.addStyleTag({ content: fs.readFileSync(path.join(root,"tmp/klinvekt-mobile-server/public/online-report.css"),"utf8") });
+      for (const width of [1440,390]) {
+        await preview.setViewportSize({width,height:1000});
+        await preview.screenshot({path:path.join(root,'tmp',`primary-sources-online-${width}.png`),fullPage:true,scale:'css'});
+        const geometry=await preview.evaluate(()=>({overflow:document.documentElement.scrollWidth-innerWidth, outside:[...document.querySelectorAll('body *')].filter(element=>element.getBoundingClientRect().right>innerWidth+2).slice(0,12).map(element=>({tag:element.tagName,cls:element.className,width:element.getBoundingClientRect().width}))}));
+        assert.ok(geometry.overflow<=2,JSON.stringify({width,...geometry}));
       }
       await preview.close();
     }

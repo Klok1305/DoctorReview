@@ -60,34 +60,36 @@ function cloudDoctorReport(doctorId, monthKey, comments) {
   const result = computeMetrics(doctorId, monthKey), profile = profileForDoctor(doctorId);
   const report = buildMobilePublicationPeriod(doctorId, monthKey, result,
     doctorHasDashboardData(doctorId, prevMonthKey(monthKey)) ? computeMetrics(doctorId, prevMonthKey(monthKey)) : null, comments, { includeDynamics: false });
-  const base = adminClientBaseSummary(doctorId, monthKey);
-  const groups = ["active", "loyalSleep", "newRisk", "lost"];
-  const baseSeries = adminClientBaseSeries(doctorId, monthKey);
-  const previousBase = adminClientBaseSummary(doctorId, prevMonthKey(monthKey));
-  const share = (value, group) => value?.total ? value.seg[group] / value.total * 100 : null;
-  const shareMetrics = groups.map(group => {
-    const current = share(base, group), previous = share(previousBase, group);
-    return mobilePublicationMetric(adminClientBaseGroupLabel(group), fmtPct(current),
-      `${clientBaseShareMovement(current, previous)}. ${monthLabel(prevMonthKey(monthKey))}: ${fmtPct(previous)} → ${monthLabel(monthKey)}: ${fmtPct(current)}. ${fmtNum(base?.seg[group])} чел.`,
-      "", current == null || previous == null || Math.abs(current - previous) < .0001 ? "neutral" : (group === "active" ? current > previous : current < previous) ? "good" : "bad");
-  });
+  const groups = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
   Object.assign(report.vectors[3], {
-    methodologyId: "partition-v1-36m", scoreMethodologyId: "legacy-overlap-v1",
-    methodologyLabel: "Четыре непересекающиеся группы за 36 месяцев, как в Admin и HTML. Балл В4 сохраняет прежнюю методику.",
-    detail: "Клиентская база за три года: только количества и показатели.",
-    windows: [{ id: "36", label: "3 года", period: "Точное окно 36 месяцев", methodologyId: "partition-v1-36m",
-      sections: base ? [{ title: "Клиентская база", note: adminClientBaseQualityNote(base),
-        metrics: [mobilePublicationMetric("Общая база", fmtNum(base.total)), ...shareMetrics,
-          mobilePublicationMetric("Кандидаты на реактивацию", fmtNum(base.reactivationCandidates)), mobilePublicationMetric("Выручка кандидатов", fmtMoney(base.reactivationSum))],
-        columns: ["Группа", "Пациенты", "Доля", "Условие"],
-        rows: groups.map(group => [adminClientBaseGroupLabel(group), fmtNum(base.seg[group]), fmtPct(base.total ? base.seg[group] / base.total * 100 : null), adminClientBaseGroupDescription(base.partition, group)]),
-        charts: [mobilePublicationChart("partition-shares", "Доли аудиторий по месяцам", "line", baseSeries.months.map(monthLabel), groups.map((group, index) => ({
-          label: adminClientBaseGroupLabel(group), color: ["#16a34a", "#64748b", "#d97706", "#dc2626"][index], values: baseSeries.bases.map(value => share(value, group)),
-        })), "%"), mobilePublicationChart("partition", "Группы клиентской базы", "donut", groups.map(adminClientBaseGroupLabel),
-          [{ label: "Пациенты", values: groups.map(group => base.seg[group]), colors: ["#16a34a", "#94a3b8", "#d97706", "#dc2626"] }], "чел.")].filter(Boolean),
-      }] : [{ title: "Клиентская база", metrics: [mobilePublicationMetric("Данные", "Нет точной выгрузки за 36 месяцев")] }] }],
+    methodologyId: "report-overlap-v1", scoreMethodologyId: "legacy-overlap-v1",
+    methodologyLabel: "Единые пять пересекающихся групп врача и специализации. Балл В4 использует сохранённые нормативы.",
+    detail: "Точное окно базы выбирается вручную. Для активных нужны визиты за 6 месяцев.",
+    windows: [12, 6, 24, 36].map(window => {
+      const base = reportClientBaseSummary(doctorId, monthKey, window);
+      const previous = reportClientBaseSummary(doctorId, prevMonthKey(monthKey), window);
+      const series = adminClientBaseSeries(doctorId, monthKey, window);
+      const visible = groups.filter(group => base?.groupAvailable[group]);
+      return { id: String(window), label: `${window} мес.`, period: `Точное окно ${window} месяцев`, methodologyId: "report-overlap-v1", sections: [{
+        title: "Клиентская база", note: !base ? `Нет точной выгрузки за ${window} месяцев. Другой период не подставляется.`
+          : !base.groupAvailable.active ? "Для активных нет корректной выгрузки ровно за 6 месяцев. Ноль не подставляется." : "",
+        metrics: [mobilePublicationMetric("Общая база", fmtNum(base?.total), previous && base ? mobilePublicationPercentChange(previous.total ? (base.total - previous.total) / previous.total * 100 : null) : "Нет данных за предыдущий месяц"),
+          ...visible.map(group => mobilePublicationMetric(clientBaseGroupLabel(group), fmtPct(clientBaseGroupPct(base, group)), `${fmtNum(base.seg[group])} чел. · ${clientBaseShareMovement(clientBaseGroupPct(base, group), previous?.groupAvailable[group] ? clientBaseGroupPct(previous, group) : null)}`))],
+        columns: ["Группа", "Пациенты", "Доля", "Условие"], rows: visible.map(group => [clientBaseGroupLabel(group), fmtNum(base.seg[group]), fmtPct(clientBaseGroupPct(base, group)), clientBaseGroupDescription(base, group)]),
+        charts: [mobilePublicationChart("overlap-shares", "Доли по месяцам", "line", series.months.map(monthLabel),
+          groups.filter(group => series.bases.some(value => value?.groupAvailable[group])).map(group => ({ label: clientBaseGroupLabel(group), values: series.bases.map(value => value?.groupAvailable[group] ? clientBaseGroupPct(value, group) : null) })), "%")].filter(Boolean),
+      }] };
+    }),
   });
   const primary = doctorPrimaryPatients(doctorId, monthKey);
+  const sources = doctorPrimarySources(primary);
+  report.vectors[4].sections.push({ title: "Источники первичных пациентов",
+    note: `Проценты — от всех первичных за соответствующий период. Неоднозначные и неизвестные источники не распределяются. ${!sources.year.complete || !sources.month.complete ? "Неполные данные: показаны первичные из загруженных отчётов." : ""}`,
+    charts: [["year", `С начала ${monthKey.slice(0,4)} года — ${monthLabel(monthKey)}`], ["month", `За последний месяц · ${monthLabel(monthKey)}`]].map(([key, title]) => ({
+      id: `primary-sources-${key}`, title, type: "donut", unit: "чел.", labels: globalThis.klinvektReportPresentation.primarySourceGroups.map(group => group.label),
+      series: [{ label: "Первичные пациенты", values: sources[key].counts, colors: globalThis.klinvektReportPresentation.primarySourceGroups.map(group => group.color) }],
+    })),
+  });
   report.vectors[4].sections.push({ title: "Первичные пациенты врача",
     note: `Первичные у выбранного врача. Посещения — с первого месяца пациента; доли — от всех первичных за год. ${primary.incompletePrimaryMonths.length ? `Неполные данные: ${primary.incompletePrimaryMonths.map(monthLabel).join(", ")}.` : "Загружены все месяцы с начала года."} Списки пациентов — в Админ и защищённом Viewer.`,
     metrics: [mobilePublicationMetric("Первичных за месяц", fmtNum(primary.current?.count)),
@@ -113,6 +115,11 @@ function cloudDoctorReport(doctorId, monthKey, comments) {
     ["primary.year.count", primary.yearCount, "count"],
     ...primary.buckets.map(bucket => [`primary.year.visits${bucket.visits}`, bucket.count, "count"]),
   ].map(([id, value, unit]) => ({ id, value: Number.isFinite(value) ? value : null, unit, methodologyId: "doctor-primary-ytd-v1" })));
+  for (const period of ["year", "month"]) for (let i = 0; i < 5; i++) {
+    for (const [suffix, value, unit] of [["count", sources[period].counts[i], "count"], ["share", sources[period].shares[i], "percent"]]) {
+      report.numbers.metrics.push({ id: `primary.sources.${period}.${i}.${suffix}`, value, unit, methodologyId: "doctor-primary-sources-v1" });
+    }
+  }
   return report;
 }
 
@@ -155,13 +162,26 @@ function cloudGroupReport(item, monthKey, comments, doctors) {
     })],
     [section("Репутация", [metric("Средний рейтинг", result.rep.avgRating, value => fmtNum(value, 2)), metric("NPS", result.rep.nps, fmtPct),
       metric("Новые отзывы", result.rep.reviews), metric("Всего отзывов", result.rep.totalReviews)], {
-      columns: ["Врач", "Балл", "Полнота", "Отзывы"], rows: [...records].sort((a, b) => (b.result.scores?.rankEligible ? b.result.scores.total : -1) - (a.result.scores?.rankEligible ? a.result.scores.total : -1))
+      columns: ["Врач", "Балл", "Полнота", "Отзывы"], rows: [...records].sort((a, b) => (b.result.rep?.totalReviews ?? -1) - (a.result.rep?.totalReviews ?? -1)
+        || doctorName(a.id).localeCompare(doctorName(b.id), "ru") || String(a.id).localeCompare(String(b.id)))
         .map(({ id, result: row }) => [doctorName(id), fmtNum(row.scores?.total, 1) + (row.scores?.preliminary ? " · предв." : ""), fmtPct(row.scores?.coveragePct), fmtNum(row.rep?.totalReviews)]),
     })],
   ];
   const vectors = ["v1", "v2", "v3", "v4", "v5", "v6"].map((id, index) => ({ id, number: index + 1, title: VECTOR_META[id].name,
     score: Number.isFinite(result.vecAvg[id]) ? Math.round(result.vecAvg[id]) : null, delta: null, coverage: null, preliminary: false,
     detail: "Сводные показатели включённых врачей. Несопоставимые значения остаются незаданными.", sections: vectorSections[index] }));
+  vectors[3].methodologyId = "report-overlap-v1";
+  vectors[3].sections = [];
+  vectors[3].windows = [12, 6, 24, 36].map(window => {
+    const bases = records.map(({id}) => ({ id, base: reportClientBaseSummary(id, monthKey, window), previous: reportClientBaseSummary(id, prevMonthKey(monthKey), window) }));
+    const visible = groups.filter(group => bases.some(row => row.base?.groupAvailable[group]));
+    return { id: String(window), label: `${window} мес.`, period: `Точное окно ${window} месяцев`, sections: [{ title: "Клиентская база · сравнение врачей",
+      note: "Единая методика с личным В4. Незаданные показатели не заменяются нулями; для активных нужна выгрузка за 6 месяцев.",
+      columns: ["Врач", "Период", "Общая база", "Изменение базы", ...visible.map(clientBaseGroupLabel)],
+      rows: bases.map(({id, base, previous}) => [doctorName(id), `${window} мес.`, fmtNum(base?.total), mobilePublicationPercentChange(base && previous?.total ? (base.total - previous.total) / previous.total * 100 : null),
+        ...visible.map(group => base?.groupAvailable[group] ? `${fmtNum(base.seg[group])} · ${fmtPct(clientBaseGroupPct(base, group))}` : "—")]),
+    }] };
+  });
   const overall = Number.isFinite(result.scores.total) ? Math.round(result.scores.total) : null;
   const previous = getResult(prevMonthKey(monthKey))?.scores?.total;
   const report = { id: monthKey, label: monthLabel(monthKey), shortLabel: monthLabel(monthKey).split(/\s+/)[0], overall, coverage: null, preliminary: false, missing,

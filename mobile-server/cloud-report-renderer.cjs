@@ -26,8 +26,16 @@ function renderTree(nodes = [], columns = []) {
   }).join("");
 }
 function renderSections(sections = [], options = {}) {
+  sections = sections.map(section => {
+    const index = section.columns?.findIndex(label => ["Отзывы", "Всего отзывов"].includes(label));
+    if (!(index > 0) || !["Врач", "Сотрудник"].includes(section.columns[0])) return section;
+    const count = row => /^\d[\d\s\u00a0]*(?:\s*шт\.)?$/.test(String(row[index]).trim()) ? Number(String(row[index]).replace(/шт\.|\s/g, "")) : -1;
+    return { ...section, rows: [...section.rows].sort((a,b) => count(b) - count(a) || a[0].localeCompare(b[0], "ru")) };
+  });
   return sections.map(section => `<section class="cloud-section"><h3>${esc(section.title)}</h3>${renderSectionNote(section.note, options)}
-    ${renderMetrics(section.metrics)}${section.tree?.length ? renderTree(section.tree, section.columns) : renderTable(section.columns, section.rows)}${renderCharts(section.charts, options)}</section>`).join("");
+    ${renderMetrics(section.metrics)}${section.tree?.length ? renderTree(section.tree, section.columns) : renderTable(section.columns, section.rows)}${section.charts?.some(chart => chart.id.startsWith("primary-sources-"))
+      ? `<div class="primary-source-charts" data-primary-sources>${section.charts.map(chart => `<div data-primary-source-period="${esc(chart.id.replace("primary-sources-", ""))}">${presentation.clientBaseCompositionHtml(chart.series[0].values, "", { groups: presentation.primarySourceGroups, title: chart.title })}</div>`).join("")}</div>`
+      : renderCharts(section.charts, options)}</section>`).join("");
 }
 function renderSectionNote(note, options) {
   if (!note) return "";
@@ -42,7 +50,7 @@ function renderClientBase(vector, report, options) {
   const charts = current.charts || [], composition = charts.find(chart => chart.id === "partition"), history = charts.find(chart => chart.id === "partition-shares");
   if (current.columns?.includes("Условие")) options.help.push(`<ul>${(current.rows || []).map(row => `<li><b>${esc(row[0])}:</b> ${esc(row[row.length - 1])}</li>`).join("")}</ul>`);
   options.help.push('<p>Зелёным в таблице показаны лучшие значения за период, красным — худшие. Для активных лояльных лучше большая доля, для остальных групп — меньшая.</p>');
-  return renderSectionNote(current.note, options) + renderMetrics(current.metrics)
+  return '<p class="cloud-completeness">Этот отчёт сохранён с прежними четырьмя группами. Для пяти групп и сравнения по единой методике сформируйте новую публикацию в обновлённом Админ.</p>' + renderSectionNote(current.note, options) + renderMetrics(current.metrics)
     + presentation.clientBaseCompositionHtml(composition?.series[0]?.values || [null, null, null, null], report.label)
     + (history ? presentation.clientBaseShareTableHtml(history.labels, history.series.map((series, index) => ({ ...presentation.clientBaseGroups[index], label: series.label, values: series.values }))) : "")
     + renderCharts(charts.filter(chart => !["partition", "partition-shares"].includes(chart.id)), options)
@@ -52,7 +60,14 @@ function renderVector(vector, report, options) {
   const help = [vector.detail, vector.methodologyLabel].filter(Boolean).map(text => `<p>${lines(text)}</p>`);
   const sectionOptions = { ...options, help };
   const partitioned = vector.id === "v4" && vector.methodologyId === "partition-v1-36m";
-  const body = partitioned ? renderClientBase(vector, report, sectionOptions)
+  const overlapping = vector.id === "v4" && vector.methodologyId === "report-overlap-v1";
+  const body = overlapping ? `<label class="client-base-window-picker">Период базы <select data-client-base-window>${vector.windows.map(window => `<option value="${esc(window.id)}">${esc(window.label)}</option>`).join("")}</select></label>`
+    + vector.windows.map((window, index) => `<div data-client-base-window-panel="${esc(window.id)}"${index ? " hidden" : ""}>${window.sections.map(section => {
+      const history = section.charts?.find(chart => chart.id === "overlap-shares");
+      return renderSections([{ ...section, charts: section.charts?.filter(chart => chart !== history) }], sectionOptions)
+        + (history ? presentation.clientBaseShareTableHtml(history.labels, history.series.map(series => ({ ...presentation.overlappingClientBaseGroups.find(group => group.label === series.label), label: series.label, values: series.values }))) : "");
+    }).join("")}</div>`).join("") + presentation.clientBaseDefinitionsHtml()
+    : partitioned ? renderClientBase(vector, report, sectionOptions)
     : vector.windows?.length ? vector.windows.map((window, index) => `<details class="cloud-window" ${index === 0 ? "open" : ""}><summary>${esc(vector.windowPickerLabel || "Период")}: ${esc(window.label)}</summary><p>${esc(window.period)}</p>${renderSections(window.sections, sectionOptions)}</details>`).join("")
       : renderSections(vector.sections, sectionOptions);
   return `<details class="cloud-vector" data-vector-key="${esc(vector.id)}" open><summary><span>В${vector.number} · ${esc(vector.title)}</span><b>${score(vector.score)}${vector.preliminary ? " · предв." : ""}</b></summary>${body}${presentation.reportHelpHtml(help.join(""))}</details>`;

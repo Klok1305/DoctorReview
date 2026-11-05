@@ -164,7 +164,7 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /Загрузка отделения/);
   assert.match(actual, /currentLoadPct/);
   assert.match(actual, /sberhealth/);
-  assert.doesNotMatch(actual, /yandex/);
+  assert.doesNotMatch(actual, /key: "yandex"/);
   assert.match(actual, /Собственная запись в 1С/);
   assert.match(actual, /собственных записей \/.*всех визитов за месяц × 100%/);
   assert.match(actual, /За выбранный месяц текущего значения нет/);
@@ -247,11 +247,11 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /aria-pressed/);
   assert.match(actual, /Справка о расчётах/);
   assert.match(actual, /openClientSegment/);
-  for (const field of ["cb_loyalVisits", "cb_activeM", "cb_sleepVisits", "cb_sleepM", "cb_newRiskVisits", "cb_lostM", "cb_lostVisits", "cb_lostAfterM"]) assert.match(actual, new RegExp(field));
-  assert.match(actual, /<th class="num">Визиты<\/th><th class="num">Длительность, мес\.<\/th>/);
+  assert.match(actual, /data-client-base-definitions/);
+  assert.doesNotMatch(actual, /id="clientBasePartitionRules"/);
   assert.doesNotMatch(actual, /id="np_(?:loyal|active|newRisk|sleep|lost)(?:Visits|M|Within)"/);
   assert.match(actual, /clientBaseRequiredWindow/);
-  assert.match(actual, /kbWinByDoctor/);
+  assert.match(actual, /reportClientBaseSummary/);
   assert.match(actual, /function reportOverallIndex/);
   assert.match(actual, /Общий индекс/);
   assert.doesNotMatch(actual, /onPrepareClose|confirmCloseSaved|app:prepare-close/);
@@ -659,15 +659,15 @@ test("appointment conversion block starts compact and parent groups hide their w
   assert.match(css, /\.appointment-conversion-body\s*\{/);
 });
 
-test("Admin client-base vector has four configurable groups on a full three-year base", () => {
+test("Admin client-base vector uses five shared groups and a manually selected exact window", () => {
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
   const vector = ui.match(/\/\* ---- В4 Клиентская база ---- \*\/[\s\S]*?\/\* ---- В5 Лояльность ---- \*\//);
 
   assert.ok(vector);
   assert.doesNotMatch(vector[0], /disabled:/);
-  assert.match(vector[0], /const groupOrder = \["active", "loyalSleep", "newRisk", "lost"\]/);
-  assert.match(vector[0], /adminClientBaseSummary\(UI.docId, mk\)/);
+  assert.match(vector[0], /const groupOrder = \["loyal", "active", "newRisk", "loyalSleep", "lost"\]/);
+  assert.match(vector[0], /reportClientBaseSummary\(UI.docId, mk, UI.kbWin\)/);
   assert.doesNotMatch(vector[0], /kbWinSeg|Остальные/);
   assert.match(vector[0], /filter\(group => kb\.groupAvailable\[group\]\)/);
   assert.match(vector[0], /kb-summary-share/);
@@ -677,13 +677,13 @@ test("Admin client-base vector has four configurable groups on a full three-year
   assert.match(vector[0], /group === "active" \|\| group === "lost"/);
   assert.match(vector[0], /group === "newRisk" \|\| group === "loyalSleep" \|\| group === "lost"/);
   assert.match(vector[0], /reportHelpHtml\(clientBaseHelp/);
-  for (const label of ["Общая база", "Каждый пациент относится к одной группе", "отсутствие выгрузки не означает ноль пациентов"]) {
+  for (const label of ["Общая база", "отсутствие выгрузки не означает ноль пациентов"]) {
     assert.match(vector[0], new RegExp(label));
   }
   for (const label of ["Лояльные", "Активные", "Новые, риск", "Лояльные, спящие", "Потерянные"]) assert.match(ui, new RegExp(label));
   assert.match(vector[0], /openClientSegment\('newRisk'\)/);
   assert.match(vector[0], /openClientSegment\('loyalSleep'\)/);
-  assert.match(ui, /presentation\.clientBaseCompositionHtml/);
+  assert.match(vector[0], /clientBaseDefinitionsHtml/);
   assert.match(ui, /presentation\.clientBaseShareTableHtml/);
   assert.doesNotMatch(vector[0], /data-client-base-methodology-note|kb-vector-key-note/);
   assert.match(css, /\.kb-summary-card\.key-indicator/);
@@ -849,14 +849,15 @@ test("client-base table shows overlapping groups and omits unavailable values", 
   assert.match(table[0], /<h2>Клиентская база /);
   assert.doesNotMatch(table[0], /Мониторинг базы|<th>Настройки базы<\/th>/);
   assert.match(table[0], /visibleGroups/);
-  assert.match(table[0], /clientBaseProfileDescription\(p, visibleGroups\)/);
-  assert.match(table[0], /clientBaseProfileDescriptionMarkup\(item\.profile, visibleGroups\)/);
+  assert.match(table[0], /reportClientBaseSummary\(x.id, mk, UI.kbWin\)/);
+  assert.match(table[0], /clientBaseDefinitionsHtml/);
   assert.match(table[0], /kb\.groupAvailable\[group\]/);
   assert.match(table[0], /fmtPct\(clientBaseGroupPct\(kb, group\)\)/);
   assert.doesNotMatch(table[0], /от A|база A/);
-  assert.match(table[0], /Все проценты рассчитаны от общей клиентской базы/);
-  assert.match(table[0], /Группы могут пересекаться/);
-  assert.match(table[0], /ноль не подставляется/);
+  const presentation = fs.readFileSync(path.join(root, "mobile-pilot/report-presentation.js"), "utf8");
+  assert.match(presentation, /Проценты считаются от общей клиентской базы/);
+  assert.match(presentation, /Группы могут пересекаться/);
+  assert.match(presentation, /ноль не подставляется/);
   assert.match(table[0], /compactBaseTrend\(kb\.total,/);
   assert.ok(trendMatch);
   const compactBaseTrend = new Function("kbTrendMarkup", `${trendMatch[0]}; return compactBaseTrend;`)((current, previous, lower, mode) => `${current}|${previous}|${lower}|${mode}`);
@@ -1129,8 +1130,8 @@ test("Viewer doctor HTML mirrors the Admin client-base methodology and keeps pro
 
   assert.match(adminUi, /function viewerClientBaseHtml\(target, periodKey\)/);
   assert.match(adminUi, /target\.tab !== "doctor"/);
-  assert.match(adminUi, /const kb = adminClientBaseSummary\(doctorId, periodKey\)/);
-  assert.match(adminUi, /data-client-base-methodology="partition-v1-36m"/);
+  assert.match(adminUi, /const kb = reportClientBaseSummary\(doctorId, periodKey, UI.kbWin\)/);
+  assert.match(adminUi, /data-client-base-methodology="report-overlap-v1"/);
   assert.match(adminUi, /reportHelpHtml\(clientBaseHelp/);
   assert.match(adminUi, /originalClientBase\.insertAdjacentHTML\("beforeend", clientBase\)/);
   assert.match(adminUi, /Источник данных:[\s\S]*periodStr\(kb\.period\)/);

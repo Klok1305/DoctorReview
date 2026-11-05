@@ -48,7 +48,7 @@ function createContext({ desktop = false, desktopAPI = null } = {}) {
     vm.runInContext(fs.readFileSync(path.join(build, fileName), "utf8"), context, { filename: fileName });
   }
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
-  vm.runInContext(ui.slice(ui.indexOf("function adminClientBaseGroupLabel"), ui.indexOf("function clientBaseProfileDescription")), context);
+  vm.runInContext(ui.slice(ui.indexOf("function clientBaseGroupLabel"), ui.indexOf("function clientBaseProfileDescription")), context);
   return context;
 }
 
@@ -102,8 +102,8 @@ test("Admin September feedback preserves referral totals, item conversion, year 
     const excluded = computeMetrics('d1', '2026-01');
     const persisted = DB.settings.depts['Косметология'].overrides['процедура а'].referralIncluded;
     const catalog = collectDeptItems('Косметология', DB.settings.depts['Косметология']);
-    const year = adminDoctorDynamics('d1', '2026-12');
-    const base = adminClientBaseSeries('d1', '2026-12');
+    const year = adminDoctorDynamics('d1', '2026-12', 36);
+    const base = adminClientBaseSeries('d1', '2026-12', 36);
     const buckets = adminReferralBuckets({
       'Профильные услуги': { s: 200, q: 2, includedS: 0, items: { A: { s: 200, q: 2 } } },
       'Другие услуги клиники': { s: 300, q: 1, includedS: 300, items: { B: { s: 300, q: 1 } } }
@@ -143,7 +143,7 @@ test("Admin September feedback preserves referral totals, item conversion, year 
   assert.equal(x.noDenominator, '—');
 });
 
-test("four-group Admin chart uses 36 months, retains old low-frequency patients and missing months", () => {
+test("five-group Admin history uses the selected exact window and retains old patients and missing months", () => {
   const context = createContext();
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   vm.runInContext(ui.slice(ui.indexOf("function adminYearMonths"), ui.indexOf("function dynamicsHtml")), context);
@@ -156,13 +156,13 @@ test("four-group Admin chart uses 36 months, retains old low-frequency patients 
       { name: 'C', v: 2, r: 365 }, { name: 'D', v: 2, r: 366 }, { name: 'E', v: 1, r: 1000 }
     ] }, 12: { clients: [{ name: 'Short', v: 3, r: 20 }] } };
     DB.months['2026-02'].kb.d1 = { 12: { clients: [{ name: 'Short', v: 3, r: 20 }] } };
-    const series = adminClientBaseSeries('d1', '2026-12');
+    const series = adminClientBaseSeries('d1', '2026-12', 36);
     return { ...series, settings: clientBasePartitionSettings(DB.settings.depts['Косметология']) };
   })()`, context);
   const x = JSON.parse(JSON.stringify(result));
-  assert.deepEqual(x.datasets.map(row => row.label), ['Активные лояльные', 'Лояльные спящие', 'Новые в риске', 'Потерянные']);
-  assert.deepEqual(x.datasets.map(row => row.data[0]), [1, 1, 1, 2]);
-  assert.equal(x.datasets.reduce((sum, row) => sum + row.data[0], 0), x.totals[0]);
+  assert.deepEqual(x.datasets.map(row => row.label), ['Лояльные', 'Активные', 'Лояльные, спящие', 'Новые, риск', 'Потерянные']);
+  assert.deepEqual(x.datasets.map(row => row.data[0]), [0, null, 0, 3, 2]);
+  assert.equal(x.totals[0], 5);
   assert.ok(x.datasets.every(row => row.data[1] === null));
   assert.equal(x.totals[1], null);
   assert.equal(x.months.length, 12);
@@ -387,11 +387,11 @@ test("mobile publication preserves preliminary score coverage, missing sources a
   assert.deepEqual(plain.publication.methodologies, {
     score: "score-v1",
     clientBase: "legacy-overlap-v1",
-    adminViewerClientBase: "partition-v1-36m",
+    adminViewerClientBase: "report-overlap-v1",
   });
   assert.equal(v4.methodologyId, "legacy-overlap-v1");
   assert.equal(v4.scoreMethodologyId, "legacy-overlap-v1");
-  assert.match(v4.methodologyLabel, /не новое разбиение Admin\/Viewer partition-v1-36m/);
+  assert.match(v4.methodologyLabel, /Мобильные группы используют сохранённые нормативы/);
   assert.ok(v4.windows.every(window => window.methodologyId === "legacy-overlap-v1"));
   assert.deepEqual({ target: unsetRevenueGoal.target, hasTarget: unsetRevenueGoal.hasTarget, progress: unsetRevenueGoal.progress },
     { target: "не задана", hasTarget: false, progress: 0 });

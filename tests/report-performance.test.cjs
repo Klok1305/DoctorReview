@@ -20,7 +20,7 @@ function fixture(c, { clients = 120, doctors = 3 } = {}) {
       const m = DB.months[key] = emptyMonth();
       for (const id of Object.keys(DB.doctors)) {
         m.vyrabotka[id] = { items: [{ n: 'Прием', q: 2, sOwn: 1000, sRef: 100, goods: false }] };
-        m.kb[id] = Object.fromEntries([1, 12, 36].map(win => [win, { clients: Array.from({ length: fixtureOptions.clients }, (_, i) => ({ name: 'Пациент ' + i, patientId: 'id-' + i, s: 1000 + i, v: i % 6 + 1, r: i % 900 })) }]));
+        m.kb[id] = Object.fromEntries([1, 6, 12, 36].map(win => [win, { clients: Array.from({ length: fixtureOptions.clients }, (_, i) => ({ name: 'Пациент ' + i, patientId: 'id-' + i, s: 1000 + i, v: i % 6 + 1, r: i % 900 })) }]));
       }
     }
     DB.months['2026-03'].zapis.d1 = { total: 20, zapis: 10, okaz: 5, created: 4 };
@@ -44,14 +44,14 @@ const plain = value => JSON.parse(JSON.stringify(value));
 
 test("report Worker matches direct metrics, calendar gaps, partial coverage and changed targets; selected snapshot excludes other patients", async () => {
   const c = context(); fixture(c);
-  const expected = plain(vm.runInContext("['2026-01','2026-03'].map(key => ({metric:computeMetrics('d0',key), rows:adminClientBaseSummary('d0',key).clientRows}))", c));
+  const expected = plain(vm.runInContext("['2026-01','2026-03'].map(key => ({metric:computeMetrics('d0',key), rows:adminClientBaseSummary('d0',key).clientRows, reportBase:reportClientBaseSummary('d0',key,12), reportRows:reportClientBaseSummary('d0',key,12).clientRows}))", c));
   const snapshot = vm.runInContext("reportWorkerSnapshot(DB,['d0'])", c);
   assert.deepEqual(Object.keys(snapshot.months['2026-03'].kb), ['d0']);
   assert.equal(snapshot.months['2026-03'].importedReports.zapis, true, "old inferred coverage includes another doctor's import");
   const prepared = await prepare(snapshot, { tab: "doctor", doctorId: "d0", month: "2026-03" });
   c.prepared = prepared;
   vm.runInContext("clearMetricsCache();adoptReportCalculations(prepared)", c);
-  assert.deepEqual(plain(vm.runInContext("['2026-01','2026-03'].map(key => ({metric:computeMetrics('d0',key), rows:adminClientBaseSummary('d0',key).clientRows}))", c)), expected);
+  assert.deepEqual(plain(vm.runInContext("['2026-01','2026-03'].map(key => ({metric:computeMetrics('d0',key), rows:adminClientBaseSummary('d0',key).clientRows, reportBase:reportClientBaseSummary('d0',key,12), reportRows:reportClientBaseSummary('d0',key,12).clientRows}))", c)), expected);
   assert.equal(vm.runInContext("computeMetrics('d0','2026-02')", c), null);
   assert.equal(vm.runInContext("computeMetrics('d0','2026-03').akb.wins[36].clientRows.length", c), 120, "lazy rows survive structured clone");
   for (const filter of ["all", ["X"]]) {

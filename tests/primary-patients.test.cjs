@@ -158,17 +158,18 @@ test("Admin/Viewer markup and online numeric report share the cohort while cloud
 test("V4 share series preserves missing calendar months and compares percentages rather than patient counts", () => {
   const c=context();
   vm.runInContext(`for(const [key,active,total] of [['2026-01',1,2],['2026-03',3,4]]){
-    const m=ensureMonth(key); m.kb.d1={'36':{clients:Array.from({length:total},(_,i)=>({name:'Пациент '+i,v:i<active?10:1,r:20,s:100}))}}; }
+    const m=ensureMonth(key); m.kb.d1=Object.fromEntries([6,12,36].map(window=>[window,{clients:Array.from({length:total},(_,i)=>({name:'Пациент '+i,v:i<active?10:1,r:20,s:100}))}])); }
     clearMetricsCache();`,c);
   const series=plain(vm.runInContext("adminClientBaseSeries('d1','2026-03')",c));
   assert.equal(series.months.length,3);assert.equal(series.bases[1],null);
   assert.equal(vm.runInContext("clientBaseShareMovement(75,50)",c),'Доля выросла на 25 п.п.');
   assert.equal(vm.runInContext("clientBaseShareMovement(50,null)",c),'Нет данных за предыдущий месяц');
   const report=plain(vm.runInContext("cloudDoctorReport('d1','2026-03',[])",c));
-  const chart=report.vectors[3].windows[0].sections[0].charts.find(c=>c.id==='partition-shares');
+  const chart=report.vectors[3].windows[0].sections[0].charts.find(c=>c.id==='overlap-shares');
   assert.deepEqual(chart.series[0].values,[50,null,75]);
   const html = renderCloudReport(report, 'Врач');
-  assert.match(html, /data-client-base-composition/);
+  assert.match(html, /data-client-base-definitions/);
+  assert.doesNotMatch(html, /data-client-base-composition/);
   assert.match(html, /data-client-base-share-table/);
   assert.doesNotMatch(html, /data-chart="[^"]*partition-shares/);
   assert.match(html, /class="num period-best"[^>]*>75%/);
@@ -193,4 +194,78 @@ test("V4 circular composition includes exact counts/shares and handles empty, mi
   assert.match(presentation.clientBaseCompositionHtml([null,null,null,null]),/нет данных/);
   assert.equal((presentation.clientBaseCompositionHtml([3,0,0,0]).match(/<circle /g)||[]).length,1);
   assert.doesNotMatch(presentation.reportHelpHtml('<p>Пояснение</p>'),/<details[^>]*\sopen/);
+});
+
+test("five report groups use fixed boundaries, overlap, exact windows and actual six-month visits", () => {
+  const c=context();
+  vm.runInContext(`const m=ensureMonth('2026-03');
+    const rows=[{patientId:'a',name:'А',v:4,r:183,s:100},{patientId:'b',name:'Б',v:9,r:20,s:200},
+      {patientId:'c',name:'В',v:4,r:184,s:300},{patientId:'d',name:'Г',v:2,r:366,s:400},
+      {patientId:'e',name:'Д',v:2,r:183,s:500},{patientId:'f',name:'Е',v:4,r:365,s:600}];
+    m.kb.d1={12:{clients:rows},36:{clients:rows},6:{clients:[{patientId:'a',name:'А',v:4,r:183},{patientId:'b',name:'Б',v:3,r:20},{patientId:'e',name:'Д',v:2,r:183}]}};
+    DB.settings.depts['Косметология'].loyalVisits=9;
+    clearMetricsCache();`,c);
+  const base=plain(vm.runInContext("reportClientBaseSummary('d1','2026-03',12)",c));
+  assert.deepEqual(Object.fromEntries(['loyal','active','newRisk','loyalSleep','lost'].map(k=>[k,base.seg[k]])),{loyal:4,active:1,newRisk:1,loyalSleep:2,lost:1});
+  assert.ok(Math.abs(base.activeBasePct-100/6)<1e-10);
+  const rows=plain(vm.runInContext("reportClientBaseSummary('d1','2026-03',12).clientRows",c));
+  assert.deepEqual(rows[0].groups,['loyal','active']);
+  assert.deepEqual(rows[2].groups,['loyal','loyalSleep']);
+  assert.deepEqual(rows[3].groups,['newRisk','lost']);
+  assert.equal(rows[1].groups.includes('active'),false,'9 visits over a year do not mean 4 in six months');
+  const short=plain(vm.runInContext("reportClientBaseSummary('d1','2026-03',6)",c));
+  assert.equal(short.groupAvailable.loyal,false);assert.equal(short.seg.loyal,null);assert.equal(short.seg.lost,null);
+  assert.equal(vm.runInContext("reportClientBaseSummary('d1','2026-03',24)",c),null,'no window substitution');
+  vm.runInContext("delete DB.months['2026-03'].kb.d1[6]; invalidateMetricsCache({months:['2026-03']});",c);
+  assert.equal(vm.runInContext("reportClientBaseSummary('d1','2026-03',12).activeBasePct",c),null);
+});
+
+test("primary source pies share exact counts and whole-cohort percentages, with unknown/ambiguous sources retained", () => {
+  const c=context();cohort(c);
+  vm.runInContext(`const names=['Рекомендация пациента','Сайт клиники','ПроДокторов','ВКонтакте','Неизвестный канал','Интернет и рекомендация'];
+    DB.months['2026-01'].primaryPatients.perDoc.d1.patients=names.map((source,i)=>({name:'Первичный '+i,source,primary:1,visits:1,revenue:100}));
+    DB.months['2026-02'].primaryPatients.perDoc.d1.patients=[{name:'Первичный 0',source:'Интернет',primary:1,visits:1,revenue:100},{name:'Новый февраль',source:'СберЗдоровье',primary:1,visits:1,revenue:100}];`,c);
+  const summary=plain(vm.runInContext("doctorPrimarySources(doctorPrimaryPatients('d1','2026-02'))",c));
+  assert.deepEqual(summary.year.counts,[1,1,2,1,2]);assert.equal(summary.year.total,7);
+  assert.deepEqual(summary.month.counts,[0,1,1,0,0]);assert.equal(summary.month.total,2);
+  assert.ok(Math.abs(summary.year.shares.reduce((s,v)=>s+v,0)-100)<1e-10);
+  assert.ok(Math.abs(summary.year.shares[0]-100/7)<1e-10);
+  const report=plain(vm.runInContext("cloudDoctorReport('d1','2026-02',[])",c));
+  assert.doesNotThrow(()=>validateCloudReport(report,{periodKey:'2026-02',doctorId:'d1',title:'Врач'}));
+  const charts=report.vectors[4].sections.find(section=>section.title==='Источники первичных пациентов').charts;
+  assert.deepEqual(charts[0].series[0].values,summary.year.counts);assert.deepEqual(charts[1].series[0].values,summary.month.counts);
+  assert.ok(Math.abs(report.numbers.metrics.find(metric=>metric.id==='primary.sources.year.0.share').value-100/7)<1e-10);
+  const html=vm.runInContext("primaryPatientsReportHtml('d1','2026-02',{registry:false})",c);
+  assert.equal((html.match(/data-primary-source-composition/g)||[]).length,2);
+  assert.match(html,/Неизвестный канал — 1/);assert.match(html,/14,3%/);
+  const online=renderCloudReport(report,'Врач');
+  assert.equal((online.match(/data-primary-source-composition/g)||[]).length,2);assert.match(online,/14,3%/);
+  assert.doesNotMatch(JSON.stringify(report),/Неизвестный канал|Первичный 0/,'cloud contains aggregates only');
+  vm.runInContext("delete DB.months['2026-01'].primaryPatients;",c);
+  const partial=plain(vm.runInContext("doctorPrimarySources(doctorPrimaryPatients('d1','2026-02'))",c));
+  assert.equal(partial.year.complete,false);assert.equal(partial.year.total,2);
+  assert.equal(vm.runInContext("doctorPrimarySources(doctorPrimaryPatients('d1','2026-03')).month.total",c),0);
+  assert.deepEqual(plain(vm.runInContext("doctorPrimarySources(doctorPrimaryPatients('d1','2026-05')).month.counts",c)),[null,null,null,null,null]);
+});
+
+test("source mapping rejects conflicting duplicates and mixed categories without guessing", () => {
+  const c=context();
+  const result=plain(vm.runInContext(`primarySourcesSummary(primaryPatientRows([
+    {name:'Один',source:'Сайт клиники',primary:1,visits:1,revenue:0},
+    {name:'Один',source:'Рекомендация врача',primary:1,visits:1,revenue:0},
+    {name:'Два',source:'Рекомендация из Instagram',primary:1,visits:1,revenue:0},
+    {name:'Три',source:'',primary:1,visits:1,revenue:0}]),true)`,c));
+  assert.deepEqual(result.counts,[0,0,0,0,3]);assert.equal(result.total,3);
+  assert.match(presentation.primarySourcesHtml({year:result,month:result},'Март 2026','2026'),/Противоречивые источники/);
+});
+
+test("reputation defaults to total reviews descending, then name and ID; scores and missing totals do not reorder it", () => {
+  const c=context();
+  vm.runInContext(`DB.doctors={a:{name:'Альфа'},b:{name:'Бета'},c:{name:'Гамма'},d:{name:'Дельта'}};
+    const rep=(totalReviews,score)=>({rep:{totalReviews,platforms:[]},scores:{total:score,rankEligible:true}});
+    testRows=[{id:'c',r:rep(20,99)},{id:'b',r:rep(100,1)},{id:'a',r:rep(100,2)},{id:'d',r:rep(null,100)}];`,c);
+  const html=vm.runInContext("reputationReportHtml(testRows,'2026-03','Отделение')",c);
+  assert.ok(html.indexOf('<b>Альфа</b>')<html.indexOf('<b>Бета</b>'));
+  assert.ok(html.indexOf('<b>Бета</b>')<html.indexOf('<b>Гамма</b>'));
+  assert.ok(html.indexOf('<b>Гамма</b>')<html.indexOf('<b>Дельта</b>'));
 });

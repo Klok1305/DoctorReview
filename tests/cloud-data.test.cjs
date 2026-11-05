@@ -45,7 +45,7 @@ function bundle(payload) {
   }) });
 }
 
-test("cloud JSON exports all periods without DOM/charts, retains numeric Admin results, gaps, partition and comments", async () => {
+test("cloud JSON exports all periods without DOM/charts, retains numeric Admin results, gaps, report groups and comments", async () => {
   const context = fixtureContext(), progress = [];
   context.progress = text => progress.push(text);
   const payload = await vm.runInContext("buildCloudPublicationPayload(progress)", context), publication = bundle(payload);
@@ -56,7 +56,7 @@ test("cloud JSON exports all periods without DOM/charts, retains numeric Admin r
   assert.equal(number(personal, "traffic.patients"), vm.runInContext("computeMetrics('d1','2026-03').traffic.patients", context));
   assert.equal(number(personal, "economy.sales"), 1000);
   assert.equal(personal.report.overallDelta, null, "February gap must not compare March to January");
-  assert.equal(personal.report.vectors[3].methodologyId, "partition-v1-36m");
+  assert.equal(personal.report.vectors[3].methodologyId, "report-overlap-v1");
   assert.equal(personal.report.dynamics.conclusion, "Ручной вывод\nНоль & пропуск А");
   const money = personal.report.dynamics.charts.find(chart => chart.id === "money");
   assert.equal(money.labels.length, 3); assert.equal(money.series[0].values[1], null);

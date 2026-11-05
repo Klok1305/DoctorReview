@@ -2,6 +2,22 @@
 for (const board of document.querySelectorAll(".reputation-honor-board")) board.remove();
 // Older HTML snapshots receive the same presentation without changing their data.
 const presentation = window.klinvektReportPresentation;
+for (const picker of document.querySelectorAll("[data-client-base-window]")) {
+  const section = picker.closest('[data-vector-key="v4"]');
+  picker.addEventListener("change", () => {
+    for (const panel of section.querySelectorAll("[data-client-base-window-panel]")) panel.hidden = panel.dataset.clientBaseWindowPanel !== picker.value;
+  });
+}
+// Previous HTML already contains review totals: reorder it without altering values.
+for (const table of document.querySelectorAll(".reputation-report table")) {
+  const header = [...table.rows].find(row => [...row.cells].some(cell => cell.textContent.trim() === "Всего отзывов"));
+  const countIndex = header ? [...header.cells].findIndex(cell => cell.textContent.trim() === "Всего отзывов") : -1;
+  if (countIndex < 0) continue;
+  const rows = [...table.rows].filter(row => row !== header && row.cells.length === header.cells.length);
+  const count = row => /^\s*[\d\s\u00a0]+\s*шт\./.test(row.cells[countIndex].textContent) ? Number(row.cells[countIndex].textContent.match(/[\d\s\u00a0]+/)[0].replace(/\s/g,"")) : -1;
+  rows.sort((a,b) => count(b) - count(a) || a.cells[0].textContent.localeCompare(b.cells[0].textContent, "ru"));
+  for (const row of rows) row.parentElement.appendChild(row);
+}
 const displayNumber = value => {
   const match = String(value || "").match(/-?\d[\d\s\u00a0]*(?:[.,]\d+)?/);
   return match ? Number(match[0].replace(/[\s\u00a0]/g, "").replace(",", ".")) : null;
@@ -20,6 +36,11 @@ function reportHelpBody(section) {
 }
 for (const section of document.querySelectorAll('.viewer-dashboard-snapshot [data-vector-key="v4"][data-client-base-methodology="partition-v1-36m"]')) {
   if (section.querySelector('.kb-summary-card[data-client-base-group="loyal"]')) continue;
+  if (!section.querySelector("[data-client-base-legacy-note]")) {
+    const note = document.createElement("p"); note.className = "notice blue"; note.dataset.clientBaseLegacyNote = "";
+    note.textContent = "Этот отчёт сохранён с прежними четырьмя группами. Для пяти групп и сравнения по единой методике сформируйте новую публикацию в обновлённом Админ.";
+    section.querySelector(".vhead,h3")?.insertAdjacentElement("afterend", note);
+  }
   const help = reportHelpBody(section);
   for (const note of section.querySelectorAll('[data-client-base-methodology-note], .kb-source, .kb-vector-key-note, .kb-group-rules, .kb-action')) {
     if (!note.closest("[data-report-help]")) help.appendChild(note);
