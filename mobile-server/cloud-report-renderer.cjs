@@ -13,10 +13,24 @@ function renderMetrics(metrics = []) {
     ${metric.note ? `<small>${esc(metric.note)}</small>` : ""}${metric.target ? `<em>${esc(metric.target)}</em>` : ""}
     ${(metric.history || []).map(row => `<small>${esc(row.label)}: ${esc(row.delta)} · ${esc(row.value)}</small>`).join("")}</div>`).join("")}</div>`;
 }
-function renderTable(columns = [], rows = []) {
+function renderTable(columns = [], rows = [], renderCell = esc) {
   if (!rows.length) return "";
   return `<div class="cloud-table-scroll"><table><thead><tr>${columns.map(value => `<th>${tableHeaderHtml(value)}</th>`).join("")}</tr></thead>
-    <tbody>${rows.map(row => `<tr>${row.map(value => `<td>${esc(value)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+    <tbody>${rows.map((row, rowIndex) => `<tr>${row.map((value, index) => `<td>${renderCell(value, index, rowIndex)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+function renderClientBaseComparison(section, options) {
+  const groupStart = 4;
+  const groups = section.columns.slice(groupStart);
+  const counts = section.rows.map(row => row.slice(groupStart).map(value => value.split(" · ")[0]));
+  const shares = section.rows.map((row, index) => row.slice(groupStart).map((value, group) =>
+    presentation.publishedClientBaseShare(row[2], counts[index][group], value.split(" · ")[1])));
+  const averages = presentation.clientBaseAveragesHtml(groups, shares);
+  return `<section class="cloud-section"><div class="client-base-heading"><h3>${esc(section.title)}</h3>${averages}</div>${renderSectionNote(section.note, options)}
+    ${renderTable(section.columns, section.rows, (value, index, row) => {
+      if (index < groupStart) return esc(value);
+      const count = counts[row][index - groupStart];
+      return presentation.clientBaseShareCellHtml(shares[row][index - groupStart], count === "—" ? "" : count);
+    })}</section>`;
 }
 function renderTree(nodes = [], columns = []) {
   return nodes.map(node => {
@@ -63,6 +77,9 @@ function renderVector(vector, report, options) {
   const overlapping = vector.id === "v4" && vector.methodologyId === "report-overlap-v1";
   const body = overlapping ? `<label class="client-base-window-picker">Период базы <select data-client-base-window>${vector.windows.map(window => `<option value="${esc(window.id)}">${esc(window.label)}</option>`).join("")}</select></label>`
     + vector.windows.map((window, index) => `<div data-client-base-window-panel="${esc(window.id)}"${index ? " hidden" : ""}>${window.sections.map(section => {
+      if (section.title === "Клиентская база · сравнение врачей" && section.columns?.[3] === "Изменение базы") {
+        return renderClientBaseComparison(section, sectionOptions);
+      }
       const history = section.charts?.find(chart => chart.id === "overlap-shares");
       return renderSections([{ ...section, charts: section.charts?.filter(chart => chart !== history) }], sectionOptions)
         + (history ? presentation.clientBaseShareTableHtml(history.labels, history.series.map(series => ({ ...presentation.overlappingClientBaseGroups.find(group => group.label === series.label), label: series.label, values: series.values }))) : "");
@@ -74,12 +91,14 @@ function renderVector(vector, report, options) {
 }
 function renderCloudReport(report, title, options = {}) {
   const completeness = [report.preliminary ? "Предварительная оценка" : "", report.coverage != null ? `Полнота: ${report.coverage}%` : "", ...(report.missing || [])].filter(Boolean);
+  const dynamicsCharts = options.kind === "specialization"
+    ? report.dynamics?.charts?.filter(chart => chart.id !== "scores") : report.dynamics?.charts;
   return `<main class="cloud-data-report"><header class="cloud-heading"><div><h1>${esc(title)}</h1><p>${esc(report.assessment)}</p></div><div class="cloud-score">${score(report.overall)}<small>общий балл</small></div></header>
     <p>${esc(report.summary)}</p>${completeness.length ? `<p class="cloud-completeness">${completeness.map(esc).join(" · ")}</p>` : ""}
     ${renderMetrics(report.headlineMetrics)}
     ${report.goals?.length ? `<details class="cloud-vector"><summary>Цели</summary>${report.goals.map(goal => `<p><b>${esc(goal.title)}</b> · ${esc(goal.description)}</p>`).join("")}</details>` : ""}
     ${report.vectors.map(vector => renderVector(vector, report, options)).join("")}
-    ${report.dynamics ? `<details class="cloud-vector" open><summary>Динамика показателей по месяцам</summary>${renderCharts(report.dynamics.charts, options)}
+    ${report.dynamics ? `<details class="cloud-vector" open><summary>Динамика показателей по месяцам</summary>${renderCharts(dynamicsCharts, options)}
       ${renderTable(["Показатель", ...report.dynamics.columns, "К прошлому месяцу", "К среднему"], report.dynamics.rows.map(row => [row.label, ...row.values, row.delta, row.averageDelta || "—"]))}
       ${report.dynamics.growth.length ? `<h3>Точки роста</h3>${report.dynamics.growth.map(value => `<p>${esc(value)}</p>`).join("")}` : ""}
       ${report.dynamics.risk.length ? `<h3>Точки риска</h3>${report.dynamics.risk.map(value => `<p>${esc(value)}</p>`).join("")}` : ""}
@@ -96,7 +115,7 @@ function createReportRenderCache({ maxEntries = 8, maxBytes = 16 * 1024 * 1024 }
         entries.delete(page.pageId); entries.set(page.pageId, existing); return existing.html;
       }
       if (existing) { entries.delete(page.pageId); bytes -= existing.bytes; }
-      const html = renderCloudReport(page.report, page.title, { deferred: true }); renders++;
+      const html = renderCloudReport(page.report, page.title, { deferred: true, kind: page.kind }); renders++;
       const size = Buffer.byteLength(html);
       if (size <= maxBytes) { entries.set(page.pageId, { report: page.report, title: page.title, html, bytes: size }); bytes += size; }
       while (entries.size > maxEntries || bytes > maxBytes) { const id = entries.keys().next().value; bytes -= entries.get(id).bytes; entries.delete(id); }

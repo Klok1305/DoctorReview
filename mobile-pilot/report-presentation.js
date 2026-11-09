@@ -48,6 +48,27 @@
     .map((label, i) => ({ label, color: ["#16a34a", "#2563eb", "#7c3aed", "#d97706", "#94a3b8"][i] }));
   const number = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 });
   const pct = value => Number.isFinite(value) ? number.format(value) + "%" : "—";
+  function clientBaseShareCellHtml(share, count) {
+    return `<strong class="client-base-cell-share">${pct(share)}</strong>${count ? `<small class="client-base-cell-count">${escape(count)} чел.</small>` : ""}`;
+  }
+  function clientBaseAveragesHtml(labels, sharesByDoctor) {
+    if (!labels.length) return "";
+    const items = labels.map((label, index) => {
+      const values = sharesByDoctor.map(shares => shares[index]).filter(Number.isFinite);
+      const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+      return `<span class="client-base-average"><span>${escape(label)}</span> <strong>${pct(average)}</strong>${values.length < sharesByDoctor.length ? ` <small>${values.length} из ${sharesByDoctor.length} врачей</small>` : ""}</span>`;
+    }).join("");
+    return `<div class="client-base-averages" data-client-base-averages><span class="client-base-averages-label">Среднее по врачам</span>${items}</div>`;
+  }
+  const publishedReportCount = value => /^\d[\d\s]*$/.test(value) ? Number(value.replace(/\s/g, "")) : null;
+  function publishedClientBaseShare(total, count, share) {
+    if (!/^\d+(?:[,.]\d+)?%$/.test(share)) return null;
+    const saved = Number(share.slice(0, -1).replace(",", "."));
+    // Published percentages are rounded. Recover full precision when the saved counts agree.
+    const base = publishedReportCount(total), patients = publishedReportCount(count);
+    const exact = base > 0 && patients != null ? patients / base * 100 : null;
+    return exact != null && pct(exact) === pct(saved) ? exact : saved;
+  }
   function periodValueStates(values, lowerBetter = false) {
     // Compare displayed precision, so equal-looking percentages have equal colours.
     const rounded = values.map(value => Number.isFinite(value) ? Math.round(value * 10) / 10 : null);
@@ -90,7 +111,7 @@
     return body ? `<details class="report-help" data-report-help><summary>${escape(title)}</summary><div class="report-help-body">${body}</div></details>` : "";
   }
   const api = { tableHeaderLines, tableHeaderHtml, clientBaseGroups, overlappingClientBaseGroups, clientBaseDefinitionsHtml, primarySourceGroups, primarySourcesHtml, periodValueStates,
-    clientBaseShareTableHtml, clientBaseCompositionHtml, reportHelpHtml };
+    clientBaseShareTableHtml, clientBaseCompositionHtml, clientBaseShareCellHtml, clientBaseAveragesHtml, publishedReportCount, publishedClientBaseShare, reportHelpHtml };
   if (typeof module === "object" && module.exports) module.exports = api;
   root.klinvektReportPresentation = api;
 })(typeof globalThis === "object" ? globalThis : this);

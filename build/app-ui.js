@@ -28,8 +28,6 @@ const UI = {
   clientSegment: "newRisk",
   showLabels: true, // цифры на графиках
   charts: {},
-  scoreChartModes: { chDeptScores: "all", chScores: "all" },
-  scoreChartSources: {},
   setDepartment: null,
   setSpecialization: "",
 };
@@ -1200,18 +1198,21 @@ function renderDeptNow() {
   }
 
   // Клиентская база: период выбирается вручную, группы с недоступным временным порогом скрываются.
-  const withKb = rows.map(x => ({ ...x, kb: reportClientBaseSummary(x.id, mk, UI.kbWin), baseProfile: clientBaseReportProfile() })).filter(x => x.kb);
+  const presentation = globalThis.klinvektReportPresentation;
+  const bases = rows.map(x => ({ id: x.id, kb: reportClientBaseSummary(x.id, mk, UI.kbWin) }));
+  const withKb = bases.filter(x => x.kb);
   if (withKb.length) {
     const previousMonth = prevMonthKey(mk, 1);
-    const groupOrder = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
-    const visibleGroups = groupOrder.filter(group => withKb.some(x => x.kb.groupAvailable[group]));
-    html += `<div class="card"><h2>Клиентская база <span class="spacer"></span>${segToggle("specializationKbWin", [6,12,24,36].map(v => ({v, label: v + " мес."})), UI.kbWin, "setKbWin")} ${copyBtn("copyTable", "tblRisk")}</h2><table class="data" id="tblRisk"><tr><th>Специалист</th><th class="num">Период</th><th class="num">Общая база</th>${visibleGroups.map(group => `<th class="num">${esc(clientBaseGroupLabel(group))}</th>`).join("")}</tr>`;
+    const visibleGroups = presentation.overlappingClientBaseGroups.filter(group => withKb.some(x => x.kb.groupAvailable[group.key]));
+    const averages = presentation.clientBaseAveragesHtml(visibleGroups.map(group => group.label),
+      bases.map(({ kb }) => visibleGroups.map(group => clientBaseGroupPct(kb, group.key))));
+    html += `<div class="card"><div class="client-base-heading"><h2>Клиентская база</h2>${averages}<div class="client-base-controls">${segToggle("specializationKbWin", [6,12,24,36].map(v => ({v, label: v + " мес."})), UI.kbWin, "setKbWin")} ${copyBtn("copyTable", "tblRisk")}</div></div><table class="data" id="tblRisk"><tr><th>Специалист</th><th class="num">Период</th><th class="num">Общая база</th>${visibleGroups.map(group => `<th class="num">${esc(group.label)}</th>`).join("")}</tr>`;
     for (const x of withKb) {
       const kb = x.kb;
       const previousKb = reportClientBaseSummary(x.id, previousMonth, kb.window);
       html += `<tr><td>${esc(doctorName(x.id))}<br><span class="small muted">${esc(resolvedSpecializationName(x.id) || resolvedDepartmentName(x.id))}</span></td>
         <td class="num">${fmtNum(kb.window)} мес.</td><td class="num"><b>${fmtNum(kb.total)}</b>${compactBaseTrend(kb.total, previousKb ? previousKb.total : null)}</td>
-        ${visibleGroups.map(group => `<td class="num">${kb.groupAvailable[group] ? `<b>${fmtNum(kb.seg[group])}</b><br><span class="small muted">${fmtPct(clientBaseGroupPct(kb, group))}</span>` : ""}</td>`).join("")}</tr>`;
+        ${visibleGroups.map(({ key }) => `<td class="num">${presentation.clientBaseShareCellHtml(clientBaseGroupPct(kb, key), kb.groupAvailable[key] ? fmtNum(kb.seg[key]) : "")}</td>`).join("")}</tr>`;
     }
     html += `</table>${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml()}</div>`;
   } else {
@@ -1229,15 +1230,9 @@ function renderDeptNow() {
   html += reputationReportHtml(rows, mk, UI.deptFilter === "all" ? "Клиника" : scoreScope);
   const deptDyn = computeDeptDynamics(mk, UI.deptFilter, UI.subFilter);
   if (deptDyn && deptDyn.months.length) {
-    const deptScoresHtml = DB.settings.showScores && deptDyn.months.length >= 2
-      ? `<div id="chDeptScoresWrap"><h3 class="small muted" style="margin:14px 0 6px">СРЕДНИЕ БАЛЛЫ ПО ВЕКТОРАМ ПО МЕСЯЦАМ ${copyBtn("copyChart", "chDeptScores", "PNG")}</h3>
-        ${scoreChartPicker("chDeptScores")}
-        <div class="chart-box score-chart"><canvas id="chDeptScores"></canvas></div></div>`
-      : "";
     html += dynamicsHtml(deptDyn, "blkDeptDyn", "Динамика специализации: точки роста и риска",
       `${UI.deptFilter === "all" ? "Все врачи с данными" : "Специализация «" + esc(UI.deptFilter) + "»"} · с января по ${monthLabel(mk)}. Месяцы без данных оставлены пустыми. Последний месяц сравнивается с прошлым и со средним предыдущих месяцев года. Деньги и визиты суммируются, пациенты дедуплицируются, доли и конверсии взвешиваются; средний балл включает только врачей с полнотой данных от 80%.`,
-      `dept|${mk}|${UI.deptFilter}|${UI.subFilter}`,
-      deptScoresHtml);
+      `dept|${mk}|${UI.deptFilter}|${UI.subFilter}`);
     html += "</div>";
   }
 
@@ -1245,12 +1240,6 @@ function renderDeptNow() {
   renderCompare(mk, rows);
   if (deptDyn && deptDyn.months.length >= 2) {
     renderDynCharts(deptDyn, "blkDeptDyn");
-    if (DB.settings.showScores) {
-      const rendered = renderScoresChart("chDeptScores", deptDyn.months,
-        (k, vk) => { const rr = deptDyn.results[k]; return rr && rr.vecAvg ? rr.vecAvg[vk] : null; },
-        k => { const rr = deptDyn.results[k]; return rr && rr.scores ? rr.scores.total : null; });
-      if (!rendered) document.getElementById("chDeptScoresWrap")?.remove();
-    }
   }
 }
 
@@ -1305,6 +1294,7 @@ function renderCompare(mk, rows) {
     { name: "Средний чек посещения", fmt: r => fmtMoney(r.econ.avgVisit), num: r => r.econ.avgVisit },
     { name: "Визиты за месяц", fmt: r => fmtNum(r.traffic.visits), num: r => r.traffic.visits },
     { name: "Пациенты за месяц", fmt: r => fmtNum(r.traffic.patients), num: r => r.traffic.patients },
+    { name: "Визитов на пациента", fmt: r => fmtNum(r.traffic.freq, 2), num: r => r.traffic.freq },
     { name: "Загрузка расписания", fmt: r => r.loyalty.sched ? fmtPct(r.loyalty.sched.pct) : "—", num: r => r.loyalty.sched ? r.loyalty.sched.pct : null, targetKey: "schedLoad", targetFmt: fmtPct },
     { name: `Возвращаемость первички (${primaryReturnMonths} мес.)`, fmt: r => { const pv = r.loyalty.pvSlices[primaryReturnMonths]; return pv ? fmtPct(pv.pct) : "—"; }, num: r => { const pv = r.loyalty.pvSlices[primaryReturnMonths]; return pv ? pv.pct : null; }, targetKey: "pervichka", targetFmt: fmtPct },
     { name: "Собственная запись в 1С", fmt: r => r.loyalty.ownRec ? fmtPct(r.loyalty.ownRec.pct) : "—", num: r => r.loyalty.ownRec ? r.loyalty.ownRec.pct : null, targetKey: "ownRecords", targetFmt: fmtPct },
@@ -2929,24 +2919,6 @@ function scoreAxisBounds(datasets) {
   return { min, max, stepSize: max - min <= 35 ? 5 : 10 };
 }
 
-const SCORE_CHART_OPTIONS = [
-  { value: "all", label: "Все", title: "Все векторы и общий балл" },
-  { value: "total", label: "Общий балл", title: "Только общий балл" },
-  { value: "v1", label: "В1 Экономическая результативность", title: VECTOR_META.v1.name },
-  { value: "v2", label: "В2 Экспертность и продукт", title: VECTOR_META.v2.name },
-  { value: "v3", label: "В3 Междисциплинарный подход", title: VECTOR_META.v3.name },
-  { value: "v4", label: "В4 Работа с клиентской базой", title: VECTOR_META.v4.name },
-  { value: "v5", label: "В5 Лояльность и удержание", title: VECTOR_META.v5.name },
-  { value: "v6", label: "В6 Репутация и NPS", title: VECTOR_META.v6.name },
-];
-
-function scoreChartPicker(canvasId) {
-  const current = UI.scoreChartModes[canvasId] || "all";
-  return `<div class="score-chart-controls" id="${canvasId}_score_picker"><span class="small muted">Показать график:</span>${SCORE_CHART_OPTIONS.map(option =>
-    `<button type="button" class="btn mini score-chart-choice${current === option.value ? " active" : ""}" data-score-mode="${option.value}" aria-pressed="${current === option.value ? "true" : "false"}" title="${esc(option.title)}" onclick="setScoreChartMode('${canvasId}','${option.value}')">${esc(option.label)}</button>`
-  ).join("")}</div>`;
-}
-
 function doctorVectorScoreChartHtml(vector, dynamics) {
   if (!DB.settings.showScores || !dynamics || dynamics.months.length < 2) return "";
   const canvasId = "chScore_" + vector;
@@ -2954,59 +2926,18 @@ function doctorVectorScoreChartHtml(vector, dynamics) {
     <div class="chart-box score-chart"><canvas id="${canvasId}"></canvas></div></div>`;
 }
 
-function syncScoreChartPicker(canvasId, current, available) {
-  const picker = document.getElementById(canvasId + "_score_picker");
-  if (!picker) return;
-  picker.querySelectorAll("button[data-score-mode]").forEach(button => {
-    const mode = button.dataset.scoreMode;
-    const active = mode === current;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-pressed", active ? "true" : "false");
-    button.disabled = mode !== "all" && !available.has(mode);
-  });
-}
-
-function setScoreChartMode(canvasId, mode) {
-  if (!SCORE_CHART_OPTIONS.some(option => option.value === mode)) return;
-  const source = UI.scoreChartSources[canvasId];
-  if (!source) return;
-  UI.scoreChartModes[canvasId] = mode;
-  renderScoresChart(canvasId, source.months, source.vecGetter, source.totalGetter);
-}
-
-/* График баллов векторов по месяцам: общий вид или выбранная отдельная серия. */
-function renderScoresChart(canvasId, months, vecGetter, totalGetter, fixedMode = null) {
-  UI.scoreChartSources[canvasId] = { months, vecGetter, totalGetter };
-  const allDatasets = [];
-  const available = new Set();
-  for (const vk of ["v1", "v2", "v3", "v4", "v5", "v6"]) {
-    const data = months.map(k => vecGetter(k, vk));
-    if (!data.some(v => v != null)) continue;
-    available.add(vk);
-    allDatasets.push({
-      scoreMode: vk,
-      label: "В" + vk[1] + " " + VECTOR_META[vk].name,
-      data, borderColor: VEC_LINE_COLORS[vk], backgroundColor: VEC_LINE_COLORS[vk],
-      borderWidth: 2.2, pointRadius: 3.5, spanGaps: false, tension: 0.25,
-    });
-  }
-  const totalData = months.map(totalGetter);
-  if (totalData.some(v => v != null)) {
-    available.add("total");
-    allDatasets.push({
-      scoreMode: "total",
-      label: "Общий балл", data: totalData,
-      borderColor: "#1c2333", backgroundColor: "#1c2333",
-      borderWidth: 3.5, pointRadius: 4, spanGaps: false, tension: 0.25,
-    });
-  }
-  if (!allDatasets.length) return false;
-  if (fixedMode && !available.has(fixedMode)) return false;
-  let mode = fixedMode || UI.scoreChartModes[canvasId] || "all";
-  if (mode !== "all" && !available.has(mode)) mode = "all";
-  UI.scoreChartModes[canvasId] = mode;
-  const datasets = mode === "all" ? allDatasets : allDatasets.filter(dataset => dataset.scoreMode === mode);
-  syncScoreChartPicker(canvasId, mode, available);
+/* График одного вектора врача или его общего балла. */
+function renderScoresChart(canvasId, months, getter, scoreMode) {
+  const data = months.map(getter);
+  if (!data.some(value => value != null)) return false;
+  const total = scoreMode === "total";
+  const color = total ? "#1c2333" : VEC_LINE_COLORS[scoreMode];
+  const datasets = [{
+    scoreMode,
+    label: total ? "Общий балл" : "В" + scoreMode[1] + " " + VECTOR_META[scoreMode].name,
+    data, borderColor: color, backgroundColor: color,
+    borderWidth: total ? 3.5 : 2.2, pointRadius: total ? 4 : 3.5, spanGaps: false, tension: 0.25,
+  }];
   const axis = scoreAxisBounds(datasets);
   chart(canvasId, {
     type: "line",
@@ -3019,7 +2950,7 @@ function renderScoresChart(canvasId, months, vecGetter, totalGetter, fixedMode =
         legend: { position: "bottom" },
         tooltip: { mode: "index", intersect: false },
         datalabels: {
-          display: ctx => UI.showLabels && (mode !== "all" || ctx.dataset.label === "Общий балл"),
+          display: () => UI.showLabels,
           align: ctx => ctx.dataIndex % 2 ? "bottom" : "top",
           offset: 6, clamp: true,
           color: ctx => ctx.dataset.borderColor || "#1c2333", font: { size: 11, weight: "700" },
@@ -4525,7 +4456,7 @@ function renderDoctorNow() {
       const previousShare = kbDyn.prev && kbDyn.prev.groupAvailable[group] ? clientBaseGroupPct(kbDyn.prev, group) : null;
       return `<div class="kb-summary-card ${cls}${keyIndicator ? " key-indicator" : ""}" data-client-base-group="${group}">
         <div class="kb-summary-label">${esc(clientBaseGroupLabel(group))}${keyIndicator ? '<span class="kb-key-badge">ключевой показатель</span>' : ""}</div>
-        <div class="kb-summary-value-line"><div class="kb-summary-value">${fmtNum(kb.seg[group])} чел.</div><div class="kb-summary-share">${fmtPct(share)}</div></div>
+        <div class="kb-summary-value-line"><div class="kb-summary-value">${fmtPct(share)}</div><div class="kb-summary-meta">${fmtNum(kb.seg[group])} чел.</div></div>
         <div class="kb-share-movement">${esc(clientBaseShareMovement(share, previousShare))}</div>
         <div class="kb-share-comparison"><span>${esc(monthLabel(kbDyn.prevKey))}: <b>${fmtPct(previousShare)}</b></span><span>${esc(monthLabel(mk))}: <b>${fmtPct(share)}</b></span></div>
         <div class="kb-summary-trends">
@@ -4672,11 +4603,11 @@ function renderDoctorNow() {
       const block = document.getElementById("blkV" + vector[1]);
       block.insertAdjacentHTML("beforeend", doctorVectorScoreChartHtml(vector, docDyn));
       const rendered = renderScoresChart("chScore_" + vector, docDyn.months,
-        (k, key) => {
+        k => {
           const rr = docDyn.results[k];
-          return key === "v3" && scoreNazSlice != null && rr?.scores?.v3ByNaz
-            ? rr.scores.v3ByNaz[scoreNazSlice] ?? null : rr?.scores?.vec[key] ?? null;
-        }, () => null, vector);
+          return vector === "v3" && scoreNazSlice != null && rr?.scores?.v3ByNaz
+            ? rr.scores.v3ByNaz[scoreNazSlice] ?? null : rr?.scores?.vec[vector] ?? null;
+        }, vector);
       if (!rendered) block.querySelector(".doctor-vector-score-history")?.remove();
     }
   }
@@ -4887,7 +4818,6 @@ function renderDoctorNow() {
     renderDynCharts(docDyn, "blkDyn");
     if (DB.settings.showScores) {
       const rendered = renderScoresChart("chScores", docDyn.months,
-        (k, vk) => { const rr = docDyn.results[k]; return rr && rr.scores ? rr.scores.vec[vk] : null; },
         k => { const rr = docDyn.results[k]; return rr && rr.scores ? rr.scores.total : null; }, "total");
       if (!rendered) document.getElementById("chScoresWrap")?.remove();
     }

@@ -664,17 +664,24 @@ function createWindow() {
               const comparisonHeaderWidths = comparisonTable
                 ? [...comparisonTable.querySelectorAll('tr:first-child th')].map(cell => Math.round(cell.getBoundingClientRect().width))
                 : [];
+              const monthlyRateRow = comparisonRows.find(row => row.cells[0]?.textContent === 'Визитов на пациента');
               const specializationSummaryValid = comparisonHeaders.includes('Цель специализации')
                 && comparisonHeaders.includes('Итог специализации')
                 && comparisonRows.length > 0
                 && comparisonRows.every(row => row.cells.length === comparisonHeaders.length)
                 && comparisonRows.some(row => row.cells[0]?.textContent.trim() === 'Выручка'
                   && row.querySelector('.compare-total-cell')?.textContent.includes('₽'))
+                && monthlyRateRow?.previousElementSibling?.cells[0]?.textContent === 'Пациенты за месяц'
+                && monthlyRateRow.querySelector('.compare-total-cell')?.textContent === '—'
+                && monthlyRateRow.cells[comparisonHeaders.indexOf('Тестов')]?.textContent === '1,33'
                 && comparisonHeaderWidths.length === 5
                 && Math.abs(comparisonHeaderWidths[1] - comparisonHeaderWidths[2]) <= 2
                 && Math.abs(comparisonHeaderWidths[3] - comparisonHeaderWidths[4]) <= 2;
               const specializationBaseRow = [...document.querySelectorAll('#tblRisk tr')].find(row => row.cells[0]?.textContent.includes('Тестов Косметолог'));
-              const specializationBaseCounts = specializationBaseRow ? [...specializationBaseRow.cells].slice(2).map(cell => cell.querySelector('b')?.textContent.trim()) : [];
+              const specializationBaseCells = specializationBaseRow ? [...specializationBaseRow.cells].slice(3) : [];
+              const specializationBaseShares = specializationBaseCells.map(cell => cell.querySelector('.client-base-cell-share')?.textContent);
+              const specializationBaseCounts = specializationBaseCells.map(cell => cell.querySelector('.client-base-cell-count')?.textContent);
+              const specializationAverages = [...document.querySelectorAll('#deptBody .client-base-average')];
               const specializationPrimaryReturnHeader = [...document.querySelectorAll('#tblRating th')]
                 .find(cell => cell.textContent.includes('Возвращаемость'));
               const specializationPrimaryReturnHeaderValid = Boolean(specializationPrimaryReturnHeader)
@@ -784,9 +791,12 @@ function createWindow() {
               const lostBaseCard = clientBaseCard('lost');
               const totalBaseCard = clientBaseCard('total');
               const clientBaseDynamicsValid = clientBaseCards.length === 6
-                && specializationBaseCounts.join('|') === clientBaseCards.map(card => card.querySelector('.kb-summary-value').textContent.replace(' чел.','').trim()).join('|')
-                && clientBaseCards.every(card => Boolean(card.querySelector('.kb-summary-share'))
-                  && card.querySelectorAll('.kb-summary-trends > div').length === 2)
+                && specializationBaseShares.join('|') === clientBaseCards.slice(1).map(card => card.querySelector('.kb-summary-value').textContent).join('|')
+                && specializationBaseCounts.join('|') === clientBaseCards.slice(1).map(card => card.querySelector('.kb-summary-value-line .kb-summary-meta').textContent).join('|')
+                && specializationAverages.length === 5
+                && specializationAverages.map(item => item.querySelector('strong').textContent).join('|') === specializationBaseShares.join('|')
+                && specializationAverages.every(item => item.querySelector('small')?.textContent === '1 из 2 врачей')
+                && clientBaseCards.every(card => card.querySelectorAll('.kb-summary-trends > div').length === 2)
                 && totalBaseCard?.querySelector('.kb-summary-share')?.textContent.trim() === '100%'
                 && activeBaseCard?.classList.contains('key-indicator')
                 && lostBaseCard?.classList.contains('key-indicator')
@@ -1581,7 +1591,7 @@ function createWindow() {
               const specializationCharts = ['money', 'traffic', 'pct', 'base'].map(key => UI.charts['blkDeptDyn_' + key]).filter(Boolean);
               if (specializationCharts.length < 2 || specializationCharts.some(instance => instance.data.labels.length !== 12 || !instance.data.labels[0].includes('Январь') || !instance.data.labels[11].includes('Декабрь'))) throw Error('Admin QA: specialization graphs omit calendar months');
               if (specializationCharts.some(instance => instance.data.datasets.some(series => series.data[2] !== null || series.spanGaps !== false))) throw Error('Admin QA: specialization graphs connect missing months');
-              if (UI.charts.chDeptScores && UI.charts.chDeptScores.data.labels.length !== 12) throw Error('Admin QA: specialization score graph omits calendar months');
+              if (document.querySelector('#chDeptScoresWrap, #chDeptScores')) throw Error('Admin QA: combined specialization score chart remains');
               await settlePdfCharts(document.getElementById('deptBody'));
               const specializationYearImage = await capture(document.getElementById('blkDeptDyn'));
               // Real settings controls must persist, rerender, and leave every patient in the stack.

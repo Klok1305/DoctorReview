@@ -1434,15 +1434,15 @@ test("separate vector score charts keep one numeric series and do not connect a 
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   vm.runInContext(ui.slice(ui.indexOf("function scoreAxisBounds"), ui.indexOf("function toggleGroup")), context);
   const result = vm.runInContext(`(() => {
-    const UI = globalThis.UI = { scoreChartModes: {}, scoreChartSources: {}, showLabels: true };
+    const UI = globalThis.UI = { showLabels: true };
     const VEC_LINE_COLORS = globalThis.VEC_LINE_COLORS = { v1: '#aaa', v4: '#bbb' };
     const configs = globalThis.configs = [];
     globalThis.chart = (id, config) => configs.push({ id, config });
     const months = ['2026-01', '2026-02', '2026-03'];
-    const getter = (month, vector) => vector === 'v4' ? ({ '2026-01': 30, '2026-03': 60 }[month] ?? null) : vector === 'v1' ? 80 : null;
-    const rendered = renderScoresChart('v4', months, getter, () => 55, 'v4');
-    const empty = renderScoresChart('v6', months, getter, () => 55, 'v6');
-    renderScoresChart('total', months, getter, () => 55, 'total');
+    const getter = month => ({ '2026-01': 30, '2026-03': 60 }[month] ?? null);
+    const rendered = renderScoresChart('v4', months, getter, 'v4');
+    const empty = renderScoresChart('v6', months, () => null, 'v6');
+    renderScoresChart('total', months, () => 55, 'total');
     return { rendered, empty, configs };
   })()`, context);
   assert.equal(result.rendered, true);

@@ -75,6 +75,7 @@ async function main() {
     || '<div class="viewer-dashboard-snapshot"><div class="card"><h2>Синтетический отчёт</h2><p>43 визита</p><p>Комментарий администратора</p></div></div>')
     + '<section class="reputation-honor-board"><h2>Доска почёта · старый HTML</h2></section>'
     + legacyClientBaseHtml()
+    + '<div class="viewer-dashboard-snapshot"><div class="card" data-legacy-specialization-fixture><table class="data" id="tblRisk"><tr><th>Специалист</th><th>Период</th><th>Общая база</th><th>Активные</th></tr><tr><td>Врач А</td><td>12 мес.</td><td><b>3</b></td><td><b>1</b><br><span class="small muted">33,3%</span></td></tr><tr><td>Врач Б</td><td>12 мес.</td><td><b>5</b></td><td><b>0</b><br><span class="small muted">0%</span></td></tr></table><table id="tblCompare"><tr><th>Метрика</th><th>Итог</th><th>Врач А</th></tr><tr><td>Визиты за месяц</td><td>7</td><td>3</td></tr><tr><td>Пациенты за месяц</td><td>3</td><td>2</td></tr></table></div></div>'
     + '<section class="reputation-report" data-legacy-reputation-fixture><table><tr><th>Сотрудник</th><th>Всего отзывов</th><th>Общий балл</th></tr><tr><td>Врач В</td><td>5 шт.</td><td>100</td></tr><tr><td>Врач Б</td><td>50 шт.</td><td>10</td></tr><tr><td>Врач А</td><td>50 шт.</td><td>1</td></tr></table></section>'
     + '<div class="card"><table class="data" id="tblDepartmentYear"><tr><th>Выручка с перенаправлениями</th><th>Доля перенаправлений от выручки</th><th>Возвращаемость первички за 3 месяца</th></tr><tr><td>3 000 ₽</td><td>20%</td><td>50%</td></tr></table></div>';
   const publication = createCloudPublication({ appVersion: "test", doctors: [
@@ -86,6 +87,8 @@ async function main() {
   ], pages: ["2026-01", "2026-03"].flatMap(periodKey => [
     { kind: "doctor", doctorId: "a", department: "A", specialization: "X", periodKey, title: `Врач А · ${periodKey}`, html },
     { kind: "doctor", doctorId: "b", department: "B", specialization: "Y", periodKey, title: `Врач Б · ${periodKey}`, html },
+    { kind: "specialization", doctorId: "", department: "", specialization: "X", periodKey, title: `Специализация X · ${periodKey}`,
+      html: html + '<div class="viewer-dashboard-snapshot"><table data-archived-score-table><tr><td>Общий балл</td><td>78</td></tr></table><div data-archived-score-chart><h3>СРЕДНИЕ БАЛЛЫ ПО ВЕКТОРАМ ПО МЕСЯЦАМ</h3><div class="chart-box score-chart"></div></div></div>' },
     { kind: "clinic", doctorId: "", department: "", specialization: "", periodKey, title: `Вся клиника · ${periodKey}`, html },
   ]) });
   fs.writeFileSync(path.join(dataDir, "publications.kvcloud"), JSON.stringify({ portalId: "test-portal", publication }));
@@ -114,6 +117,11 @@ async function main() {
     assert.equal(await frame.locator("[data-viewer-patient-register]").count(), 0);
     const legacyBase = frame.locator("[data-legacy-v4-fixture]");
     await legacyBase.locator("[data-client-base-composition] svg").waitFor();
+    assert.equal(await legacyBase.locator('[data-client-base-group="active"] .kb-summary-value').textContent(), "20%");
+    const legacySpecialization = frame.locator("[data-legacy-specialization-fixture]");
+    assert.equal(await legacySpecialization.locator(".client-base-average strong").textContent(), "16,7%");
+    assert.deepEqual(await legacySpecialization.locator("#tblRisk .client-base-cell-share").allTextContents(), ["33,3%", "0%"]);
+    assert.deepEqual(await legacySpecialization.locator("#tblCompare tr:last-child td").allTextContents(), ["Визитов на пациента", "2,33", "1,5"]);
     assert.equal(await legacyBase.locator(".old-line-marker").count(), 0);
     assert.equal(await legacyBase.locator("[data-client-base-methodology-note]").isVisible(), false);
     assert.equal(await legacyBase.locator("[data-report-help]").evaluate(element => element.open), false);
@@ -141,7 +149,12 @@ async function main() {
       "X-Vibe-User-Id": "2", "X-Vibe-Portal-Id": "test-portal" } });
     const adminPage = await admin.newPage(); await adminPage.goto(base);
     await adminPage.locator("#onlineScope:not([disabled])").waitFor();
-    assert.equal(await adminPage.locator("#onlineScope option").count(), 3);
+    assert.equal(await adminPage.locator("#onlineScope option").count(), 4);
+    await adminPage.locator("#onlineScope").selectOption({ label: "Специализация X" });
+    const archivedSpecialization = adminPage.frameLocator("#onlineFrame");
+    await archivedSpecialization.locator("[data-archived-score-table]").waitFor();
+    assert.equal(await archivedSpecialization.locator("[data-archived-score-chart]").count(), 0);
+    assert.match(await archivedSpecialization.locator("[data-archived-score-table]").textContent(), /Общий балл78/);
     await adminPage.locator("#onlineUploadPanel > summary").click();
     await adminPage.locator("#onlineUploadFile").setInputFiles({ name: "database.json", mimeType: "application/json", buffer: Buffer.from('{"format":"klinvekt-portable-json"}') });
     await adminPage.locator("#onlineUploadButton").click();
@@ -188,7 +201,7 @@ async function main() {
     await pinPage.locator("#onlineAccount").selectOption("admin");
     await pinPage.locator("#onlinePin").fill("654321"); await pinPage.locator("#onlineLoginButton").click();
     await pinPage.locator("#onlineScope:not([disabled])").waitFor();
-    assert.equal(await pinPage.locator("#onlineScope option").count(), 3);
+    assert.equal(await pinPage.locator("#onlineScope option").count(), 4);
     await pinPage.locator("#onlineUploadPanel > summary").click();
     const pinUpdated = structuredClone(pinPublication); pinUpdated.pages = pinUpdated.pages.filter(page => page.periodKey === "2026-03");
     await pinPage.locator("#onlineUploadFile").setInputFiles({ name: "anonymous-pin.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(pinUpdated)) });
@@ -260,8 +273,8 @@ async function main() {
       await preview.addStyleTag({ content: fs.readFileSync(path.join(root,"tmp/klinvekt-mobile-server/public/online-report.css"),"utf8") });
       for (const width of [1440,390]) {
         await preview.setViewportSize({ width, height: 1000 });
-        assert.ok(await preview.evaluate(()=>document.documentElement.scrollWidth-innerWidth<=2));
         await preview.screenshot({ path: path.join(root,"tmp",`client-base-online-${width}.png`), fullPage:true, scale:"css" });
+        assert.ok(await preview.evaluate(()=>document.documentElement.scrollWidth-innerWidth<=2));
       }
       const sourcesHtml=await sources.evaluate(element=>element.outerHTML);
       await preview.setContent(`<meta name="viewport" content="width=device-width,initial-scale=1"><body class="online-report"><main class="cloud-data-report">${sourcesHtml}</main></body>`);

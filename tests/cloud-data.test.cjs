@@ -4,7 +4,7 @@ const fs = require("node:fs"), path = require("node:path"), vm = require("node:v
 const { createCloudPublication, validateCloudPublication, cloudAccountsFromViewer, PIN_PARAMS } = require("../desktop/services/cloud-publication-service.cjs");
 const { assertCloudPatientPrivacy, cloudPrivacyPatterns } = require("../desktop/services/cloud-privacy.cjs");
 const { createMobileServer } = require("../mobile-server/server.cjs");
-const { renderCloudReport } = require("../mobile-server/cloud-report-renderer.cjs");
+const { createReportRenderCache, renderCloudReport } = require("../mobile-server/cloud-report-renderer.cjs");
 const { BackgroundTaskQueue } = require("../desktop/services/background-task-queue.cjs");
 const root = path.resolve(__dirname, "..");
 function fixtureContext() {
@@ -91,6 +91,41 @@ test("online doctor and group graphs keep the entire calendar year even when Jan
     assert.equal(page.report.dynamics.rows.find(row => row.key === 'sales').values[0], '·');
   }
   assert.equal(payload.pages.filter(page => page.periodKey === '2026-09').length, 6);
+});
+
+test("online specialization shows monthly visit frequency and averages individual client-base shares", async () => {
+  const context = fixtureContext();
+  vm.runInContext(`
+    DB.doctors.d2.specialization = "X";
+    const bases = DB.months["2026-03"].kb;
+    bases.d1[36].clients[1].r = 500;
+    bases.d2[36].clients.push({ patientId: "3", v: 3, r: 20 }, { patientId: "4", v: 4, r: 20 });
+    bases.d1[6] = { clients: [{ patientId: "shared-private-id", v: 1, r: 20 }] };
+  `, context);
+  const payload = await vm.runInContext("buildCloudPublicationPayload()", context);
+  const page = payload.pages.find(page => page.kind === "specialization" && page.specialization === "X" && page.periodKey === "2026-03");
+  const traffic = page.report.vectors[0].sections.find(section => section.columns?.includes("Визитов на пациента"));
+  assert.deepEqual(JSON.parse(JSON.stringify(traffic.rows)), [
+    ["Итог специализации", "7", "3", "2,33"],
+    ["Доктор Второй", "4", "2", "2"],
+    ["Доктор Первый", "3", "2", "1,5"],
+  ]);
+  const html = renderCloudReport(page.report, page.title);
+  const longWindow = html.split('data-client-base-window-panel="36"')[1];
+  assert.match(longWindow, /Потерянные<\/span> <strong>25%<\/strong>/);
+  assert.match(longWindow, /Активные<\/span> <strong>0%<\/strong> <small>1 из 2 врачей/);
+  assert.match(longWindow, /<strong class="client-base-cell-share">50%<\/strong><small class="client-base-cell-count">1 чел\./);
+  const shortWindow = html.split('data-client-base-window-panel="6"')[1].split('data-client-base-window-panel="24"')[0];
+  assert.doesNotMatch(shortWindow, /Потерянные/);
+  assert.equal(page.report.dynamics.charts.some(chart => chart.id === "scores"), false);
+  const archived = JSON.parse(JSON.stringify(page));
+  archived.report.dynamics.rows.push({ label: "Общий балл", values: ["78", "—", "80"], delta: "—" });
+  archived.report.dynamics.charts.push({ id: "scores", title: "Баллы по векторам", type: "line", unit: "баллов",
+    labels: archived.report.dynamics.columns, series: [{ label: "Общий балл", values: [78, null, 80] }] });
+  const archivedHtml = createReportRenderCache().render(archived);
+  assert.doesNotMatch(archivedHtml, /Баллы по векторам/);
+  assert.match(archivedHtml, /<td>Общий балл<\/td><td>78<\/td><td>—<\/td><td>80<\/td>/);
+  assert.match(archivedHtml, /Выручка по месяцам/);
 });
 
 test("cloud privacy permits a labelled doctor who is also a patient but still rejects that name in free text", () => {

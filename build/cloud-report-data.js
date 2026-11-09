@@ -18,7 +18,7 @@ function cloudReportNumbers(result, report) {
   return { version: 1, metrics: definitions.map(([id, value, unit]) => ({ id, value: Number.isFinite(value) ? value : null, unit })) };
 }
 
-function cloudReportDynamics(monthKey, getResult, profile, noteKey) {
+function cloudReportDynamics(monthKey, getResult, profile, noteKey, { includeScoreChart = true } = {}) {
   const dynamics = buildDynamics(calendarYearMonthKeys(monthKey), monthKey, getResult, 12, profile);
   if (!dynamics.rows.length) return null;
   const notes = DB.dynamicNotes || {}, manual = Object.prototype.hasOwnProperty.call(notes, noteKey);
@@ -47,7 +47,7 @@ function cloudReportDynamics(monthKey, getResult, profile, noteKey) {
       chart("money", "Выручка по месяцам", [["sales", "Собственная выручка", "#2563eb"], ["withRef", "С перенаправлениями", "#7c3aed"]], "₽"),
       chart("traffic", "Визиты и пациенты", [["visits", "Визиты", "#2563eb"], ["patients", "Пациенты", "#16a34a"]], "шт."),
       chart("rates", "Загрузка и конверсия", [["sched", "Расписание", "#d97706"], ["perv", "Первичка", "#2563eb"], ["nazConv", "Назначения", "#db2777"]], "%"),
-      mobilePublicationChart("scores", "Баллы по векторам", "line", dynamics.months.map(monthLabel), [
+      includeScoreChart && mobilePublicationChart("scores", "Баллы по векторам", "line", dynamics.months.map(monthLabel), [
         { label: "Общий балл", color: "#1c2333", values: dynamics.months.map(key => dynamics.results[key]?.scores?.total ?? null) },
         ...["v1", "v2", "v3", "v4", "v5", "v6"].map(key => ({ label: `В${key[1]} ${VECTOR_META[key].name}`, color: VEC_LINE_COLORS[key],
           values: dynamics.months.map(month => dynamics.results[month]?.scores?.vec?.[key] ?? dynamics.results[month]?.vecAvg?.[key] ?? null) })),
@@ -142,9 +142,14 @@ function cloudGroupReport(item, monthKey, comments, doctors) {
   const base = result.akb.primary;
   const groups = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
   const missing = Object.entries(result.coverage).filter(([, value]) => !value.complete).map(([key, value]) => `${key}: данные ${value.coveredDoctors} из ${value.expectedDoctors} врачей`);
+  const monthlyTrafficRow = (label, { traffic }) => [label, fmtNum(traffic.visits), fmtNum(traffic.patients), fmtNum(traffic.freq, 2)];
   const vectorSections = [
     [section("Экономика", [metric("Собственная выручка", result.econ.sales, fmtMoney), metric("С перенаправлениями", result.econ.revenueWithRef, fmtMoney),
-      metric("На пациента", result.econ.avgClient, fmtMoney), metric("На посещение", result.econ.avgVisit, fmtMoney)])],
+      metric("На пациента", result.econ.avgClient, fmtMoney), metric("На посещение", result.econ.avgVisit, fmtMoney)]),
+      ...(item.kind === "specialization" ? [section("Профайлы специалистов · визиты за месяц", [], {
+        columns: ["Врач", "Визиты за месяц", "Пациенты за месяц", "Визитов на пациента"],
+        rows: [monthlyTrafficRow("Итог специализации", result), ...records.map(row => monthlyTrafficRow(doctorName(row.id), row.result))],
+      })] : [])],
     [section("Экспертный профиль", [metric("Использовано позиций", result.product?.devicesUsed), metric("Доля экспертных услуг", result.product?.expertShare, fmtPct)], {
       columns: ["Категория", "Количество", "Выручка"], rows: [...revenueGroups].map(([name, group]) => [name, fmtNum(group.q), fmtMoney(group.s)]),
       charts: [mobilePublicationPie("revenue", "Структура выручки", [...revenueGroups].map(([name, group], index) => [name, group.s, ["#2563eb", "#7c3aed", "#16a34a", "#d97706"][index % 4]]), "₽")].filter(Boolean),
@@ -190,7 +195,9 @@ function cloudGroupReport(item, monthKey, comments, doctors) {
     headlineMetrics: [metric("Пациентов за месяц", result.traffic.patients), metric("Загрузка расписания", result.loyalty.sched?.pct, fmtPct),
       metric("Визитов на пациента", result.traffic.freq, value => fmtNum(value, 2)), metric("Частота за 12 мес.", result.loyalty.freq12, value => fmtNum(value, 2)), metric("Активная база", base?.activeBasePct, fmtPct)],
     vectors, goals: [], comments: scopeComments,
-    dynamics: cloudReportDynamics(monthKey, getResult, profile, `${item.kind === "specialization" ? "dept" : item.context.scopeType}|${monthKey}|${item.context.scopeId}|all`),
+    dynamics: cloudReportDynamics(monthKey, getResult, profile,
+      `${item.kind === "specialization" ? "dept" : item.context.scopeType}|${monthKey}|${item.context.scopeId}|all`,
+      { includeScoreChart: item.kind !== "specialization" }),
   };
   if (item.kind !== "clinic") report.goals = departmentMetricDefs().map(def => {
     const goal = departmentGoalInfo(def, result, profile);

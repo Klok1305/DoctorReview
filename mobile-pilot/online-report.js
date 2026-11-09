@@ -2,6 +2,10 @@
 for (const board of document.querySelectorAll(".reputation-honor-board")) board.remove();
 // Older HTML snapshots receive the same presentation without changing their data.
 const presentation = window.klinvektReportPresentation;
+for (const heading of document.querySelectorAll('body[data-report-kind="specialization"] .viewer-dashboard-snapshot h3')) {
+  const block = heading.parentElement;
+  if (heading.textContent.trim().startsWith("СРЕДНИЕ БАЛЛЫ ПО ВЕКТОРАМ ПО МЕСЯЦАМ") && block.querySelector(":scope > .score-chart")) block.remove();
+}
 for (const picker of document.querySelectorAll("[data-client-base-window]")) {
   const section = picker.closest('[data-vector-key="v4"]');
   picker.addEventListener("change", () => {
@@ -72,6 +76,53 @@ for (const section of document.querySelectorAll('.viewer-dashboard-snapshot [dat
       else if (child.matches("p.small")) help.appendChild(child);
     }
   }
+}
+for (const card of document.querySelectorAll('.viewer-dashboard-snapshot [data-vector-key="v4"] .kb-summary-card:not([data-client-base-group="total"])')) {
+  const value = card.querySelector(".kb-summary-value");
+  if (!value?.textContent.trim().endsWith("чел.")) continue;
+  const share = card.querySelector(".kb-summary-value-line .kb-summary-share");
+  const percentage = share?.textContent.trim()
+    || card.querySelector(".kb-share-comparison span:last-child")?.textContent.match(/\d+(?:[,.]\d+)?%\s*$/)?.[0].trim();
+  if (!percentage) continue;
+  const count = document.createElement("div");
+  count.className = "kb-summary-meta";
+  count.textContent = value.textContent;
+  value.textContent = percentage;
+  if (share) share.replaceWith(count);
+  else value.after(count);
+}
+for (const table of document.querySelectorAll(".viewer-dashboard-snapshot #tblRisk")) {
+  const [header, ...rows] = [...table.rows];
+  const groups = [...(header?.cells || [])].slice(3).map(cell => cell.textContent.trim());
+  if (!groups.length || table.closest(".card")?.querySelector("[data-client-base-averages]")) continue;
+  const shares = rows.map(row => {
+    const total = row.cells[2]?.querySelector("b")?.textContent.trim();
+    return [...row.cells].slice(3).map(cell => {
+      const count = cell.querySelector("b")?.textContent.trim();
+      const share = presentation.publishedClientBaseShare(total, count, cell.querySelector(".small.muted")?.textContent.trim());
+      cell.innerHTML = presentation.clientBaseShareCellHtml(share, count);
+      return share;
+    });
+  });
+  // Some older snapshots could substitute a different window per doctor.
+  if (rows.length && rows.every(row => row.cells[1]?.textContent === rows[0].cells[1]?.textContent)) {
+    table.insertAdjacentHTML("beforebegin", presentation.clientBaseAveragesHtml(groups, shares));
+  }
+}
+for (const table of document.querySelectorAll(".viewer-dashboard-snapshot #tblCompare")) {
+  const rows = [...table.rows];
+  const find = label => rows.find(row => row.cells[0]?.textContent.trim() === label);
+  const visits = find("Визиты за месяц"), patients = find("Пациенты за месяц");
+  if (!visits || !patients || find("Визитов на пациента")) continue;
+  const rate = patients.cloneNode(true);
+  rate.cells[0].textContent = "Визитов на пациента";
+  [...rate.cells].slice(1).forEach((cell, index) => {
+    const numerator = presentation.publishedReportCount(visits.cells[index + 1]?.textContent.trim());
+    const denominator = presentation.publishedReportCount(cell.textContent.trim());
+    cell.textContent = numerator != null && denominator > 0
+      ? (numerator / denominator).toLocaleString("ru-RU", { maximumFractionDigits: 2 }) : "—";
+  });
+  patients.after(rate);
 }
 for (const section of document.querySelectorAll(".viewer-dashboard-snapshot [data-primary-patients-summary]")) {
   for (const note of [...section.querySelectorAll("p")]) {

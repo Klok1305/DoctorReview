@@ -188,14 +188,6 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /targetKey:\s*"riskShare"[\s\S]*lower:\s*true/);
   assert.match(actual, /\.data td\.compare-goal-cell\.goal-good[^}]*var\(--good-soft\)/);
   assert.match(actual, /\.data td\.compare-goal-cell\.goal-bad[^}]*var\(--bad-soft\)/);
-  assert.match(actual, /function scoreChartPicker/);
-  assert.match(actual, /function setScoreChartMode/);
-  assert.match(actual, /Показать график:/);
-  assert.match(actual, /В1 Экономическая результативность/);
-  assert.match(actual, /В6 Репутация и NPS/);
-  assert.match(actual, /scoreChartSources/);
-  assert.match(actual, /mode !== "all" \|\| ctx\.dataset\.label === "Общий балл"/);
-  assert.match(actual, /\.score-chart-choice\.active[^}]*var\(--accent\)/);
   assert.match(actual, /function doctorGoalsSummaryHtml/);
   assert.match(actual, /🎯 Цели врача/);
   assert.match(actual, /doctor-goals-grid/);
@@ -388,17 +380,19 @@ test("doctor goal cards color facts for direct and lower-is-better targets", () 
 test("doctor coefficients stay grouped under all six vectors with full block names", () => {
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
+  const metrics = fs.readFileSync(path.join(build, "app-metrics.js"), "utf8");
   const summary = ui.match(/function doctorGoalsSummaryHtml\(docId, profile, standalone = true, result = null\) \{[\s\S]*?\n\}/);
 
   assert.ok(summary, "doctorGoalsSummaryHtml source must be present");
   for (const label of [
-    "В1 Экономическая результативность",
-    "В2 Экспертность и продукт",
-    "В3 Междисциплинарный подход",
-    "В4 Работа с клиентской базой",
-    "В5 Лояльность и удержание",
-    "В6 Репутация и NPS",
-  ]) assert.match(ui, new RegExp(label));
+    "Экономическая результативность",
+    "Экспертность и продукт",
+    "Междисциплинарный подход",
+    "Работа с клиентской базой",
+    "Лояльность и удержание",
+    "Репутация и NPS",
+  ]) assert.ok(metrics.includes(`name: "${label}"`));
+  assert.match(summary[0], /VECTOR_META\[vector\]\.name/);
   for (const vector of ["v1", "v2", "v3", "v4", "v5", "v6"]) {
     assert.match(summary[0], new RegExp(`"${vector}"`));
   }
@@ -846,13 +840,13 @@ test("client-base table shows overlapping groups and omits unavailable values", 
   const trendMatch = ui.match(/function compactBaseTrend\(current, previous, lowerBetter = false\) \{[\s\S]*?\n\}/);
 
   assert.ok(table);
-  assert.match(table[0], /<h2>Клиентская база /);
+  assert.match(table[0], /<h2>Клиентская база<\/h2>/);
   assert.doesNotMatch(table[0], /Мониторинг базы|<th>Настройки базы<\/th>/);
   assert.match(table[0], /visibleGroups/);
   assert.match(table[0], /reportClientBaseSummary\(x.id, mk, UI.kbWin\)/);
   assert.match(table[0], /clientBaseDefinitionsHtml/);
-  assert.match(table[0], /kb\.groupAvailable\[group\]/);
-  assert.match(table[0], /fmtPct\(clientBaseGroupPct\(kb, group\)\)/);
+  assert.match(table[0], /kb\.groupAvailable\[key\]/);
+  assert.match(table[0], /clientBaseShareCellHtml\(clientBaseGroupPct\(kb, key\)/);
   assert.doesNotMatch(table[0], /от A|база A/);
   const presentation = fs.readFileSync(path.join(root, "mobile-pilot/report-presentation.js"), "utf8");
   assert.match(presentation, /Проценты считаются от общей клиентской базы/);

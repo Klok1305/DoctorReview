@@ -868,6 +868,16 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
   border-radius: 5px;
 }
 .client-base-table-note { margin-top: 10px; line-height: 1.45; }
+.client-base-heading, .client-base-controls, .client-base-averages { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.client-base-heading { margin-bottom: 8px; }
+.client-base-heading h2, .client-base-heading h3 { margin: 0; }
+.client-base-controls { margin-left: auto; }
+.client-base-averages { font-size: 12px; }
+.client-base-averages-label { color: var(--muted); font-weight: 600; }
+.client-base-average { padding: 3px 8px; border: 1px solid var(--line); border-radius: 8px; background: #f4f7fb; }
+.client-base-average strong, .client-base-cell-share { font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.client-base-average small, .client-base-cell-count { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.client-base-cell-share, .client-base-cell-count { display: block; }
 .client-base-table-note p { margin: 6px 0 0; }
 .client-base-threshold-scope { margin-top: 6px; }
 .client-base-description-list { margin: 4px 0 0; padding-left: 20px; }
@@ -973,9 +983,6 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .department-profiles-table .department-profile-name-col { width: 190px; }
 .department-profiles-table .department-profile-value-col { width: 120px; }
 .department-total-row td { background: var(--accent-soft); border-top: 2px solid #9dbcf3; border-bottom: 2px solid #9dbcf3; color: var(--ink); }
-.score-chart-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
-.score-chart-choice.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-.score-chart-choice:disabled { opacity: .4; cursor: not-allowed; }
 .doctor-goals-summary { padding: 16px 18px; }
 .doctor-goals-summary:not(.card) { margin-top: 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
 .doctor-goals-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
