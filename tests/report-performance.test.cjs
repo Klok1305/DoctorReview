@@ -105,7 +105,7 @@ test("specialization year preparation is reused across filters, months and recen
     function readSpecialization() {
       const month = UI.deptMonth, filter = UI.deptFilter, sub = UI.subFilter, window = UI.specializationKbWin;
       return { sales: computeMetrics('d1', month).econ.sales, totals: aggregateDeptMonth(month, filter, sub).econ,
-        series: specializationClientBaseHistory(month, window, filter, sub).series,
+        series: specializationClientBaseHistory(month, filter, sub).series,
         shares: reportClientBaseSummary('d1', month, window)?.seg,
         previous: reportClientBaseSummary('d1', prevMonthKey(month), window)?.total };
     }`, c);

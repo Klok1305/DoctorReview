@@ -41,7 +41,7 @@ function reportCalculationJob(tab) {
   selectFilter.disabled = false;
   const subs = UI.deptFilter === "all" ? [] : deptProfile(UI.deptFilter).subdivisions || [];
   if (UI.subFilter !== "all" && !subs.includes(UI.subFilter)) UI.subFilter = "all";
-  return { tab, month, filter: UI.deptFilter, subFilter: UI.subFilter, baseWindow: UI.specializationKbWin };
+  return { tab, month, filter: UI.deptFilter, subFilter: UI.subFilter };
 }
 
 function createReportWorker() {

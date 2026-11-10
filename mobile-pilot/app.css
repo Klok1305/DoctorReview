@@ -274,6 +274,10 @@ summary.tree-row:focus-visible, .tree-tools button:focus-visible, .chart-data su
 .plot-scroll { max-height: 460px; overflow: auto; overscroll-behavior-x: contain; }
 .plot-scroll svg { min-width: 520px; }
 .line-plot .line-narrow { display: none; }
+.line-plot { overflow-x: auto; }
+.line-plot-history { direction: rtl; }
+.line-plot-history svg { direction: ltr; }
+.line-plot svg .line-point-value { font-size: 10px; stroke: #fff; stroke-width: 2.5px; paint-order: stroke; }
 .chart-legend { display: grid; gap: 9px; margin: 14px 0 0; padding: 0; list-style: none; }
 .chart-legend li { display: flex; align-items: baseline; gap: 7px; font-size: 11px; line-height: 1.4; }
 .chart-legend svg { flex: 0 0 9px; width: 9px; height: 9px; }

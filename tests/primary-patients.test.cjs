@@ -237,9 +237,16 @@ test("primary source pies share exact counts and whole-cohort percentages, with 
   assert.ok(Math.abs(report.numbers.metrics.find(metric=>metric.id==='primary.sources.year.0.share').value-100/7)<1e-10);
   const html=vm.runInContext("primaryPatientsReportHtml('d1','2026-02',{registry:false})",c);
   assert.equal((html.match(/data-primary-source-composition/g)||[]).length,2);
+  assert.equal((html.match(/>Прочее<\/span>/g)||[]).length,2);
+  assert.match(html,/>Прочее: /);
   assert.match(html,/Неизвестный канал — 1/);assert.match(html,/14,3%/);
+  for (const chart of charts) {
+    assert.equal(chart.labels[4],"Прочее");
+    chart.labels[4]="Не распределено";
+  }
   const online=renderCloudReport(report,'Врач');
   assert.equal((online.match(/data-primary-source-composition/g)||[]).length,2);assert.match(online,/14,3%/);
+  assert.equal((online.match(/>Прочее<\/span>/g)||[]).length,2);
   assert.doesNotMatch(JSON.stringify(report),/Неизвестный канал|Первичный 0/,'cloud contains aggregates only');
   vm.runInContext("delete DB.months['2026-01'].primaryPatients;",c);
   const partial=plain(vm.runInContext("doctorPrimarySources(doctorPrimaryPatients('d1','2026-02'))",c));
@@ -250,6 +257,8 @@ test("primary source pies share exact counts and whole-cohort percentages, with 
 
 test("source mapping rejects conflicting duplicates and mixed categories without guessing", () => {
   const c=context();
+  assert.deepEqual(plain(vm.runInContext(`['Яндекс.Карты','Инстаграмм','Ютуб','ВК','Дзен','Яндекс-Дзен','СС','Агрегаторы']
+    .map(source => primarySourceCategory({source}))`, c)), [1,3,3,3,3,3,3,2]);
   const result=plain(vm.runInContext(`primarySourcesSummary(primaryPatientRows([
     {name:'Один',source:'Сайт клиники',primary:1,visits:1,revenue:0},
     {name:'Один',source:'Рекомендация врача',primary:1,visits:1,revenue:0},
@@ -257,6 +266,8 @@ test("source mapping rejects conflicting duplicates and mixed categories without
     {name:'Три',source:'',primary:1,visits:1,revenue:0}]),true)`,c));
   assert.deepEqual(result.counts,[0,0,0,0,3]);assert.equal(result.total,3);
   assert.match(presentation.primarySourcesHtml({year:result,month:result},'Март 2026','2026'),/Противоречивые источники/);
+  assert.match(presentation.specializationPrimarySourcesHtml([0,0,0,0,0]),/Всего <strong>0 чел\.<\/strong>/);
+  assert.doesNotMatch(presentation.specializationPrimarySourcesHtml([0,0,0,0,0]),/specialization-source-bar/);
 });
 
 test("reputation defaults to total reviews descending, then name and ID; scores and missing totals do not reorder it", () => {

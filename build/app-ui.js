@@ -376,7 +376,60 @@ function chart(id, cfg) {
   if (UI.charts[id]) { UI.charts[id].destroy(); delete UI.charts[id]; }
   const el = document.getElementById(id);
   if (!el) return;
+  if (cfg.type === "doughnut") {
+    cfg.options.plugins.legend.labels = { generateLabels(c) {
+      const labels = Chart.overrides.doughnut.plugins.legend.labels.generateLabels(c);
+      return labels.map(label => ({ ...label, text: `${label.text} · ${fmtNum(c.data.datasets[0].data[label.index], 2)}` }));
+    } };
+  }
   queueReportChart(id, el, cfg);
+}
+
+function trendValueLabels(format = value => fmtNum(value, 2), notes = false) {
+  return {
+    id: "trendValueLabels",
+    afterDatasetsDraw(chart) {
+      if (!UI.showLabels) return;
+      const { ctx, chartArea } = chart;
+      const top = Math.max(8, chartArea.top - 18), bottom = chartArea.bottom - 2;
+      const placed = [];
+      const visible = chart.getSortedVisibleDatasetMetas();
+      ctx.save();
+      ctx.font = '10px "Segoe UI", sans-serif';
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2.5;
+      ctx.lineJoin = "round";
+      for (let i = 0; i < chart.data.labels.length; i++) for (const meta of visible) {
+        const dataset = chart.data.datasets[meta.index];
+        const value = dataset.data[i], point = meta.data[i];
+        if (!Number.isFinite(value) || !point || point.skip || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+        const share = notes ? dataset.pointNotes?.[i]?.split(" ")[0] : "";
+        const label = share ? `${format(value)} · ${share}` : format(value);
+        const halfWidth = ctx.measureText(label).width / 2 + 2;
+        const x = Math.max(halfWidth, Math.min(chart.width - halfWidth, point.x));
+        const preferred = Math.max(top, Math.min(bottom, point.y + (meta.index % 2 ? 11 : -11)));
+        const fits = y => y >= top && y <= bottom && !placed.some(other =>
+          Math.abs(y - other.y) < 12 && Math.abs(x - other.x) < halfWidth + other.halfWidth);
+        let y = preferred;
+        for (let distance = 0; distance <= bottom - top; distance += 12) {
+          if (fits(preferred - distance)) { y = preferred - distance; break; }
+          if (fits(preferred + distance)) { y = preferred + distance; break; }
+        }
+        placed.push({ x, y, halfWidth });
+        ctx.fillStyle = dataset.borderColor || "#263444";
+        ctx.strokeText(label, x, y);
+        ctx.fillText(label, x, y);
+      }
+      ctx.restore();
+    },
+  };
+}
+
+function compactChartMoney(value) {
+  const magnitude = Math.abs(value);
+  return magnitude >= 1000000 ? `${fmtNum(value / 1000000, 2)} млн` : magnitude >= 10000 ? `${fmtNum(value / 1000, 1)} тыс.` : fmtNum(value, 2);
 }
 
 function switchTab(tab) {
@@ -681,18 +734,21 @@ function renderDepartmentCharts(history, defs) {
     responsive: true,
     maintainAspectRatio: false,
     interaction: { mode: "index", intersect: false },
-    plugins: { legend: { position: "bottom" }, datalabels: { display: false } },
+    layout: { padding: { top: 27, right: 18, bottom: 22, left: 18 } },
+    plugins: { legend: { position: "bottom" } },
   };
   chart("chDepartmentRevenue", {
     type: "bar",
+    plugins: [trendValueLabels(compactChartMoney)],
     data: { labels, datasets: [
       { label: "Выручка", data: vals("sales"), backgroundColor: "rgba(37,99,235,.55)", borderColor: "#2563eb", borderWidth: 1 },
       { label: "С перенаправлениями", data: vals("withRef"), type: "line", borderColor: "#7c3aed", backgroundColor: "#7c3aed", tension: .25, pointRadius: 3 },
     ] },
-    options: { ...common, scales: { y: { beginAtZero: true, ticks: { callback: v => Math.abs(v) >= 1000000 ? fmtNum(v / 1000000, 1) + " млн" : fmtNum(v) } } } },
+    options: { ...common, scales: { y: { beginAtZero: true, ticks: { callback: compactChartMoney } } } },
   });
   chart("chDepartmentRates", {
     type: "line",
+    plugins: [trendValueLabels(fmtPct)],
     data: { labels, datasets: [
       { label: "Первичка 3 мес.", data: vals("pv3"), borderColor: "#2563eb", backgroundColor: "#2563eb", tension: .25, spanGaps: false },
       { label: "Первичка 6 мес.", data: vals("pv6"), borderColor: "#7c3aed", backgroundColor: "#7c3aed", tension: .25, spanGaps: false },
@@ -703,6 +759,7 @@ function renderDepartmentCharts(history, defs) {
   });
   chart("chDepartmentBase", {
     type: "line",
+    plugins: [trendValueLabels()],
     data: { labels, datasets: [
       { label: "Активная база", data: vals("active"), borderColor: "#059669", backgroundColor: "rgba(5,150,105,.15)", fill: true, tension: .25, spanGaps: false },
       { label: "Потерянная база", data: vals("lost"), borderColor: "#dc2626", backgroundColor: "rgba(220,38,38,.1)", fill: true, tension: .25, spanGaps: false },
@@ -1056,24 +1113,42 @@ function renderDept() { return renderPreparedReport("dept", renderDeptNow); }
 function specializationTrendHtml(spec) {
   const id = `chart-${spec.id}`;
   const format = spec.unit === "₽" ? fmtMoney : fmtNum;
-  return `<h3 class="section-title">${esc(spec.title)} ${copyBtn("copyChart", id, "PNG")}</h3>
-    <div class="chart-box"><canvas id="${id}" aria-label="${esc(spec.title)}"></canvas></div>
+  const device = spec.id.startsWith("specialization-devices-");
+  const canvas = `<div class="chart-box"${device ? ` style="--device-chart-min:${100 + spec.labels.length * 70}px"` : ""}><canvas id="${id}" aria-label="${esc(spec.title)}"></canvas></div>`;
+  const values = device ? globalThis.klinvektReportPresentation.deviceHistoryTableHtml([spec]) : `<table class="data"><tr><th>Месяц</th>${spec.series.map(series => `<th class="num">${esc(series.label)}</th>`).join("")}</tr>
+    ${spec.labels.map((label, i) => `<tr><td>${esc(label)}</td>${spec.series.map(series => `<td class="num">${format(series.values[i])}${series.pointNotes?.[i] ? `<br><small class="muted">${esc(series.pointNotes[i])}</small>` : ""}</td>`).join("")}</tr>`).join("")}</table>`;
+  const html = `<h3 class="section-title">${esc(spec.title)} ${copyBtn("copyChart", id, "PNG")}</h3>
+    ${device ? `<div class="device-history-scroll">${canvas}</div>` : canvas}
     <details ${collapsibleListAttrs(`values-${spec.id}`, false)}><summary class="collapsible-list-summary"><span>Точные значения по месяцам</span><span class="collapse-hint"></span></summary>
-    <div class="collapsible-list-body"><table class="data"><tr><th>Месяц</th>${spec.series.map(series => `<th class="num">${esc(series.label)}</th>`).join("")}</tr>
-    ${spec.labels.map((label, i) => `<tr><td>${esc(label)}</td>${spec.series.map(series => `<td class="num">${format(series.values[i])}${series.pointNotes?.[i] ? `<br><small class="muted">${esc(series.pointNotes[i])}</small>` : ""}</td>`).join("")}</tr>`).join("")}</table></div></details>`;
+    <div class="collapsible-list-body">${values}</div></details>`;
+  return device ? `<section class="device-history-chart" data-device-history-chart>${html}</section>` : html;
 }
 
 function renderSpecializationTrend(spec) {
   const format = spec.unit === "₽" ? fmtMoney : fmtNum;
+  const device = spec.id.startsWith("specialization-devices-");
   chart(`chart-${spec.id}`, {
     type: "line",
+    plugins: device ? [] : [trendValueLabels(format, true)],
     data: { labels: spec.labels, datasets: spec.series.map(series => ({
       label: series.label, data: series.values, pointNotes: series.pointNotes,
       borderColor: series.color, backgroundColor: series.color, pointRadius: 3, borderWidth: 2, spanGaps: false,
     })) },
     options: { maintainAspectRatio: false, interaction: { mode: "nearest", intersect: false },
-      scales: { y: { beginAtZero: true, ticks: { callback: value => spec.unit === "₽" ? fmtMoney(value) : fmtNum(value) } } },
-      plugins: { legend: { position: "bottom" }, tooltip: { callbacks: {
+      layout: { padding: device ? { top: 34, left: 12, right: 36 } : { top: 20, left: 18, right: 28, bottom: 12 } },
+      scales: {
+        ...(device ? { x: { offset: true, ticks: { autoSkip: false, maxRotation: 0,
+          callback: index => spec.labels[index].replace(/^(\S{3})\S* \d{2}(\d{2})$/, "$1 $2") } } } : {}),
+        y: { beginAtZero: true, ticks: { callback: value => spec.unit === "₽" ? fmtMoney(value) : fmtNum(value) } },
+      },
+      plugins: { legend: device ? { display: false } : { position: "bottom" },
+        datalabels: device ? {
+          display: context => Number.isFinite(context.dataset.data[context.dataIndex]),
+          align: "top", offset: 4, color: "#263444",
+          font: { size: 10, lineHeight: 1.15 }, textAlign: "center",
+          formatter: (value, context) => [format(value), context.dataset.pointNotes?.[context.dataIndex]].filter(Boolean),
+        } : false,
+        tooltip: { callbacks: {
         label: item => [`${item.dataset.label}: ${format(item.raw)}`, item.dataset.pointNotes?.[item.dataIndex]].filter(Boolean).join(" · "),
       } } } },
   });
@@ -1192,6 +1267,7 @@ function renderDeptNow() {
 
   const activity = specializationActivityView(mk, UI.deptFilter === "all" ? null : deptProfile(UI.deptFilter), UI.deptFilter, UI.subFilter);
   const deviceActivity = activity.current?.devices;
+  const deviceCharts = globalThis.klinvektReportPresentation.splitDeviceHistoryCharts(activity.deviceCharts);
   // тепловая карта экспертных позиций — при выбранной специализации (у каждой свой набор)
   if (UI.deptFilter !== "all") {
     const fProfile = deptProfile(UI.deptFilter);
@@ -1199,11 +1275,12 @@ function renderDeptNow() {
     const withVy = rows.filter(x => x.r.product);
     if (devs.length && withVy.length && fProfile.expertise.mode !== "none") {
       let maxQ = 1;
-      for (const x of withVy) for (const dv of devs) maxQ = Math.max(maxQ, x.r.product.expert[dv] ? x.r.product.expert[dv].q : 0);
+      if (!deviceActivity) for (const x of withVy) for (const dv of devs) maxQ = Math.max(maxQ, x.r.product.expert[dv]?.q ?? 0);
+      const { deviceHeatMaxima, deviceHeatCellHtml, deviceHeatLegendHtml } = globalThis.klinvektReportPresentation;
+      const maxima = deviceActivity ? deviceHeatMaxima(Object.values(deviceActivity.byDoctor).flatMap(doctor => doctor.items)) : null;
       const deviceHeading = deviceActivity ? "за месяц, шт. и ₽" : "за месяц, шт";
-      const deviceCell = (q, s) => deviceActivity ? `<span>${fmtNum(q)} шт.<span class="heatmap-money">${fmtMoney(s)}</span></span>` : (q || "·");
       html += `<div class="card"><h2>🔥 Тепловая карта: ${esc(fProfile.expertise.title)} <span class="small muted">(${deviceHeading})</span> <span class="spacer"></span>${copyBtn("copyTable", "tblHeat")}</h2>
-        ${deviceActivity ? `<p><b>Выручка по всем аппаратам · ${fmtMoney(deviceActivity.total)}</b> <span class="small muted">· общая доля ${fmtPct(deviceActivity.share)}</span></p>` : ""}
+        ${deviceActivity ? `<p><b>Выручка по всем аппаратам</b> · ${fmtMoney(deviceActivity.total)} <span class="small muted">· общая доля ${fmtPct(deviceActivity.share)}</span></p>${deviceHeatLegendHtml()}` : ""}
         <div class="heatmap-scroll"><table class="data heatmap-table" id="tblHeat" style="--heat-table-min:${300 + devs.length * 150}px"><colgroup><col class="heatmap-specialist-col">${devs.map(() => '<col class="heatmap-focus-col">').join("")}<col class="heatmap-total-col">${deviceActivity ? '<col class="heatmap-focus-col">' : ""}</colgroup><tr><th>Специалист</th>` + devs.map(d => `<th class="num heatmap-focus-heading">${esc(d)}</th>`).join("") + `<th class="num">Итого</th>${deviceActivity ? '<th class="num">Доля от выручки</th>' : ""}</tr>`;
       const devTotals = {};
       for (const x of withVy) {
@@ -1214,28 +1291,33 @@ function renderDeptNow() {
           rowTotal += q;
           devTotals[dv] = (devTotals[dv] || 0) + q;
           const alpha = q ? 0.15 + 0.7 * (q / maxQ) : 0;
-          html += `<td class="num heatmap-focus-cell"><div class="heat-cell" style="background:rgba(37,99,235,${alpha.toFixed(2)});color:${alpha > 0.5 ? "#fff" : "inherit"}">${deviceCell(q, x.r.product.expert[dv]?.s ?? 0)}</div></td>`;
+          html += `<td class="num heatmap-focus-cell">${deviceActivity
+            ? `<div class="heat-cell device-heat-holder">${deviceHeatCellHtml({ q, s: x.r.product.expert[dv]?.s ?? 0 }, maxima)}</div>`
+            : `<div class="heat-cell" style="background:rgba(37,99,235,${alpha.toFixed(2)});color:${alpha > 0.5 ? "#fff" : "inherit"}">${q || "·"}</div>`}</td>`;
         }
         const doctorDevices = deviceActivity?.byDoctor[x.id];
-        html += `<td class="num"><b>${deviceCell(rowTotal, doctorDevices?.total)}</b></td>${deviceActivity ? `<td class="num"><b>${fmtPct(doctorDevices?.share)}</b></td>` : ""}</tr>`;
+        html += `<td class="num">${deviceActivity ? deviceHeatCellHtml({ q: rowTotal, s: doctorDevices?.total }) : `<b>${rowTotal}</b>`}</td>${deviceActivity ? `<td class="num"><span class="device-heat-cell">${fmtPct(doctorDevices?.share)}</span></td>` : ""}</tr>`;
       }
       const countTotal = Object.values(devTotals).reduce((a, b) => a + b, 0);
-      html += '<tr><td><b>Итого по специализации</b></td>' + devs.map(dv => `<td class="num"><b>${deviceActivity ? deviceCell(devTotals[dv] || 0, deviceActivity.items[activity.names.indexOf(dv)].s) : devTotals[dv] || 0}</b></td>`).join("") +
-        `<td class="num"><b>${deviceCell(countTotal, deviceActivity?.total)}</b></td>${deviceActivity ? `<td class="num"><b>${fmtPct(deviceActivity.share)}</b></td>` : ""}</tr>`;
+      html += '<tr><td><b>Итого по специализации</b></td>' + devs.map(dv => `<td class="num">${deviceActivity ? deviceHeatCellHtml(deviceActivity.items[activity.names.indexOf(dv)]) : `<b>${devTotals[dv] || 0}</b>`}</td>`).join("") +
+        `<td class="num">${deviceActivity ? deviceHeatCellHtml({ q: countTotal, s: deviceActivity.total }) : `<b>${countTotal}</b>`}</td>${deviceActivity ? `<td class="num"><span class="device-heat-cell">${fmtPct(deviceActivity.share)}</span></td>` : ""}</tr>`;
       html += `</table></div><p class="small muted">${deviceActivity ? SPECIALIZATION_DEVICE_NOTE : "«·» по всем врачам — простаивающая позиция. Набор настраивается в профиле специализации."}</p></div>`;
     }
   } else if (rows.some(x => x.r.product)) {
     html += `<div class="card"><p class="small muted" style="margin:0">🔥 Тепловая карта аппаратов/услуг доступна при выборе конкретной специализации в фильтре сверху — у каждой специализации свой набор отслеживаемых позиций.</p></div>`;
   }
 
-  if (activity.deviceCharts.length) html += `<div class="card"><details ${collapsibleListAttrs("specializationDeviceHistory", false)} data-specialization-device-history>
+  if (deviceCharts.length) html += `<div class="card"><details ${collapsibleListAttrs("specializationDeviceHistory", false)} data-specialization-device-history>
     <summary class="collapsible-list-summary"><span>${SPECIALIZATION_DEVICE_TITLE}</span><span class="collapse-hint"></span></summary>
-    <div class="collapsible-list-body"><p class="small muted">Выручка по месяцам с начала года. Количество процедур видно у точек и в таблице.</p>
-    ${activity.deviceCharts.map(specializationTrendHtml).join("")}</div></details></div>`;
+    <div class="collapsible-list-body"><p class="small muted">Выручка и количество процедур по месяцам с начала года.</p>
+    <details ${collapsibleListAttrs("specializationDeviceTotals", false)} data-device-history-summary><summary class="collapsible-list-summary"><span>Точные значения по месяцам · все аппараты</span><span class="collapse-hint"></span></summary>
+    <div class="collapsible-list-body">${globalThis.klinvektReportPresentation.deviceHistoryTableHtml(deviceCharts)}</div></details>
+    ${deviceCharts.map(specializationTrendHtml).join("")}</div></details></div>`;
   if (activity.current) {
     const primary = activity.current.primary;
     html += `<div class="card" data-specialization-primary><h2>Первичные пациенты <span class="small muted">${monthLabel(mk)}</span><span class="spacer"></span>${copyBtn("copyTable", "tblSpecPrimary")}</h2>
       <p class="small muted">${SPECIALIZATION_PRIMARY_NOTE} Данные есть у ${primary.covered} из ${rows.length} врачей.</p>
+      ${globalThis.klinvektReportPresentation.specializationPrimarySourcesHtml(primary.sourceCounts)}
       <table class="data" id="tblSpecPrimary"><tr><th>Специалист</th><th class="num">Первичных за месяц</th></tr>
       ${rows.map(row => `<tr><td>${esc(doctorName(row.id))}</td><td class="num">${fmtNum(primary.byDoctor[row.id])}</td></tr>`).join("")}
       <tr><td><b>${UI.deptFilter === "all" ? "Итого по выборке" : "Итого по специализации"}</b></td><td class="num"><b>${fmtNum(primary.total)}</b></td></tr></table>
@@ -1249,6 +1331,7 @@ function renderDeptNow() {
   const presentation = globalThis.klinvektReportPresentation;
   const kbWin = UI.specializationKbWin;
   const bases = rows.map(x => ({ id: x.id, kb: reportClientBaseSummary(x.id, mk, kbWin) }));
+  const baseDefinitions = presentation.clientBaseDefinitionsHtml(clientBaseDefinitionsForDoctors(rows.map(row => row.id)));
   const kbControls = segToggle("specializationKbWin", [6,12,24,36].map(v => ({v, label: v + " мес."})), kbWin, "setSpecializationKbWin");
   const withKb = bases.filter(x => x.kb);
   if (withKb.length) {
@@ -1264,9 +1347,9 @@ function renderDeptNow() {
         <td class="num">${fmtNum(kb.window)} мес.</td><td class="num"><b>${fmtNum(kb.total)}</b>${compactBaseTrend(kb.total, previousKb ? previousKb.total : null)}</td>
         ${visibleGroups.map(({ key }) => `<td class="num">${presentation.clientBaseShareCellHtml(clientBaseGroupPct(kb, key), kb.groupAvailable[key] ? fmtNum(kb.seg[key]) : "")}</td>`).join("")}</tr>`;
     }
-    html += `</table>${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml()}</div>`;
+    html += `</table>${baseDefinitions}</div>`;
   } else {
-    html += `<div class="card"><h2>Клиентская база ${kbControls}</h2><p class="muted">Нет точной выгрузки за ${fmtNum(kbWin)} мес. для выбранных врачей и месяца. Другой период не подставляется.</p>${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml()}</div>`;
+    html += `<div class="card"><h2>Клиентская база ${kbControls}</h2><p class="muted">Нет точной выгрузки за ${fmtNum(kbWin)} мес. для выбранных врачей и месяца. Другой период не подставляется.</p>${baseDefinitions}</div>`;
   }
 
   // профайлы специалистов — все врачи фильтра, метрики в строках
@@ -1279,7 +1362,7 @@ function renderDeptNow() {
   /* ---- динамика специализации: точки роста и риска ---- */
   html += reputationReportHtml(rows, mk, UI.deptFilter === "all" ? "Клиника" : scoreScope);
   const deptDyn = computeDeptDynamics(mk, UI.deptFilter, UI.subFilter);
-  const baseHistory = specializationClientBaseHistory(mk, kbWin, UI.deptFilter, UI.subFilter);
+  const baseHistory = specializationClientBaseHistory(mk, UI.deptFilter, UI.subFilter);
   if (deptDyn && deptDyn.months.length) {
     html += dynamicsHtml(deptDyn, "blkDeptDyn", "Динамика специализации: точки роста и риска",
       `${UI.deptFilter === "all" ? "Все врачи с данными" : "Специализация «" + esc(UI.deptFilter) + "»"} · с января по ${monthLabel(mk)}. Месяцы без данных оставлены пустыми. Последний месяц сравнивается с прошлым и со средним предыдущих месяцев года. Деньги и визиты суммируются, пациенты дедуплицируются, доли и конверсии взвешиваются; средний балл включает только врачей с полнотой данных от 80%.`,
@@ -1289,7 +1372,7 @@ function renderDeptNow() {
 
   document.getElementById("deptBody").innerHTML = html;
   renderCompare(mk, rows);
-  activity.deviceCharts.forEach(renderSpecializationTrend);
+  deviceCharts.forEach(renderSpecializationTrend);
   if (activity.primaryChart) renderSpecializationTrend(activity.primaryChart);
   if (deptDyn) renderDynCharts(deptDyn, "blkDeptDyn", baseHistory);
 }
@@ -1403,7 +1486,7 @@ async function exportDeptXlsx() {
   const aoa = [["Сводная по векторам за " + monthLabel(mk)], [], header];
   const num = v => (v == null || isNaN(v)) ? null : Math.round(v * 100) / 100;
   for (const x of rows) {
-    const r = x.r, baseProfile = clientBaseReportProfile(), kb = reportClientBaseSummary(x.id, mk, UI.specializationKbWin), pv = r.loyalty.pvSlices[UI.pvSlice], nz = r.cross.naz[UI.nazSlice];
+    const r = x.r, baseProfile = clientBaseReportProfile(deptParams(x.id)), kb = reportClientBaseSummary(x.id, mk, UI.specializationKbWin), pv = r.loyalty.pvSlices[UI.pvSlice], nz = r.cross.naz[UI.nazSlice];
     const groupValue = (group, value) => kb && kb.groupAvailable[group] ? value : null;
     aoa.push([
       doctorName(x.id), resolvedDepartmentName(x.id), resolvedSpecializationName(x.id) || "—",
@@ -1504,6 +1587,19 @@ function clientBaseGroupDescription(kb, group) {
     loyalSleep: `не менее ${fmtNum(t.sleepVisits)} визитов; последний визит был более ${fmtNum(t.sleepM)} мес. назад`,
     lost: `от 1 до ${fmtNum(t.lostVisits)} визитов; последний визит был более ${fmtNum(t.lostM)} мес. назад`,
   })[group] || "";
+}
+
+function clientBaseDefinitionSection(profile) {
+  const holder = { thresholds: clientBaseThresholds(clientBaseReportProfile(profile)) };
+  return { title: "Что означают группы?", columns: ["Группа", "Условие"],
+    rows: ["loyal", "active", "newRisk", "loyalSleep", "lost"].map(group => [clientBaseGroupLabel(group), clientBaseGroupDescription(holder, group)]) };
+}
+
+function clientBaseDefinitionsForDoctors(ids) {
+  const definitions = ids.map(id => clientBaseDefinitionSection(deptParams(id)));
+  const first = definitions[0] || clientBaseDefinitionSection();
+  return definitions.every(section => JSON.stringify(section.rows) === JSON.stringify(first.rows)) ? first
+    : { title: first.title, note: "В этой сводке у специализаций разные пороги. Для каждого врача применяются настройки его специализации." };
 }
 
 function adminClientBaseGroupLabel(group) {
@@ -2477,7 +2573,7 @@ function renderDynCharts(dyn, blkId, baseHistory = null) {
   if (!dyn || (dyn.months.length < 2 && !baseHistory)) return;
   const labels = dyn.months.map(monthLabel);
   const val = key => { const row = dyn.rows.find(x => x.key === key); return row ? row.values : null; };
-  const mk = (canvas, series, fmt, tickCb, history = null) => {
+  const mk = (canvas, series, fmt, tickCb, history = null, labelFormat = fmt) => {
     const chartLabels = history ? history.months.map(monthLabel) : labels;
     const datasets = series.filter(s => s.data && s.data.some(v => v != null)).map(s => ({
       label: s.label, data: s.data, borderColor: s.color, backgroundColor: s.color,
@@ -2489,17 +2585,14 @@ function renderDynCharts(dyn, blkId, baseHistory = null) {
     const numFmt = v => (typeof v === "number" ? fmt(v) : "");
     chart(canvas, {
       type: "line",
+      plugins: [trendValueLabels(labelFormat)],
       data: { labels: chartLabels, datasets },
       options: {
         maintainAspectRatio: false,
+        layout: { padding: { top: 26, right: 20, bottom: 23, left: 12 } },
         plugins: {
           title: history ? { display: true, text: SPECIALIZATION_BASE_TITLE } : undefined,
           legend: { position: "bottom", labels: { boxWidth: 12, font: { size: 11 } } },
-          datalabels: {
-            display: ctx => UI.showLabels && ctx.dataIndex === ctx.dataset.data.length - 1 && ctx.dataset.data[ctx.dataIndex] != null,
-            align: "top", font: { size: 10, weight: "700" }, color: "#1c2333",
-            formatter: numFmt,
-          },
           tooltip: { callbacks: { label: c => c.dataset.label + ": " + numFmt(c.raw) } },
         },
         scales: { ...(history ? { x: { ticks: { maxTicksLimit: 9, maxRotation: 0,
@@ -2511,7 +2604,7 @@ function renderDynCharts(dyn, blkId, baseHistory = null) {
   mk(blkId + "_money", [
     { label: "Выручка", data: val("sales"), color: "#2563eb" },
     { label: "С перенаправлениями", data: val("withRef"), color: "#7c3aed", dash: [5, 3] },
-  ], v => (v >= 1000000 ? (v / 1000000).toFixed(2) + " млн" : fmtNum(v)), v => (v / 1000000).toFixed(1) + " млн");
+  ], fmtMoney, v => (v / 1000000).toFixed(1) + " млн", null, compactChartMoney);
   mk(blkId + "_traffic", [
     { label: "Визиты", data: val("visits"), color: "#2563eb" },
     { label: "Пациенты", data: val("patients"), color: "#16a34a" },
@@ -2526,7 +2619,7 @@ function renderDynCharts(dyn, blkId, baseHistory = null) {
     { label: "Активная база", data: val("akb"), color: "#16a34a" },
     { label: "Потерянные", data: val("lost"), color: "#dc2626" },
   ];
-  mk(blkId + "_base", baseSeries, v => fmtNum(v) + " чел.", undefined, baseHistory);
+  mk(blkId + "_base", baseSeries, v => fmtNum(v) + " чел.", undefined, baseHistory, v => fmtNum(v));
 }
 
 function dynamicsRow(dyn, key) {
@@ -2926,7 +3019,7 @@ function dynamicsHtml(dyn, blkId, title, subtitle, noteKey, detailTailHtml = "",
   if (!single || baseHistory) {
     const hasBase = !baseHistory || baseHistory.series.some(series => series.values.some(Number.isFinite));
     const baseCaption = baseHistory ? SPECIALIZATION_BASE_TITLE : "Клиентская база";
-    html += `<div class="grid cols-2" style="margin-bottom:12px">
+    html += `<div class="grid cols-2 dynamics-charts" style="margin-bottom:12px">
       ${single ? "" : `
       <div><h3 class="small muted" style="margin:0 0 4px">ВЫРУЧКА ${copyBtn("copyChart", blkId + "_money", "PNG")}</h3><div class="chart-box"><canvas id="${blkId}_money"></canvas></div></div>
       <div><h3 class="small muted" style="margin:0 0 4px">ПАЦИЕНТЫ / ВИЗИТЫ ${copyBtn("copyChart", blkId + "_traffic", "PNG")}</h3><div class="chart-box"><canvas id="${blkId}_traffic"></canvas></div></div>
@@ -3019,7 +3112,7 @@ function renderScoresChart(canvasId, months, getter, scoreMode) {
         legend: { position: "bottom" },
         tooltip: { mode: "index", intersect: false },
         datalabels: {
-          display: () => UI.showLabels,
+          display: ctx => UI.showLabels && Number.isFinite(ctx.dataset.data[ctx.dataIndex]),
           align: ctx => ctx.dataIndex % 2 ? "bottom" : "top",
           offset: 6, clamp: true,
           color: ctx => ctx.dataset.borderColor || "#1c2333", font: { size: 11, weight: "700" },
@@ -4570,8 +4663,8 @@ function renderDoctorNow() {
   }
 
   if (!kb) html += clientBaseShareHistoryHtml(kbSeries);
-  html += globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml()
-    + (kb && !kb.groupAvailable.active ? '<p class="notice blue">Для активных нужна корректная выгрузка «Давность посещений» ровно за 6 месяцев. Число визитов из большего окна не подставляется.</p>' : "")
+  html += globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml(clientBaseDefinitionSection(deptParams(UI.docId)))
+    + (kb && !kb.groupAvailable.active ? `<p class="notice blue">Для активных нужно выбрать окно не короче ${kb.activeWindow} мес. и загрузить «Давность посещений» ровно за ${kb.activeWindow} мес.</p>` : "")
     + globalThis.klinvektReportPresentation.reportHelpHtml(clientBaseHelp) + '</div>';
 
   /* ---- В5 Лояльность ---- */
@@ -5821,7 +5914,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
   }
 
   /* Слайд 6: клиентская база */
-  const withKb = rows.map(x => ({ ...x, kb: reportClientBaseSummary(x.id, mk, UI.repKbWin), baseProfile: clientBaseReportProfile() })).filter(x => x.kb);
+  const withKb = rows.map(x => ({ ...x, kb: reportClientBaseSummary(x.id, mk, UI.repKbWin) })).filter(x => x.kb);
   if (withKb.length) {
     const groupOrder = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
     const visibleGroups = groupOrder.filter(group => withKb.some(x => x.kb.groupAvailable[group]));
@@ -5831,7 +5924,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
       html += `<tr><td>${esc(doctorName(x.id))}</td><td class="num">${fmtNum(kb.window)} мес.</td><td class="num"><b>${fmtNum(kb.total)}</b></td>
         ${visibleGroups.map(group => `<td class="num">${kb.groupAvailable[group] ? clientBaseCountPctMarkup(kb, group) : ""}</td>`).join("")}</tr>`;
     }
-    html += `</table>${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml()}</div>`;
+    html += `</table>${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml(clientBaseDefinitionsForDoctors(withKb.map(row => row.id)))}</div>`;
   }
 
   /* Слайд 7: лояльность */
@@ -6469,9 +6562,20 @@ function renderSettings() {
 
   /* --- 1. Нормативы и подразделения --- */
   if (specializationName) {
+    const baseThresholds = clientBaseReportProfile(p);
+    const baseFields = [
+      ["loyal", "loyalVisits", "loyalM", "От", "Не более"],
+      ["active", "activeVisits", "activeM", "От", "За последние"],
+      ["newRisk", "newRiskVisits", "newRiskM", "До", "Более"],
+      ["loyalSleep", "sleepVisits", "sleepM", "От", "Более"],
+      ["lost", "lostVisits", "lostM", "До", "Более"],
+    ];
+    const field = (key, label, group) => `<label>${label} <input type="number" id="cb_report_${key}" min="1" max="${clientBaseReportLimit(key)}" step="1" value="${baseThresholds[key]}" aria-label="${esc(`${clientBaseGroupLabel(group)} · ${label} ${key.endsWith("M") ? "месяцев" : "визитов"}`)}"></label>`;
     html += `${pageBlockStart("settings.norm", `📐 Нормативы специализации: клиентская база, курсовое, первичка — «${esc(specializationName)}»`, { defaultOpen: false })}
-    ${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml()}
-    <p class="small muted">Врач и специализация используют одинаковые фиксированные группы. Сохранённые нормативы балла В4 и прежних мобильных отчётов не меняются.</p>
+    <h3>Группы клиентской базы</h3><p class="small muted">Эти пороги применяются в отчётах врача и его специализации. Для активных загрузите «Давность посещений» за указанный срок. Для остальных групп срок отсчитывается с последнего визита.</p>
+    <table class="data wtable" data-client-base-report-settings><thead><tr><th>Группа</th><th>Визитов</th><th>Период, мес.</th></tr></thead><tbody>
+    ${baseFields.map(([group, visits, months, visitLabel, monthLabel]) => `<tr><th scope="row">${esc(clientBaseGroupLabel(group))}</th><td>${field(visits, visitLabel, group)}</td><td>${field(months, monthLabel, group)}</td></tr>`).join("")}</tbody></table>
+    ${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml(clientBaseDefinitionSection(p))}
     <h3 style="margin:12px 0 6px">Остальные нормативы</h3>
     <table class="data wtable"><tr>
       <th class="num" title="Курсовое лечение: минимум визитов…">Курсовое: от, виз.</th>
@@ -6946,8 +7050,20 @@ function saveDeptBasics() {
     return;
   }
   const p = curSetProfile();
+  let reportThresholds = null;
+  if (document.getElementById("cb_report_loyalVisits")) {
+    reportThresholds = {};
+    for (const key of Object.keys(CLIENT_BASE_REPORT_DEFAULTS)) {
+      const value = Number(document.getElementById("cb_report_" + key)?.value);
+      if (!Number.isInteger(value) || value < 1 || value > clientBaseReportLimit(key)) {
+        toast("Задайте целые числа: от 1 до 50 визитов и от 1 до 36 месяцев.", true);
+        return;
+      }
+      reportThresholds[key] = value;
+    }
+  }
   let partition = null;
-  // Accept former controls when restoring older forms; current fixed groups have no inputs.
+  // Accept former controls when restoring older forms.
   if (document.getElementById("cb_loyalVisits")) {
     partition = {};
     for (const [key, min, max] of [["loyalVisits", 2, 50], ["activeM", 1, 36], ["lostM", 1, 36]]) {
@@ -6973,6 +7089,7 @@ function saveDeptBasics() {
     }
   }
   Object.assign(p, values);
+  if (reportThresholds) p.clientBaseReport = reportThresholds;
   if (partition) p.clientBasePartition = partition;
   // Старые нормативы KPI и публикаций сохраняются в профиле без изменения.
   p.subdivisions = document.getElementById("np_subdivisions").value.split("\n").map(x => x.trim()).filter(Boolean);

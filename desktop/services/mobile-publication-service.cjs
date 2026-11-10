@@ -146,7 +146,7 @@ function validateSection(section, label) {
   optionalText(item.note, `${label}: пояснение`, 2000);
   const metrics = Array.isArray(item.metrics) ? item.metrics : [];
   const rows = Array.isArray(item.rows) ? item.rows : [];
-  if (!metrics.length && !rows.length && !item.tree?.length && !item.charts?.length) fail(`${label}: пустой раздел`);
+  if (!item.note?.trim() && !metrics.length && !rows.length && !item.tree?.length && !item.charts?.length) fail(`${label}: пустой раздел`);
   if (metrics.length > 30 || rows.length > 500) fail(`${label}: слишком много данных`);
   metrics.forEach((metric, index) => validateMetric(metric, `${label}: показатель ${index + 1}`));
   if (rows.length || item.tree != null) {
@@ -181,6 +181,7 @@ function validateVector(vector, index) {
   shortText(item.detail, `описание вектора ${item.id}`, 1500);
   if (Array.isArray(item.windows)) {
     if (!item.windows.length || item.windows.length > 12) fail(`окна вектора ${item.id}`);
+    if (item.sections != null && (!Array.isArray(item.sections) || item.sections.length)) validateSections(item.sections, `общие метрики вектора ${item.id}`);
     item.windows.forEach((window, windowIndex) => {
       const entry = plainObject(window, `окно ${item.id}.${windowIndex + 1}`);
       shortText(entry.id, `идентификатор окна ${item.id}`, 30);

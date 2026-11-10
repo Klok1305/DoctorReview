@@ -761,7 +761,6 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
   .v3-tile small { font-size: 11px; }
 }
 .v3-window-panel[hidden] { display: none; }
-.heatmap-money { display: block; font-weight: 700; white-space: nowrap; }
 .appointment-focus-title { padding: 10px 12px; border-left: 4px solid #7c3aed; border-radius: 6px; background: #f3e8ff; color: #5b21b6; }
 .completed-referrals-section { margin-top: 24px; padding-top: 18px; border-top: 3px solid #0d9488; }
 .completed-referrals-section > h3 { color: #0f766e; }
@@ -839,6 +838,19 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .primary-source-charts .client-base-pie-layout > svg { justify-self: center; max-width: 250px; }
 .primary-source-charts .client-base-pie-legend li { gap: 8px; padding: 8px 0; }
 .primary-source-charts .client-base-pie-legend strong { font-size: 16px; }
+.specialization-primary-sources { margin: 12px 0 16px; }
+.specialization-source-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; margin-bottom: 8px; }
+.specialization-source-heading > h3 { margin: 0; }
+.specialization-source-bar { display: flex; height: 9px; overflow: hidden; border-radius: 8px; margin-bottom: 8px; }
+.specialization-source-bar span, .specialization-source-label .client-base-pie-key { print-color-adjust: exact; }
+.specialization-source-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr)); gap: 8px; list-style: none; padding: 0; margin: 0; }
+.specialization-source-groups > li { display: flex; flex-direction: column; gap: 4px; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; padding: 8px 10px; break-inside: avoid; }
+.specialization-source-label, .specialization-source-values { display: flex; align-items: baseline; gap: 6px; }
+.specialization-source-label { align-items: center; }
+.specialization-source-label .client-base-pie-key { flex: none; }
+.specialization-source-groups small { color: #475569; }
+.specialization-source-values { justify-content: space-between; flex-wrap: wrap; margin-top: auto; padding-top: 4px; font-variant-numeric: tabular-nums; }
+.specialization-source-values strong { font-size: 16px; }
 .client-base-window-picker { display: block; margin: 12px 0; }
 @media (max-width: 700px) { .primary-source-charts { grid-template-columns: minmax(0, 1fr); gap: 8px; } }
 .client-base-table-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
@@ -914,6 +926,31 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
   padding: 2px 6px;
   border-radius: 5px;
 }
+.heatmap-money { display: block; font-weight: 700; white-space: nowrap; }
+.heat-cell.device-heat-holder { padding: 1px 0; }
+.device-heat-cell {
+  display: grid;
+  width: 100%;
+  gap: 3px;
+  color: var(--ink);
+  text-align: right;
+  font-size: 11px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.device-heat-line { display: grid; gap: 2px; }
+.device-heat-q { --device-heat-color: #2563eb; }
+.device-heat-s { --device-heat-color: #008475; }
+.device-heat-track, .device-heat-fill { display: block; height: 5px; border-radius: 3px; }
+.device-heat-track { overflow: hidden; background: #eaf0f5; print-color-adjust: exact; }
+.device-heat-track.is-empty { background: transparent; }
+.device-heat-fill { background: var(--device-heat-color); print-color-adjust: exact; }
+.device-heat-fill.is-negative { margin-left: auto; opacity: .65; }
+.device-heat-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 5px 0; color: var(--muted); font-size: 11px; }
+.device-heat-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.device-heat-legend span::before { content: ""; width: 13px; height: 5px; border-radius: 3px; background: var(--device-heat-color); print-color-adjust: exact; }
 .client-base-table-note { margin-top: 10px; line-height: 1.45; }
 .client-base-heading, .client-base-controls, .client-base-averages { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
 .client-base-heading { margin-bottom: 8px; }
@@ -1285,6 +1322,18 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 }
 .notice.blue { background: var(--accent-soft); border-color: #bcd3f7; color: #1e4fa3; }
 .chart-box { position: relative; height: 260px; }
+.device-history-chart + .device-history-chart { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
+[data-device-history-summary] { margin-bottom: 12px; }
+.device-history-values th[scope="row"], .device-history-values td.num { white-space: nowrap; }
+.device-history-values tfoot > tr > * { border-top: 2px solid var(--line); font-weight: 700; }
+.device-history-values td.period-best { background: #dcfce7; color: #166534; font-weight: 700; print-color-adjust: exact; }
+.device-history-scroll { overflow-x: auto; }
+.device-history-scroll .chart-box { min-width: var(--device-chart-min, 0px); }
+.dynamics-charts > div { min-width: 0; }
+@media print {
+  .device-history-scroll { overflow: visible; }
+  .device-history-scroll .chart-box { min-width: 0; }
+}
 .chart-box.tall { height: 320px; }
 .chart-box.score-chart { height: 440px; }
 @media (max-width: 900px) { .chart-box.score-chart { height: 380px; } }
@@ -6150,12 +6199,12 @@ function doctorPrimaryPatients(docId, endMonth) {
 // Categories are explicit: unknown or conflicting labels keep their own denominator share.
 function primarySourceCategory(patient) {
   if (patient.sourceConflict) return null;
-  const source = primaryPatientNameKey(patient.source || "");
+  const source = primaryPatientNameKey(patient.source || "").replace(/(?:яндекс|yandex)[\s.\p{Pd}]+(?:дзен|zen)/gu, "дзен");
   const matches = [
     /рекоменд|сарафан|знаком|родствен|друз/.test(source),
     /интернет|сайт|поисков|google|гугл|яндекс|yandex|2гис|2gis/.test(source),
     /агрегатор|продоктор|prodoctor|напоправку|napopravku|сберздоров|сбер здоров|sberhealth|docdoc|докдок|doctu|докту|zoon|зун/.test(source),
-    /соц[ ._-]*сет|социальн|instagram|инстаграм|вконтакте|\bvk\b|telegram|телеграм|facebook|фейсбук|youtube|ютуб|tiktok|тикток|одноклассник/.test(source),
+    /соц[ ._-]*сет|социальн|instagram|инстаграм|вконтакте|\bvk\b|telegram|телеграм|facebook|фейсбук|youtube|ютуб|tiktok|тикток|одноклассник|(?:^|[^\p{L}])(?:сс|вк|дзен|dzen)(?!\p{L})/u.test(source),
   ];
   return matches.filter(Boolean).length === 1 ? matches.indexOf(true) : null;
 }
@@ -6179,18 +6228,23 @@ function doctorPrimarySources(summary) {
     month: primarySourcesSummary(summary.current?.patients || [], summary.current != null, summary.current?.count != null) };
 }
 
-// The five report groups share one fixed definition; scoring retains saved profiles.
-function clientBaseReportProfile() {
-  return { loyalVisits: 4, loyalM: 12, activeVisits: 4, activeM: 6, newRiskVisits: 2,
-    newRiskM: 6, newRiskWithin: false, sleepVisits: 4, sleepM: 6, lostVisits: 2, lostM: 12 };
+// Shared report thresholds are stored separately from scoring thresholds.
+const CLIENT_BASE_REPORT_DEFAULTS = { loyalVisits: 4, loyalM: 12, activeVisits: 4, activeM: 6, newRiskVisits: 2,
+  newRiskM: 6, sleepVisits: 4, sleepM: 6, lostVisits: 2, lostM: 12 };
+const clientBaseReportLimit = key => key.endsWith("M") ? 36 : 50;
+function clientBaseReportProfile(profile) {
+  return Object.fromEntries(Object.entries(CLIENT_BASE_REPORT_DEFAULTS).map(([key, fallback]) => {
+    const value = Number(profile?.clientBaseReport?.[key]);
+    return [key, Number.isInteger(value) && value >= 1 && value <= clientBaseReportLimit(key) ? value : fallback];
+  }));
 }
 function kbClientIdentity(client) {
   const id = String(client.patientId || "").trim().toLowerCase();
   const name = normFio(client.name || "");
   return id ? "id:" + id : name ? "name:" + name : null;
 }
-function clientBaseActiveVisits(docId, monthKey) {
-  const source = kbWindow(docId, monthKey, 6);
+function clientBaseActiveVisits(docId, monthKey, windowMonths) {
+  const source = kbWindow(docId, monthKey, windowMonths);
   if (!source || source.clients.some(client => !kbClientIdentity(client) || !Number.isSafeInteger(client.v) || client.v < 0)) return null;
   const visits = new Map();
   for (const client of source.clients) { const key = kbClientIdentity(client); visits.set(key, (visits.get(key) || 0) + client.v); }
@@ -6198,15 +6252,15 @@ function clientBaseActiveVisits(docId, monthKey) {
 }
 function reportClientBaseSummary(docId, monthKey, windowMonths = 12) {
   const key = JSON.stringify([String(docId), String(monthKey), Number(windowMonths), "report-overlap-v1"]);
+  const calculate = () => computeKbSummary(docId, monthKey, windowMonths, clientBaseReportProfile(deptParams(docId)), true);
   if (specializationCalculations?.reportBase) {
     const bases = specializationCalculations.reportBase;
-    if (!bases.has(key)) bases.set(key, computeKbSummary(docId, monthKey, windowMonths, clientBaseReportProfile(), true));
+    if (!bases.has(key)) bases.set(key, calculate());
     return bases.get(key);
   }
   const cached = metricsCacheGet(_kbSummaryCache, key, "kbSummary");
   if (cached !== undefined) return cached;
-  return metricsCacheSet(_kbSummaryCache, key,
-    computeKbSummary(docId, monthKey, windowMonths, clientBaseReportProfile(), true), METRICS_CACHE_LIMITS.kbSummary);
+  return metricsCacheSet(_kbSummaryCache, key, calculate(), METRICS_CACHE_LIMITS.kbSummary);
 }
 function kbAvailableWindows(docId, monthKey) {
   const m = DB.months[monthKey];
@@ -6336,7 +6390,7 @@ function kbClientRows(docId, monthKey, win, summary) {
   if (cached !== undefined) return cached;
   const kb = kbWindow(docId, monthKey, win);
   if (!kb) return [];
-  const activeVisits = summary.activeWindow ? clientBaseActiveVisits(docId, monthKey) : null;
+  const activeVisits = summary.groupAvailable.active && summary.activeWindow ? clientBaseActiveVisits(docId, monthKey, summary.activeWindow) : null;
   const rows = kb.clients.map((client, index) => {
     const classified = classifyKbClient(client, summary.thresholds, summary.groupAvailable, summary.thresholds,
       summary.activeWindow ? activeVisits?.get(kbClientIdentity(client)) || 0 : Number(client.v) || 0);
@@ -6378,7 +6432,7 @@ function computeKbSummary(docId, monthKey, win, reportProfile = null, strictActi
   const p = reportProfile || deptParams(docId);
   const t = clientBaseThresholds(p);
   const groupAvailable = clientBaseGroupAvailability(win, p);
-  const activeVisits = strictActive ? clientBaseActiveVisits(docId, monthKey) : null;
+  const activeVisits = strictActive && groupAvailable.active ? clientBaseActiveVisits(docId, monthKey, t.activeM) : null;
   if (strictActive && !activeVisits) groupAvailable.active = false;
   const sourceWindowComplete = clientBaseWindowSufficient(win, p);
   const requiredWindowM = clientBaseRequiredWindow(p);
@@ -6429,7 +6483,7 @@ function computeKbSummary(docId, monthKey, win, reportProfile = null, strictActi
   const courseCnt = kb.clients.filter(c => c.v >= p.courseX).length;
   const summary = {
     window: Number(win), period: kb.period, params: p, sourceWindowComplete, requiredWindowM, groupAvailable,
-    thresholds, ...(strictActive ? { activeWindow: 6, methodologyId: "report-overlap-v1" } : {}),
+    thresholds, ...(strictActive ? { activeWindow: t.activeM, methodologyId: "report-overlap-v1" } : {}),
     total, known: total - seg.unknown, seg, totalSum, totalVisits,
     activeSum: groupAvailable.active ? groupSums.active : null,
     riskSum: groupAvailable.newRisk ? groupSums.newRisk : null,
@@ -7182,34 +7236,30 @@ function scopeDoctorsInMonth(mk, deptFilter, subFilter = "all", doctorIds = null
   );
 }
 
-function specializationClientBasePoint(month, windowMonths, deptFilter, subFilter, scope) {
+const SPECIALIZATION_BASE_WINDOW = 36;
+function specializationClientBasePoint(month, deptFilter, subFilter, scope) {
   if (!DB.months[month]) return null;
-  const key = JSON.stringify([month, windowMonths, deptFilter, subFilter, scope]);
+  const key = JSON.stringify([month, SPECIALIZATION_BASE_WINDOW, deptFilter, subFilter, scope]);
   const prepared = specializationCalculations?.basePoints;
   if (prepared?.has(key)) return prepared.get(key);
   if (!prepared) {
     const cached = metricsCacheGet(_specializationBaseCache, key, "specializationBase");
     if (cached !== undefined) return cached;
   }
-  const totals = specializationCalculations?.department.get(aggregateDeptCacheKey(month, deptFilter, subFilter, scope))?.akb?.wins;
-  let base;
-  if (totals && Object.hasOwn(totals, windowMonths)) base = totals[windowMonths];
-  else {
-    const ids = scopeDoctorsInMonth(month, deptFilter, subFilter, scope);
-    const bases = ids.map(id => kbSummary(id, month, windowMonths));
-    base = bases.every(Boolean) ? mergeClientBaseSummaries(bases) : null;
-  }
+  const ids = scopeDoctorsInMonth(month, deptFilter, subFilter, scope);
+  const bases = ids.map(id => reportClientBaseSummary(id, month, SPECIALIZATION_BASE_WINDOW));
+  const base = bases.every(Boolean) ? mergeClientBaseSummaries(bases) : null;
   const point = base ? { active: base.seg.active, lost: base.seg.lost } : null;
   if (prepared) prepared.set(key, point);
   else metricsCacheSet(_specializationBaseCache, key, point, METRICS_CACHE_LIMITS.specializationBase);
   return point;
 }
 
-function specializationClientBaseHistory(endMk, windowMonths, deptFilter, subFilter = "all", doctorIds = null) {
-  const months = calendarMonthKeys(prevMonthKey(endMk, 35), endMk);
+function specializationClientBaseHistory(endMk, deptFilter, subFilter = "all", doctorIds = null) {
+  const months = calendarYearMonthKeys(endMk);
   const scope = reportDoctorScope(doctorIds);
-  const points = months.map(month => specializationClientBasePoint(month, windowMonths, deptFilter, subFilter, scope));
-  return { months, windowMonths, series: [
+  const points = months.map(month => specializationClientBasePoint(month, deptFilter, subFilter, scope));
+  return { months, series: [
     { label: "Активная база", color: "#16a34a", values: points.map(point => point?.active ?? null) },
     { label: "Потерянные", color: "#dc2626", values: points.map(point => point?.lost ?? null) },
   ] };
@@ -7233,6 +7283,10 @@ function specializationActivityMonth(month, filter, subFilter, doctorIds, device
     for (const row of rows || []) {
       const entry = patients.get(row.key) || { primary: false, visits: 0 };
       entry.primary ||= row.primary > 0;
+      if (row.primary > 0 && (row.source || row.sourceConflict)) {
+        const category = primarySourceCategory(row);
+        entry.sourceCategory = entry.sourceCategory === undefined || entry.sourceCategory === category ? category : null;
+      }
       entry.visits = entry.visits != null && isCount(row.visits) ? entry.visits + row.visits : null;
       patients.set(row.key, entry);
     }
@@ -7240,6 +7294,8 @@ function specializationActivityMonth(month, filter, subFilter, doctorIds, device
   const primary = [...patients.values()].filter(patient => patient.primary);
   const covered = ids.filter(id => primaryByDoctor[id] != null).length;
   const primaryTotal = covered === ids.length ? primary.length : null;
+  const sourceCounts = Array(5).fill(primaryTotal == null ? null : 0);
+  if (primaryTotal != null) for (const patient of primary) sourceCounts[patient.sourceCategory ?? 4]++;
   const frequent = primaryTotal != null && primary.every(patient => patient.visits != null)
     ? primary.filter(patient => patient.visits > 3).length : null;
 
@@ -7260,7 +7316,7 @@ function specializationActivityMonth(month, filter, subFilter, doctorIds, device
     }
     devices = { byDoctor, items, total, share: sales > 0 ? total / sales * 100 : null };
   }
-  const activity = { ids, devices, primary: { byDoctor: primaryByDoctor, total: primaryTotal, frequent,
+  const activity = { ids, devices, primary: { byDoctor: primaryByDoctor, total: primaryTotal, frequent, sourceCounts,
     share: frequent != null && primaryTotal > 0 ? frequent / primaryTotal * 100 : null, covered } };
   cache?.set(key, activity);
   return activity;
@@ -7464,35 +7520,29 @@ function prepareSpecializationCalculations(year, onProgress = () => {}) {
   const prepared = { metrics: new Map(), department: new Map(), reportBase: new Map(), basePoints: new Map(), activity: new Map() };
   const deviceNames = new Map([...filters].map(filter => [filter, specializationDeviceNames(deptProfile(filter))]));
   if (!yearMonths.length) return prepared;
-  const firstHistoryMonth = prevMonthKey(yearMonths[0], 35);
-  const historyMonths = months.filter(month => month >= firstHistoryMonth && month <= yearMonths.at(-1));
   specializationCalculations = prepared;
   preparedMetricsForRender = prepared.metrics;
   try {
-    onProgress(0, historyMonths.length);
-    for (const [index, month] of historyMonths.entries()) {
-      if (month.startsWith(year + "-")) {
-        const previous = prevMonthKey(month);
-        for (const id of doctorsInMonth(month)) {
-          computeMetrics(id, month);
-          for (const window of windows) {
-            reportClientBaseSummary(id, month, window);
-            reportClientBaseSummary(id, previous, window);
-          }
-        }
-        for (const [filter, subFilter] of scopes) {
-          const totals = aggregateDeptMonth(month, filter, subFilter);
-          specializationActivityMonth(month, filter, subFilter, null, deviceNames.get(filter) || []);
-          // Рендер специализации использует только сводные показатели.
-          for (const base of [totals?.akb?.primary, ...Object.values(totals?.akb?.wins || {})]) {
-            if (base) delete base.clientRows;
-          }
+    onProgress(0, yearMonths.length);
+    for (const [index, month] of yearMonths.entries()) {
+      const previous = prevMonthKey(month);
+      for (const id of doctorsInMonth(month)) {
+        computeMetrics(id, month);
+        for (const window of windows) {
+          reportClientBaseSummary(id, month, window);
+          reportClientBaseSummary(id, previous, window);
         }
       }
       for (const [filter, subFilter] of scopes) {
-        for (const window of windows) specializationClientBasePoint(month, window, filter, subFilter, null);
+        const totals = aggregateDeptMonth(month, filter, subFilter);
+        specializationActivityMonth(month, filter, subFilter, null, deviceNames.get(filter) || []);
+        specializationClientBasePoint(month, filter, subFilter, null);
+        // Рендер специализации использует только сводные показатели.
+        for (const base of [totals?.akb?.primary, ...Object.values(totals?.akb?.wins || {})]) {
+          if (base) delete base.clientRows;
+        }
       }
-      onProgress(index + 1, historyMonths.length);
+      onProgress(index + 1, yearMonths.length);
     }
     return prepared;
   } finally {
@@ -7523,7 +7573,7 @@ function prepareReportCalculations(job) {
   }
   const metrics = [...preparedMetricsForRender];
   preparedMetricsForRender = null;
-  if (job.tab === "dept" && job.baseWindow) specializationClientBaseHistory(job.month, job.baseWindow, job.filter, job.subFilter);
+  if (job.tab === "dept") specializationClientBaseHistory(job.month, job.filter, job.subFilter);
   // Large patient registries are not needed to paint a summary or historical chart.
   // Keep them in the worker; restore their lazy getters only when a list/export asks.
   for (const [, result] of _deptCache) {
@@ -7626,7 +7676,7 @@ function reportCalculationJob(tab) {
   selectFilter.disabled = false;
   const subs = UI.deptFilter === "all" ? [] : deptProfile(UI.deptFilter).subdivisions || [];
   if (UI.subFilter !== "all" && !subs.includes(UI.subFilter)) UI.subFilter = "all";
-  return { tab, month, filter: UI.deptFilter, subFilter: UI.subFilter, baseWindow: UI.specializationKbWin };
+  return { tab, month, filter: UI.deptFilter, subFilter: UI.subFilter };
 }
 
 function createReportWorker() {
@@ -7844,6 +7894,60 @@ function queueReportChart(id, element, config) {
     return lines.length === 1 ? escape(lines[0])
       : lines.map(line => `<span class="report-table-heading-line">${escape(line)}</span>`).join("\n");
   }
+  const deviceNumber = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 });
+  function publishedDeviceMeasure(value) {
+    const text = String(value ?? "").replace(/\s/g, "").replace(/(?:шт\.?|₽)$/, "").replace(",", ".");
+    return /^-?\d+(?:\.\d+)?$/.test(text) && Number.isFinite(Number(text)) ? Number(text) : null;
+  }
+  function deviceHeatMaxima(cells) {
+    return cells.reduce((max, { q, s }) => ({
+      q: Math.max(max.q, Number.isFinite(q) ? Math.abs(q) : 0),
+      s: Math.max(max.s, Number.isFinite(s) ? Math.abs(s) : 0),
+    }), { q: 0, s: 0 });
+  }
+  function deviceHeatCellHtml({ q, s }, maxima = null) {
+    const line = (value, key, unit) => {
+      const hasValue = Number.isFinite(value);
+      const width = hasValue && maxima?.[key] ? Math.min(100, Math.abs(value) / maxima[key] * 100) : 0;
+      const label = hasValue ? `${deviceNumber.format(key === "s" ? Math.round(value) : value)} ${unit}` : "—";
+      return `<span class="device-heat-line device-heat-${key}"><span>${label}</span>${maxima ? `<span class="device-heat-track${width ? "" : " is-empty"}" aria-hidden="true"><span class="device-heat-fill${value < 0 ? " is-negative" : ""}" style="width:${width.toFixed(2)}%"></span></span>` : ""}</span>`;
+    };
+    return `<span class="device-heat-cell">${line(q, "q", "шт.")}${line(s, "s", "₽")}</span>`;
+  }
+  function deviceHeatLegendHtml() {
+    return '<p class="device-heat-legend"><span class="device-heat-q">Процедуры</span><span class="device-heat-s">Выручка</span></p>';
+  }
+  function splitDeviceHistoryCharts(charts = []) {
+    return charts.flatMap(chart => chart.series.map((series, index) => ({
+      ...chart, id: `${chart.id}-${index}`, title: series.label, series: [series],
+    })));
+  }
+  const historyMoney = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 });
+  function deviceHistoryTableHtml(charts = []) {
+    const labels = charts[0]?.labels || [];
+    const series = charts.flatMap(chart => chart.series);
+    if (!labels.length || !series.length) return "";
+    const measure = (rubles, count) => `${Number.isFinite(rubles) ? `${historyMoney.format(rubles)} ₽` : "—"}${Number.isFinite(count) ? `<br><small class="muted">${deviceNumber.format(count)} шт.</small>` : ""}`;
+    const columns = series.map(item => {
+      const months = labels.map((_, i) => ({ rubles: item.values[i], count: publishedDeviceMeasure(item.pointNotes?.[i]) }));
+      const observed = months.filter(month => Number.isFinite(month.rubles) || Number.isFinite(month.count));
+      const revenues = observed.map(month => month.rubles).filter(Number.isFinite);
+      return { label: item.label, months, best: Math.max(0, ...revenues),
+        total: revenues.length ? revenues.reduce((sum, value) => sum + value, 0) : null,
+        count: observed.length && observed.every(month => Number.isFinite(month.count)) ? observed.reduce((sum, month) => sum + month.count, 0) : null };
+    });
+    return `<table class="data device-history-values"><thead><tr><th scope="col">Месяц</th>${columns.map(column => `<th scope="col" class="num">${escape(column.label)}</th>`).join("")}</tr></thead>
+      <tbody>${labels.map((label, i) => `<tr><th scope="row">${escape(label)}</th>${columns.map(({ months, best }) => {
+        const { rubles, count } = months[i];
+        const peak = best > 0 && rubles === best;
+        return `<td class="num${peak ? " period-best" : ""}"${peak ? ' title="Лучший месяц по выручке"' : ""}>${measure(rubles, count)}</td>`;
+      }).join("")}</tr>`).join("")}</tbody>
+      <tfoot><tr><th scope="row">Итого</th>${columns.map(column => `<td class="num">${measure(column.total, column.count)}</td>`).join("")}</tr></tfoot></table>`;
+  }
+  function deviceHistoryDetailsHtml(charts, combined = false) {
+    const table = deviceHistoryTableHtml(charts);
+    return table ? `<details class="chart-data"${combined ? " data-device-history-summary" : ""}><summary>Точные значения по месяцам</summary><div class="chart-data-scroll">${table}</div></details>` : "";
+  }
   const clientBaseGroups = [
     { key: "active", label: "Активные лояльные", color: "#16a34a", lowerBetter: false },
     { key: "loyalSleep", label: "Лояльные спящие", color: "#94a3b8", lowerBetter: true },
@@ -7857,16 +7961,18 @@ function queueReportChart(id, element, config) {
     { key: "loyalSleep", label: "Лояльные, спящие", color: "#94a3b8", lowerBetter: true },
     { key: "lost", label: "Потерянные", color: "#dc2626", lowerBetter: true },
   ];
-  function clientBaseDefinitionsHtml() {
-    return `<section class="client-base-table-note small muted" data-client-base-definitions><h3>Что означают группы?</h3><ul>
+  function clientBaseDefinitionsHtml(definitions) {
+    const rules = definitions ? (definitions.rows?.length ? `<ul>${definitions.rows.map(([label, rule]) => `<li><b>${escape(label)}:</b> ${escape(rule.endsWith(".") ? rule : rule + ".")}</li>`).join("")}</ul>` : "") : `<ul>
       <li><b>Лояльные:</b> не менее 4 визитов, последний визит не более 12 месяцев назад.</li>
       <li><b>Активные:</b> не менее 4 визитов за последние 6 месяцев.</li>
       <li><b>Новые, риск:</b> от 1 до 2 визитов, последний визит более 6 месяцев назад.</li>
       <li><b>Лояльные, спящие:</b> не менее 4 визитов, последний визит более 6 месяцев назад.</li>
-      <li><b>Потерянные:</b> от 1 до 2 визитов, последний визит более 12 месяцев назад.</li></ul>
-      <p>Проценты считаются от общей клиентской базы. Группы могут пересекаться. Если порог превышает выбранный период, группа не отображается; ноль не подставляется. Для активных используется число визитов из точной выгрузки за 6 месяцев.</p></section>`;
+      <li><b>Потерянные:</b> от 1 до 2 визитов, последний визит более 12 месяцев назад.</li></ul>`;
+    return `<section class="client-base-table-note small muted" data-client-base-definitions><h3>Что означают группы?</h3>${rules}
+      ${definitions?.note ? `<p>${escape(definitions.note)}</p>` : ""}
+      <p>Проценты считаются от общей клиентской базы. Группы могут пересекаться. Если порог превышает выбранный период, группа скрывается и ноль не подставляется. Для активных нужна точная выгрузка за ${definitions ? "период из настроек" : "6 месяцев"}.</p></section>`;
   }
-  const primarySourceGroups = ["Все рекомендации", "Интернет", "Агрегаторы", "Социальные сети", "Не распределено"]
+  const primarySourceGroups = ["Все рекомендации", "Интернет", "Агрегаторы", "Социальные сети", "Прочее"]
     .map((label, i) => ({ label, color: ["#16a34a", "#2563eb", "#7c3aed", "#d97706", "#94a3b8"][i] }));
   const number = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 });
   const pct = value => Number.isFinite(value) ? number.format(value) + "%" : "—";
@@ -7926,13 +8032,36 @@ function queueReportChart(id, element, config) {
       const data = sources[key];
       return `<div data-primary-source-period="${key}">${clientBaseCompositionHtml(data.counts, "", { groups: primarySourceGroups, title: period })}
         ${!data.complete ? '<p class="notice blue">Неполные данные первичности: показаны только пациенты загруженных отчётов с подтверждённой первичностью.</p>' : ""}
-        ${data.unresolved.length ? `<p class="small muted">Не распределено: ${data.unresolved.map(item => `${escape(item.label)} — ${number.format(item.count)}`).join("; ")}. Эти пациенты входят в общее количество и знаменатель процентов.</p>` : ""}</div>`;
+        ${data.unresolved.length ? `<p class="small muted">Прочее: ${data.unresolved.map(item => `${escape(item.label)} — ${number.format(item.count)}`).join("; ")}. Эти пациенты входят в общее количество и знаменатель процентов.</p>` : ""}</div>`;
     }).join("")}</div></section>`;
+  }
+  function specializationPrimarySourcesHtml(counts) {
+    const known = counts.length === primarySourceGroups.length && counts.every(value => Number.isSafeInteger(value) && value >= 0);
+    const total = known ? counts.reduce((sum, count) => sum + count, 0) : null;
+    const groups = [
+      [0, "Рекомендации", "Пациенты и знакомые"],
+      [1, "Интернет", "Яндекс, Яндекс Карты"],
+      [3, "Социальные сети", "Instagram, YouTube, ВК, Дзен"],
+      [2, "Агрегаторы", "ПроДокторов, НаПоправку"],
+      [4, "Прочие", "Другие и неизвестные источники"],
+    ];
+    const bar = total > 0 ? `<div class="specialization-source-bar" aria-hidden="true">${groups.map(([index]) => counts[index] > 0
+      ? `<span style="flex-grow:${counts[index]};background:${primarySourceGroups[index].color}"></span>` : "").join("")}</div>` : "";
+    const displayCount = count => known ? `${number.format(count)} чел.` : "—";
+    return `<section class="specialization-primary-sources" data-specialization-primary-sources>
+      <div class="specialization-source-heading"><h3>Источники первичных пациентов</h3><span>Всего <strong>${displayCount(total)}</strong></span></div>
+      ${total == null ? '<p class="small muted">Для общей разбивки нужны данные по всем врачам выборки.</p>' : ""}
+      ${bar}<ul class="specialization-source-groups">${groups.map(([index, label, examples]) => `<li>
+        <div class="specialization-source-label"><span class="client-base-pie-key" style="background:${primarySourceGroups[index].color}"></span><b>${label}</b></div>
+        <small>${examples}</small><div class="specialization-source-values"><strong>${displayCount(counts[index])}</strong><span>${pct(total > 0 ? counts[index] / total * 100 : null)}</span></div>
+      </li>`).join("")}</ul></section>`;
   }
   function reportHelpHtml(body, title = "Справка о расчётах") {
     return body ? `<details class="report-help" data-report-help><summary>${escape(title)}</summary><div class="report-help-body">${body}</div></details>` : "";
   }
-  const api = { tableHeaderLines, tableHeaderHtml, clientBaseGroups, overlappingClientBaseGroups, clientBaseDefinitionsHtml, primarySourceGroups, primarySourcesHtml, periodValueStates,
+  const api = { tableHeaderLines, tableHeaderHtml, publishedDeviceMeasure, deviceHeatMaxima, deviceHeatCellHtml, deviceHeatLegendHtml, splitDeviceHistoryCharts,
+    deviceHistoryTableHtml, deviceHistoryDetailsHtml,
+    clientBaseGroups, overlappingClientBaseGroups, clientBaseDefinitionsHtml, primarySourceGroups, primarySourcesHtml, specializationPrimarySourcesHtml, periodValueStates,
     clientBaseShareTableHtml, clientBaseCompositionHtml, clientBaseShareCellHtml, clientBaseAveragesHtml, publishedReportCount, publishedClientBaseShare, reportHelpHtml };
   if (typeof module === "object" && module.exports) module.exports = api;
   root.klinvektReportPresentation = api;
@@ -8006,7 +8135,8 @@ function cloudDoctorReport(doctorId, monthKey, comments) {
   Object.assign(report.vectors[3], {
     methodologyId: "report-overlap-v1", scoreMethodologyId: "legacy-overlap-v1",
     methodologyLabel: "Единые пять пересекающихся групп врача и специализации. Балл В4 использует сохранённые нормативы.",
-    detail: "Точное окно базы выбирается вручную. Для активных нужны визиты за 6 месяцев.",
+    detail: "Точное окно базы выбирается вручную. Для активных нужны визиты за срок из настроек специализации.",
+    sections: [clientBaseDefinitionSection(profile)],
     windows: [12, 6, 24, 36].map(window => {
       const base = reportClientBaseSummary(doctorId, monthKey, window);
       const previous = reportClientBaseSummary(doctorId, prevMonthKey(monthKey), window);
@@ -8014,7 +8144,7 @@ function cloudDoctorReport(doctorId, monthKey, comments) {
       const visible = groups.filter(group => base?.groupAvailable[group]);
       return { id: String(window), label: `${window} мес.`, period: `Точное окно ${window} месяцев`, methodologyId: "report-overlap-v1", sections: [{
         title: "Клиентская база", note: !base ? `Нет точной выгрузки за ${window} месяцев. Другой период не подставляется.`
-          : !base.groupAvailable.active ? "Для активных нет корректной выгрузки ровно за 6 месяцев. Ноль не подставляется." : "",
+          : !base.groupAvailable.active ? `Неполные данные: для активных нужно выбрать окно не короче ${base.activeWindow} мес. и загрузить «Давность посещений» ровно за ${base.activeWindow} мес.` : "",
         metrics: [mobilePublicationMetric("Общая база", fmtNum(base?.total), previous && base ? mobilePublicationPercentChange(previous.total ? (base.total - previous.total) / previous.total * 100 : null) : "Нет данных за предыдущий месяц"),
           ...visible.map(group => mobilePublicationMetric(clientBaseGroupLabel(group), fmtPct(clientBaseGroupPct(base, group)), `${fmtNum(base.seg[group])} чел. · ${clientBaseShareMovement(clientBaseGroupPct(base, group), previous?.groupAvailable[group] ? clientBaseGroupPct(previous, group) : null)}`))],
         columns: ["Группа", "Пациенты", "Доля", "Условие"], rows: visible.map(group => [clientBaseGroupLabel(group), fmtNum(base.seg[group]), fmtPct(clientBaseGroupPct(base, group)), clientBaseGroupDescription(base, group)]),
@@ -8065,7 +8195,7 @@ function cloudDoctorReport(doctorId, monthKey, comments) {
   return report;
 }
 
-const SPECIALIZATION_BASE_TITLE = "Динамика в разрезе 3-х лет";
+const SPECIALIZATION_BASE_TITLE = "Динамика с начала года · база за 36 месяцев";
 const SPECIALIZATION_DEVICE_TITLE = "Загрузка аппаратов";
 const SPECIALIZATION_DEVICE_NOTE = "Доля рассчитана от собственной выручки. Аппараты берутся из настроек специализации.";
 const SPECIALIZATION_PRIMARY_NOTE = "Из отчёта «Пациенты по врачам». В итоге пациент учитывается один раз по ФИО. 4+ — первичные пациенты, посетившие врачей этой группы больше трёх раз за тот же месяц.";
@@ -8107,12 +8237,17 @@ function cloudSpecializationActivitySections(activity) {
     title: "Аппаратные методики по врачам", columns: ["Врач", "Выручка по аппаратам", "Доля от выручки врача"],
     rows: ids.map(id => [doctorName(id), fmtMoney(devices.byDoctor[id].total), fmtPct(devices.byDoctor[id].share)]),
   }, ...(deviceCharts.length ? [{ title: SPECIALIZATION_DEVICE_TITLE, charts: deviceCharts }] : [])] : [];
+  const sourceGroups = globalThis.klinvektReportPresentation.primarySourceGroups;
   const primarySections = [{
     title: "Первичные пациенты", note: SPECIALIZATION_PRIMARY_NOTE,
     columns: ["Врач", "Первичных за месяц"],
     rows: [...ids.map(id => [doctorName(id), fmtNum(primary.byDoctor[id])]), ["Итого по специализации", fmtNum(primary.total)]],
     metrics: [mobilePublicationMetric("Врачи с данными", `${primary.covered} из ${ids.length}`)],
-    charts: primaryChart ? [primaryChart] : [],
+    charts: [...(primaryChart ? [primaryChart] : []), {
+      id: "specialization-primary-sources", title: "Источники первичных пациентов", type: "donut", unit: "чел.",
+      labels: sourceGroups.map(group => group.label),
+      series: [{ label: "Первичные пациенты", values: primary.sourceCounts, colors: sourceGroups.map(group => group.color) }],
+    }],
   }];
   return { deviceSections, primarySections };
 }
@@ -8173,20 +8308,22 @@ function cloudGroupReport(item, monthKey, comments, doctors) {
     score: Number.isFinite(result.vecAvg[id]) ? Math.round(result.vecAvg[id]) : null, delta: null, coverage: null, preliminary: false,
     detail: "Сводные показатели включённых врачей. Несопоставимые значения остаются незаданными.", sections: vectorSections[index] }));
   vectors[3].methodologyId = "report-overlap-v1";
-  vectors[3].sections = [];
+  vectors[3].sections = [clientBaseDefinitionsForDoctors(records.map(({ id }) => id))];
+  if (specialization) {
+    const history = specializationClientBaseHistory(monthKey, "all", "all", ids);
+    const chart = mobilePublicationChart("specialization-base-history", SPECIALIZATION_BASE_TITLE, "line", history.months.map(monthLabel), history.series, "чел.");
+    vectors[3].sections.push({ title: "Динамика клиентской базы", charts: chart ? [chart] : [],
+      note: chart ? "" : "Неполные данные: нет сопоставимых выгрузок «Давность посещений» за 36 месяцев." });
+  }
   vectors[3].windows = (specialization ? [36, 6, 12, 24] : [12, 6, 24, 36]).map(window => {
     const bases = records.map(({id}) => ({ id, base: reportClientBaseSummary(id, monthKey, window), previous: reportClientBaseSummary(id, prevMonthKey(monthKey), window) }));
     const visible = groups.filter(group => bases.some(row => row.base?.groupAvailable[group]));
-    const history = specialization ? specializationClientBaseHistory(monthKey, window, "all", "all", ids) : null;
-    const baseChart = history && mobilePublicationChart("specialization-base-history", SPECIALIZATION_BASE_TITLE, "line",
-      history.months.map(monthLabel), history.series, "чел.");
     return { id: String(window), label: `${window} мес.`, period: `Точное окно ${window} месяцев`, sections: [{ title: "Клиентская база · сравнение врачей",
-      note: "Единая методика с личным В4. Незаданные показатели не заменяются нулями; для активных нужна выгрузка за 6 месяцев."
-        + (history && !baseChart ? ` Неполные данные: нет сопоставимых выгрузок «Давность посещений» за ${window} мес.` : ""),
+      note: "Единая методика с личным В4. Для активных нужна выгрузка за срок из настроек специализации.",
       columns: ["Врач", "Период", "Общая база", "Изменение базы", ...visible.map(clientBaseGroupLabel)],
       rows: bases.map(({id, base, previous}) => [doctorName(id), `${window} мес.`, fmtNum(base?.total), mobilePublicationPercentChange(base && previous?.total ? (base.total - previous.total) / previous.total * 100 : null),
         ...visible.map(group => base?.groupAvailable[group] ? `${fmtNum(base.seg[group])} · ${fmtPct(clientBaseGroupPct(base, group))}` : "—")]),
-    }, ...(baseChart ? [{ title: "Динамика клиентской базы", charts: [baseChart] }] : [])] };
+    }] };
   });
   const overall = Number.isFinite(result.scores.total) ? Math.round(result.scores.total) : null;
   const previous = getResult(prevMonthKey(monthKey))?.scores?.total;
@@ -8684,7 +8821,60 @@ function chart(id, cfg) {
   if (UI.charts[id]) { UI.charts[id].destroy(); delete UI.charts[id]; }
   const el = document.getElementById(id);
   if (!el) return;
+  if (cfg.type === "doughnut") {
+    cfg.options.plugins.legend.labels = { generateLabels(c) {
+      const labels = Chart.overrides.doughnut.plugins.legend.labels.generateLabels(c);
+      return labels.map(label => ({ ...label, text: `${label.text} · ${fmtNum(c.data.datasets[0].data[label.index], 2)}` }));
+    } };
+  }
   queueReportChart(id, el, cfg);
+}
+
+function trendValueLabels(format = value => fmtNum(value, 2), notes = false) {
+  return {
+    id: "trendValueLabels",
+    afterDatasetsDraw(chart) {
+      if (!UI.showLabels) return;
+      const { ctx, chartArea } = chart;
+      const top = Math.max(8, chartArea.top - 18), bottom = chartArea.bottom - 2;
+      const placed = [];
+      const visible = chart.getSortedVisibleDatasetMetas();
+      ctx.save();
+      ctx.font = '10px "Segoe UI", sans-serif';
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2.5;
+      ctx.lineJoin = "round";
+      for (let i = 0; i < chart.data.labels.length; i++) for (const meta of visible) {
+        const dataset = chart.data.datasets[meta.index];
+        const value = dataset.data[i], point = meta.data[i];
+        if (!Number.isFinite(value) || !point || point.skip || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+        const share = notes ? dataset.pointNotes?.[i]?.split(" ")[0] : "";
+        const label = share ? `${format(value)} · ${share}` : format(value);
+        const halfWidth = ctx.measureText(label).width / 2 + 2;
+        const x = Math.max(halfWidth, Math.min(chart.width - halfWidth, point.x));
+        const preferred = Math.max(top, Math.min(bottom, point.y + (meta.index % 2 ? 11 : -11)));
+        const fits = y => y >= top && y <= bottom && !placed.some(other =>
+          Math.abs(y - other.y) < 12 && Math.abs(x - other.x) < halfWidth + other.halfWidth);
+        let y = preferred;
+        for (let distance = 0; distance <= bottom - top; distance += 12) {
+          if (fits(preferred - distance)) { y = preferred - distance; break; }
+          if (fits(preferred + distance)) { y = preferred + distance; break; }
+        }
+        placed.push({ x, y, halfWidth });
+        ctx.fillStyle = dataset.borderColor || "#263444";
+        ctx.strokeText(label, x, y);
+        ctx.fillText(label, x, y);
+      }
+      ctx.restore();
+    },
+  };
+}
+
+function compactChartMoney(value) {
+  const magnitude = Math.abs(value);
+  return magnitude >= 1000000 ? `${fmtNum(value / 1000000, 2)} млн` : magnitude >= 10000 ? `${fmtNum(value / 1000, 1)} тыс.` : fmtNum(value, 2);
 }
 
 function switchTab(tab) {
@@ -8989,18 +9179,21 @@ function renderDepartmentCharts(history, defs) {
     responsive: true,
     maintainAspectRatio: false,
     interaction: { mode: "index", intersect: false },
-    plugins: { legend: { position: "bottom" }, datalabels: { display: false } },
+    layout: { padding: { top: 27, right: 18, bottom: 22, left: 18 } },
+    plugins: { legend: { position: "bottom" } },
   };
   chart("chDepartmentRevenue", {
     type: "bar",
+    plugins: [trendValueLabels(compactChartMoney)],
     data: { labels, datasets: [
       { label: "Выручка", data: vals("sales"), backgroundColor: "rgba(37,99,235,.55)", borderColor: "#2563eb", borderWidth: 1 },
       { label: "С перенаправлениями", data: vals("withRef"), type: "line", borderColor: "#7c3aed", backgroundColor: "#7c3aed", tension: .25, pointRadius: 3 },
     ] },
-    options: { ...common, scales: { y: { beginAtZero: true, ticks: { callback: v => Math.abs(v) >= 1000000 ? fmtNum(v / 1000000, 1) + " млн" : fmtNum(v) } } } },
+    options: { ...common, scales: { y: { beginAtZero: true, ticks: { callback: compactChartMoney } } } },
   });
   chart("chDepartmentRates", {
     type: "line",
+    plugins: [trendValueLabels(fmtPct)],
     data: { labels, datasets: [
       { label: "Первичка 3 мес.", data: vals("pv3"), borderColor: "#2563eb", backgroundColor: "#2563eb", tension: .25, spanGaps: false },
       { label: "Первичка 6 мес.", data: vals("pv6"), borderColor: "#7c3aed", backgroundColor: "#7c3aed", tension: .25, spanGaps: false },
@@ -9011,6 +9204,7 @@ function renderDepartmentCharts(history, defs) {
   });
   chart("chDepartmentBase", {
     type: "line",
+    plugins: [trendValueLabels()],
     data: { labels, datasets: [
       { label: "Активная база", data: vals("active"), borderColor: "#059669", backgroundColor: "rgba(5,150,105,.15)", fill: true, tension: .25, spanGaps: false },
       { label: "Потерянная база", data: vals("lost"), borderColor: "#dc2626", backgroundColor: "rgba(220,38,38,.1)", fill: true, tension: .25, spanGaps: false },
@@ -9364,24 +9558,42 @@ function renderDept() { return renderPreparedReport("dept", renderDeptNow); }
 function specializationTrendHtml(spec) {
   const id = `chart-${spec.id}`;
   const format = spec.unit === "₽" ? fmtMoney : fmtNum;
-  return `<h3 class="section-title">${esc(spec.title)} ${copyBtn("copyChart", id, "PNG")}</h3>
-    <div class="chart-box"><canvas id="${id}" aria-label="${esc(spec.title)}"></canvas></div>
+  const device = spec.id.startsWith("specialization-devices-");
+  const canvas = `<div class="chart-box"${device ? ` style="--device-chart-min:${100 + spec.labels.length * 70}px"` : ""}><canvas id="${id}" aria-label="${esc(spec.title)}"></canvas></div>`;
+  const values = device ? globalThis.klinvektReportPresentation.deviceHistoryTableHtml([spec]) : `<table class="data"><tr><th>Месяц</th>${spec.series.map(series => `<th class="num">${esc(series.label)}</th>`).join("")}</tr>
+    ${spec.labels.map((label, i) => `<tr><td>${esc(label)}</td>${spec.series.map(series => `<td class="num">${format(series.values[i])}${series.pointNotes?.[i] ? `<br><small class="muted">${esc(series.pointNotes[i])}</small>` : ""}</td>`).join("")}</tr>`).join("")}</table>`;
+  const html = `<h3 class="section-title">${esc(spec.title)} ${copyBtn("copyChart", id, "PNG")}</h3>
+    ${device ? `<div class="device-history-scroll">${canvas}</div>` : canvas}
     <details ${collapsibleListAttrs(`values-${spec.id}`, false)}><summary class="collapsible-list-summary"><span>Точные значения по месяцам</span><span class="collapse-hint"></span></summary>
-    <div class="collapsible-list-body"><table class="data"><tr><th>Месяц</th>${spec.series.map(series => `<th class="num">${esc(series.label)}</th>`).join("")}</tr>
-    ${spec.labels.map((label, i) => `<tr><td>${esc(label)}</td>${spec.series.map(series => `<td class="num">${format(series.values[i])}${series.pointNotes?.[i] ? `<br><small class="muted">${esc(series.pointNotes[i])}</small>` : ""}</td>`).join("")}</tr>`).join("")}</table></div></details>`;
+    <div class="collapsible-list-body">${values}</div></details>`;
+  return device ? `<section class="device-history-chart" data-device-history-chart>${html}</section>` : html;
 }
 
 function renderSpecializationTrend(spec) {
   const format = spec.unit === "₽" ? fmtMoney : fmtNum;
+  const device = spec.id.startsWith("specialization-devices-");
   chart(`chart-${spec.id}`, {
     type: "line",
+    plugins: device ? [] : [trendValueLabels(format, true)],
     data: { labels: spec.labels, datasets: spec.series.map(series => ({
       label: series.label, data: series.values, pointNotes: series.pointNotes,
       borderColor: series.color, backgroundColor: series.color, pointRadius: 3, borderWidth: 2, spanGaps: false,
     })) },
     options: { maintainAspectRatio: false, interaction: { mode: "nearest", intersect: false },
-      scales: { y: { beginAtZero: true, ticks: { callback: value => spec.unit === "₽" ? fmtMoney(value) : fmtNum(value) } } },
-      plugins: { legend: { position: "bottom" }, tooltip: { callbacks: {
+      layout: { padding: device ? { top: 34, left: 12, right: 36 } : { top: 20, left: 18, right: 28, bottom: 12 } },
+      scales: {
+        ...(device ? { x: { offset: true, ticks: { autoSkip: false, maxRotation: 0,
+          callback: index => spec.labels[index].replace(/^(\S{3})\S* \d{2}(\d{2})$/, "$1 $2") } } } : {}),
+        y: { beginAtZero: true, ticks: { callback: value => spec.unit === "₽" ? fmtMoney(value) : fmtNum(value) } },
+      },
+      plugins: { legend: device ? { display: false } : { position: "bottom" },
+        datalabels: device ? {
+          display: context => Number.isFinite(context.dataset.data[context.dataIndex]),
+          align: "top", offset: 4, color: "#263444",
+          font: { size: 10, lineHeight: 1.15 }, textAlign: "center",
+          formatter: (value, context) => [format(value), context.dataset.pointNotes?.[context.dataIndex]].filter(Boolean),
+        } : false,
+        tooltip: { callbacks: {
         label: item => [`${item.dataset.label}: ${format(item.raw)}`, item.dataset.pointNotes?.[item.dataIndex]].filter(Boolean).join(" · "),
       } } } },
   });
@@ -9500,6 +9712,7 @@ function renderDeptNow() {
 
   const activity = specializationActivityView(mk, UI.deptFilter === "all" ? null : deptProfile(UI.deptFilter), UI.deptFilter, UI.subFilter);
   const deviceActivity = activity.current?.devices;
+  const deviceCharts = globalThis.klinvektReportPresentation.splitDeviceHistoryCharts(activity.deviceCharts);
   // тепловая карта экспертных позиций — при выбранной специализации (у каждой свой набор)
   if (UI.deptFilter !== "all") {
     const fProfile = deptProfile(UI.deptFilter);
@@ -9507,11 +9720,12 @@ function renderDeptNow() {
     const withVy = rows.filter(x => x.r.product);
     if (devs.length && withVy.length && fProfile.expertise.mode !== "none") {
       let maxQ = 1;
-      for (const x of withVy) for (const dv of devs) maxQ = Math.max(maxQ, x.r.product.expert[dv] ? x.r.product.expert[dv].q : 0);
+      if (!deviceActivity) for (const x of withVy) for (const dv of devs) maxQ = Math.max(maxQ, x.r.product.expert[dv]?.q ?? 0);
+      const { deviceHeatMaxima, deviceHeatCellHtml, deviceHeatLegendHtml } = globalThis.klinvektReportPresentation;
+      const maxima = deviceActivity ? deviceHeatMaxima(Object.values(deviceActivity.byDoctor).flatMap(doctor => doctor.items)) : null;
       const deviceHeading = deviceActivity ? "за месяц, шт. и ₽" : "за месяц, шт";
-      const deviceCell = (q, s) => deviceActivity ? `<span>${fmtNum(q)} шт.<span class="heatmap-money">${fmtMoney(s)}</span></span>` : (q || "·");
       html += `<div class="card"><h2>🔥 Тепловая карта: ${esc(fProfile.expertise.title)} <span class="small muted">(${deviceHeading})</span> <span class="spacer"></span>${copyBtn("copyTable", "tblHeat")}</h2>
-        ${deviceActivity ? `<p><b>Выручка по всем аппаратам · ${fmtMoney(deviceActivity.total)}</b> <span class="small muted">· общая доля ${fmtPct(deviceActivity.share)}</span></p>` : ""}
+        ${deviceActivity ? `<p><b>Выручка по всем аппаратам</b> · ${fmtMoney(deviceActivity.total)} <span class="small muted">· общая доля ${fmtPct(deviceActivity.share)}</span></p>${deviceHeatLegendHtml()}` : ""}
         <div class="heatmap-scroll"><table class="data heatmap-table" id="tblHeat" style="--heat-table-min:${300 + devs.length * 150}px"><colgroup><col class="heatmap-specialist-col">${devs.map(() => '<col class="heatmap-focus-col">').join("")}<col class="heatmap-total-col">${deviceActivity ? '<col class="heatmap-focus-col">' : ""}</colgroup><tr><th>Специалист</th>` + devs.map(d => `<th class="num heatmap-focus-heading">${esc(d)}</th>`).join("") + `<th class="num">Итого</th>${deviceActivity ? '<th class="num">Доля от выручки</th>' : ""}</tr>`;
       const devTotals = {};
       for (const x of withVy) {
@@ -9522,28 +9736,33 @@ function renderDeptNow() {
           rowTotal += q;
           devTotals[dv] = (devTotals[dv] || 0) + q;
           const alpha = q ? 0.15 + 0.7 * (q / maxQ) : 0;
-          html += `<td class="num heatmap-focus-cell"><div class="heat-cell" style="background:rgba(37,99,235,${alpha.toFixed(2)});color:${alpha > 0.5 ? "#fff" : "inherit"}">${deviceCell(q, x.r.product.expert[dv]?.s ?? 0)}</div></td>`;
+          html += `<td class="num heatmap-focus-cell">${deviceActivity
+            ? `<div class="heat-cell device-heat-holder">${deviceHeatCellHtml({ q, s: x.r.product.expert[dv]?.s ?? 0 }, maxima)}</div>`
+            : `<div class="heat-cell" style="background:rgba(37,99,235,${alpha.toFixed(2)});color:${alpha > 0.5 ? "#fff" : "inherit"}">${q || "·"}</div>`}</td>`;
         }
         const doctorDevices = deviceActivity?.byDoctor[x.id];
-        html += `<td class="num"><b>${deviceCell(rowTotal, doctorDevices?.total)}</b></td>${deviceActivity ? `<td class="num"><b>${fmtPct(doctorDevices?.share)}</b></td>` : ""}</tr>`;
+        html += `<td class="num">${deviceActivity ? deviceHeatCellHtml({ q: rowTotal, s: doctorDevices?.total }) : `<b>${rowTotal}</b>`}</td>${deviceActivity ? `<td class="num"><span class="device-heat-cell">${fmtPct(doctorDevices?.share)}</span></td>` : ""}</tr>`;
       }
       const countTotal = Object.values(devTotals).reduce((a, b) => a + b, 0);
-      html += '<tr><td><b>Итого по специализации</b></td>' + devs.map(dv => `<td class="num"><b>${deviceActivity ? deviceCell(devTotals[dv] || 0, deviceActivity.items[activity.names.indexOf(dv)].s) : devTotals[dv] || 0}</b></td>`).join("") +
-        `<td class="num"><b>${deviceCell(countTotal, deviceActivity?.total)}</b></td>${deviceActivity ? `<td class="num"><b>${fmtPct(deviceActivity.share)}</b></td>` : ""}</tr>`;
+      html += '<tr><td><b>Итого по специализации</b></td>' + devs.map(dv => `<td class="num">${deviceActivity ? deviceHeatCellHtml(deviceActivity.items[activity.names.indexOf(dv)]) : `<b>${devTotals[dv] || 0}</b>`}</td>`).join("") +
+        `<td class="num">${deviceActivity ? deviceHeatCellHtml({ q: countTotal, s: deviceActivity.total }) : `<b>${countTotal}</b>`}</td>${deviceActivity ? `<td class="num"><span class="device-heat-cell">${fmtPct(deviceActivity.share)}</span></td>` : ""}</tr>`;
       html += `</table></div><p class="small muted">${deviceActivity ? SPECIALIZATION_DEVICE_NOTE : "«·» по всем врачам — простаивающая позиция. Набор настраивается в профиле специализации."}</p></div>`;
     }
   } else if (rows.some(x => x.r.product)) {
     html += `<div class="card"><p class="small muted" style="margin:0">🔥 Тепловая карта аппаратов/услуг доступна при выборе конкретной специализации в фильтре сверху — у каждой специализации свой набор отслеживаемых позиций.</p></div>`;
   }
 
-  if (activity.deviceCharts.length) html += `<div class="card"><details ${collapsibleListAttrs("specializationDeviceHistory", false)} data-specialization-device-history>
+  if (deviceCharts.length) html += `<div class="card"><details ${collapsibleListAttrs("specializationDeviceHistory", false)} data-specialization-device-history>
     <summary class="collapsible-list-summary"><span>${SPECIALIZATION_DEVICE_TITLE}</span><span class="collapse-hint"></span></summary>
-    <div class="collapsible-list-body"><p class="small muted">Выручка по месяцам с начала года. Количество процедур видно у точек и в таблице.</p>
-    ${activity.deviceCharts.map(specializationTrendHtml).join("")}</div></details></div>`;
+    <div class="collapsible-list-body"><p class="small muted">Выручка и количество процедур по месяцам с начала года.</p>
+    <details ${collapsibleListAttrs("specializationDeviceTotals", false)} data-device-history-summary><summary class="collapsible-list-summary"><span>Точные значения по месяцам · все аппараты</span><span class="collapse-hint"></span></summary>
+    <div class="collapsible-list-body">${globalThis.klinvektReportPresentation.deviceHistoryTableHtml(deviceCharts)}</div></details>
+    ${deviceCharts.map(specializationTrendHtml).join("")}</div></details></div>`;
   if (activity.current) {
     const primary = activity.current.primary;
     html += `<div class="card" data-specialization-primary><h2>Первичные пациенты <span class="small muted">${monthLabel(mk)}</span><span class="spacer"></span>${copyBtn("copyTable", "tblSpecPrimary")}</h2>
       <p class="small muted">${SPECIALIZATION_PRIMARY_NOTE} Данные есть у ${primary.covered} из ${rows.length} врачей.</p>
+      ${globalThis.klinvektReportPresentation.specializationPrimarySourcesHtml(primary.sourceCounts)}
       <table class="data" id="tblSpecPrimary"><tr><th>Специалист</th><th class="num">Первичных за месяц</th></tr>
       ${rows.map(row => `<tr><td>${esc(doctorName(row.id))}</td><td class="num">${fmtNum(primary.byDoctor[row.id])}</td></tr>`).join("")}
       <tr><td><b>${UI.deptFilter === "all" ? "Итого по выборке" : "Итого по специализации"}</b></td><td class="num"><b>${fmtNum(primary.total)}</b></td></tr></table>
@@ -9557,6 +9776,7 @@ function renderDeptNow() {
   const presentation = globalThis.klinvektReportPresentation;
   const kbWin = UI.specializationKbWin;
   const bases = rows.map(x => ({ id: x.id, kb: reportClientBaseSummary(x.id, mk, kbWin) }));
+  const baseDefinitions = presentation.clientBaseDefinitionsHtml(clientBaseDefinitionsForDoctors(rows.map(row => row.id)));
   const kbControls = segToggle("specializationKbWin", [6,12,24,36].map(v => ({v, label: v + " мес."})), kbWin, "setSpecializationKbWin");
   const withKb = bases.filter(x => x.kb);
   if (withKb.length) {
@@ -9572,9 +9792,9 @@ function renderDeptNow() {
         <td class="num">${fmtNum(kb.window)} мес.</td><td class="num"><b>${fmtNum(kb.total)}</b>${compactBaseTrend(kb.total, previousKb ? previousKb.total : null)}</td>
         ${visibleGroups.map(({ key }) => `<td class="num">${presentation.clientBaseShareCellHtml(clientBaseGroupPct(kb, key), kb.groupAvailable[key] ? fmtNum(kb.seg[key]) : "")}</td>`).join("")}</tr>`;
     }
-    html += `</table>${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml()}</div>`;
+    html += `</table>${baseDefinitions}</div>`;
   } else {
-    html += `<div class="card"><h2>Клиентская база ${kbControls}</h2><p class="muted">Нет точной выгрузки за ${fmtNum(kbWin)} мес. для выбранных врачей и месяца. Другой период не подставляется.</p>${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml()}</div>`;
+    html += `<div class="card"><h2>Клиентская база ${kbControls}</h2><p class="muted">Нет точной выгрузки за ${fmtNum(kbWin)} мес. для выбранных врачей и месяца. Другой период не подставляется.</p>${baseDefinitions}</div>`;
   }
 
   // профайлы специалистов — все врачи фильтра, метрики в строках
@@ -9587,7 +9807,7 @@ function renderDeptNow() {
   /* ---- динамика специализации: точки роста и риска ---- */
   html += reputationReportHtml(rows, mk, UI.deptFilter === "all" ? "Клиника" : scoreScope);
   const deptDyn = computeDeptDynamics(mk, UI.deptFilter, UI.subFilter);
-  const baseHistory = specializationClientBaseHistory(mk, kbWin, UI.deptFilter, UI.subFilter);
+  const baseHistory = specializationClientBaseHistory(mk, UI.deptFilter, UI.subFilter);
   if (deptDyn && deptDyn.months.length) {
     html += dynamicsHtml(deptDyn, "blkDeptDyn", "Динамика специализации: точки роста и риска",
       `${UI.deptFilter === "all" ? "Все врачи с данными" : "Специализация «" + esc(UI.deptFilter) + "»"} · с января по ${monthLabel(mk)}. Месяцы без данных оставлены пустыми. Последний месяц сравнивается с прошлым и со средним предыдущих месяцев года. Деньги и визиты суммируются, пациенты дедуплицируются, доли и конверсии взвешиваются; средний балл включает только врачей с полнотой данных от 80%.`,
@@ -9597,7 +9817,7 @@ function renderDeptNow() {
 
   document.getElementById("deptBody").innerHTML = html;
   renderCompare(mk, rows);
-  activity.deviceCharts.forEach(renderSpecializationTrend);
+  deviceCharts.forEach(renderSpecializationTrend);
   if (activity.primaryChart) renderSpecializationTrend(activity.primaryChart);
   if (deptDyn) renderDynCharts(deptDyn, "blkDeptDyn", baseHistory);
 }
@@ -9711,7 +9931,7 @@ async function exportDeptXlsx() {
   const aoa = [["Сводная по векторам за " + monthLabel(mk)], [], header];
   const num = v => (v == null || isNaN(v)) ? null : Math.round(v * 100) / 100;
   for (const x of rows) {
-    const r = x.r, baseProfile = clientBaseReportProfile(), kb = reportClientBaseSummary(x.id, mk, UI.specializationKbWin), pv = r.loyalty.pvSlices[UI.pvSlice], nz = r.cross.naz[UI.nazSlice];
+    const r = x.r, baseProfile = clientBaseReportProfile(deptParams(x.id)), kb = reportClientBaseSummary(x.id, mk, UI.specializationKbWin), pv = r.loyalty.pvSlices[UI.pvSlice], nz = r.cross.naz[UI.nazSlice];
     const groupValue = (group, value) => kb && kb.groupAvailable[group] ? value : null;
     aoa.push([
       doctorName(x.id), resolvedDepartmentName(x.id), resolvedSpecializationName(x.id) || "—",
@@ -9812,6 +10032,19 @@ function clientBaseGroupDescription(kb, group) {
     loyalSleep: `не менее ${fmtNum(t.sleepVisits)} визитов; последний визит был более ${fmtNum(t.sleepM)} мес. назад`,
     lost: `от 1 до ${fmtNum(t.lostVisits)} визитов; последний визит был более ${fmtNum(t.lostM)} мес. назад`,
   })[group] || "";
+}
+
+function clientBaseDefinitionSection(profile) {
+  const holder = { thresholds: clientBaseThresholds(clientBaseReportProfile(profile)) };
+  return { title: "Что означают группы?", columns: ["Группа", "Условие"],
+    rows: ["loyal", "active", "newRisk", "loyalSleep", "lost"].map(group => [clientBaseGroupLabel(group), clientBaseGroupDescription(holder, group)]) };
+}
+
+function clientBaseDefinitionsForDoctors(ids) {
+  const definitions = ids.map(id => clientBaseDefinitionSection(deptParams(id)));
+  const first = definitions[0] || clientBaseDefinitionSection();
+  return definitions.every(section => JSON.stringify(section.rows) === JSON.stringify(first.rows)) ? first
+    : { title: first.title, note: "В этой сводке у специализаций разные пороги. Для каждого врача применяются настройки его специализации." };
 }
 
 function adminClientBaseGroupLabel(group) {
@@ -10785,7 +11018,7 @@ function renderDynCharts(dyn, blkId, baseHistory = null) {
   if (!dyn || (dyn.months.length < 2 && !baseHistory)) return;
   const labels = dyn.months.map(monthLabel);
   const val = key => { const row = dyn.rows.find(x => x.key === key); return row ? row.values : null; };
-  const mk = (canvas, series, fmt, tickCb, history = null) => {
+  const mk = (canvas, series, fmt, tickCb, history = null, labelFormat = fmt) => {
     const chartLabels = history ? history.months.map(monthLabel) : labels;
     const datasets = series.filter(s => s.data && s.data.some(v => v != null)).map(s => ({
       label: s.label, data: s.data, borderColor: s.color, backgroundColor: s.color,
@@ -10797,17 +11030,14 @@ function renderDynCharts(dyn, blkId, baseHistory = null) {
     const numFmt = v => (typeof v === "number" ? fmt(v) : "");
     chart(canvas, {
       type: "line",
+      plugins: [trendValueLabels(labelFormat)],
       data: { labels: chartLabels, datasets },
       options: {
         maintainAspectRatio: false,
+        layout: { padding: { top: 26, right: 20, bottom: 23, left: 12 } },
         plugins: {
           title: history ? { display: true, text: SPECIALIZATION_BASE_TITLE } : undefined,
           legend: { position: "bottom", labels: { boxWidth: 12, font: { size: 11 } } },
-          datalabels: {
-            display: ctx => UI.showLabels && ctx.dataIndex === ctx.dataset.data.length - 1 && ctx.dataset.data[ctx.dataIndex] != null,
-            align: "top", font: { size: 10, weight: "700" }, color: "#1c2333",
-            formatter: numFmt,
-          },
           tooltip: { callbacks: { label: c => c.dataset.label + ": " + numFmt(c.raw) } },
         },
         scales: { ...(history ? { x: { ticks: { maxTicksLimit: 9, maxRotation: 0,
@@ -10819,7 +11049,7 @@ function renderDynCharts(dyn, blkId, baseHistory = null) {
   mk(blkId + "_money", [
     { label: "Выручка", data: val("sales"), color: "#2563eb" },
     { label: "С перенаправлениями", data: val("withRef"), color: "#7c3aed", dash: [5, 3] },
-  ], v => (v >= 1000000 ? (v / 1000000).toFixed(2) + " млн" : fmtNum(v)), v => (v / 1000000).toFixed(1) + " млн");
+  ], fmtMoney, v => (v / 1000000).toFixed(1) + " млн", null, compactChartMoney);
   mk(blkId + "_traffic", [
     { label: "Визиты", data: val("visits"), color: "#2563eb" },
     { label: "Пациенты", data: val("patients"), color: "#16a34a" },
@@ -10834,7 +11064,7 @@ function renderDynCharts(dyn, blkId, baseHistory = null) {
     { label: "Активная база", data: val("akb"), color: "#16a34a" },
     { label: "Потерянные", data: val("lost"), color: "#dc2626" },
   ];
-  mk(blkId + "_base", baseSeries, v => fmtNum(v) + " чел.", undefined, baseHistory);
+  mk(blkId + "_base", baseSeries, v => fmtNum(v) + " чел.", undefined, baseHistory, v => fmtNum(v));
 }
 
 function dynamicsRow(dyn, key) {
@@ -11234,7 +11464,7 @@ function dynamicsHtml(dyn, blkId, title, subtitle, noteKey, detailTailHtml = "",
   if (!single || baseHistory) {
     const hasBase = !baseHistory || baseHistory.series.some(series => series.values.some(Number.isFinite));
     const baseCaption = baseHistory ? SPECIALIZATION_BASE_TITLE : "Клиентская база";
-    html += `<div class="grid cols-2" style="margin-bottom:12px">
+    html += `<div class="grid cols-2 dynamics-charts" style="margin-bottom:12px">
       ${single ? "" : `
       <div><h3 class="small muted" style="margin:0 0 4px">ВЫРУЧКА ${copyBtn("copyChart", blkId + "_money", "PNG")}</h3><div class="chart-box"><canvas id="${blkId}_money"></canvas></div></div>
       <div><h3 class="small muted" style="margin:0 0 4px">ПАЦИЕНТЫ / ВИЗИТЫ ${copyBtn("copyChart", blkId + "_traffic", "PNG")}</h3><div class="chart-box"><canvas id="${blkId}_traffic"></canvas></div></div>
@@ -11327,7 +11557,7 @@ function renderScoresChart(canvasId, months, getter, scoreMode) {
         legend: { position: "bottom" },
         tooltip: { mode: "index", intersect: false },
         datalabels: {
-          display: () => UI.showLabels,
+          display: ctx => UI.showLabels && Number.isFinite(ctx.dataset.data[ctx.dataIndex]),
           align: ctx => ctx.dataIndex % 2 ? "bottom" : "top",
           offset: 6, clamp: true,
           color: ctx => ctx.dataset.borderColor || "#1c2333", font: { size: 11, weight: "700" },
@@ -12878,8 +13108,8 @@ function renderDoctorNow() {
   }
 
   if (!kb) html += clientBaseShareHistoryHtml(kbSeries);
-  html += globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml()
-    + (kb && !kb.groupAvailable.active ? '<p class="notice blue">Для активных нужна корректная выгрузка «Давность посещений» ровно за 6 месяцев. Число визитов из большего окна не подставляется.</p>' : "")
+  html += globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml(clientBaseDefinitionSection(deptParams(UI.docId)))
+    + (kb && !kb.groupAvailable.active ? `<p class="notice blue">Для активных нужно выбрать окно не короче ${kb.activeWindow} мес. и загрузить «Давность посещений» ровно за ${kb.activeWindow} мес.</p>` : "")
     + globalThis.klinvektReportPresentation.reportHelpHtml(clientBaseHelp) + '</div>';
 
   /* ---- В5 Лояльность ---- */
@@ -14129,7 +14359,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
   }
 
   /* Слайд 6: клиентская база */
-  const withKb = rows.map(x => ({ ...x, kb: reportClientBaseSummary(x.id, mk, UI.repKbWin), baseProfile: clientBaseReportProfile() })).filter(x => x.kb);
+  const withKb = rows.map(x => ({ ...x, kb: reportClientBaseSummary(x.id, mk, UI.repKbWin) })).filter(x => x.kb);
   if (withKb.length) {
     const groupOrder = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
     const visibleGroups = groupOrder.filter(group => withKb.some(x => x.kb.groupAvailable[group]));
@@ -14139,7 +14369,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
       html += `<tr><td>${esc(doctorName(x.id))}</td><td class="num">${fmtNum(kb.window)} мес.</td><td class="num"><b>${fmtNum(kb.total)}</b></td>
         ${visibleGroups.map(group => `<td class="num">${kb.groupAvailable[group] ? clientBaseCountPctMarkup(kb, group) : ""}</td>`).join("")}</tr>`;
     }
-    html += `</table>${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml()}</div>`;
+    html += `</table>${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml(clientBaseDefinitionsForDoctors(withKb.map(row => row.id)))}</div>`;
   }
 
   /* Слайд 7: лояльность */
@@ -14777,9 +15007,20 @@ function renderSettings() {
 
   /* --- 1. Нормативы и подразделения --- */
   if (specializationName) {
+    const baseThresholds = clientBaseReportProfile(p);
+    const baseFields = [
+      ["loyal", "loyalVisits", "loyalM", "От", "Не более"],
+      ["active", "activeVisits", "activeM", "От", "За последние"],
+      ["newRisk", "newRiskVisits", "newRiskM", "До", "Более"],
+      ["loyalSleep", "sleepVisits", "sleepM", "От", "Более"],
+      ["lost", "lostVisits", "lostM", "До", "Более"],
+    ];
+    const field = (key, label, group) => `<label>${label} <input type="number" id="cb_report_${key}" min="1" max="${clientBaseReportLimit(key)}" step="1" value="${baseThresholds[key]}" aria-label="${esc(`${clientBaseGroupLabel(group)} · ${label} ${key.endsWith("M") ? "месяцев" : "визитов"}`)}"></label>`;
     html += `${pageBlockStart("settings.norm", `📐 Нормативы специализации: клиентская база, курсовое, первичка — «${esc(specializationName)}»`, { defaultOpen: false })}
-    ${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml()}
-    <p class="small muted">Врач и специализация используют одинаковые фиксированные группы. Сохранённые нормативы балла В4 и прежних мобильных отчётов не меняются.</p>
+    <h3>Группы клиентской базы</h3><p class="small muted">Эти пороги применяются в отчётах врача и его специализации. Для активных загрузите «Давность посещений» за указанный срок. Для остальных групп срок отсчитывается с последнего визита.</p>
+    <table class="data wtable" data-client-base-report-settings><thead><tr><th>Группа</th><th>Визитов</th><th>Период, мес.</th></tr></thead><tbody>
+    ${baseFields.map(([group, visits, months, visitLabel, monthLabel]) => `<tr><th scope="row">${esc(clientBaseGroupLabel(group))}</th><td>${field(visits, visitLabel, group)}</td><td>${field(months, monthLabel, group)}</td></tr>`).join("")}</tbody></table>
+    ${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml(clientBaseDefinitionSection(p))}
     <h3 style="margin:12px 0 6px">Остальные нормативы</h3>
     <table class="data wtable"><tr>
       <th class="num" title="Курсовое лечение: минимум визитов…">Курсовое: от, виз.</th>
@@ -15254,8 +15495,20 @@ function saveDeptBasics() {
     return;
   }
   const p = curSetProfile();
+  let reportThresholds = null;
+  if (document.getElementById("cb_report_loyalVisits")) {
+    reportThresholds = {};
+    for (const key of Object.keys(CLIENT_BASE_REPORT_DEFAULTS)) {
+      const value = Number(document.getElementById("cb_report_" + key)?.value);
+      if (!Number.isInteger(value) || value < 1 || value > clientBaseReportLimit(key)) {
+        toast("Задайте целые числа: от 1 до 50 визитов и от 1 до 36 месяцев.", true);
+        return;
+      }
+      reportThresholds[key] = value;
+    }
+  }
   let partition = null;
-  // Accept former controls when restoring older forms; current fixed groups have no inputs.
+  // Accept former controls when restoring older forms.
   if (document.getElementById("cb_loyalVisits")) {
     partition = {};
     for (const [key, min, max] of [["loyalVisits", 2, 50], ["activeM", 1, 36], ["lostM", 1, 36]]) {
@@ -15281,6 +15534,7 @@ function saveDeptBasics() {
     }
   }
   Object.assign(p, values);
+  if (reportThresholds) p.clientBaseReport = reportThresholds;
   if (partition) p.clientBasePartition = partition;
   // Старые нормативы KPI и публикаций сохраняются в профиле без изменения.
   p.subdivisions = document.getElementById("np_subdivisions").value.split("\n").map(x => x.trim()).filter(Boolean);

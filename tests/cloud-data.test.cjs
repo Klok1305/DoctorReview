@@ -128,10 +128,11 @@ test("online specialization shows monthly visit frequency and averages individua
   assert.match(archivedHtml, /Выручка по месяцам/);
 });
 
-test("specialization chart uses the chosen recency export, counts unique patients and keeps 36 calendar months", async () => {
+test("specialization charts January through the selected month using the 36-month base and shared doctor thresholds", async () => {
   const context = fixtureContext();
   vm.runInContext(`
     DB.doctors.d2.specialization = 'X';
+    DB.settings.depts.X.clientBaseReport = { activeM: 12, activeVisits: 5, lostM: 15 };
     DB.months['2023-04'] = structuredMonth('2026-01');
     DB.months['2023-03'] = structuredMonth('2026-01');
     function structuredMonth(key) { return JSON.parse(JSON.stringify(DB.months[key])); }
@@ -141,7 +142,7 @@ test("specialization chart uses the chosen recency export, counts unique patient
         base[36].clients[0].v = 5;
         base[36].clients[1].r = 500;
         base[36].clients[1].v = 2;
-        base[12].clients[0].v = 1;
+        base[12].clients[0].v = 5;
         base[12].clients[1].v = 1;
       }
     }
@@ -151,31 +152,25 @@ test("specialization chart uses the chosen recency export, counts unique patient
   const report = payload.pages.find(page => page.kind === "specialization" && page.specialization === "X" && page.periodKey === "2026-03").report;
   const windows = report.vectors[3].windows;
   assert.equal(windows[0].id, "36");
-  const chart = window => windows.find(value => value.id === window).sections[1]?.charts[0];
-  const long = chart("36"), short = chart("12");
-  assert.equal(long.labels.length, 36);
-  assert.equal(long.labels[0], "Апрель 2023");
-  assert.equal(long.title, "Динамика в разрезе 3-х лет");
-  assert.deepEqual(Array.from(long.series, item => item.values[0]), [1, 2]);
-  assert.deepEqual(Array.from(long.series, item => item.values[33]), [null, null]);
-  assert.deepEqual(Array.from(long.series, item => item.values[34]), [null, null]);
-  assert.deepEqual(Array.from(long.series, item => item.values[35]), [1, 2]);
-  assert.equal(short.series[0].values[35], 0);
-  assert.equal(chart("6"), undefined);
+  const historySection = report.vectors[3].sections.find(section => section.title === "Динамика клиентской базы");
+  const annual = historySection.charts[0];
+  assert.deepEqual(Array.from(annual.labels), ["Январь 2026", "Февраль 2026", "Март 2026"]);
+  assert.equal(annual.title, "Динамика с начала года · база за 36 месяцев");
+  assert.deepEqual(Array.from(annual.series, item => Array.from(item.values)), [[null, null, 1], [null, null, 2]]);
+  assert.ok(windows.every(window => window.sections.length === 1));
   assert.equal(report.dynamics.columns.length, 3);
+  const doctor = payload.pages.find(page => page.doctorId === "d1" && page.periodKey === "2026-03").report;
+  const personal = doctor.vectors[3].windows.find(window => window.id === "36").sections[0];
+  assert.deepEqual(Array.from(personal.rows.find(row => row[0] === "Активные").slice(1)), ["1", "50%", "не менее 5 визитов за последние 12 мес."]);
+  assert.match(renderCloudReport(report, "Специализация X", { kind: "specialization" }), /не менее 5 визитов за последние 12 мес/);
 
   const canvas = new Map();
   context.chart = (id, config) => canvas.set(id, config);
-  const runAdmin = window => vm.runInContext(`renderDynCharts(computeDeptDynamics('2026-03','X'), 'blkDeptDyn',
-    specializationClientBaseHistory('2026-03', ${window}, 'X'))`, context);
-  runAdmin(36);
-  assert.deepEqual(Array.from(canvas.get("blkDeptDyn_base").data.datasets, item => item.data[35]), [1, 2]);
-  assert.equal(canvas.get("blkDeptDyn_base").data.labels.length, 36);
+  vm.runInContext(`renderDynCharts(computeDeptDynamics('2026-03','X'), 'blkDeptDyn', specializationClientBaseHistory('2026-03', 'X'))`, context);
+  assert.deepEqual(Array.from(canvas.get("blkDeptDyn_base").data.datasets, item => item.data[2]), [1, 2]);
+  assert.equal(canvas.get("blkDeptDyn_base").data.labels.length, 3);
   assert.equal(canvas.get("blkDeptDyn_money").data.labels.length, 3);
-  assert.equal(canvas.get("blkDeptDyn_base").options.plugins.title.text, long.title);
-  runAdmin(12);
-  assert.equal(canvas.get("blkDeptDyn_base").data.datasets[0].data[35], 0);
-  assert.equal(canvas.get("blkDeptDyn_base").options.plugins.title.text, long.title);
+  assert.equal(canvas.get("blkDeptDyn_base").options.plugins.title.text, annual.title);
 });
 
 test("specialization publishes device revenue and unique monthly primary patients with four or more visits", async () => {
@@ -189,10 +184,13 @@ test("specialization publishes device revenue and unique monthly primary patient
       month.vyrabotka.d2.items.push({ n: 'Другая услуга', sourceForm: 'Сотрудник', q: 3, sOwn: 3000 });
       month.vyrabotka.d1.items.push({ n: 'Процедура', sourceForm: 'Направление', q: 1, sRef: 900 });
     }
-    const shared = { name: 'Синтетический Общий Пациент', primary: 1, visits: 3 };
-    const other = { name: 'Синтетический Другой Пациент', primary: 1, visits: 3 };
-    DB.months['2026-01'].primaryPatients = { perDoc: { d1: { patients: [shared, other] },
-      d2: { patients: [{ ...shared, name: 'СИНТЕТИЧЕСКИЙ ОБЩИЙ ПАЦИЕНТ', visits: 1 }] } } };
+    const shared = { name: 'Синтетический Общий Пациент', primary: 1, visits: 3, source: 'Рекомендация' };
+    const other = { name: 'Синтетический Другой Пациент', primary: 1, visits: 3, source: 'Сайт' };
+    const newPatients = ['Яндекс-Карты', 'Яндекс Дзен', 'ПроДокторов', ''].map((source, i) =>
+      ({ name: 'Синтетический Новый Пациент ' + i, primary: 1, visits: 1, source }));
+    DB.months['2026-01'].primaryPatients = { perDoc: { d1: { patients: [shared, other, ...newPatients] },
+      d2: { patients: [{ ...shared, name: 'СИНТЕТИЧЕСКИЙ ОБЩИЙ ПАЦИЕНТ', visits: 1, source: 'Сарафанное радио' },
+        { ...other, visits: 1, source: 'ВК' }, { ...newPatients[0], primary: 0, source: 'ВК' }] } } };
     DB.months['2026-03'].primaryPatients = { perDoc: { d1: { patients: [other] } } };
     clearMetricsCache();
   `, context);
@@ -212,14 +210,46 @@ test("specialization publishes device revenue and unique monthly primary patient
   assert.deepEqual(deviceChart.series[0].pointNotes, ["3 шт.", "", "3 шт."]);
   const primary = report.vectors[4].sections.find(section => section.title === "Первичные пациенты");
   assert.deepEqual(Object.fromEntries(primary.rows), { "Доктор Первый": "1", "Доктор Второй": "—", "Итого по специализации": "—" });
-  assert.deepEqual(primary.charts[0].series[0].values, [2, null, null]);
-  assert.deepEqual(primary.charts[0].series[1].values, [1, null, null]);
-  assert.deepEqual(primary.charts[0].series[1].pointNotes, ["50% от первичных", "", ""]);
+  assert.deepEqual(primary.charts[0].series[0].values, [6, null, null]);
+  assert.deepEqual(primary.charts[0].series[1].values, [2, null, null]);
+  assert.deepEqual(primary.charts[0].series[1].pointNotes, ["33,3% от первичных", "", ""]);
+  assert.deepEqual(primary.charts[1].series[0].values, [null, null, null, null, null]);
+  const january = publication.pages.find(page => page.kind === "specialization" && page.specialization === "X" && page.periodKey === "2026-01").report;
+  const januaryPrimary = january.vectors[4].sections.find(section => section.title === "Первичные пациенты");
+  assert.deepEqual(Array.from(januaryPrimary.charts.find(chart => chart.id === "specialization-primary-sources").series[0].values), [1, 1, 1, 1, 2]);
+  const januaryHtml = renderCloudReport(january, "Специализация X", { kind: "specialization" });
+  assert.match(januaryHtml, /data-specialization-primary-sources[\s\S]+Всего <strong>6 чел\.[\s\S]+Яндекс Карты[\s\S]+Instagram, YouTube, ВК, Дзен[\s\S]+Агрегаторы[\s\S]+Прочие/);
+  assert.doesNotMatch(JSON.stringify(january), /Синтетический .+ Пациент|Сарафанное радио/i);
+  const legacy = structuredClone(january);
+  const legacyPrimary = legacy.vectors[4].sections.find(section => section.title === "Первичные пациенты");
+  legacyPrimary.charts = legacyPrimary.charts.filter(chart => chart.id !== "specialization-primary-sources");
+  const legacyHtml = renderCloudReport(legacy, "Специализация X", { kind: "specialization" });
+  assert.doesNotMatch(legacyHtml, /data-specialization-primary-sources/);
+  assert.match(legacyHtml, /Итого по специализации<\/td><td>6/);
   assert.doesNotMatch(JSON.stringify(report), /Синтетический (Общий|Другой) Пациент/i);
   const html = renderCloudReport(report, "Специализация X", { kind: "specialization" });
   assert.match(html, /<details[^>]+data-specialization-device-history/);
+  assert.match(html, /<h5>Аппарат А<\/h5>/);
+  assert.match(html, /<h5>Аппарат Б<\/h5>/);
+  assert.match(html, /class="device-point-label"[^>]+>3[\s\u00a0]000 ₽<tspan[^>]+>3 шт\./);
+  const summary = html.match(/data-device-history-summary[\s\S]+?<\/details>/)[0];
+  assert.equal((summary.match(/class="num period-best"/g) || []).length, 2, "both tied positive months are best and zero revenue stays neutral");
+  assert.match(summary, /<tfoot>[\s\S]*6\s000 ₽<br><small class="muted">6 шт\.[\s\S]*0 ₽<br><small class="muted">0 шт\./);
   assert.match(html, /<title>Аппарат А · Январь 2026: [^<]+ · 3 шт\.<\/title>/);
-  assert.match(html, /50% от первичных/);
+  assert.match(html, /33,3% от первичных/);
+  assert.match(html, /Для общей разбивки нужны данные по всем врачам выборки/);
+  let adminChart;
+  context.chart = (_id, config) => { adminChart = config; };
+  vm.runInContext("renderSpecializationTrend(specializationActivityView('2026-03', null, 'X').primaryChart)", context);
+  adminChart.data.datasets[1].data[2] = 0;
+  adminChart.data.datasets[1].pointNotes[2] = "0% от первичных";
+  const drawn = [];
+  const ctx = { save() {}, restore() {}, strokeText() {}, measureText: value => ({ width: value.length * 6 }),
+    fillText: (text, x, y) => drawn.push({ text, x, y }) };
+  adminChart.plugins[0].afterDatasetsDraw({ ctx, width: 300, chartArea: { top: 20, bottom: 200 }, data: adminChart.data,
+    getSortedVisibleDatasetMetas: () => [0, 1].map(index => ({ index, data: [60, 110, 160].map(x => ({ x, y: 198 })) })) });
+  assert.deepEqual(drawn.map(label => label.text), ["6", "2 · 33,3%", "0 · 0%"]);
+  assert.ok(Math.abs(drawn[0].y - drawn[1].y) >= 12, "labels of coinciding points remain separate");
 });
 
 test("dismissed doctors are excluded from cloud credentials, pages and totals while Admin keeps their history", async () => {

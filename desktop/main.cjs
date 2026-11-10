@@ -708,15 +708,27 @@ function createWindow() {
                 && heatmapCellWidths.length === 2
                 && Math.max(...heatmapFocusWidths) - Math.min(...heatmapFocusWidths) <= 2
                 && Math.max(...heatmapCellWidths) - Math.min(...heatmapCellWidths) <= 2;
+              const secondDeviceCell = document.querySelectorAll('#tblHeat tr:nth-child(2) .device-heat-cell')[1];
+              const deviceBars = [...secondDeviceCell.querySelectorAll('.device-heat-fill')];
+              if (deviceBars.map(bar => bar.style.width).join('|') !== '16.67%|33.33%'
+                || deviceBars.some(bar => getComputedStyle(bar).height !== '5px')
+                || getComputedStyle(secondDeviceCell).fontWeight !== '400'
+                || getComputedStyle(secondDeviceCell).fontSize !== '11px'
+                || document.querySelector('#tblHeat tr:last-child .device-heat-track')) throw Error('Invalid device heatmap bars or typography');
               const deviceHistory = document.querySelector('[data-specialization-device-history]');
               if (!deviceHistory || deviceHistory.open || !document.querySelector('#tblHeat').textContent.includes(fmtMoney(17000))) {
                 throw Error('Missing monthly device revenue or expandable device history');
               }
               deviceHistory.open = true;
               flushReportCharts();
-              const deviceTrend = UI.charts['chart-specialization-devices-0']?.data.datasets;
+              const deviceTrendChart = UI.charts['chart-specialization-devices-0-0'];
+              const deviceTrend = deviceTrendChart?.data.datasets;
+              const deviceTrendTitles = [...deviceHistory.querySelectorAll('[data-device-history-chart] h3')].map(title => title.firstChild.textContent.trim());
+              const labels = deviceTrendChart?.config.options.plugins.datalabels;
               const primaryTrend = UI.charts['chart-specialization-primary']?.data.datasets;
-              if (deviceTrend?.[0].data[1] !== 13000 || deviceTrend[0].pointNotes[1] !== '13 шт.'
+              if (deviceTrendTitles.join('|') !== 'ЭхоКГ|Велоэргометрия'
+                || deviceTrend?.length !== 1 || deviceTrend[0].data[1] !== 13000 || deviceTrend[0].pointNotes[1] !== '13 шт.'
+                || labels?.formatter(13000, { dataset: deviceTrend[0], dataIndex: 1 }).join('|') !== fmtMoney(13000) + '|13 шт.'
                 || primaryTrend?.[0].data.join('|') !== '2|1' || primaryTrend?.[1].data.join('|') !== '1|0'
                 || primaryTrend[1].pointNotes[0] !== '50% от первичных') throw Error('Invalid device or primary patient trends');
               deviceHistory.open = false;
@@ -1629,10 +1641,17 @@ function createWindow() {
               const legacyFields = ['loyalVisits', 'loyalM', 'activeVisits', 'activeM', 'newRiskVisits', 'newRiskM', 'newRiskWithin', 'sleepVisits', 'sleepM', 'lostVisits', 'lostM', 'minVisits', 'riskM'];
               const originalLegacy = JSON.stringify(legacyFields.map(key => curSetProfile()[key]));
               const definition = document.querySelector('#settingsBody [data-client-base-definitions]');
-              if (!definition || definition.querySelectorAll('li').length !== 5 || document.getElementById('clientBasePartitionRules')) throw Error('Admin QA: fixed five report groups missing');
+              if (!definition || definition.querySelectorAll('li').length !== 5 || document.querySelectorAll('[data-client-base-report-settings] input').length !== 10) throw Error('Admin QA: five editable report groups missing');
               const normCard = definition.closest('details.card'); normCard.open = true;
               const settingsImage = await capture(normCard);
+              const originalReportThresholds = curSetProfile().clientBaseReport;
+              document.getElementById('cb_report_activeVisits').value = '5';
+              document.getElementById('cb_report_activeM').value = '12';
+              document.getElementById('cb_report_sleepM').value = '9';
               saveDeptBasics();
+              const doctorThresholds = clientBaseReportProfile(deptParams('d1'));
+              if (doctorThresholds.activeVisits !== 5 || doctorThresholds.activeM !== 12 || doctorThresholds.sleepM !== 9 || !document.querySelector('#settingsBody [data-client-base-definitions]').textContent.includes('не менее 5 визитов за последние 12 мес.')) throw Error('Admin QA: report thresholds do not reach doctor and settings');
+              curSetProfile().clientBaseReport = originalReportThresholds;
               if (JSON.stringify(curSetProfile().clientBasePartition) !== JSON.stringify(originalPartition)) throw Error('Admin QA: saved partition changed');
               if (JSON.stringify(legacyFields.map(key => curSetProfile()[key])) !== originalLegacy) throw Error('Admin QA: legacy KPI settings changed');
               curSetProfile().clientBasePartition = originalPartition;

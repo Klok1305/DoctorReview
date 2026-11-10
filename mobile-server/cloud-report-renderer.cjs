@@ -47,10 +47,20 @@ function renderSections(sections = [], options = {}) {
     return { ...section, rows: [...section.rows].sort((a,b) => count(b) - count(a) || a[0].localeCompare(b[0], "ru")) };
   });
   return sections.map(section => {
-    const content = renderSectionContent(section, options);
     if (options.kind === "specialization" && section.title === "Загрузка аппаратов") {
-      return `<details class="collapsible-list cloud-section" data-specialization-device-history><summary class="collapsible-list-summary"><span>${esc(section.title)}</span><span class="collapse-hint"></span></summary><div class="collapsible-list-body">${content}</div></details>`;
+      const content = renderSectionContent({ ...section, charts: presentation.splitDeviceHistoryCharts(section.charts) },
+        { ...options, renderValues: chart => presentation.deviceHistoryDetailsHtml([chart]) });
+      return `<details class="collapsible-list cloud-section" data-specialization-device-history><summary class="collapsible-list-summary"><span>${esc(section.title)}</span><span class="collapse-hint"></span></summary><div class="collapsible-list-body">${presentation.deviceHistoryDetailsHtml(section.charts, true)}${content}</div></details>`;
     }
+    const sources = options.kind === "specialization" && section.charts?.find(chart => chart.id === "specialization-primary-sources");
+    if (sources) {
+      const coverage = section.metrics?.find(metric => metric.label === "Врачи с данными");
+      return `<section class="cloud-section" data-specialization-primary><h3>${esc(section.title)}</h3>${renderSectionNote(section.note, options)}
+        ${coverage ? `<p class="small muted">Данные есть у ${esc(coverage.value)} врачей.</p>` : ""}
+        ${presentation.specializationPrimarySourcesHtml(sources.series[0]?.values || [])}
+        ${renderSectionContent({ ...section, charts: section.charts.filter(chart => chart !== sources) }, options)}</section>`;
+    }
+    const content = renderSectionContent(section, options);
     return `<section class="cloud-section"><h3>${esc(section.title)}</h3>${renderSectionNote(section.note, options)}
       ${renderMetrics(section.metrics)}${content}</section>`;
   }).join("");
@@ -58,8 +68,13 @@ function renderSections(sections = [], options = {}) {
 function renderSectionContent(section, options) {
   const charts = section.charts?.some(chart => chart.id.startsWith("primary-sources-"))
     ? `<div class="primary-source-charts" data-primary-sources>${section.charts.map(chart => `<div data-primary-source-period="${esc(chart.id.replace("primary-sources-", ""))}">${presentation.clientBaseCompositionHtml(chart.series[0].values, "", { groups: presentation.primarySourceGroups, title: chart.title })}</div>`).join("")}</div>`
-    : renderCharts(section.charts?.map(chart => chart.id === "specialization-base-history" && chart.labels.length === 36
-      ? { ...chart, title: "Динамика в разрезе 3-х лет" } : chart), options);
+    : renderCharts(section.charts, options);
+  if (section.title === "Аппараты за месяц" && section.columns?.[0] === "Аппарат" && section.columns.length === 3 && section.rows?.length) {
+    const cells = section.rows.map(([, q, s]) => ({ q: presentation.publishedDeviceMeasure(q), s: presentation.publishedDeviceMeasure(s) }));
+    const maxima = presentation.deviceHeatMaxima(cells);
+    return presentation.deviceHeatLegendHtml() + renderTable(["Аппарат", "Процедуры и выручка"],
+      section.rows.map(([name]) => [name, ""]), (value, column, row) => column ? presentation.deviceHeatCellHtml(cells[row], maxima) : esc(value)) + charts;
+  }
   return (section.tree?.length ? renderTree(section.tree, section.columns) : renderTable(section.columns, section.rows)) + charts;
 }
 function renderSectionNote(note, options) {
@@ -125,6 +140,20 @@ function renderDoctorV3(vector, report, options) {
         conversion, conversion?.target || "цель не установлена", body);
     });
 }
+function renderSpecializationBaseHistory(vector, report, options) {
+  if (options.kind !== "specialization") return "";
+  const section = vector.sections?.find(item => item.title === "Динамика клиентской базы");
+  if (section) return renderSections([section], options);
+  const archived = vector.windows?.find(window => window.id === "36")?.sections
+    .flatMap(item => item.charts || []).find(chart => chart.id === "specialization-base-history");
+  if (!archived) return "";
+  const endMonth = Number(String(report.id).slice(5));
+  const months = endMonth >= 1 && endMonth <= 12 ? endMonth : 12;
+  const chart = { ...archived, title: "Динамика с начала года · база за 36 месяцев", labels: archived.labels.slice(-months),
+    series: archived.series.map(series => ({ ...series, values: series.values.slice(-months), pointNotes: series.pointNotes?.slice(-months) })) };
+  return renderSections([{ title: "Динамика клиентской базы", charts: [chart] }], options);
+}
+
 function renderVector(vector, report, options) {
   const help = [vector.detail, vector.methodologyLabel].filter(Boolean).map(text => `<p>${lines(text)}</p>`);
   const sectionOptions = { ...options, help };
@@ -138,9 +167,12 @@ function renderVector(vector, report, options) {
         return renderClientBaseComparison(section, sectionOptions);
       }
       const history = section.charts?.find(chart => chart.id === "overlap-shares");
-      return renderSections([{ ...section, charts: section.charts?.filter(chart => chart !== history) }], sectionOptions)
+      const charts = section.charts?.filter(chart => chart !== history && chart.id !== "specialization-base-history");
+      if (section.title === "Динамика клиентской базы" && section.charts?.length && !charts.length) return "";
+      return renderSections([{ ...section, charts }], sectionOptions)
         + (history ? presentation.clientBaseShareTableHtml(history.labels, history.series.map(series => ({ ...presentation.overlappingClientBaseGroups.find(group => group.label === series.label), label: series.label, values: series.values }))) : "");
-    }).join("")}</div>`).join("") + presentation.clientBaseDefinitionsHtml()
+    }).join("")}</div>`).join("") + renderSpecializationBaseHistory(vector, report, sectionOptions)
+    + presentation.clientBaseDefinitionsHtml(vector.sections?.find(section => section.title === "Что означают группы?"))
     : partitioned ? renderClientBase(vector, report, sectionOptions)
     : vector.windows?.length ? vector.windows.map((window, index) => `<details class="cloud-window" ${index === 0 ? "open" : ""}><summary>${esc(vector.windowPickerLabel || "Период")}: ${esc(window.label)}</summary><p>${esc(window.period)}</p>${renderSections(window.sections, sectionOptions)}</details>`).join("")
       : renderSections(vector.sections, sectionOptions);

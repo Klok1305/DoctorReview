@@ -624,12 +624,12 @@ function doctorPrimaryPatients(docId, endMonth) {
 // Categories are explicit: unknown or conflicting labels keep their own denominator share.
 function primarySourceCategory(patient) {
   if (patient.sourceConflict) return null;
-  const source = primaryPatientNameKey(patient.source || "");
+  const source = primaryPatientNameKey(patient.source || "").replace(/(?:яндекс|yandex)[\s.\p{Pd}]+(?:дзен|zen)/gu, "дзен");
   const matches = [
     /рекоменд|сарафан|знаком|родствен|друз/.test(source),
     /интернет|сайт|поисков|google|гугл|яндекс|yandex|2гис|2gis/.test(source),
     /агрегатор|продоктор|prodoctor|напоправку|napopravku|сберздоров|сбер здоров|sberhealth|docdoc|докдок|doctu|докту|zoon|зун/.test(source),
-    /соц[ ._-]*сет|социальн|instagram|инстаграм|вконтакте|\bvk\b|telegram|телеграм|facebook|фейсбук|youtube|ютуб|tiktok|тикток|одноклассник/.test(source),
+    /соц[ ._-]*сет|социальн|instagram|инстаграм|вконтакте|\bvk\b|telegram|телеграм|facebook|фейсбук|youtube|ютуб|tiktok|тикток|одноклассник|(?:^|[^\p{L}])(?:сс|вк|дзен|dzen)(?!\p{L})/u.test(source),
   ];
   return matches.filter(Boolean).length === 1 ? matches.indexOf(true) : null;
 }
@@ -653,18 +653,23 @@ function doctorPrimarySources(summary) {
     month: primarySourcesSummary(summary.current?.patients || [], summary.current != null, summary.current?.count != null) };
 }
 
-// The five report groups share one fixed definition; scoring retains saved profiles.
-function clientBaseReportProfile() {
-  return { loyalVisits: 4, loyalM: 12, activeVisits: 4, activeM: 6, newRiskVisits: 2,
-    newRiskM: 6, newRiskWithin: false, sleepVisits: 4, sleepM: 6, lostVisits: 2, lostM: 12 };
+// Shared report thresholds are stored separately from scoring thresholds.
+const CLIENT_BASE_REPORT_DEFAULTS = { loyalVisits: 4, loyalM: 12, activeVisits: 4, activeM: 6, newRiskVisits: 2,
+  newRiskM: 6, sleepVisits: 4, sleepM: 6, lostVisits: 2, lostM: 12 };
+const clientBaseReportLimit = key => key.endsWith("M") ? 36 : 50;
+function clientBaseReportProfile(profile) {
+  return Object.fromEntries(Object.entries(CLIENT_BASE_REPORT_DEFAULTS).map(([key, fallback]) => {
+    const value = Number(profile?.clientBaseReport?.[key]);
+    return [key, Number.isInteger(value) && value >= 1 && value <= clientBaseReportLimit(key) ? value : fallback];
+  }));
 }
 function kbClientIdentity(client) {
   const id = String(client.patientId || "").trim().toLowerCase();
   const name = normFio(client.name || "");
   return id ? "id:" + id : name ? "name:" + name : null;
 }
-function clientBaseActiveVisits(docId, monthKey) {
-  const source = kbWindow(docId, monthKey, 6);
+function clientBaseActiveVisits(docId, monthKey, windowMonths) {
+  const source = kbWindow(docId, monthKey, windowMonths);
   if (!source || source.clients.some(client => !kbClientIdentity(client) || !Number.isSafeInteger(client.v) || client.v < 0)) return null;
   const visits = new Map();
   for (const client of source.clients) { const key = kbClientIdentity(client); visits.set(key, (visits.get(key) || 0) + client.v); }
@@ -672,15 +677,15 @@ function clientBaseActiveVisits(docId, monthKey) {
 }
 function reportClientBaseSummary(docId, monthKey, windowMonths = 12) {
   const key = JSON.stringify([String(docId), String(monthKey), Number(windowMonths), "report-overlap-v1"]);
+  const calculate = () => computeKbSummary(docId, monthKey, windowMonths, clientBaseReportProfile(deptParams(docId)), true);
   if (specializationCalculations?.reportBase) {
     const bases = specializationCalculations.reportBase;
-    if (!bases.has(key)) bases.set(key, computeKbSummary(docId, monthKey, windowMonths, clientBaseReportProfile(), true));
+    if (!bases.has(key)) bases.set(key, calculate());
     return bases.get(key);
   }
   const cached = metricsCacheGet(_kbSummaryCache, key, "kbSummary");
   if (cached !== undefined) return cached;
-  return metricsCacheSet(_kbSummaryCache, key,
-    computeKbSummary(docId, monthKey, windowMonths, clientBaseReportProfile(), true), METRICS_CACHE_LIMITS.kbSummary);
+  return metricsCacheSet(_kbSummaryCache, key, calculate(), METRICS_CACHE_LIMITS.kbSummary);
 }
 function kbAvailableWindows(docId, monthKey) {
   const m = DB.months[monthKey];
@@ -810,7 +815,7 @@ function kbClientRows(docId, monthKey, win, summary) {
   if (cached !== undefined) return cached;
   const kb = kbWindow(docId, monthKey, win);
   if (!kb) return [];
-  const activeVisits = summary.activeWindow ? clientBaseActiveVisits(docId, monthKey) : null;
+  const activeVisits = summary.groupAvailable.active && summary.activeWindow ? clientBaseActiveVisits(docId, monthKey, summary.activeWindow) : null;
   const rows = kb.clients.map((client, index) => {
     const classified = classifyKbClient(client, summary.thresholds, summary.groupAvailable, summary.thresholds,
       summary.activeWindow ? activeVisits?.get(kbClientIdentity(client)) || 0 : Number(client.v) || 0);
@@ -852,7 +857,7 @@ function computeKbSummary(docId, monthKey, win, reportProfile = null, strictActi
   const p = reportProfile || deptParams(docId);
   const t = clientBaseThresholds(p);
   const groupAvailable = clientBaseGroupAvailability(win, p);
-  const activeVisits = strictActive ? clientBaseActiveVisits(docId, monthKey) : null;
+  const activeVisits = strictActive && groupAvailable.active ? clientBaseActiveVisits(docId, monthKey, t.activeM) : null;
   if (strictActive && !activeVisits) groupAvailable.active = false;
   const sourceWindowComplete = clientBaseWindowSufficient(win, p);
   const requiredWindowM = clientBaseRequiredWindow(p);
@@ -903,7 +908,7 @@ function computeKbSummary(docId, monthKey, win, reportProfile = null, strictActi
   const courseCnt = kb.clients.filter(c => c.v >= p.courseX).length;
   const summary = {
     window: Number(win), period: kb.period, params: p, sourceWindowComplete, requiredWindowM, groupAvailable,
-    thresholds, ...(strictActive ? { activeWindow: 6, methodologyId: "report-overlap-v1" } : {}),
+    thresholds, ...(strictActive ? { activeWindow: t.activeM, methodologyId: "report-overlap-v1" } : {}),
     total, known: total - seg.unknown, seg, totalSum, totalVisits,
     activeSum: groupAvailable.active ? groupSums.active : null,
     riskSum: groupAvailable.newRisk ? groupSums.newRisk : null,
@@ -1656,34 +1661,30 @@ function scopeDoctorsInMonth(mk, deptFilter, subFilter = "all", doctorIds = null
   );
 }
 
-function specializationClientBasePoint(month, windowMonths, deptFilter, subFilter, scope) {
+const SPECIALIZATION_BASE_WINDOW = 36;
+function specializationClientBasePoint(month, deptFilter, subFilter, scope) {
   if (!DB.months[month]) return null;
-  const key = JSON.stringify([month, windowMonths, deptFilter, subFilter, scope]);
+  const key = JSON.stringify([month, SPECIALIZATION_BASE_WINDOW, deptFilter, subFilter, scope]);
   const prepared = specializationCalculations?.basePoints;
   if (prepared?.has(key)) return prepared.get(key);
   if (!prepared) {
     const cached = metricsCacheGet(_specializationBaseCache, key, "specializationBase");
     if (cached !== undefined) return cached;
   }
-  const totals = specializationCalculations?.department.get(aggregateDeptCacheKey(month, deptFilter, subFilter, scope))?.akb?.wins;
-  let base;
-  if (totals && Object.hasOwn(totals, windowMonths)) base = totals[windowMonths];
-  else {
-    const ids = scopeDoctorsInMonth(month, deptFilter, subFilter, scope);
-    const bases = ids.map(id => kbSummary(id, month, windowMonths));
-    base = bases.every(Boolean) ? mergeClientBaseSummaries(bases) : null;
-  }
+  const ids = scopeDoctorsInMonth(month, deptFilter, subFilter, scope);
+  const bases = ids.map(id => reportClientBaseSummary(id, month, SPECIALIZATION_BASE_WINDOW));
+  const base = bases.every(Boolean) ? mergeClientBaseSummaries(bases) : null;
   const point = base ? { active: base.seg.active, lost: base.seg.lost } : null;
   if (prepared) prepared.set(key, point);
   else metricsCacheSet(_specializationBaseCache, key, point, METRICS_CACHE_LIMITS.specializationBase);
   return point;
 }
 
-function specializationClientBaseHistory(endMk, windowMonths, deptFilter, subFilter = "all", doctorIds = null) {
-  const months = calendarMonthKeys(prevMonthKey(endMk, 35), endMk);
+function specializationClientBaseHistory(endMk, deptFilter, subFilter = "all", doctorIds = null) {
+  const months = calendarYearMonthKeys(endMk);
   const scope = reportDoctorScope(doctorIds);
-  const points = months.map(month => specializationClientBasePoint(month, windowMonths, deptFilter, subFilter, scope));
-  return { months, windowMonths, series: [
+  const points = months.map(month => specializationClientBasePoint(month, deptFilter, subFilter, scope));
+  return { months, series: [
     { label: "Активная база", color: "#16a34a", values: points.map(point => point?.active ?? null) },
     { label: "Потерянные", color: "#dc2626", values: points.map(point => point?.lost ?? null) },
   ] };
@@ -1707,6 +1708,10 @@ function specializationActivityMonth(month, filter, subFilter, doctorIds, device
     for (const row of rows || []) {
       const entry = patients.get(row.key) || { primary: false, visits: 0 };
       entry.primary ||= row.primary > 0;
+      if (row.primary > 0 && (row.source || row.sourceConflict)) {
+        const category = primarySourceCategory(row);
+        entry.sourceCategory = entry.sourceCategory === undefined || entry.sourceCategory === category ? category : null;
+      }
       entry.visits = entry.visits != null && isCount(row.visits) ? entry.visits + row.visits : null;
       patients.set(row.key, entry);
     }
@@ -1714,6 +1719,8 @@ function specializationActivityMonth(month, filter, subFilter, doctorIds, device
   const primary = [...patients.values()].filter(patient => patient.primary);
   const covered = ids.filter(id => primaryByDoctor[id] != null).length;
   const primaryTotal = covered === ids.length ? primary.length : null;
+  const sourceCounts = Array(5).fill(primaryTotal == null ? null : 0);
+  if (primaryTotal != null) for (const patient of primary) sourceCounts[patient.sourceCategory ?? 4]++;
   const frequent = primaryTotal != null && primary.every(patient => patient.visits != null)
     ? primary.filter(patient => patient.visits > 3).length : null;
 
@@ -1734,7 +1741,7 @@ function specializationActivityMonth(month, filter, subFilter, doctorIds, device
     }
     devices = { byDoctor, items, total, share: sales > 0 ? total / sales * 100 : null };
   }
-  const activity = { ids, devices, primary: { byDoctor: primaryByDoctor, total: primaryTotal, frequent,
+  const activity = { ids, devices, primary: { byDoctor: primaryByDoctor, total: primaryTotal, frequent, sourceCounts,
     share: frequent != null && primaryTotal > 0 ? frequent / primaryTotal * 100 : null, covered } };
   cache?.set(key, activity);
   return activity;

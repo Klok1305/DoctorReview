@@ -2,6 +2,61 @@
 for (const board of document.querySelectorAll(".reputation-honor-board")) board.remove();
 // Older HTML snapshots receive the same presentation without changing their data.
 const presentation = window.klinvektReportPresentation;
+const legacyDeviceHistoryTables = new Map();
+for (const values of document.querySelectorAll('.viewer-dashboard-snapshot [data-specialization-device-history] [data-list-key^="values-specialization-devices-"]')) {
+  if (values.closest("[data-device-history-chart]")) continue;
+  const plot = values.previousElementSibling;
+  const heading = plot?.previousElementSibling;
+  if (!plot?.classList.contains("chart-box") || !heading?.matches("h3")) continue;
+  const [header, ...rows] = values.querySelector("table")?.rows || [];
+  if (!header || !rows.length || rows.some(row => row.cells.length !== header.cells.length)) continue;
+  const labels = rows.map(row => row.cells[0].textContent.trim());
+  const series = [...header.cells].slice(1).map((cell, index) => ({
+    label: cell.textContent.trim(),
+    values: rows.map(row => presentation.publishedDeviceMeasure(row.cells[index + 1].firstChild?.textContent)),
+    pointNotes: rows.map(row => row.cells[index + 1].querySelector("small")?.textContent.trim() || ""),
+  }));
+  if (!series.length || !series.some(item => item.values.some(Number.isFinite))) continue;
+  const source = {
+    id: values.dataset.listKey.slice("values-".length), type: "line", labels, unit: "₽", series,
+  };
+  const container = values.parentElement;
+  if (!legacyDeviceHistoryTables.has(container)) legacyDeviceHistoryTables.set(container, []);
+  legacyDeviceHistoryTables.get(container).push(source);
+  const charts = presentation.splitDeviceHistoryCharts([source]);
+  heading.insertAdjacentHTML("beforebegin", window.klinvektReportCharts.renderCharts(charts,
+    { deferred: true, renderValues: chart => presentation.deviceHistoryDetailsHtml([chart]) }));
+  heading.remove(); plot.remove(); values.remove();
+}
+for (const [container, charts] of legacyDeviceHistoryTables) {
+  container.insertAdjacentHTML("afterbegin", presentation.deviceHistoryDetailsHtml(charts, true));
+}
+for (const label of document.querySelectorAll(".viewer-dashboard-snapshot [data-primary-source-composition] .client-base-pie-legend li > span, .viewer-dashboard-snapshot [data-primary-source-composition] svg title, .viewer-dashboard-snapshot [data-primary-sources] p")) {
+  const text = label.firstChild;
+  if (text?.nodeType === Node.TEXT_NODE && /^Не распределено(?=:|$)/.test(text.nodeValue)) {
+    text.nodeValue = text.nodeValue.replace(/^Не распределено/, "Прочее");
+  }
+}
+for (const table of document.querySelectorAll(".viewer-dashboard-snapshot .heatmap-table")) {
+  const cells = [...table.querySelectorAll(".heatmap-money")].map(money => {
+    const cell = money.closest("td");
+    const holder = cell?.querySelector(".heat-cell");
+    const s = presentation.publishedDeviceMeasure(money.textContent);
+    const q = presentation.publishedDeviceMeasure(money.parentElement.textContent.slice(0, -money.textContent.length));
+    return { cell, holder, q, s };
+  }).filter(({ cell, q, s }) => cell && q != null && s != null);
+  if (!cells.length) continue;
+  const maxima = presentation.deviceHeatMaxima(cells.filter(({ holder }) => holder));
+  const anchor = table.closest(".heatmap-scroll") || table;
+  anchor.insertAdjacentHTML("beforebegin", presentation.deviceHeatLegendHtml());
+  for (const { cell, holder, q, s } of cells) {
+    if (holder) {
+      holder.removeAttribute("style");
+      holder.classList.add("device-heat-holder");
+    }
+    (holder || cell).innerHTML = presentation.deviceHeatCellHtml({ q, s }, holder ? maxima : null);
+  }
+}
 for (const heading of document.querySelectorAll('body[data-report-kind="specialization"] .viewer-dashboard-snapshot h3')) {
   const block = heading.parentElement;
   if (heading.textContent.trim().startsWith("СРЕДНИЕ БАЛЛЫ ПО ВЕКТОРАМ ПО МЕСЯЦАМ") && block.querySelector(":scope > .score-chart")) block.remove();
@@ -236,7 +291,7 @@ for (const table of document.querySelectorAll("#tblDepartmentYear")) {
     cell.innerHTML = window.klinvektReportPresentation.tableHeaderHtml(cell.textContent);
   }
 }
-const chartCards = [...document.querySelectorAll(".cloud-data-report .report-chart")];
+const chartCards = [...document.querySelectorAll(".cloud-data-report .report-chart, .viewer-dashboard-snapshot .device-history-report")];
 const preparedCharts = new WeakMap();
 const drawChart = card => {
   let chart = preparedCharts.get(card);
@@ -256,7 +311,7 @@ if (typeof IntersectionObserver === "function") {
   chartCards.filter(card => card.dataset.chartDeferred).forEach(card => observer.observe(card));
 } else chartCards.filter(card => card.dataset.chartDeferred).forEach(drawChart);
 window.addEventListener("beforeprint", () => {
-  for (const details of document.querySelectorAll(".cloud-data-report details:not(.report-help)")) details.open = true;
+  for (const details of document.querySelectorAll(".cloud-data-report details:not(.report-help), .viewer-dashboard-snapshot [data-specialization-device-history]")) details.open = true;
   chartCards.filter(card => card.dataset.chartDeferred).forEach(drawChart);
   for (const image of document.images) image.loading = "eager";
 });

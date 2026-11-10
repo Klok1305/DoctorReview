@@ -31,35 +31,29 @@ function prepareSpecializationCalculations(year, onProgress = () => {}) {
   const prepared = { metrics: new Map(), department: new Map(), reportBase: new Map(), basePoints: new Map(), activity: new Map() };
   const deviceNames = new Map([...filters].map(filter => [filter, specializationDeviceNames(deptProfile(filter))]));
   if (!yearMonths.length) return prepared;
-  const firstHistoryMonth = prevMonthKey(yearMonths[0], 35);
-  const historyMonths = months.filter(month => month >= firstHistoryMonth && month <= yearMonths.at(-1));
   specializationCalculations = prepared;
   preparedMetricsForRender = prepared.metrics;
   try {
-    onProgress(0, historyMonths.length);
-    for (const [index, month] of historyMonths.entries()) {
-      if (month.startsWith(year + "-")) {
-        const previous = prevMonthKey(month);
-        for (const id of doctorsInMonth(month)) {
-          computeMetrics(id, month);
-          for (const window of windows) {
-            reportClientBaseSummary(id, month, window);
-            reportClientBaseSummary(id, previous, window);
-          }
-        }
-        for (const [filter, subFilter] of scopes) {
-          const totals = aggregateDeptMonth(month, filter, subFilter);
-          specializationActivityMonth(month, filter, subFilter, null, deviceNames.get(filter) || []);
-          // Рендер специализации использует только сводные показатели.
-          for (const base of [totals?.akb?.primary, ...Object.values(totals?.akb?.wins || {})]) {
-            if (base) delete base.clientRows;
-          }
+    onProgress(0, yearMonths.length);
+    for (const [index, month] of yearMonths.entries()) {
+      const previous = prevMonthKey(month);
+      for (const id of doctorsInMonth(month)) {
+        computeMetrics(id, month);
+        for (const window of windows) {
+          reportClientBaseSummary(id, month, window);
+          reportClientBaseSummary(id, previous, window);
         }
       }
       for (const [filter, subFilter] of scopes) {
-        for (const window of windows) specializationClientBasePoint(month, window, filter, subFilter, null);
+        const totals = aggregateDeptMonth(month, filter, subFilter);
+        specializationActivityMonth(month, filter, subFilter, null, deviceNames.get(filter) || []);
+        specializationClientBasePoint(month, filter, subFilter, null);
+        // Рендер специализации использует только сводные показатели.
+        for (const base of [totals?.akb?.primary, ...Object.values(totals?.akb?.wins || {})]) {
+          if (base) delete base.clientRows;
+        }
       }
-      onProgress(index + 1, historyMonths.length);
+      onProgress(index + 1, yearMonths.length);
     }
     return prepared;
   } finally {
@@ -90,7 +84,7 @@ function prepareReportCalculations(job) {
   }
   const metrics = [...preparedMetricsForRender];
   preparedMetricsForRender = null;
-  if (job.tab === "dept" && job.baseWindow) specializationClientBaseHistory(job.month, job.baseWindow, job.filter, job.subFilter);
+  if (job.tab === "dept") specializationClientBaseHistory(job.month, job.filter, job.subFilter);
   // Large patient registries are not needed to paint a summary or historical chart.
   // Keep them in the worker; restore their lazy getters only when a list/export asks.
   for (const [, result] of _deptCache) {

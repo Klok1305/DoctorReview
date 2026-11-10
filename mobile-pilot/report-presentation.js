@@ -22,6 +22,60 @@
     return lines.length === 1 ? escape(lines[0])
       : lines.map(line => `<span class="report-table-heading-line">${escape(line)}</span>`).join("\n");
   }
+  const deviceNumber = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 });
+  function publishedDeviceMeasure(value) {
+    const text = String(value ?? "").replace(/\s/g, "").replace(/(?:шт\.?|₽)$/, "").replace(",", ".");
+    return /^-?\d+(?:\.\d+)?$/.test(text) && Number.isFinite(Number(text)) ? Number(text) : null;
+  }
+  function deviceHeatMaxima(cells) {
+    return cells.reduce((max, { q, s }) => ({
+      q: Math.max(max.q, Number.isFinite(q) ? Math.abs(q) : 0),
+      s: Math.max(max.s, Number.isFinite(s) ? Math.abs(s) : 0),
+    }), { q: 0, s: 0 });
+  }
+  function deviceHeatCellHtml({ q, s }, maxima = null) {
+    const line = (value, key, unit) => {
+      const hasValue = Number.isFinite(value);
+      const width = hasValue && maxima?.[key] ? Math.min(100, Math.abs(value) / maxima[key] * 100) : 0;
+      const label = hasValue ? `${deviceNumber.format(key === "s" ? Math.round(value) : value)} ${unit}` : "—";
+      return `<span class="device-heat-line device-heat-${key}"><span>${label}</span>${maxima ? `<span class="device-heat-track${width ? "" : " is-empty"}" aria-hidden="true"><span class="device-heat-fill${value < 0 ? " is-negative" : ""}" style="width:${width.toFixed(2)}%"></span></span>` : ""}</span>`;
+    };
+    return `<span class="device-heat-cell">${line(q, "q", "шт.")}${line(s, "s", "₽")}</span>`;
+  }
+  function deviceHeatLegendHtml() {
+    return '<p class="device-heat-legend"><span class="device-heat-q">Процедуры</span><span class="device-heat-s">Выручка</span></p>';
+  }
+  function splitDeviceHistoryCharts(charts = []) {
+    return charts.flatMap(chart => chart.series.map((series, index) => ({
+      ...chart, id: `${chart.id}-${index}`, title: series.label, series: [series],
+    })));
+  }
+  const historyMoney = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 });
+  function deviceHistoryTableHtml(charts = []) {
+    const labels = charts[0]?.labels || [];
+    const series = charts.flatMap(chart => chart.series);
+    if (!labels.length || !series.length) return "";
+    const measure = (rubles, count) => `${Number.isFinite(rubles) ? `${historyMoney.format(rubles)} ₽` : "—"}${Number.isFinite(count) ? `<br><small class="muted">${deviceNumber.format(count)} шт.</small>` : ""}`;
+    const columns = series.map(item => {
+      const months = labels.map((_, i) => ({ rubles: item.values[i], count: publishedDeviceMeasure(item.pointNotes?.[i]) }));
+      const observed = months.filter(month => Number.isFinite(month.rubles) || Number.isFinite(month.count));
+      const revenues = observed.map(month => month.rubles).filter(Number.isFinite);
+      return { label: item.label, months, best: Math.max(0, ...revenues),
+        total: revenues.length ? revenues.reduce((sum, value) => sum + value, 0) : null,
+        count: observed.length && observed.every(month => Number.isFinite(month.count)) ? observed.reduce((sum, month) => sum + month.count, 0) : null };
+    });
+    return `<table class="data device-history-values"><thead><tr><th scope="col">Месяц</th>${columns.map(column => `<th scope="col" class="num">${escape(column.label)}</th>`).join("")}</tr></thead>
+      <tbody>${labels.map((label, i) => `<tr><th scope="row">${escape(label)}</th>${columns.map(({ months, best }) => {
+        const { rubles, count } = months[i];
+        const peak = best > 0 && rubles === best;
+        return `<td class="num${peak ? " period-best" : ""}"${peak ? ' title="Лучший месяц по выручке"' : ""}>${measure(rubles, count)}</td>`;
+      }).join("")}</tr>`).join("")}</tbody>
+      <tfoot><tr><th scope="row">Итого</th>${columns.map(column => `<td class="num">${measure(column.total, column.count)}</td>`).join("")}</tr></tfoot></table>`;
+  }
+  function deviceHistoryDetailsHtml(charts, combined = false) {
+    const table = deviceHistoryTableHtml(charts);
+    return table ? `<details class="chart-data"${combined ? " data-device-history-summary" : ""}><summary>Точные значения по месяцам</summary><div class="chart-data-scroll">${table}</div></details>` : "";
+  }
   const clientBaseGroups = [
     { key: "active", label: "Активные лояльные", color: "#16a34a", lowerBetter: false },
     { key: "loyalSleep", label: "Лояльные спящие", color: "#94a3b8", lowerBetter: true },
@@ -35,16 +89,18 @@
     { key: "loyalSleep", label: "Лояльные, спящие", color: "#94a3b8", lowerBetter: true },
     { key: "lost", label: "Потерянные", color: "#dc2626", lowerBetter: true },
   ];
-  function clientBaseDefinitionsHtml() {
-    return `<section class="client-base-table-note small muted" data-client-base-definitions><h3>Что означают группы?</h3><ul>
+  function clientBaseDefinitionsHtml(definitions) {
+    const rules = definitions ? (definitions.rows?.length ? `<ul>${definitions.rows.map(([label, rule]) => `<li><b>${escape(label)}:</b> ${escape(rule.endsWith(".") ? rule : rule + ".")}</li>`).join("")}</ul>` : "") : `<ul>
       <li><b>Лояльные:</b> не менее 4 визитов, последний визит не более 12 месяцев назад.</li>
       <li><b>Активные:</b> не менее 4 визитов за последние 6 месяцев.</li>
       <li><b>Новые, риск:</b> от 1 до 2 визитов, последний визит более 6 месяцев назад.</li>
       <li><b>Лояльные, спящие:</b> не менее 4 визитов, последний визит более 6 месяцев назад.</li>
-      <li><b>Потерянные:</b> от 1 до 2 визитов, последний визит более 12 месяцев назад.</li></ul>
-      <p>Проценты считаются от общей клиентской базы. Группы могут пересекаться. Если порог превышает выбранный период, группа не отображается; ноль не подставляется. Для активных используется число визитов из точной выгрузки за 6 месяцев.</p></section>`;
+      <li><b>Потерянные:</b> от 1 до 2 визитов, последний визит более 12 месяцев назад.</li></ul>`;
+    return `<section class="client-base-table-note small muted" data-client-base-definitions><h3>Что означают группы?</h3>${rules}
+      ${definitions?.note ? `<p>${escape(definitions.note)}</p>` : ""}
+      <p>Проценты считаются от общей клиентской базы. Группы могут пересекаться. Если порог превышает выбранный период, группа скрывается и ноль не подставляется. Для активных нужна точная выгрузка за ${definitions ? "период из настроек" : "6 месяцев"}.</p></section>`;
   }
-  const primarySourceGroups = ["Все рекомендации", "Интернет", "Агрегаторы", "Социальные сети", "Не распределено"]
+  const primarySourceGroups = ["Все рекомендации", "Интернет", "Агрегаторы", "Социальные сети", "Прочее"]
     .map((label, i) => ({ label, color: ["#16a34a", "#2563eb", "#7c3aed", "#d97706", "#94a3b8"][i] }));
   const number = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 });
   const pct = value => Number.isFinite(value) ? number.format(value) + "%" : "—";
@@ -104,13 +160,36 @@
       const data = sources[key];
       return `<div data-primary-source-period="${key}">${clientBaseCompositionHtml(data.counts, "", { groups: primarySourceGroups, title: period })}
         ${!data.complete ? '<p class="notice blue">Неполные данные первичности: показаны только пациенты загруженных отчётов с подтверждённой первичностью.</p>' : ""}
-        ${data.unresolved.length ? `<p class="small muted">Не распределено: ${data.unresolved.map(item => `${escape(item.label)} — ${number.format(item.count)}`).join("; ")}. Эти пациенты входят в общее количество и знаменатель процентов.</p>` : ""}</div>`;
+        ${data.unresolved.length ? `<p class="small muted">Прочее: ${data.unresolved.map(item => `${escape(item.label)} — ${number.format(item.count)}`).join("; ")}. Эти пациенты входят в общее количество и знаменатель процентов.</p>` : ""}</div>`;
     }).join("")}</div></section>`;
+  }
+  function specializationPrimarySourcesHtml(counts) {
+    const known = counts.length === primarySourceGroups.length && counts.every(value => Number.isSafeInteger(value) && value >= 0);
+    const total = known ? counts.reduce((sum, count) => sum + count, 0) : null;
+    const groups = [
+      [0, "Рекомендации", "Пациенты и знакомые"],
+      [1, "Интернет", "Яндекс, Яндекс Карты"],
+      [3, "Социальные сети", "Instagram, YouTube, ВК, Дзен"],
+      [2, "Агрегаторы", "ПроДокторов, НаПоправку"],
+      [4, "Прочие", "Другие и неизвестные источники"],
+    ];
+    const bar = total > 0 ? `<div class="specialization-source-bar" aria-hidden="true">${groups.map(([index]) => counts[index] > 0
+      ? `<span style="flex-grow:${counts[index]};background:${primarySourceGroups[index].color}"></span>` : "").join("")}</div>` : "";
+    const displayCount = count => known ? `${number.format(count)} чел.` : "—";
+    return `<section class="specialization-primary-sources" data-specialization-primary-sources>
+      <div class="specialization-source-heading"><h3>Источники первичных пациентов</h3><span>Всего <strong>${displayCount(total)}</strong></span></div>
+      ${total == null ? '<p class="small muted">Для общей разбивки нужны данные по всем врачам выборки.</p>' : ""}
+      ${bar}<ul class="specialization-source-groups">${groups.map(([index, label, examples]) => `<li>
+        <div class="specialization-source-label"><span class="client-base-pie-key" style="background:${primarySourceGroups[index].color}"></span><b>${label}</b></div>
+        <small>${examples}</small><div class="specialization-source-values"><strong>${displayCount(counts[index])}</strong><span>${pct(total > 0 ? counts[index] / total * 100 : null)}</span></div>
+      </li>`).join("")}</ul></section>`;
   }
   function reportHelpHtml(body, title = "Справка о расчётах") {
     return body ? `<details class="report-help" data-report-help><summary>${escape(title)}</summary><div class="report-help-body">${body}</div></details>` : "";
   }
-  const api = { tableHeaderLines, tableHeaderHtml, clientBaseGroups, overlappingClientBaseGroups, clientBaseDefinitionsHtml, primarySourceGroups, primarySourcesHtml, periodValueStates,
+  const api = { tableHeaderLines, tableHeaderHtml, publishedDeviceMeasure, deviceHeatMaxima, deviceHeatCellHtml, deviceHeatLegendHtml, splitDeviceHistoryCharts,
+    deviceHistoryTableHtml, deviceHistoryDetailsHtml,
+    clientBaseGroups, overlappingClientBaseGroups, clientBaseDefinitionsHtml, primarySourceGroups, primarySourcesHtml, specializationPrimarySourcesHtml, periodValueStates,
     clientBaseShareTableHtml, clientBaseCompositionHtml, clientBaseShareCellHtml, clientBaseAveragesHtml, publishedReportCount, publishedClientBaseShare, reportHelpHtml };
   if (typeof module === "object" && module.exports) module.exports = api;
   root.klinvektReportPresentation = api;

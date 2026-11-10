@@ -75,6 +75,18 @@ async function main() {
     || '<div class="viewer-dashboard-snapshot"><div class="card"><h2>Синтетический отчёт</h2><p>43 визита</p><p>Комментарий администратора</p></div></div>')
     + '<section class="reputation-honor-board"><h2>Доска почёта · старый HTML</h2></section>'
     + legacyClientBaseHtml()
+    + `<div class="viewer-dashboard-snapshot"><details class="collapsible-list" data-specialization-device-history data-legacy-device-history><summary>Загрузка аппаратов</summary><div>
+      <h3>Выручка по аппаратам</h3><div class="chart-box"></div><details data-list-key="values-specialization-devices-0"><summary>Точные значения</summary><table>
+      <tr><th>Месяц</th><th>Аппарат А</th><th>Аппарат Б</th></tr>
+      <tr><td>Январь 2026</td><td>15 000 ₽<br><small>3 шт.</small></td><td>12 000 ₽<br><small>2 шт.</small></td></tr>
+      </table></details></div></details></div>`
+    + '<div class="viewer-dashboard-snapshot"><section data-primary-sources data-legacy-source-fixture><div data-primary-source-composition><svg><title>Не распределено: 3 чел.</title></svg><ul class="client-base-pie-legend"><li><span></span><span>Не распределено</span><b>3 чел.</b></li></ul></div><p>Не распределено: источник не указан</p></section></div>'
+    + `<div class="viewer-dashboard-snapshot" data-legacy-device-fixture><div class="heatmap-scroll"><table class="data heatmap-table">
+      <tr><th>Специалист</th><th>Альтера</th></tr>
+      <tr><td>Врач А</td><td><div class="heat-cell" style="background:blue"><span>22 шт.<span class="heatmap-money">64 500 ₽</span></span></div></td></tr>
+      <tr><td>Врач Б</td><td><div class="heat-cell" style="background:blue"><span>6 шт.<span class="heatmap-money">192 000 ₽</span></span></div></td></tr>
+      <tr><td>Итого</td><td><b><span>28 шт.<span class="heatmap-money">256 500 ₽</span></span></b></td></tr>
+      </table></div></div>`
     + `<div class="viewer-dashboard-snapshot"><div data-vector-key="v3" data-legacy-v3-fixture>
       <div class="vhead"><h3>Вектор 3</h3><span class="vscore">5<span> из 6 фокусов</span></span></div>
       <details class="collapsible-list" data-list-key="appointmentConversionBlock" open><summary>Планы лечения <span class="section-detail">· окно 1 мес.</span><strong class="appointment-conversion-summary-value">75%</strong></summary>
@@ -121,6 +133,25 @@ async function main() {
       frameHeight: document.getElementById("onlineFrame").clientHeight }));
     assert.ok(narrow.overflow <= 2); assert.ok(narrow.frameHeight > 200);
     const frame = page.frameLocator("#onlineFrame");
+    const legacyDeviceHistory = frame.locator("[data-legacy-device-history]");
+    await legacyDeviceHistory.locator(":scope > summary").click();
+    await legacyDeviceHistory.locator("h5").first().waitFor();
+    assert.deepEqual(await legacyDeviceHistory.locator("h5").allTextContents(), ["Аппарат А", "Аппарат Б"]);
+    const legacyPoint = legacyDeviceHistory.locator(".report-chart").first().locator(".device-chart-months");
+    await legacyPoint.waitFor();
+    assert.match(await legacyPoint.innerText(), /15\s000 ₽ · 3 шт\./);
+    const legacyDeviceTotals = legacyDeviceHistory.locator("[data-device-history-summary]");
+    await legacyDeviceTotals.locator("summary").click();
+    assert.match(await legacyDeviceTotals.locator("tfoot").innerText(), /Итого[\s\S]*15\s000 ₽[\s\S]*3 шт\.[\s\S]*12\s000 ₽[\s\S]*2 шт\./);
+    const legacySources = frame.locator("[data-legacy-source-fixture]");
+    await legacySources.locator("li > span:nth-child(2)").filter({ hasText: "Прочее" }).waitFor();
+    assert.equal(await legacySources.locator("svg title").textContent(), "Прочее: 3 чел.");
+    assert.equal(await legacySources.locator("p").textContent(), "Прочее: источник не указан");
+    const legacyDevices = frame.locator("[data-legacy-device-fixture]");
+    await legacyDevices.locator(".device-heat-legend").waitFor();
+    assert.deepEqual(await legacyDevices.locator(".device-heat-fill").evaluateAll(bars => bars.map(bar => bar.style.width)),
+      ["100%", "33.59%", "27.27%", "100%"]);
+    assert.equal(await legacyDevices.locator("tr:last-child .device-heat-fill").count(), 0);
     const legacyV3 = frame.locator("[data-legacy-v3-fixture]");
     await legacyV3.locator('[data-v3-section="focus"]').waitFor();
     assert.deepEqual(await legacyV3.locator("[data-v3-section]").evaluateAll(elements => elements.map(element => element.dataset.v3Section)), ["focus", "revenue", "conversion"]);
@@ -266,16 +297,23 @@ async function main() {
         { label: "Вторая серия", color: "#16a34a", values: [100, null, 150, 160, 170, 180, 190, 200, 210] },
       ] }] });
     const specializationReport = structuredClone(numericReport);
+    specializationReport.vectors[1].sections.push({ title: "Аппараты за месяц", columns: ["Аппарат", "Процедуры, шт.", "Выручка"],
+      rows: [["Аппарат А", "22", "64 500 ₽"], ["Аппарат Б", "6", "192 000 ₽"]] });
     const chartLabels = ["Январь 2026", "Февраль 2026", "Март 2026"];
     specializationReport.vectors[1].sections.push({ title: "Загрузка аппаратов", charts: [{
       id: "specialization-devices-0", title: "Выручка по аппаратам", type: "line", labels: chartLabels, unit: "₽",
-      series: [{ label: "Аппарат А", color: "#2563eb", values: [15000, null, 25000], pointNotes: ["3 шт.", "", "5 шт."] }],
+      series: [{ label: "Аппарат А", color: "#2563eb", values: [15000, null, 25000], pointNotes: ["3 шт.", "", "5 шт."] },
+        { label: "Аппарат Б", color: "#008475", values: [12000, 19000, 16000], pointNotes: ["2 шт.", "4 шт.", "6 шт."] }],
     }] });
     specializationReport.vectors[4].sections.push({ title: "Первичные пациенты", columns: ["Врач", "Первичных за месяц"],
       rows: [["Итого по специализации", "7"]], charts: [{
         id: "specialization-primary", title: "Первичные пациенты по месяцам", type: "line", labels: chartLabels, unit: "чел.",
         series: [{ label: "Первичные пациенты", color: "#2563eb", values: [8, null, 7] },
-          { label: "Из них с 4+ посещениями", color: "#16a34a", values: [2, null, 1], pointNotes: ["25% от первичных", "", "14,3% от первичных"] }],
+          { label: "Из них с 4+ посещениями", color: "#16a34a", values: [2, null, 0], pointNotes: ["25% от первичных", "", "0% от первичных"] }],
+      }, {
+        id: "specialization-primary-sources", title: "Источники первичных пациентов", type: "donut", unit: "чел.",
+        labels: ["Рекомендации", "Интернет", "Агрегаторы", "Социальные сети", "Прочие"],
+        series: [{ label: "Первичные пациенты", values: [3, 1, 0, 1, 2] }],
       }] });
     const baseLabels = Array.from({ length: 36 }, (_, i) => {
       const date = new Date(Date.UTC(2023, 9 + i));
@@ -421,30 +459,70 @@ async function main() {
       await specializationPage.addScriptTag({ path: path.join(publicRoot, asset) });
     }
     const scopeBase = specializationPage.locator('[data-vector-key="v4"]');
-    const baseChart = window => scopeBase.locator(`[data-client-base-window-panel="${window}"] .report-chart`);
-    const basePath = async window => {
-      const chart = baseChart(window);
-      await chart.scrollIntoViewIfNeeded();
-      assert.equal(await chart.locator("h5").textContent(), "Динамика в разрезе 3-х лет");
-      await chart.locator("svg.line-narrow").waitFor();
-      return chart.locator(".line-narrow path").getAttribute("d");
-    };
-    const longPath = await basePath(36);
-    await baseChart(36).screenshot({ path: path.join(root, "tmp", "specialization-base-online-390.png") });
+    const baseChart = scopeBase.locator(".report-chart");
+    await baseChart.scrollIntoViewIfNeeded();
+    assert.equal(await baseChart.locator("h5").textContent(), "Динамика с начала года · база за 36 месяцев");
+    await baseChart.locator("svg.line-narrow").waitFor();
+    const annualPath = await baseChart.locator(".line-narrow path").getAttribute("d");
+    assert.deepEqual(JSON.parse(await baseChart.getAttribute("data-chart")).labels, baseLabels.slice(-9));
+    assert.deepEqual(await baseChart.locator("svg.line-narrow .line-point-value").allTextContents(), ["36", "10"]);
+    await baseChart.screenshot({ path: path.join(root, "tmp", "specialization-base-online-390.png") });
     await scopeBase.locator("[data-client-base-window]").selectOption("12");
-    assert.equal(await baseChart(36).isVisible(), false);
-    assert.notEqual(await basePath(12), longPath);
+    assert.equal(await baseChart.isVisible(), true);
+    assert.equal(await baseChart.locator(".line-narrow path").getAttribute("d"), annualPath);
+    const deviceMonth = specializationPage.locator(".cloud-section").filter({ has: specializationPage.getByRole("heading", { name: "Аппараты за месяц" }) });
+    assert.deepEqual(await deviceMonth.locator(".device-heat-fill").evaluateAll(bars => bars.map(bar => bar.style.width)),
+      ["100%", "33.59%", "27.27%", "100%"]);
+    assert.deepEqual(await deviceMonth.locator(".device-heat-fill").evaluateAll(bars => [...new Set(bars.map(bar => getComputedStyle(bar).height))]), ["5px"]);
+    await deviceMonth.screenshot({ path: path.join(root, "tmp", "device-heatmap-online-390.png") });
     const deviceHistory = specializationPage.locator("[data-specialization-device-history]");
     assert.equal(await deviceHistory.evaluate(element => element.open), false);
     await deviceHistory.locator(":scope > summary").click();
-    await deviceHistory.locator("svg.line-narrow").waitFor();
-    assert.match(await deviceHistory.locator("svg.line-narrow circle title").first().textContent(), /3 шт\./);
-    await deviceHistory.locator(".chart-data > summary").click();
-    assert.match(await deviceHistory.locator(".chart-data tbody").innerText(), /5 шт\./);
+    assert.deepEqual(await deviceHistory.locator("h5").allTextContents(), ["Аппарат А", "Аппарат Б"]);
+    const deviceTotals = deviceHistory.locator("[data-device-history-summary]");
+    await deviceTotals.locator("summary").click();
+    assert.match(await deviceTotals.locator("tfoot").innerText(), /Итого[\s\S]*40\s000 ₽[\s\S]*8 шт\.[\s\S]*47\s000 ₽[\s\S]*12 шт\./);
+    assert.deepEqual(await deviceTotals.locator("td.period-best").evaluateAll(cells =>
+      cells.map(cell => [cell.parentElement.cells[0].textContent, cell.cellIndex, getComputedStyle(cell).backgroundColor])),
+      [["Февраль 2026", 2, "rgb(220, 252, 231)"], ["Март 2026", 1, "rgb(220, 252, 231)"]]);
+    const deviceGraph = deviceHistory.locator(".report-chart").first();
+    await deviceGraph.locator("svg.line-narrow").waitFor();
+    assert.match(await deviceGraph.locator(".device-chart-months").innerText(), /15\s000 ₽ · 3 шт\./);
+    assert.match(await deviceGraph.locator(".device-chart-months li").nth(1).innerText(), /Февраль 2026\s+—/);
+    assert.match(await deviceGraph.locator("svg.line-narrow circle title").first().textContent(), /3 шт\./);
+    await specializationPage.setViewportSize({ width: 1200, height: 900 });
+    const deviceLabels = deviceGraph.locator("svg.line-wide .device-point-label");
+    await deviceLabels.first().waitFor();
+    assert.equal(await deviceLabels.count(), 2);
+    assert.match(await deviceLabels.first().textContent(), /15\s000 ₽3 шт\./);
+    assert.ok(await deviceGraph.locator("svg.line-wide").evaluate(svg => {
+      const label = svg.querySelector(".device-point-label").getBBox();
+      return [...svg.querySelectorAll('text[text-anchor="end"]')].every(tick => {
+        const box = tick.getBBox();
+        return box.x + box.width < label.x;
+      });
+    }), "point labels must fit to the right of the revenue axis");
+    await deviceGraph.screenshot({ path: path.join(root, "tmp", "device-history-online.png") });
+    const specializationSources = specializationPage.locator("[data-specialization-primary-sources]");
+    await specializationSources.scrollIntoViewIfNeeded();
+    assert.match(await specializationSources.locator(".specialization-source-heading").innerText(), /Всего\s+7 чел\./);
+    assert.deepEqual(await specializationSources.locator(".specialization-source-values > span").allTextContents(), ["42,9%", "14,3%", "14,3%", "0%", "28,6%"]);
+    assert.equal(await specializationSources.locator(".specialization-source-bar > span").count(), 4);
+    await specializationSources.screenshot({ path: path.join(root, "tmp", "specialization-sources-online-wide.png") });
+    await specializationPage.setViewportSize({ width: 390, height: 844 });
+    assert.ok(await specializationSources.evaluate(section => [...section.querySelectorAll("li")].every(item => item.scrollWidth <= item.clientWidth)));
+    await specializationSources.screenshot({ path: path.join(root, "tmp", "specialization-sources-online-narrow.png") });
+    await deviceGraph.locator(".chart-data > summary").click();
+    assert.match(await deviceGraph.locator(".chart-data tbody").innerText(), /5 шт\./);
     const primaryChart = specializationPage.locator(".report-chart").filter({ hasText: "Первичные пациенты по месяцам" });
     await primaryChart.scrollIntoViewIfNeeded();
     await primaryChart.locator("svg.line-narrow").waitFor();
-    assert.match(await primaryChart.locator("svg.line-narrow").textContent(), /25% от первичных/);
+    for (const layout of ["narrow", "wide"]) {
+      const values = primaryChart.locator(`svg.line-${layout} .line-point-value`);
+      assert.deepEqual(await values.allTextContents(), ["8", "2 · 25%", "7", "0 · 0%"]);
+    }
+    assert.ok(await primaryChart.locator("svg.line-narrow .line-point-value").first().isVisible());
+    await primaryChart.screenshot({ path: path.join(root, "tmp", "chart-point-labels-online.png") });
     assert.ok(await specializationPage.evaluate(() => document.documentElement.scrollWidth - innerWidth <= 2));
     await pinContext.close();
     // Model the HTTPS app inside a different Bitrix origin with production

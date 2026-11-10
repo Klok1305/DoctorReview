@@ -11,6 +11,13 @@
     new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1, notation: "compact" })];
   const chartNumber = (value, compact = false) => Number.isFinite(value) ? numberFormats[compact ? 1 : 0].format(value) : "—";
   const pointNote = (series, index) => series.pointNotes?.[index] || "";
+  const deviceHistory = chart => chart.type === "line" && chart.id?.startsWith("specialization-devices-") && chart.series.length === 1;
+  const pointValue = (series, index, unit) => Number.isFinite(series.values[index]) ? `${chartNumber(series.values[index])} ${unit}` : "—";
+  const lineValue = (value, unit, note) => {
+    const share = note.match(/^\d+(?:[,.]\d+)?%/)?.[0];
+    const number = chartNumber(value, unit === "₽" && Math.abs(value) >= 10000);
+    return number + (unit === "%" ? "%" : "") + (share ? ` · ${share}` : "");
+  };
 
   function chartTable(chart) {
     return `<details class="chart-data"><summary>Точные значения${chart.unit ? ` · ${escapeHtml(chart.unit)}` : ""}</summary><div class="chart-data-scroll"><table>
@@ -65,14 +72,43 @@
     const numbers = series.flatMap(item => item.values).filter(Number.isFinite);
     if (!numbers.length) return '<p class="chart-note">Нет данных для этого ряда.</p>';
     const min = Math.min(0, ...numbers), max = Math.max(1, ...numbers);
+    const device = deviceHistory(chart);
+    const valuesByMonth = device ? [] : chart.labels.map((_, index) => series.flatMap((item, seriesIndex) => {
+      const value = item.values[index];
+      return Number.isFinite(value) ? [{ value, seriesIndex, text: lineValue(value, chart.unit, pointNote(item, index)) }] : [];
+    }));
+    const labelWidth = Math.max(25, ...valuesByMonth.flatMap(values => values.map(point => point.text.length * 6 + 6)));
+    const rowHeight = 14;
+    const extraHeight = Math.max(0, ...valuesByMonth.map(values => values.length - 11)) * rowHeight;
     const lineSvg = compact => {
-    const width = compact ? 360 : 610;
-    const start = compact ? 52 : 62, end = width - (compact ? 25 : 48);
-    const x = index => start + index * (end - start) / Math.max(1, chart.labels.length - 1);
-    const y = value => 194 - (value - min) / (max - min) * 160;
+    const start = compact ? 52 : 62;
+    const right = device ? (compact ? 25 : 48) : Math.max(27, labelWidth / 2);
+    const requiredWidth = device ? 0 : start + right + (chart.labels.length - 1) * labelWidth;
+    const width = Math.max(compact ? 360 : 610, requiredWidth, device && !compact ? 195 + chart.labels.length * 83 : 0);
+    const end = width - right;
+    const pointInset = device && !compact ? 45 : 0;
+    const x = index => chart.labels.length === 1 ? (start + end) / 2
+      : start + pointInset + index * (end - start - 2 * pointInset) / Math.max(1, chart.labels.length - 1);
+    const bottom = 194 + extraHeight;
+    const y = value => bottom - (value - min) / (max - min) * ((device && !compact ? 142 : 160) + extraHeight);
     const grid = Array.from({ length: 5 }, (_, i) => {
       const value = min + (max - min) * i / 4;
       return `<line x1="${start}" x2="${end}" y1="${y(value)}" y2="${y(value)}" stroke="#e8edf4"/><text x="${start - 8}" y="${y(value) + 4}" text-anchor="end">${chartNumber(value, true)}</text>`;
+    }).join("");
+    const pointLabels = valuesByMonth.map((values, i) => {
+      const positions = values.map(point => ({ ...point, y: y(point.value) + (point.seriesIndex % 2 ? 13 : -9) })).sort((a, b) => a.y - b.y);
+      let top = 24 - rowHeight;
+      for (const point of positions) {
+        point.y = Math.max(top + rowHeight, point.y);
+        top = point.y;
+      }
+      let lower = bottom + rowHeight * 2;
+      for (let index = positions.length - 1; index >= 0; index--) {
+        const point = positions[index];
+        point.y = Math.min(lower - rowHeight, point.y);
+        lower = point.y;
+      }
+      return positions.map(point => `<text class="line-point-value" x="${x(i)}" y="${point.y}" text-anchor="middle" style="fill:${chartColor(series[point.seriesIndex].color, point.seriesIndex)}">${escapeHtml(point.text)}</text>`).join("");
     }).join("");
     const lines = series.map((item, s) => {
       let previous = false;
@@ -83,24 +119,32 @@
         previous = true;
         return part;
       }).join(" ");
-      return `<path d="${path}" fill="none" stroke="${color}" stroke-width="2.5"/>${item.values.map((value, i) => Number.isFinite(value) ? `<circle cx="${x(i)}" cy="${y(value)}" r="3.5" fill="${color}"><title>${escapeHtml(item.label)} · ${escapeHtml(chart.labels[i])}: ${chartNumber(value)}${pointNote(item, i) ? ` · ${escapeHtml(pointNote(item, i))}` : ""}</title></circle>` : "").join("")}`;
+      const markers = item.values.map((value, i) => {
+        if (!Number.isFinite(value)) return "";
+        const note = escapeHtml(pointNote(item, i));
+        const label = device && !compact ? `<text class="device-point-label" x="${x(i)}" y="${y(value) - (note ? 21 : 8)}" text-anchor="middle">${escapeHtml(pointValue(item, i, chart.unit))}${note ? `<tspan x="${x(i)}" dy="1.1em">${note}</tspan>` : ""}</text>` : "";
+        return `<circle cx="${x(i)}" cy="${y(value)}" r="3.5" fill="${color}"><title>${escapeHtml(item.label)} · ${escapeHtml(chart.labels[i])}: ${chartNumber(value)}${note ? ` · ${note}` : ""}</title></circle>${label}`;
+      }).join("");
+      return `<path d="${path}" fill="none" stroke="${color}" stroke-width="2.5"/>${markers}`;
     }).join("");
     const sparse = chart.labels.length > 12;
-    const labelText = label => compact || sparse ? String(label).split(/\s+/).map((part, i) => i === 0 ? part.slice(0, 3) : /^\d{4}$/.test(part) ? part.slice(-2) : part).join(" ") : label;
+    const labelText = label => compact || chart.labels.length > 6 || device ? String(label).split(/\s+/).map((part, i) => i === 0 ? part.slice(0, 3) : /^\d{4}$/.test(part) ? part.slice(-2) : part).join(" ") : label;
     const tickCount = compact ? 6 : 9;
     const ticks = sparse
       ? Array.from({ length: tickCount }, (_, i) => Math.round(i * (chart.labels.length - 1) / (tickCount - 1)))
       : chart.labels.map((_, i) => i);
-    return `<svg class="${compact ? "line-narrow" : "line-wide"}" viewBox="0 0 ${width} 235" role="img" aria-label="${escapeHtml(chart.title)}"><text x="${start}" y="16">${escapeHtml(chart.unit || "")}</text>${grid}${lines}${ticks.map(i => `<text x="${x(i)}" y="219" text-anchor="middle">${escapeHtml(labelText(chart.labels[i]))}</text>`).join("")}</svg>`;
+    return `<svg class="${compact ? "line-narrow" : "line-wide"}"${requiredWidth ? ` style="min-width:${requiredWidth}px"` : ""} viewBox="0 0 ${width} ${235 + extraHeight}" role="img" aria-label="${escapeHtml(chart.title)}"><text x="${start}" y="16">${escapeHtml(chart.unit || "")}</text>${grid}${lines}${pointLabels}${ticks.map(i => `<text x="${x(i)}" y="${219 + extraHeight}" text-anchor="middle">${escapeHtml(labelText(chart.labels[i]))}</text>`).join("")}</svg>`;
     };
     const observed = chart.labels.filter((_, i) => series.some(item => Number.isFinite(item.values[i]))).length;
     const coverage = chart.id === "specialization-base-history" && observed < chart.labels.length
       ? `<p class="chart-note">С данными: ${observed} из ${chart.labels.length} месяцев. Пропуски соответствуют отсутствующим или неполным выгрузкам.</p>` : "";
-    return `<div class="line-plot">${lineSvg(false)}${lineSvg(true)}</div>${chartLegend(chart, series)}${coverage}`;
+    const labels = device ? `<ul class="device-chart-months">${chart.labels.map((label, i) =>
+      `<li><small>${escapeHtml(label)}</small><span>${escapeHtml(pointValue(series[0], i, chart.unit))}${pointNote(series[0], i) ? ` · ${escapeHtml(pointNote(series[0], i))}` : ""}</span></li>`).join("")}</ul>` : chartLegend(chart, series);
+    return `<div class="line-plot${chart.labels.length > 12 ? " line-plot-history" : ""}">${lineSvg(false)}${lineSvg(true)}</div>${labels}${coverage}`;
   }
 
-  function renderCharts(charts = [], { deferred = false } = {}) {
-    return charts.map(chart => `<article class="report-chart" data-chart="${escapeHtml(JSON.stringify(chart))}"${deferred ? ' data-chart-deferred="true"' : ""}><header><h5>${escapeHtml(chart.title)}</h5>${chart.type === "line" && chart.series.length > 1 ? `<label class="chart-picker">Показать<select data-chart-series><option value="all">Все показатели</option>${chart.series.map((series, i) => `<option value="${i}"${chart.id === "scores" && i === 0 ? " selected" : ""}>${escapeHtml(series.label)}</option>`).join("")}</select></label>` : ""}</header><div class="chart-plot"${deferred ? ' style="min-height:235px"' : ""}>${deferred ? '<p class="chart-note">График появится при открытии раздела.</p>' : chartPlot(chart, chart.id === "scores" ? "0" : "all")}</div>${chartTable(chart)}</article>`).join("");
+  function renderCharts(charts = [], { deferred = false, renderValues = chartTable } = {}) {
+    return charts.map(chart => `<article class="report-chart${deviceHistory(chart) ? " device-history-report" : ""}" data-chart="${escapeHtml(JSON.stringify(chart))}"${deferred ? ' data-chart-deferred="true"' : ""}><header><h5>${escapeHtml(chart.title)}</h5>${chart.type === "line" && chart.series.length > 1 ? `<label class="chart-picker">Показать<select data-chart-series><option value="all">Все показатели</option>${chart.series.map((series, i) => `<option value="${i}"${chart.id === "scores" && i === 0 ? " selected" : ""}>${escapeHtml(series.label)}</option>`).join("")}</select></label>` : ""}</header><div class="chart-plot"${deferred ? ' style="min-height:235px"' : ""}>${deferred ? '<p class="chart-note">График появится при открытии раздела.</p>' : chartPlot(chart, chart.id === "scores" ? "0" : "all")}</div>${renderValues(chart)}</article>`).join("");
   }
 
   return Object.freeze({ renderCharts, chartPlot, chartNumber, chartTable });
