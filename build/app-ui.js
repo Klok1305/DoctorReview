@@ -2959,6 +2959,55 @@ function adminClientBaseSeries(docId, endMk, windowMonths = 12) {
     datasets: defs.map(([key, color]) => ({ label: clientBaseGroupLabel(key), backgroundColor: color, borderWidth: 0,
       maxBarThickness: 32, data: bases.map(base => base ? base.seg[key] : null) })) };
 }
+function clientBasePartitionHistorySection(docId, endMk) {
+  const months = adminYearMonths(endMk);
+  const bases = months.map(month => adminClientBaseSummary(docId, month));
+  const groups = [["active", "#afe7e9"], ["loyalSleep", "#64748b"], ["newRisk", "#fbbf24"], ["lost", "#a80000"]];
+  const labels = months.map(monthLabel);
+  const title = "Динамика клиентской базы по месяцам";
+  const chart = mobilePublicationChart("client-base-partition-history", title, "stacked", labels, groups.map(([key, color]) => ({
+    label: adminClientBaseGroupLabel(key), color, values: bases.map(base => base?.seg[key] ?? null),
+  })), "чел.");
+  const rules = clientBasePartitionSettings(deptParams(docId));
+  const missing = labels.filter((_, index) => !bases[index]);
+  const provisional = labels.filter((_, index) => bases[index] && Object.values(bases[index].provisional).some(count => count > 0));
+  const note = [
+    "Каждая полоса показывает всю базу за 36 месяцев на дату отчёта. Слева — месяцы с начала года, внутри — число пациентов в каждой группе, справа — общий итог. Каждый пациент учитывается один раз. Переключатель периода выше управляет карточками и таблицей долей.",
+    missing.length ? `Нет выгрузки за 36 месяцев: ${missing.join(", ")}.` : "",
+    provisional.length ? `В этих месяцах часть пациентов учтена предварительно из-за пропусков в числе визитов или давности: ${provisional.join(", ")}.` : "",
+  ].filter(Boolean).join("\n");
+  return { title, note, charts: chart ? [chart] : [], columns: ["Группа", "Условие"],
+    rows: groups.map(([key]) => [adminClientBaseGroupLabel(key), adminClientBaseGroupDescription(rules, key)]) };
+}
+
+function renderClientBasePartitionChart(history) {
+  if (!history) return;
+  const totals = history.labels.map((_, index) => history.series[0].values[index] == null ? null
+    : history.series.reduce((sum, series) => sum + series.values[index], 0));
+  chart("chSegments", {
+    type: "bar",
+    data: { labels: history.labels, datasets: history.series.map(series => ({
+      label: series.label, backgroundColor: series.color, maxBarThickness: 32, data: series.values,
+    })) },
+    options: { indexAxis: "y", maintainAspectRatio: false, layout: { padding: { right: 48 } },
+      plugins: { legend: { position: "bottom", onClick: () => {} },
+        datalabels: { labels: {
+          value: { color: ctx => [0, 2].includes(ctx.datasetIndex) ? "#17212b" : "#fff",
+            font: { weight: "600", size: 12 }, anchor: "center", align: "center",
+            display: ctx => {
+              const value = ctx.dataset.data[ctx.dataIndex];
+              const scale = ctx.chart.scales.x;
+              return value > 0 && scale.getPixelForValue(value) - scale.getPixelForValue(0) >= 34;
+            }, formatter: value => fmtNum(value) },
+          total: { color: "#334155", font: { weight: "700", size: 12 }, anchor: "end", align: "end", offset: 8,
+            display: ctx => ctx.datasetIndex === history.series.length - 1 && totals[ctx.dataIndex] != null,
+            formatter: (_value, ctx) => fmtNum(totals[ctx.dataIndex]) },
+        } },
+      },
+      scales: { x: { stacked: true, beginAtZero: true, title: { display: true, text: "Пациентов" }, ticks: { precision: 0 } },
+        y: { stacked: true, grid: { display: false }, ticks: { autoSkip: false } } } },
+  });
+}
 function clientBaseShareMovement(current, previous) {
   if (current == null || previous == null) return "Нет данных за предыдущий месяц";
   const delta = current - previous;
@@ -4588,6 +4637,8 @@ function renderDoctorNow() {
   /* ---- В4 Клиентская база ---- */
   const kb = reportClientBaseSummary(UI.docId, mk, UI.kbWin);
   const kbSeries = adminClientBaseSeries(UI.docId, mk, UI.kbWin);
+  const partitionHistory = clientBasePartitionHistorySection(UI.docId, mk);
+  const partitionChart = partitionHistory.charts[0];
   let clientBaseHelp = "";
   html += `<div class="card vector-card" id="blkV4" data-vector-key="v4" data-client-base-methodology="report-overlap-v1" style="border-top-color:${VECTOR_META.v4.color}">
     <div class="vhead"><h3 class="mt0">Вектор 4. Работа с клиентской базой <span class="badge ${VECTOR_META.v4.cls}">${VECTOR_META.v4.tag}</span></h3>
@@ -4655,6 +4706,13 @@ function renderDoctorNow() {
   }
 
   if (!kb) html += clientBaseShareHistoryHtml(kbSeries);
+  html += `<section class="kb-partition-history" data-client-base-partition-history>
+    <h3 class="small muted">${esc(partitionHistory.title.toUpperCase())} ${partitionChart ? copyBtn("copyChart", "chSegments", "PNG") : ""}</h3>
+    ${partitionHistory.note.split("\n").map(note => `<p class="small muted">${esc(note)}</p>`).join("")}
+    ${partitionChart ? `<div class="chart-box" style="height:${Math.max(260, partitionChart.labels.length * 42 + 85)}px"><canvas id="chSegments"></canvas></div>` : ""}
+    <details><summary>Правила четырёх групп за 36 месяцев</summary>
+      <ul>${partitionHistory.rows.map(([label, rule]) => `<li><b>${esc(label)}</b> — ${esc(rule)}.</li>`).join("")}</ul>
+    </details></section>`;
   html += globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml(clientBaseDefinitionSection(deptParams(UI.docId)))
     + (kb && !kb.groupAvailable.active ? `<p class="notice blue">Для активных нужно выбрать окно не короче ${kb.activeWindow} мес. и загрузить «Давность посещений» ровно за ${kb.activeWindow} мес.</p>` : "")
     + globalThis.klinvektReportPresentation.reportHelpHtml(clientBaseHelp) + '</div>';
@@ -4760,6 +4818,7 @@ function renderDoctorNow() {
   body.innerHTML = html;
 
   /* -------- графики -------- */
+  renderClientBasePartitionChart(partitionChart);
   if (docDyn && DB.settings.showScores && docDyn.months.length >= 2) {
     for (const vector of ["v1", "v2", "v3", "v4", "v5", "v6"]) {
       const block = document.getElementById("blkV" + vector[1]);
@@ -6555,6 +6614,7 @@ function renderSettings() {
   /* --- 1. Нормативы и подразделения --- */
   if (specializationName) {
     const baseThresholds = clientBaseReportProfile(p);
+    const partition = clientBasePartitionSettings(p);
     const baseFields = [
       ["loyal", "loyalVisits", "loyalM", "От", "Не более"],
       ["active", "activeVisits", "activeM", "От", "За последние"],
@@ -6568,6 +6628,16 @@ function renderSettings() {
     <table class="data wtable" data-client-base-report-settings><thead><tr><th>Группа</th><th>Визитов</th><th>Период, мес.</th></tr></thead><tbody>
     ${baseFields.map(([group, visits, months, visitLabel, monthLabel]) => `<tr><th scope="row">${esc(clientBaseGroupLabel(group))}</th><td>${field(visits, visitLabel, group)}</td><td>${field(months, monthLabel, group)}</td></tr>`).join("")}</tbody></table>
     ${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml(clientBaseDefinitionSection(p))}
+    <details class="kb-partition-history">
+      <summary><b>Четыре группы для графика В4 за 36 месяцев</b></summary>
+      <p class="small muted">Каждый пациент относится к одной из четырёх групп: активные лояльные, лояльные спящие, новые в риске, потерянные. Настройки применяются ко всем месяцам графика В4 врача.</p>
+      <table class="data wtable"><tbody>
+        <tr><th scope="row"><label for="cb_loyalVisits">Порог лояльности, визитов за 36 месяцев</label></th><td><input type="number" id="cb_loyalVisits" min="2" max="50" step="1" value="${partition.loyalVisits}"></td></tr>
+        <tr><th scope="row"><label for="cb_activeM">Срок активности, месяцев с последнего визита</label></th><td><input type="number" id="cb_activeM" min="1" max="36" step="1" value="${partition.activeM}"></td></tr>
+        <tr><th scope="row"><label for="cb_lostM">Срок потери, месяцев с последнего визита</label></th><td><input type="number" id="cb_lostM" min="1" max="36" step="1" value="${partition.lostM}"></td></tr>
+      </tbody></table>
+      <label><input type="checkbox" id="cb_lostAnyVisits" ${partition.lostAnyVisits ? "checked" : ""}> Считать потерянными также лояльных после срока потери</label>
+    </details>
     <h3 style="margin:12px 0 6px">Остальные нормативы</h3>
     <table class="data wtable"><tr>
       <th class="num" title="Курсовое лечение: минимум визитов…">Курсовое: от, виз.</th>
@@ -7010,32 +7080,6 @@ function removeSpecializationV4() {
   toast(`Специализация «${name}» удалена`);
   renderSettings();
 }
-function syncClientBasePartitionControls(source) {
-  const table = document.getElementById("clientBasePartitionRules");
-  if (!table) return;
-  if (source) {
-    const key = source.dataset.cbKey;
-    const value = source.value === "" ? null : Number(source.value) - Number(source.dataset.cbOffset || 0);
-    for (const input of table.querySelectorAll("[data-cb-key]")) {
-      if (input !== source && input.dataset.cbKey === key) {
-        input.value = value == null ? "" : String(value + Number(input.dataset.cbOffset || 0));
-      }
-    }
-  }
-  const partition = {
-    loyalVisits: Number(document.getElementById("cb_loyalVisits").value),
-    activeM: Number(document.getElementById("cb_activeM").value),
-    lostM: Number(document.getElementById("cb_lostM").value),
-    lostAnyVisits: document.getElementById("cb_lostAnyVisits").checked,
-  };
-  document.getElementById("cb_lostVisits").disabled = partition.lostAnyVisits;
-  document.getElementById("cb_lostVisitsControl").classList.toggle("hidden", partition.lostAnyVisits);
-  document.getElementById("cb_lostAnyVisitsLabel").classList.toggle("hidden", !partition.lostAnyVisits);
-  for (const cell of table.querySelectorAll("[data-cb-description]")) {
-    cell.textContent = adminClientBaseGroupDescription(partition, cell.dataset.cbDescription);
-  }
-}
-
 function saveDeptBasics() {
   if (!curSetSpecialization()) {
     toast("Нормативы настраиваются на уровне специализации", true);
@@ -7055,7 +7099,6 @@ function saveDeptBasics() {
     }
   }
   let partition = null;
-  // Accept former controls when restoring older forms.
   if (document.getElementById("cb_loyalVisits")) {
     partition = {};
     for (const [key, min, max] of [["loyalVisits", 2, 50], ["activeM", 1, 36], ["lostM", 1, 36]]) {

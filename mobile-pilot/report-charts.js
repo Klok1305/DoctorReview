@@ -21,7 +21,7 @@
 
   function chartTable(chart) {
     return `<details class="chart-data"><summary>Точные значения${chart.unit ? ` · ${escapeHtml(chart.unit)}` : ""}</summary><div class="chart-data-scroll"><table>
-      <thead><tr><th scope="col">${chart.type === "line" || chart.type === "mirror" ? "Период" : "Категория"}</th>${chart.series.map(series => `<th scope="col">${escapeHtml(series.label)}</th>`).join("")}</tr></thead>
+      <thead><tr><th scope="col">${["line", "mirror", "stacked"].includes(chart.type) ? "Период" : "Категория"}</th>${chart.series.map(series => `<th scope="col">${escapeHtml(series.label)}</th>`).join("")}</tr></thead>
       <tbody>${chart.labels.map((label, i) => `<tr><th scope="row">${escapeHtml(label)}</th>${chart.series.map(series => `<td>${chartNumber(series.values[i])}${pointNote(series, i) ? `<br><small>${escapeHtml(pointNote(series, i))}</small>` : ""}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`;
   }
 
@@ -33,8 +33,45 @@
     return `<ul class="chart-legend">${items.map(item => `<li><svg viewBox="0 0 9 9" aria-hidden="true"><rect width="9" height="9" rx="3" fill="${item.color}"/></svg><span>${escapeHtml(item.label)}</span>${item.value !== undefined ? `<b>${chartNumber(item.value)}${chart.unit ? ` ${escapeHtml(chart.unit)}` : ""}${total > 0 ? `<small>${chartNumber(item.value / total * 100)}%</small>` : ""}</b>` : ""}</li>`).join("")}</ul>`;
   }
 
+  function stackedPlot(chart) {
+    const totals = chart.labels.map((_, index) => chart.series[0].values[index] == null ? null
+      : chart.series.reduce((sum, series) => sum + series.values[index], 0));
+    const xStart = 115, plotWidth = 515, width = 705;
+    const max = Math.max(1, ...totals);
+    const roughStep = max / 5;
+    const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+    const step = Math.max(1, [1, 2, 5, 10].find(value => value * magnitude >= roughStep) * magnitude);
+    const limit = Math.ceil(max / step) * step;
+    const x = value => xStart + value / limit * plotWidth;
+    const axisY = chart.labels.length * 34 + 10;
+    const axis = Array.from({ length: Math.round(limit / step) + 1 }, (_, index) => {
+      const tick = index * step, tickX = x(tick);
+      return `<line x1="${tickX}" x2="${tickX}" y1="9" y2="${axisY}" stroke="#e2e8f0"/><text x="${tickX}" y="${axisY + 17}" text-anchor="middle">${chartNumber(tick)}</text>`;
+    }).join("");
+    const rows = chart.labels.map((label, index) => {
+      const y = index * 34 + 15;
+      const month = `<text x="${xStart - 10}" y="${y + 16}" text-anchor="end">${escapeHtml(label)}</text>`;
+      if (totals[index] == null) return month;
+      let start = 0;
+      const segments = chart.series.map((series, j) => {
+        const value = series.values[index], left = x(start);
+        start += value;
+        const w = x(start) - left;
+        if (!value) return "";
+        const fill = chartColor(series.color, j);
+        const color = fill === "#afe7e9" || fill === "#fbbf24" ? "#17212b" : "#fff";
+        const count = chartNumber(value);
+        return `<rect x="${left}" y="${y}" width="${w}" height="24" fill="${fill}"><title>${escapeHtml(series.label)} — ${count}</title></rect>`
+          + (w >= count.length * 8 + 8 ? `<text x="${left + w / 2}" y="${y + 16}" text-anchor="middle" style="fill:${color};font-weight:600;pointer-events:none">${count}</text>` : "");
+      }).join("");
+      return `${month}${segments}<text x="${x(totals[index]) + 8}" y="${y + 16}" style="font-weight:700" data-stack-total>${chartNumber(totals[index])}</text>`;
+    }).join("");
+    return `<div class="stacked-plot"><svg viewBox="0 0 ${width} ${axisY + 42}" role="img" aria-label="${escapeHtml(chart.title)}">${axis}${rows}<text x="${xStart + plotWidth / 2}" y="${axisY + 34}" text-anchor="middle">Пациентов</text></svg></div>${chartLegend(chart)}`;
+  }
+
   function chartPlot(chart, selection = "all") {
     const series = selection === "all" ? chart.series : [chart.series[Number(selection)]];
+    if (chart.type === "stacked") return stackedPlot(chart);
     if (chart.type === "donut") {
       const total = series[0].values.reduce((sum, value) => sum + (value || 0), 0);
       let offset = 0;

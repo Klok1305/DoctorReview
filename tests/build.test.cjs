@@ -240,7 +240,7 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /Справка о расчётах/);
   assert.match(actual, /openClientSegment/);
   assert.match(actual, /data-client-base-definitions/);
-  assert.doesNotMatch(actual, /id="clientBasePartitionRules"/);
+  assert.match(actual, /Четыре группы для графика В4 за 36 месяцев/);
   assert.doesNotMatch(actual, /id="np_(?:loyal|active|newRisk|sleep|lost)(?:Visits|M|Within)"/);
   assert.match(actual, /clientBaseRequiredWindow/);
   assert.match(actual, /reportClientBaseSummary/);

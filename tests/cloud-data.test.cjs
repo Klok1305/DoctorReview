@@ -93,6 +93,36 @@ test("online doctor and group graphs keep the entire calendar year even when Jan
   assert.equal(payload.pages.filter(page => page.periodKey === '2026-09').length, 6);
 });
 
+test("doctor V4 keeps overlapping shares and shows a separate four-group stack from exact 36-month data", async () => {
+  const context = fixtureContext();
+  vm.runInContext(`
+    DB.settings.depts.X.clientBasePartition = { loyalVisits: 3, activeM: 6, lostM: 12, lostAnyVisits: false };
+    DB.months['2026-01'].kb.d1[36].clients = [
+      { name: 'Пациент А', v: 3, r: 183 },
+      { name: 'Пациент Б', v: 4, r: 366 },
+      { name: 'Пациент В', v: 1, r: 365 },
+      { name: 'Пациент Г', v: 2, r: 366 },
+    ];
+    delete DB.months['2026-03'].kb.d1[36];
+  `, context);
+  const publication = bundle(await vm.runInContext("buildCloudPublicationPayload()", context));
+  const personal = publication.pages.find(page => page.doctorId === "d1" && page.periodKey === "2026-03");
+  const vector = personal.report.vectors[3];
+  const history = vector.sections.find(section => section.title === "Динамика клиентской базы по месяцам");
+  const chart = JSON.parse(JSON.stringify(history.charts[0]));
+  assert.equal(chart.type, "stacked");
+  assert.deepEqual(chart.labels, ["Январь 2026", "Февраль 2026", "Март 2026"]);
+  assert.deepEqual(chart.series.map(series => series.label), ["Активные лояльные", "Лояльные спящие", "Новые в риске", "Потерянные"]);
+  assert.deepEqual(chart.series.map(series => series.values), Array.from({ length: 4 }, () => [1, null, null]));
+  assert.match(history.note, /Февраль 2026, Март 2026/);
+  assert.ok(vector.windows.find(window => window.id === "12").sections[0].charts.some(chart => chart.id === "overlap-shares"));
+  const html = renderCloudReport(personal.report, personal.title);
+  assert.match(html, /data-client-base-share-table/);
+  assert.deepEqual([...html.matchAll(/data-stack-total>(\d+)</g)].map(match => Number(match[1])), [4]);
+  vector.sections = vector.sections.filter(section => section !== history);
+  assert.doesNotMatch(renderCloudReport(personal.report, personal.title), /data-client-base-partition-history/);
+});
+
 test("online specialization shows monthly visit frequency and averages individual client-base shares", async () => {
   const context = fixtureContext();
   vm.runInContext(`

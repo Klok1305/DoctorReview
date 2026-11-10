@@ -5,6 +5,9 @@ body.online-report{display:block;padding:16px;margin:0;overflow:auto;background:
 .online-report .device-chart-months{display:none}
 .online-report svg .device-point-label{font-size:12px;fill:#263444}
 .online-report .line-plot{overflow-x:auto}
+.online-report .stacked-plot{overflow-x:auto}
+.online-report .stacked-plot svg{min-width:620px}
+@media print{.online-report .stacked-plot svg{min-width:0}}
 .online-report .line-plot-history{direction:rtl}
 .online-report .line-plot-history svg{direction:ltr}
 .online-report .line-plot svg .line-point-value{font-size:10px;stroke:#fff;stroke-width:2.5px;paint-order:stroke}

@@ -165,6 +165,18 @@ function renderSpecializationBaseHistory(vector, report, options) {
   return renderSections([{ title: "Динамика клиентской базы", charts: [chart] }], options);
 }
 
+function renderDoctorBasePartitionHistory(vector, options) {
+  const history = vector.sections?.find(section => section.title === "Динамика клиентской базы по месяцам");
+  if (!history) return "";
+  return `<section class="cloud-section kb-partition-history" data-client-base-partition-history>
+    ${history.charts?.length ? "" : `<h3>${esc(history.title)}</h3>`}
+    <p class="small muted">${lines(history.note)}</p>
+    ${renderCharts(history.charts, options)}
+    <details><summary>Правила четырёх групп за 36 месяцев</summary>
+      <ul>${(history.rows || []).map(([label, rule]) => `<li><b>${esc(label)}</b> — ${esc(rule)}.</li>`).join("")}</ul>
+    </details></section>`;
+}
+
 function renderVector(vector, report, options) {
   const help = [vector.detail, vector.methodologyLabel].filter(Boolean).map(text => `<p>${lines(text)}</p>`);
   const sectionOptions = { ...options, help };
@@ -182,7 +194,7 @@ function renderVector(vector, report, options) {
       if (section.title === "Динамика клиентской базы" && section.charts?.length && !charts.length) return "";
       return renderSections([{ ...section, charts }], sectionOptions)
         + (history ? presentation.clientBaseShareTableHtml(history.labels, history.series.map(series => ({ ...presentation.overlappingClientBaseGroups.find(group => group.label === series.label), label: series.label, values: series.values }))) : "");
-    }).join("")}</div>`).join("") + renderSpecializationBaseHistory(vector, report, sectionOptions)
+    }).join("")}</div>`).join("") + renderSpecializationBaseHistory(vector, report, sectionOptions) + renderDoctorBasePartitionHistory(vector, sectionOptions)
     + presentation.clientBaseDefinitionsHtml(vector.sections?.find(section => section.title === "Что означают группы?"))
     : partitioned ? renderClientBase(vector, report, sectionOptions)
     : vector.windows?.length ? vector.windows.map((window, index) => `<details class="cloud-window" ${index === 0 ? "open" : ""}><summary>${esc(vector.windowPickerLabel || "Период")}: ${esc(window.label)}</summary><p>${esc(window.period)}</p>${renderSections(window.sections, sectionOptions)}</details>`).join("")

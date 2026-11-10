@@ -76,7 +76,7 @@ function validateCharts(charts, label) {
     plainObject(chart, `${label}: график`);
     shortText(chart.id, `${label}: код графика`, 100);
     shortText(chart.title, `${label}: название графика`, 300);
-    if (!["donut", "bar", "line", "mirror"].includes(chart.type)) fail(`${label}: тип графика`);
+    if (!["donut", "bar", "line", "mirror", "stacked"].includes(chart.type)) fail(`${label}: тип графика`);
     optionalText(chart.unit, `${label}: единица измерения`, 30);
     if (!Array.isArray(chart.labels) || !chart.labels.length || chart.labels.length > 500) fail(`${label}: подписи графика`);
     chart.labels.forEach(value => shortText(value, `${label}: подпись`, 1000));
@@ -87,7 +87,7 @@ function validateCharts(charts, label) {
       plainObject(series, `${label}: ряд графика`);
       shortText(series.label, `${label}: название ряда`, 300);
       if (!Array.isArray(series.values) || series.values.length !== chart.labels.length) fail(`${label}: значения графика`);
-      series.values.forEach(value => finiteNumber(value, `${label}: число графика`, { nullable: true, min: -1e15, max: 1e15 }));
+      series.values.forEach(value => finiteNumber(value, `${label}: число графика`, { nullable: true, min: chart.type === "stacked" ? 0 : -1e15, max: 1e15 }));
       if (series.pointNotes != null) {
         if (chart.type !== "line" || !Array.isArray(series.pointNotes) || series.pointNotes.length !== chart.labels.length) fail(`${label}: подписи точек`);
         series.pointNotes.forEach(note => {
@@ -102,6 +102,8 @@ function validateCharts(charts, label) {
       if (chart.type === "donut" && series.values.some(value => value != null && value < 0)) fail(`${label}: отрицательный сектор`);
       if (chart.type === "mirror" && !["own", "ref"].includes(series.side)) fail(`${label}: сторона выручки`);
     });
+    if (chart.type === "stacked" && chart.labels.some((_, index) =>
+      chart.series.some(series => (series.values[index] === null) !== (chart.series[0].values[index] === null)))) fail(`${label}: неполный состав полосы`);
   });
 }
 

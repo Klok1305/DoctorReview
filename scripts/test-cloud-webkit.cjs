@@ -188,7 +188,8 @@ async function main() {
     assert.equal(await legacySpecialization.locator(".client-base-average strong").textContent(), "16,7%");
     assert.deepEqual(await legacySpecialization.locator("#tblRisk .client-base-cell-share").allTextContents(), ["33,3%", "0%"]);
     assert.deepEqual(await legacySpecialization.locator("#tblCompare tr:last-child td").allTextContents(), ["Визитов на пациента", "2,33", "1,5"]);
-    assert.equal(await legacyBase.locator(".old-line-marker").count(), 0);
+    assert.equal(await legacyBase.locator(".old-line-marker").count(), 1);
+    assert.match(await legacyBase.locator(".old-line-marker").locator("../..").textContent(), /ДИНАМИКА КЛИЕНТСКОЙ БАЗЫ ПО МЕСЯЦАМ/);
     assert.equal(await legacyBase.locator("[data-client-base-methodology-note]").isVisible(), false);
     assert.equal(await legacyBase.locator("[data-report-help]").evaluate(element => element.open), false);
     assert.doesNotMatch(await legacyBase.innerText(), /partition-v1|legacy-overlap/);
@@ -397,6 +398,17 @@ async function main() {
       assert.doesNotMatch(await shortRows.allTextContents().then(rows=>rows.join("|")),/^Лояльные|Потерянные/);
       await clientBase.locator("[data-client-base-window]").selectOption("12");
       assert.equal(await clientBase.locator('.report-chart[data-chart*="partition-shares"]').count(), 0);
+      const partitionHistory = clientBase.locator("[data-client-base-partition-history]");
+      await partitionHistory.locator("[data-chart]").scrollIntoViewIfNeeded();
+      const partitionPlot = partitionHistory.locator(".stacked-plot svg");
+      await partitionPlot.waitFor();
+      const publishedStack = JSON.parse(await partitionHistory.locator("[data-chart]").getAttribute("data-chart"));
+      const totals = publishedStack.labels.flatMap((_, i) => publishedStack.series[0].values[i] == null ? []
+        : [publishedStack.series.reduce((sum, item) => sum + item.values[i], 0)]);
+      assert.deepEqual((await partitionPlot.locator("[data-stack-total]").allTextContents()).map(text => Number(text.replace(/\s/g, ""))), totals);
+      await clientBase.locator("[data-client-base-window]").selectOption("36");
+      assert.equal(await partitionPlot.isVisible(), true);
+      await clientBase.locator("[data-client-base-window]").selectOption("12");
       await clientBase.locator("[data-report-help] > summary").click();
       assert.equal(await clientBase.locator(".report-help-body").isVisible(), true);
       await clientBase.locator("[data-report-help] > summary").click();

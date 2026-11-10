@@ -65,7 +65,7 @@ function cloudDoctorReport(doctorId, monthKey, comments) {
     methodologyId: "report-overlap-v1", scoreMethodologyId: "legacy-overlap-v1",
     methodologyLabel: "Единые пять пересекающихся групп врача и специализации. Балл В4 использует сохранённые нормативы.",
     detail: "Точное окно базы выбирается вручную. Для активных нужны визиты за срок из настроек специализации.",
-    sections: [clientBaseDefinitionSection(profile)],
+    sections: [clientBaseDefinitionSection(profile), clientBasePartitionHistorySection(doctorId, monthKey)],
     windows: [12, 6, 24, 36].map(window => {
       const base = reportClientBaseSummary(doctorId, monthKey, window);
       const previous = reportClientBaseSummary(doctorId, prevMonthKey(monthKey), window);

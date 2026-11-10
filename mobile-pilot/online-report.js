@@ -239,14 +239,6 @@ for (const section of document.querySelectorAll('.viewer-dashboard-snapshot [dat
     wrapper.innerHTML = presentation.clientBaseCompositionHtml(values, period);
     section.querySelector(".kb-summary-grid")?.insertAdjacentElement("afterend", wrapper.firstElementChild);
   }
-  for (const heading of section.querySelectorAll("h3")) if (/^ДИНАМИКА КЛИЕНТСКОЙ БАЗЫ ПО МЕСЯЦАМ/i.test(heading.textContent.trim())) {
-    const container = heading.parentElement;
-    if (container === section) continue;
-    for (const child of [...container.children]) {
-      if (child === heading || child.classList.contains("chart-box")) child.remove();
-      else if (child.matches("p.small")) help.appendChild(child);
-    }
-  }
 }
 for (const card of document.querySelectorAll('.viewer-dashboard-snapshot [data-vector-key="v4"] .kb-summary-card:not([data-client-base-group="total"])')) {
   const value = card.querySelector(".kb-summary-value");

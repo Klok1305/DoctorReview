@@ -851,12 +851,16 @@ function createWindow() {
               flushReportCharts();
               const clientBasePie = document.querySelector('#blkV4 [data-client-base-composition]');
               const activeShares = document.querySelector('#blkV4 [data-client-base-share-table] tr[data-client-base-group="active"]');
+              const baseStack = UI.charts.chSegments;
               const clientShareChartValid = !clientBasePie
                 && document.querySelectorAll('#blkV4 [data-client-base-share-table] tbody tr').length === 5
                 && document.querySelector('#blkV4 [data-client-base-definitions]')
                 && activeShares?.cells[1].classList.contains('period-worst') && activeShares?.cells[2].classList.contains('period-best')
                 && [...document.querySelectorAll('#blkV4 [data-report-help]')].every(help => !help.open)
-                && !document.querySelector('#blkV4 [data-client-base-methodology-note], #chClientShares, #chSegments');
+                && !document.querySelector('#blkV4 [data-client-base-methodology-note], #chClientShares')
+                && baseStack?.options.indexAxis === 'y' && baseStack.options.scales.x.stacked
+                && baseStack.data.datasets.map(row => row.label).join('|') === 'Активные лояльные|Лояльные спящие|Новые в риске|Потерянные'
+                && JSON.stringify(baseStack.data.datasets.map(row => row.data)) === '[[1,2],[1,1],[1,1],[2,1]]';
               const riskActionButton = [...document.querySelectorAll('.kb-action-controls button')].find(button => button.textContent.includes('Новые, риск'));
               if (riskActionButton) riskActionButton.click();
               await new Promise(resolve => setTimeout(resolve, 100));
@@ -1130,6 +1134,7 @@ function createWindow() {
                 kbWindows: viewerKbButtons.map(button => button.dataset.viewerKbWindow),
                 adminAppointmentParity,
                 clientBaseMethodology: viewerDoctorRoot.querySelector('[data-vector-key="v4"][data-client-base-methodology="report-overlap-v1"]') !== null,
+                clientBasePartitionChart: !!viewerDoctorRoot.querySelector('[data-client-base-partition-history] img'),
                 clientBaseGroups: [...viewerDoctorRoot.querySelectorAll('[data-vector-key="v4"] [data-client-base-group]')]
                   .map(card => card.dataset.clientBaseGroup),
                 originalInterdisciplinaryBlock: viewerDoctorRoot.querySelectorAll('[data-vector-key="v3"]').length,
@@ -1142,6 +1147,7 @@ function createWindow() {
                 && viewerPatientRegisterDetails.collapsibleAndSearchable
                 && viewerPatientRegisterDetails.kbWindows.length === 0
                 && viewerPatientRegisterDetails.clientBaseMethodology
+                && viewerPatientRegisterDetails.clientBasePartitionChart
                 && ['total', 'loyal', 'active', 'loyalSleep', 'newRisk', 'lost'].every(group => viewerPatientRegisterDetails.clientBaseGroups.includes(group))
                 && viewerPatientRegisterDetails.adminAppointmentParity
                 && viewerPatientRegisterDetails.sourcePeriod
@@ -1635,7 +1641,7 @@ function createWindow() {
               if (monthCells.some(cell => cell.getBoundingClientRect().width < 85)) throw Error('Admin QA: month columns too narrow');
               if (document.querySelector('#tblRef').textContent.includes('Профильные услуги') || document.querySelector('#tblRef').textContent.includes('Другие услуги клиники')) throw Error('Admin QA: legacy service split remains');
               if (completed.textContent.toLowerCase().includes('конверсия')) throw Error('Admin QA: conversion in performed block');
-              if (document.querySelector('#blkV4 [data-client-base-share-table] thead tr').cells.length !== 13 || document.querySelector('#blkV4 #chSegments, #blkV4 #chClientShares')) throw Error('Admin QA: expected pie and year table');
+              if (document.querySelector('#blkV4 [data-client-base-share-table] thead tr').cells.length !== 13 || !UI.charts.chSegments || document.querySelector('#blkV4 #chClientShares')) throw Error('Admin QA: expected year table and four-group stack');
               const capture = async element => (await html2canvas(element, { backgroundColor: '#ffffff', scale: 1, logging: false, windowWidth: 1400 })).toDataURL('image/png');
               const yearImage = await capture(table);
               const v3Image = await capture(document.getElementById('blkV3'));
@@ -1661,19 +1667,21 @@ function createWindow() {
               document.getElementById('cb_report_activeVisits').value = '5';
               document.getElementById('cb_report_activeM').value = '12';
               document.getElementById('cb_report_sleepM').value = '9';
+              document.getElementById('cb_loyalVisits').value = String(originalPartition.loyalVisits + 1);
               saveDeptBasics();
               const doctorThresholds = clientBaseReportProfile(deptParams('d1'));
               if (doctorThresholds.activeVisits !== 5 || doctorThresholds.activeM !== 12 || doctorThresholds.sleepM !== 9 || !document.querySelector('#settingsBody [data-client-base-definitions]').textContent.includes('не менее 5 визитов за последние 12 мес.')) throw Error('Admin QA: report thresholds do not reach doctor and settings');
               curSetProfile().clientBaseReport = originalReportThresholds;
-              if (JSON.stringify(curSetProfile().clientBasePartition) !== JSON.stringify(originalPartition)) throw Error('Admin QA: saved partition changed');
+              if (curSetProfile().clientBasePartition.loyalVisits !== originalPartition.loyalVisits + 1) throw Error('Admin QA: partition threshold was not saved');
               if (JSON.stringify(legacyFields.map(key => curSetProfile()[key])) !== originalLegacy) throw Error('Admin QA: legacy KPI settings changed');
               curSetProfile().clientBasePartition = originalPartition;
               clearMetricsCache(); await switchTab('doctor');
               const source36 = DB.months['2026-12'].kb.d1['36'];
               delete DB.months['2026-12'].kb.d1['36'];
               clearMetricsCache(); await renderDoctor();
+              flushReportCharts();
               const remainingHistory = JSON.parse(document.querySelector('#blkV4 [data-client-base-share-table] tbody tr').dataset.periodValues);
-              if (remainingHistory[11] !== null || remainingHistory[0] == null || document.querySelector('#blkV4 [data-client-base-composition] svg')) throw Error('Admin QA: missing latest 36-month source erases history or uses short window');
+              if (remainingHistory[11] !== null || remainingHistory[0] == null || !UI.charts.chSegments?.data.datasets.every(row => row.data[11] === null && row.data[0] != null)) throw Error('Admin QA: missing latest 36-month source erases history or uses short window');
               DB.months['2026-12'].kb.d1['36'] = source36;
               clearMetricsCache(); await renderDoctor();
               UI.departmentFilter = 'Косметология'; UI.departmentMonth = '2026-02';
