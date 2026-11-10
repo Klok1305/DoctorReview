@@ -2,7 +2,7 @@
 const fs = require("node:fs"), path = require("node:path");
 const chartsPath = fs.existsSync(path.join(__dirname, "public", "report-charts.js"))
   ? "./public/report-charts.js" : "../mobile-pilot/report-charts.js";
-const { renderCharts } = require(chartsPath);
+const { renderCharts, chartTable } = require(chartsPath);
 const presentation = require(chartsPath.replace("report-charts.js", "report-presentation.js"));
 const { tableHeaderHtml } = presentation;
 const esc = value => String(value == null ? "" : value).replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
@@ -40,6 +40,14 @@ function renderTree(nodes = [], columns = []) {
   }).join("");
 }
 function renderSections(sections = [], options = {}) {
+  const deviceDetails = new Map();
+  if (options.kind === "specialization") for (const section of sections) {
+    if (section.title !== "Аппаратные методики по врачам" || section.columns?.[1] !== "Аппарат") continue;
+    for (const [name, device, q, s] of section.rows || []) {
+      if (!deviceDetails.has(device)) deviceDetails.set(device, []);
+      deviceDetails.get(device).push({ name, q: presentation.publishedDeviceMeasure(q), s: presentation.publishedDeviceMeasure(s) });
+    }
+  }
   sections = sections.map(section => {
     const index = section.columns?.findIndex(label => ["Отзывы", "Всего отзывов"].includes(label));
     if (!(index > 0) || !["Врач", "Сотрудник"].includes(section.columns[0])) return section;
@@ -47,18 +55,27 @@ function renderSections(sections = [], options = {}) {
     return { ...section, rows: [...section.rows].sort((a,b) => count(b) - count(a) || a[0].localeCompare(b[0], "ru")) };
   });
   return sections.map(section => {
+    if (options.kind === "specialization" && section.title === "Аппаратные методики по врачам") return "";
+    if (options.kind === "specialization" && section.title === "Аппараты за месяц" && section.columns?.[0] === "Аппарат") {
+      const cards = (section.rows || []).map(([name, q, s]) => ({ name, q: presentation.publishedDeviceMeasure(q), s: presentation.publishedDeviceMeasure(s), doctors: deviceDetails.get(name) }));
+      return `<section class="cloud-section" data-specialization-device-month><h3>${esc(section.title)}</h3>${presentation.deviceMonthCardsHtml(cards)}
+        ${cards.length && !deviceDetails.size ? '<p class="small muted">Разбивка по специалистам доступна после новой публикации.</p>' : ""}</section>`;
+    }
     if (options.kind === "specialization" && section.title === "Загрузка аппаратов") {
       const content = renderSectionContent({ ...section, charts: presentation.splitDeviceHistoryCharts(section.charts) },
         { ...options, renderValues: chart => presentation.deviceHistoryDetailsHtml([chart]) });
       return `<details class="collapsible-list cloud-section" data-specialization-device-history><summary class="collapsible-list-summary"><span>${esc(section.title)}</span><span class="collapse-hint"></span></summary><div class="collapsible-list-body">${presentation.deviceHistoryDetailsHtml(section.charts, true)}${content}</div></details>`;
     }
-    const sources = options.kind === "specialization" && section.charts?.find(chart => chart.id === "specialization-primary-sources");
-    if (sources) {
+    if (options.kind === "specialization" && section.title === "Первичные пациенты" && section.columns?.[1] === "Первичных за месяц") {
+      const sources = section.charts?.find(chart => chart.id === "specialization-primary-sources");
+      const counts = sources?.series[0]?.values;
       const coverage = section.metrics?.find(metric => metric.label === "Врачи с данными");
       return `<section class="cloud-section" data-specialization-primary><h3>${esc(section.title)}</h3>${renderSectionNote(section.note, options)}
-        ${coverage ? `<p class="small muted">Данные есть у ${esc(coverage.value)} врачей.</p>` : ""}
-        ${presentation.specializationPrimarySourcesHtml(sources.series[0]?.values || [])}
-        ${renderSectionContent({ ...section, charts: section.charts.filter(chart => chart !== sources) }, options)}</section>`;
+        ${coverage && !counts?.every(Number.isFinite) ? `<p class="small muted">Данные есть у ${esc(coverage.value)} врачей.</p>` : ""}
+        ${presentation.specializationPrimarySummaryHtml(section.rows || [], counts)}
+        ${renderCharts(section.charts?.filter(chart => chart !== sources), {
+          ...options, renderValues: chart => chart.id === "specialization-primary" ? "" : chartTable(chart),
+        })}</section>`;
     }
     const content = renderSectionContent(section, options);
     return `<section class="cloud-section"><h3>${esc(section.title)}</h3>${renderSectionNote(section.note, options)}
@@ -69,12 +86,6 @@ function renderSectionContent(section, options) {
   const charts = section.charts?.some(chart => chart.id.startsWith("primary-sources-"))
     ? `<div class="primary-source-charts" data-primary-sources>${section.charts.map(chart => `<div data-primary-source-period="${esc(chart.id.replace("primary-sources-", ""))}">${presentation.clientBaseCompositionHtml(chart.series[0].values, "", { groups: presentation.primarySourceGroups, title: chart.title })}</div>`).join("")}</div>`
     : renderCharts(section.charts, options);
-  if (section.title === "Аппараты за месяц" && section.columns?.[0] === "Аппарат" && section.columns.length === 3 && section.rows?.length) {
-    const cells = section.rows.map(([, q, s]) => ({ q: presentation.publishedDeviceMeasure(q), s: presentation.publishedDeviceMeasure(s) }));
-    const maxima = presentation.deviceHeatMaxima(cells);
-    return presentation.deviceHeatLegendHtml() + renderTable(["Аппарат", "Процедуры и выручка"],
-      section.rows.map(([name]) => [name, ""]), (value, column, row) => column ? presentation.deviceHeatCellHtml(cells[row], maxima) : esc(value)) + charts;
-  }
   return (section.tree?.length ? renderTree(section.tree, section.columns) : renderTable(section.columns, section.rows)) + charts;
 }
 function renderSectionNote(note, options) {

@@ -37,25 +37,46 @@ for (const label of document.querySelectorAll(".viewer-dashboard-snapshot [data-
     text.nodeValue = text.nodeValue.replace(/^Не распределено/, "Прочее");
   }
 }
+for (const block of document.querySelectorAll(".viewer-dashboard-snapshot [data-specialization-primary]")) {
+  block.querySelector('details[data-list-key="values-specialization-primary"]')?.remove();
+  const table = block.querySelector("#tblSpecPrimary");
+  if (!table || block.querySelector("[data-specialization-primary-summary]")) continue;
+  const savedRows = [...table.rows].slice(1);
+  if (!savedRows.length || savedRows.some(row => row.cells.length !== 2)) continue;
+  const rows = savedRows.map(row => [...row.cells].map(cell => cell.textContent.trim()));
+  const oldSources = block.querySelector("[data-specialization-primary-sources]");
+  const values = [...(oldSources?.querySelectorAll(".specialization-source-values > strong") || [])];
+  if (oldSources && values.length !== presentation.specializationSourceOrder.length) continue;
+  const counts = oldSources ? [] : null;
+  if (counts) presentation.specializationSourceOrder.forEach((index, position) => {
+    counts[index] = presentation.publishedReportCount(values[position].textContent.trim().replace(/\s*чел\.$/, ""));
+  });
+  (oldSources || table).insertAdjacentHTML("beforebegin", presentation.specializationPrimarySummaryHtml(rows, counts));
+  oldSources?.remove();
+  table.remove();
+}
 for (const table of document.querySelectorAll(".viewer-dashboard-snapshot .heatmap-table")) {
-  const cells = [...table.querySelectorAll(".heatmap-money")].map(money => {
-    const cell = money.closest("td");
-    const holder = cell?.querySelector(".heat-cell");
-    const s = presentation.publishedDeviceMeasure(money.textContent);
-    const q = presentation.publishedDeviceMeasure(money.parentElement.textContent.slice(0, -money.textContent.length));
-    return { cell, holder, q, s };
-  }).filter(({ cell, q, s }) => cell && q != null && s != null);
-  if (!cells.length) continue;
-  const maxima = presentation.deviceHeatMaxima(cells.filter(({ holder }) => holder));
+  if (!table.querySelector(".heatmap-money, .device-heat-s")) continue;
+  const [header, ...rows] = table.rows;
+  const totalRow = /^Итого(?:\s|$)/i.test(rows.at(-1)?.cells[0]?.textContent.trim()) ? rows.pop() : null;
+  const measure = cell => {
+    const money = cell?.querySelector(".heatmap-money");
+    return {
+      q: presentation.publishedDeviceMeasure(money ? money.parentElement.textContent.slice(0, -money.textContent.length) : cell?.querySelector(".device-heat-q > span")?.textContent),
+      s: presentation.publishedDeviceMeasure(money?.textContent || cell?.querySelector(".device-heat-s > span")?.textContent),
+    };
+  };
+  const cards = [...header.cells].slice(1).flatMap((heading, i) => {
+    const name = heading.textContent.trim();
+    if (/^(Итого|Доля от выручки)$/i.test(name)) return [];
+    const doctors = rows.map(row => ({ name: row.cells[0].textContent.trim(), ...measure(row.cells[i + 1]) }));
+    return [{ name, ...measure(totalRow?.cells[i + 1]), doctors }];
+  });
+  if (!cards.length) continue;
   const anchor = table.closest(".heatmap-scroll") || table;
-  anchor.insertAdjacentHTML("beforebegin", presentation.deviceHeatLegendHtml());
-  for (const { cell, holder, q, s } of cells) {
-    if (holder) {
-      holder.removeAttribute("style");
-      holder.classList.add("device-heat-holder");
-    }
-    (holder || cell).innerHTML = presentation.deviceHeatCellHtml({ q, s }, holder ? maxima : null);
-  }
+  const card = anchor.closest(".card");
+  const block = card?.querySelector(":scope > h2")?.textContent.includes("Тепловая карта") ? card : anchor;
+  block.outerHTML = `<div class="card" data-specialization-device-month><h2>Аппараты за месяц</h2>${presentation.deviceMonthCardsHtml(cards)}</div>`;
 }
 for (const heading of document.querySelectorAll('body[data-report-kind="specialization"] .viewer-dashboard-snapshot h3')) {
   const block = heading.parentElement;
@@ -311,7 +332,7 @@ if (typeof IntersectionObserver === "function") {
   chartCards.filter(card => card.dataset.chartDeferred).forEach(card => observer.observe(card));
 } else chartCards.filter(card => card.dataset.chartDeferred).forEach(drawChart);
 window.addEventListener("beforeprint", () => {
-  for (const details of document.querySelectorAll(".cloud-data-report details:not(.report-help), .viewer-dashboard-snapshot [data-specialization-device-history]")) details.open = true;
+  for (const details of document.querySelectorAll(".cloud-data-report details:not(.report-help), .viewer-dashboard-snapshot [data-specialization-device-history], .viewer-dashboard-snapshot [data-device-month-card] details")) details.open = true;
   chartCards.filter(card => card.dataset.chartDeferred).forEach(drawChart);
   for (const image of document.images) image.loading = "eager";
 });

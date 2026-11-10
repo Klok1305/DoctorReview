@@ -818,10 +818,10 @@ test("specialist summary removes the color legend and wraps long headers", () =>
   assert.match(ui, /<th class="num">Доля выручки<br>от перенаправлений<\/th>/);
 });
 
-test("specialization heatmap gives every focus an equal-width column", () => {
+test("specialization service heatmap gives every focus an equal-width column", () => {
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
-  const heatmap = ui.match(/\/\/ тепловая карта экспертных позиций[\s\S]*?\/\/ Клиентская база:/);
+  const heatmap = ui.match(/\/\/ Для профилей без аппаратов сохраняется тепловая карта услуг\.[\s\S]*?\/\/ Клиентская база:/);
 
   assert.ok(heatmap);
   assert.match(heatmap[0], /class="heatmap-scroll"/);

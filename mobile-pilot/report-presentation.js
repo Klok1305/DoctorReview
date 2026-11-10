@@ -45,6 +45,19 @@
   function deviceHeatLegendHtml() {
     return '<p class="device-heat-legend"><span class="device-heat-q">Процедуры</span><span class="device-heat-s">Выручка</span></p>';
   }
+  function deviceMonthCardsHtml(cards, copyTable) {
+    const detailsAvailable = cards.some(card => card.doctors?.length);
+    return `<div data-device-month-cards>${detailsAvailable ? deviceHeatLegendHtml() : ""}<div class="device-month-grid">${cards.map((card, index) => {
+      const id = `tblDeviceMonth${index}`;
+      const doctors = card.doctors || [];
+      const maxima = deviceHeatMaxima(doctors);
+      return `<article class="device-month-card" data-device-month-card><header><h3>${escape(card.name)}</h3><div class="device-month-summary">${deviceHeatCellHtml(card)}</div></header>
+        ${doctors.length ? `<details class="collapsible-list"><summary class="collapsible-list-summary"><span>По специалистам</span><span class="collapse-hint"></span></summary>
+          <div class="collapsible-list-body">${copyTable ? `<div class="device-month-copy">${copyTable(id)}</div>` : ""}
+          <table class="data device-month-table" id="${id}"><thead><tr><th scope="col">Специалист</th><th scope="col" class="num">Шт. и ₽</th></tr></thead><tbody>
+          ${doctors.map(doctor => `<tr><td>${escape(doctor.name)}</td><td class="num">${deviceHeatCellHtml(doctor, maxima)}</td></tr>`).join("")}</tbody></table></div></details>` : ""}</article>`;
+    }).join("")}</div></div>`;
+  }
   function splitDeviceHistoryCharts(charts = []) {
     return charts.flatMap(chart => chart.series.map((series, index) => ({
       ...chart, id: `${chart.id}-${index}`, title: series.label, series: [series],
@@ -153,7 +166,7 @@
         : `<path d="M130,130 L${position(start, 112)} A112,112 0 ${sweep > Math.PI ? 1 : 0},1 ${position(angle, 112)} Z" fill="${groups[index].color}" stroke="#fff" stroke-width="2"><title>${escape(label)}</title></path>`;
       return shape + (value / total >= .05 ? `<text x="${position(start + sweep / 2, 74).split(",")[0]}" y="${position(start + sweep / 2, 74).split(",")[1]}" text-anchor="middle" dominant-baseline="middle" class="client-base-sector-label">${pct(value / total * 100)}</text>` : "");
     }).join("") : "";
-    return `<section class="client-base-composition" ${options.groups ? 'data-primary-source-composition' : 'data-client-base-composition'} data-client-base-values="${escape(JSON.stringify(values))}"><h3>${escape(title)}${period ? ` · ${escape(String(period))}` : ""}</h3>${total > 0 ? `<div class="client-base-pie-layout"><svg viewBox="0 0 260 260" role="img" aria-label="${escape(title)}"><title>${options.groups ? "Первичные пациенты" : "Клиентская база"}: ${number.format(total)} чел.</title>${sectors}</svg><ul class="client-base-pie-legend">${groups.map((group, index) => `<li><span class="client-base-pie-key" style="background:${group.color}"></span><span>${escape(group.label)}</span><b>${number.format(values[index])} чел.</b><strong>${pct(values[index] / total * 100)}</strong></li>`).join("")}</ul></div>` : `<p class="muted">${total === 0 ? (options.groups ? "В этом периоде первичных пациентов нет." : "В этом месяце пациентов нет.") : "За выбранный период нет данных."}</p>`}</section>`;
+    return `<section class="client-base-composition" ${options.groups ? 'data-primary-source-composition' : 'data-client-base-composition'} data-client-base-values="${escape(JSON.stringify(values))}"><h3>${escape(title)}${period ? ` · ${escape(String(period))}` : ""}</h3>${total > 0 ? `<div class="client-base-pie-layout"><svg viewBox="0 0 260 260" role="img" aria-label="${escape(title)}"><title>${options.groups ? "Первичные пациенты" : "Клиентская база"}: ${number.format(total)} чел.</title>${sectors}</svg><ul class="client-base-pie-legend">${groups.map((group, index) => `<li><span class="client-base-pie-key" style="background:${group.color}"></span><span>${escape(group.label)}</span><b>${number.format(values[index])} чел.</b><strong>${pct(values[index] / total * 100)}</strong></li>`).join("")}</ul></div>` : `<p class="muted">${total === 0 ? (options.groups ? "В этом периоде первичных пациентов нет." : "В этом месяце пациентов нет.") : escape(options.missingText || "За выбранный период нет данных.")}</p>`}</section>`;
   }
   function primarySourcesHtml(sources, month, year) {
     return `<section data-primary-sources><h3>Источники первичных пациентов</h3><div class="primary-source-charts">${[["year", `С начала ${year} года — ${month}`], ["month", `За последний месяц · ${month}`]].map(([key, period]) => {
@@ -163,33 +176,30 @@
         ${data.unresolved.length ? `<p class="small muted">Прочее: ${data.unresolved.map(item => `${escape(item.label)} — ${number.format(item.count)}`).join("; ")}. Эти пациенты входят в общее количество и знаменатель процентов.</p>` : ""}</div>`;
     }).join("")}</div></section>`;
   }
+  const specializationSourceOrder = [0, 1, 3, 2, 4];
   function specializationPrimarySourcesHtml(counts) {
-    const known = counts.length === primarySourceGroups.length && counts.every(value => Number.isSafeInteger(value) && value >= 0);
-    const total = known ? counts.reduce((sum, count) => sum + count, 0) : null;
-    const groups = [
-      [0, "Рекомендации", "Пациенты и знакомые"],
-      [1, "Интернет", "Яндекс, Яндекс Карты"],
-      [3, "Социальные сети", "Instagram, YouTube, ВК, Дзен"],
-      [2, "Агрегаторы", "ПроДокторов, НаПоправку"],
-      [4, "Прочие", "Другие и неизвестные источники"],
-    ];
-    const bar = total > 0 ? `<div class="specialization-source-bar" aria-hidden="true">${groups.map(([index]) => counts[index] > 0
-      ? `<span style="flex-grow:${counts[index]};background:${primarySourceGroups[index].color}"></span>` : "").join("")}</div>` : "";
-    const displayCount = count => known ? `${number.format(count)} чел.` : "—";
-    return `<section class="specialization-primary-sources" data-specialization-primary-sources>
-      <div class="specialization-source-heading"><h3>Источники первичных пациентов</h3><span>Всего <strong>${displayCount(total)}</strong></span></div>
-      ${total == null ? '<p class="small muted">Для общей разбивки нужны данные по всем врачам выборки.</p>' : ""}
-      ${bar}<ul class="specialization-source-groups">${groups.map(([index, label, examples]) => `<li>
-        <div class="specialization-source-label"><span class="client-base-pie-key" style="background:${primarySourceGroups[index].color}"></span><b>${label}</b></div>
-        <small>${examples}</small><div class="specialization-source-values"><strong>${displayCount(counts[index])}</strong><span>${pct(total > 0 ? counts[index] / total * 100 : null)}</span></div>
-      </li>`).join("")}</ul></section>`;
+    const groups = specializationSourceOrder.map(index => ({ ...primarySourceGroups[index],
+      label: index === 0 ? "Рекомендации" : index === 4 ? "Прочие" : primarySourceGroups[index].label }));
+    return `<div class="specialization-primary-sources" data-specialization-primary-sources>${clientBaseCompositionHtml(specializationSourceOrder.map(index => counts[index]), "", {
+      groups, title: "Источники первичных пациентов", missingText: "Для общей разбивки нужны данные по всем врачам выборки.",
+    })}</div>`;
+  }
+  function specializationPrimarySummaryHtml(rows, counts) {
+    const lastRow = rows.at(-1);
+    const total = lastRow && /^Итого по (?:специализации|выборке)$/i.test(lastRow[0]) ? lastRow : null;
+    const doctors = total ? rows.slice(0, -1) : rows;
+    return `<div class="specialization-primary-summary${counts ? " has-sources" : ""}" data-specialization-primary-summary>
+      <table class="data specialization-primary-table" id="tblSpecPrimary"><thead><tr><th scope="col">Специалист</th><th scope="col" class="num">Первичных</th></tr></thead>
+      <tbody>${doctors.map(([name, count]) => `<tr><td>${escape(name)}</td><td class="num">${escape(count)}</td></tr>`).join("")}</tbody>
+      ${total ? `<tfoot><tr><th scope="row">${escape(total[0])}</th><td class="num">${escape(total[1])}</td></tr></tfoot>` : ""}</table>
+      ${counts ? specializationPrimarySourcesHtml(counts) : ""}</div>`;
   }
   function reportHelpHtml(body, title = "Справка о расчётах") {
     return body ? `<details class="report-help" data-report-help><summary>${escape(title)}</summary><div class="report-help-body">${body}</div></details>` : "";
   }
-  const api = { tableHeaderLines, tableHeaderHtml, publishedDeviceMeasure, deviceHeatMaxima, deviceHeatCellHtml, deviceHeatLegendHtml, splitDeviceHistoryCharts,
+  const api = { tableHeaderLines, tableHeaderHtml, publishedDeviceMeasure, deviceMonthCardsHtml, splitDeviceHistoryCharts,
     deviceHistoryTableHtml, deviceHistoryDetailsHtml,
-    clientBaseGroups, overlappingClientBaseGroups, clientBaseDefinitionsHtml, primarySourceGroups, primarySourcesHtml, specializationPrimarySourcesHtml, periodValueStates,
+    clientBaseGroups, overlappingClientBaseGroups, clientBaseDefinitionsHtml, primarySourceGroups, primarySourcesHtml, specializationSourceOrder, specializationPrimarySummaryHtml, periodValueStates,
     clientBaseShareTableHtml, clientBaseCompositionHtml, clientBaseShareCellHtml, clientBaseAveragesHtml, publishedReportCount, publishedClientBaseShare, reportHelpHtml };
   if (typeof module === "object" && module.exports) module.exports = api;
   root.klinvektReportPresentation = api;

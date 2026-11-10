@@ -1728,18 +1728,14 @@ function specializationActivityMonth(month, filter, subFilter, doctorIds, device
   if (deviceNames.length) {
     const byDoctor = {};
     const items = deviceNames.map(() => ({ q: 0, s: 0 }));
-    let sales = 0, total = 0;
     for (const id of ids) {
-      const result = computeMetrics(id, month);
-      const doctorItems = deviceNames.map(name => result?.product?.expert[name] || { q: 0, s: 0 });
-      const sum = doctorItems.reduce((value, item) => value + item.s, 0);
+      const product = computeMetrics(id, month)?.product;
+      if (!product) continue;
+      const doctorItems = deviceNames.map(name => product.expert[name] || { q: 0, s: 0 });
       doctorItems.forEach(({ q, s }, index) => { items[index].q += q; items[index].s += s; });
-      const own = result?.econ.sales;
-      byDoctor[id] = { items: doctorItems, total: sum, share: own > 0 ? sum / own * 100 : null };
-      sales += own || 0;
-      total += sum;
+      byDoctor[id] = doctorItems;
     }
-    devices = { byDoctor, items, total, share: sales > 0 ? total / sales * 100 : null };
+    devices = { byDoctor, items };
   }
   const activity = { ids, devices, primary: { byDoctor: primaryByDoctor, total: primaryTotal, frequent, sourceCounts,
     share: frequent != null && primaryTotal > 0 ? frequent / primaryTotal * 100 : null, covered } };

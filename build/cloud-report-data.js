@@ -126,7 +126,6 @@ function cloudDoctorReport(doctorId, monthKey, comments) {
 
 const SPECIALIZATION_BASE_TITLE = "Динамика с начала года · база за 36 месяцев";
 const SPECIALIZATION_DEVICE_TITLE = "Загрузка аппаратов";
-const SPECIALIZATION_DEVICE_NOTE = "Доля рассчитана от собственной выручки. Аппараты берутся из настроек специализации.";
 const SPECIALIZATION_PRIMARY_NOTE = "Из отчёта «Пациенты по врачам». В итоге пациент учитывается один раз по ФИО. 4+ — первичные пациенты, посетившие врачей этой группы больше трёх раз за тот же месяц.";
 
 function specializationActivityView(month, profile, filter, subFilter = "all", ids = null) {
@@ -153,19 +152,28 @@ function specializationActivityView(month, profile, filter, subFilter = "all", i
   return { names, months, history, current, deviceCharts, primaryChart };
 }
 
+function specializationDeviceCards({ current, names }) {
+  const devices = current?.devices;
+  return devices ? names.map((name, index) => ({ name, ...devices.items[index],
+    doctors: current.ids.filter(id => devices.byDoctor[id]).map(id => ({ name: doctorName(id), ...devices.byDoctor[id][index] })),
+  })) : [];
+}
+
 function cloudSpecializationActivitySections(activity) {
-  const { current, names, deviceCharts, primaryChart } = activity;
+  const { current, deviceCharts, primaryChart } = activity;
   if (!current) return { deviceSections: [], primarySections: [] };
-  const { devices, primary, ids } = current;
-  const deviceSections = devices ? [{
-    title: "Аппараты за месяц", note: SPECIALIZATION_DEVICE_NOTE,
-    metrics: [mobilePublicationMetric("Выручка по всем аппаратам", fmtMoney(devices.total)), mobilePublicationMetric("Общая доля аппаратных методик", fmtPct(devices.share))],
+  const { primary, ids } = current;
+  const cards = specializationDeviceCards(activity);
+  const deviceSections = cards.length ? [{
+    title: "Аппараты за месяц",
     columns: ["Аппарат", "Процедуры, шт.", "Выручка"],
-    rows: names.map((name, i) => [name, fmtNum(devices.items[i].q), fmtMoney(devices.items[i].s)]),
-  }, {
-    title: "Аппаратные методики по врачам", columns: ["Врач", "Выручка по аппаратам", "Доля от выручки врача"],
-    rows: ids.map(id => [doctorName(id), fmtMoney(devices.byDoctor[id].total), fmtPct(devices.byDoctor[id].share)]),
-  }, ...(deviceCharts.length ? [{ title: SPECIALIZATION_DEVICE_TITLE, charts: deviceCharts }] : [])] : [];
+    rows: cards.map(({ name, q, s }) => [name, fmtNum(q), fmtMoney(s)]),
+  }] : [];
+  const doctorRows = cards.flatMap(card => card.doctors.map(({ name, q, s }) => [name, card.name, fmtNum(q), fmtMoney(s)]));
+  for (let i = 0; i < doctorRows.length; i += 500) {
+    deviceSections.push({ title: "Аппаратные методики по врачам", columns: ["Врач", "Аппарат", "Процедуры, шт.", "Выручка"], rows: doctorRows.slice(i, i + 500) });
+  }
+  if (deviceCharts.length) deviceSections.push({ title: SPECIALIZATION_DEVICE_TITLE, charts: deviceCharts });
   const sourceGroups = globalThis.klinvektReportPresentation.primarySourceGroups;
   const primarySections = [{
     title: "Первичные пациенты", note: SPECIALIZATION_PRIMARY_NOTE,

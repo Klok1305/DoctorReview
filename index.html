@@ -838,19 +838,22 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .primary-source-charts .client-base-pie-layout > svg { justify-self: center; max-width: 250px; }
 .primary-source-charts .client-base-pie-legend li { gap: 8px; padding: 8px 0; }
 .primary-source-charts .client-base-pie-legend strong { font-size: 16px; }
-.specialization-primary-sources { margin: 12px 0 16px; }
-.specialization-source-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; margin-bottom: 8px; }
-.specialization-source-heading > h3 { margin: 0; }
-.specialization-source-bar { display: flex; height: 9px; overflow: hidden; border-radius: 8px; margin-bottom: 8px; }
-.specialization-source-bar span, .specialization-source-label .client-base-pie-key { print-color-adjust: exact; }
-.specialization-source-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr)); gap: 8px; list-style: none; padding: 0; margin: 0; }
-.specialization-source-groups > li { display: flex; flex-direction: column; gap: 4px; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; padding: 8px 10px; break-inside: avoid; }
-.specialization-source-label, .specialization-source-values { display: flex; align-items: baseline; gap: 6px; }
-.specialization-source-label { align-items: center; }
-.specialization-source-label .client-base-pie-key { flex: none; }
-.specialization-source-groups small { color: #475569; }
-.specialization-source-values { justify-content: space-between; flex-wrap: wrap; margin-top: auto; padding-top: 4px; font-variant-numeric: tabular-nums; }
-.specialization-source-values strong { font-size: 16px; }
+.specialization-primary-summary { display: grid; align-items: start; gap: 16px 24px; max-width: 980px; margin: 8px 0 16px; }
+.specialization-primary-summary.has-sources { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+.specialization-primary-table { max-width: 400px; font-variant-numeric: tabular-nums; }
+.specialization-primary-table th, .specialization-primary-table td { overflow-wrap: anywhere; }
+.specialization-primary-table .num { width: 1%; white-space: nowrap; }
+.specialization-primary-table tfoot > tr > * { background: #f8fafc; border-top: 1px solid var(--line); font-weight: 650; }
+.specialization-primary-sources { min-width: 0; }
+.specialization-primary-sources .client-base-composition { margin: 0; }
+.specialization-primary-sources .client-base-composition h3 { margin: 0 0 4px; }
+.specialization-primary-sources .client-base-pie-layout { grid-template-columns: minmax(100px, 165px) minmax(0, 270px); gap: 10px; }
+.specialization-primary-sources .client-base-pie-legend li { grid-template-columns: 9px minmax(0, 1fr) auto auto; gap: 6px; padding: 4px 0; font-size: 12px; }
+.specialization-primary-sources .client-base-pie-legend strong { min-width: 4ch; font-size: 13px; }
+.specialization-primary-sources .client-base-pie-legend b { font-size: 11px; color: var(--muted); font-weight: 400; }
+.specialization-primary-sources .client-base-pie-key { width: 9px; height: 9px; }
+@media (max-width: 680px) { .specialization-primary-summary.has-sources { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 450px) { .specialization-primary-sources .client-base-pie-layout { grid-template-columns: 105px minmax(0, 1fr); gap: 8px; } }
 .client-base-window-picker { display: block; margin: 12px 0; }
 @media (max-width: 700px) { .primary-source-charts { grid-template-columns: minmax(0, 1fr); gap: 8px; } }
 .client-base-table-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
@@ -926,8 +929,17 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
   padding: 2px 6px;
   border-radius: 5px;
 }
-.heatmap-money { display: block; font-weight: 700; white-space: nowrap; }
-.heat-cell.device-heat-holder { padding: 1px 0; }
+.device-month-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 285px), 1fr)); align-items: start; gap: 10px; }
+.device-month-card { min-width: 0; border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 10px; }
+.device-month-card > header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 5px 12px; }
+.device-month-card > header > h3 { margin: 0; overflow-wrap: anywhere; }
+.device-month-summary .device-heat-cell { display: flex; gap: 10px; }
+.device-month-summary .device-heat-q, .device-month-summary .device-heat-s { color: var(--device-heat-color); }
+.device-month-card details { margin-top: 8px; }
+.device-month-copy { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+.device-month-table th:first-child, .device-month-table td:first-child { overflow-wrap: anywhere; }
+.device-month-table th:last-child { width: 38%; }
+@media print { .device-month-grid { display: block; } .device-month-card { margin-bottom: 8px; } }
 .device-heat-cell {
   display: grid;
   width: 100%;
@@ -7303,18 +7315,14 @@ function specializationActivityMonth(month, filter, subFilter, doctorIds, device
   if (deviceNames.length) {
     const byDoctor = {};
     const items = deviceNames.map(() => ({ q: 0, s: 0 }));
-    let sales = 0, total = 0;
     for (const id of ids) {
-      const result = computeMetrics(id, month);
-      const doctorItems = deviceNames.map(name => result?.product?.expert[name] || { q: 0, s: 0 });
-      const sum = doctorItems.reduce((value, item) => value + item.s, 0);
+      const product = computeMetrics(id, month)?.product;
+      if (!product) continue;
+      const doctorItems = deviceNames.map(name => product.expert[name] || { q: 0, s: 0 });
       doctorItems.forEach(({ q, s }, index) => { items[index].q += q; items[index].s += s; });
-      const own = result?.econ.sales;
-      byDoctor[id] = { items: doctorItems, total: sum, share: own > 0 ? sum / own * 100 : null };
-      sales += own || 0;
-      total += sum;
+      byDoctor[id] = doctorItems;
     }
-    devices = { byDoctor, items, total, share: sales > 0 ? total / sales * 100 : null };
+    devices = { byDoctor, items };
   }
   const activity = { ids, devices, primary: { byDoctor: primaryByDoctor, total: primaryTotal, frequent, sourceCounts,
     share: frequent != null && primaryTotal > 0 ? frequent / primaryTotal * 100 : null, covered } };
@@ -7917,6 +7925,19 @@ function queueReportChart(id, element, config) {
   function deviceHeatLegendHtml() {
     return '<p class="device-heat-legend"><span class="device-heat-q">Процедуры</span><span class="device-heat-s">Выручка</span></p>';
   }
+  function deviceMonthCardsHtml(cards, copyTable) {
+    const detailsAvailable = cards.some(card => card.doctors?.length);
+    return `<div data-device-month-cards>${detailsAvailable ? deviceHeatLegendHtml() : ""}<div class="device-month-grid">${cards.map((card, index) => {
+      const id = `tblDeviceMonth${index}`;
+      const doctors = card.doctors || [];
+      const maxima = deviceHeatMaxima(doctors);
+      return `<article class="device-month-card" data-device-month-card><header><h3>${escape(card.name)}</h3><div class="device-month-summary">${deviceHeatCellHtml(card)}</div></header>
+        ${doctors.length ? `<details class="collapsible-list"><summary class="collapsible-list-summary"><span>По специалистам</span><span class="collapse-hint"></span></summary>
+          <div class="collapsible-list-body">${copyTable ? `<div class="device-month-copy">${copyTable(id)}</div>` : ""}
+          <table class="data device-month-table" id="${id}"><thead><tr><th scope="col">Специалист</th><th scope="col" class="num">Шт. и ₽</th></tr></thead><tbody>
+          ${doctors.map(doctor => `<tr><td>${escape(doctor.name)}</td><td class="num">${deviceHeatCellHtml(doctor, maxima)}</td></tr>`).join("")}</tbody></table></div></details>` : ""}</article>`;
+    }).join("")}</div></div>`;
+  }
   function splitDeviceHistoryCharts(charts = []) {
     return charts.flatMap(chart => chart.series.map((series, index) => ({
       ...chart, id: `${chart.id}-${index}`, title: series.label, series: [series],
@@ -8025,7 +8046,7 @@ function queueReportChart(id, element, config) {
         : `<path d="M130,130 L${position(start, 112)} A112,112 0 ${sweep > Math.PI ? 1 : 0},1 ${position(angle, 112)} Z" fill="${groups[index].color}" stroke="#fff" stroke-width="2"><title>${escape(label)}</title></path>`;
       return shape + (value / total >= .05 ? `<text x="${position(start + sweep / 2, 74).split(",")[0]}" y="${position(start + sweep / 2, 74).split(",")[1]}" text-anchor="middle" dominant-baseline="middle" class="client-base-sector-label">${pct(value / total * 100)}</text>` : "");
     }).join("") : "";
-    return `<section class="client-base-composition" ${options.groups ? 'data-primary-source-composition' : 'data-client-base-composition'} data-client-base-values="${escape(JSON.stringify(values))}"><h3>${escape(title)}${period ? ` · ${escape(String(period))}` : ""}</h3>${total > 0 ? `<div class="client-base-pie-layout"><svg viewBox="0 0 260 260" role="img" aria-label="${escape(title)}"><title>${options.groups ? "Первичные пациенты" : "Клиентская база"}: ${number.format(total)} чел.</title>${sectors}</svg><ul class="client-base-pie-legend">${groups.map((group, index) => `<li><span class="client-base-pie-key" style="background:${group.color}"></span><span>${escape(group.label)}</span><b>${number.format(values[index])} чел.</b><strong>${pct(values[index] / total * 100)}</strong></li>`).join("")}</ul></div>` : `<p class="muted">${total === 0 ? (options.groups ? "В этом периоде первичных пациентов нет." : "В этом месяце пациентов нет.") : "За выбранный период нет данных."}</p>`}</section>`;
+    return `<section class="client-base-composition" ${options.groups ? 'data-primary-source-composition' : 'data-client-base-composition'} data-client-base-values="${escape(JSON.stringify(values))}"><h3>${escape(title)}${period ? ` · ${escape(String(period))}` : ""}</h3>${total > 0 ? `<div class="client-base-pie-layout"><svg viewBox="0 0 260 260" role="img" aria-label="${escape(title)}"><title>${options.groups ? "Первичные пациенты" : "Клиентская база"}: ${number.format(total)} чел.</title>${sectors}</svg><ul class="client-base-pie-legend">${groups.map((group, index) => `<li><span class="client-base-pie-key" style="background:${group.color}"></span><span>${escape(group.label)}</span><b>${number.format(values[index])} чел.</b><strong>${pct(values[index] / total * 100)}</strong></li>`).join("")}</ul></div>` : `<p class="muted">${total === 0 ? (options.groups ? "В этом периоде первичных пациентов нет." : "В этом месяце пациентов нет.") : escape(options.missingText || "За выбранный период нет данных.")}</p>`}</section>`;
   }
   function primarySourcesHtml(sources, month, year) {
     return `<section data-primary-sources><h3>Источники первичных пациентов</h3><div class="primary-source-charts">${[["year", `С начала ${year} года — ${month}`], ["month", `За последний месяц · ${month}`]].map(([key, period]) => {
@@ -8035,33 +8056,30 @@ function queueReportChart(id, element, config) {
         ${data.unresolved.length ? `<p class="small muted">Прочее: ${data.unresolved.map(item => `${escape(item.label)} — ${number.format(item.count)}`).join("; ")}. Эти пациенты входят в общее количество и знаменатель процентов.</p>` : ""}</div>`;
     }).join("")}</div></section>`;
   }
+  const specializationSourceOrder = [0, 1, 3, 2, 4];
   function specializationPrimarySourcesHtml(counts) {
-    const known = counts.length === primarySourceGroups.length && counts.every(value => Number.isSafeInteger(value) && value >= 0);
-    const total = known ? counts.reduce((sum, count) => sum + count, 0) : null;
-    const groups = [
-      [0, "Рекомендации", "Пациенты и знакомые"],
-      [1, "Интернет", "Яндекс, Яндекс Карты"],
-      [3, "Социальные сети", "Instagram, YouTube, ВК, Дзен"],
-      [2, "Агрегаторы", "ПроДокторов, НаПоправку"],
-      [4, "Прочие", "Другие и неизвестные источники"],
-    ];
-    const bar = total > 0 ? `<div class="specialization-source-bar" aria-hidden="true">${groups.map(([index]) => counts[index] > 0
-      ? `<span style="flex-grow:${counts[index]};background:${primarySourceGroups[index].color}"></span>` : "").join("")}</div>` : "";
-    const displayCount = count => known ? `${number.format(count)} чел.` : "—";
-    return `<section class="specialization-primary-sources" data-specialization-primary-sources>
-      <div class="specialization-source-heading"><h3>Источники первичных пациентов</h3><span>Всего <strong>${displayCount(total)}</strong></span></div>
-      ${total == null ? '<p class="small muted">Для общей разбивки нужны данные по всем врачам выборки.</p>' : ""}
-      ${bar}<ul class="specialization-source-groups">${groups.map(([index, label, examples]) => `<li>
-        <div class="specialization-source-label"><span class="client-base-pie-key" style="background:${primarySourceGroups[index].color}"></span><b>${label}</b></div>
-        <small>${examples}</small><div class="specialization-source-values"><strong>${displayCount(counts[index])}</strong><span>${pct(total > 0 ? counts[index] / total * 100 : null)}</span></div>
-      </li>`).join("")}</ul></section>`;
+    const groups = specializationSourceOrder.map(index => ({ ...primarySourceGroups[index],
+      label: index === 0 ? "Рекомендации" : index === 4 ? "Прочие" : primarySourceGroups[index].label }));
+    return `<div class="specialization-primary-sources" data-specialization-primary-sources>${clientBaseCompositionHtml(specializationSourceOrder.map(index => counts[index]), "", {
+      groups, title: "Источники первичных пациентов", missingText: "Для общей разбивки нужны данные по всем врачам выборки.",
+    })}</div>`;
+  }
+  function specializationPrimarySummaryHtml(rows, counts) {
+    const lastRow = rows.at(-1);
+    const total = lastRow && /^Итого по (?:специализации|выборке)$/i.test(lastRow[0]) ? lastRow : null;
+    const doctors = total ? rows.slice(0, -1) : rows;
+    return `<div class="specialization-primary-summary${counts ? " has-sources" : ""}" data-specialization-primary-summary>
+      <table class="data specialization-primary-table" id="tblSpecPrimary"><thead><tr><th scope="col">Специалист</th><th scope="col" class="num">Первичных</th></tr></thead>
+      <tbody>${doctors.map(([name, count]) => `<tr><td>${escape(name)}</td><td class="num">${escape(count)}</td></tr>`).join("")}</tbody>
+      ${total ? `<tfoot><tr><th scope="row">${escape(total[0])}</th><td class="num">${escape(total[1])}</td></tr></tfoot>` : ""}</table>
+      ${counts ? specializationPrimarySourcesHtml(counts) : ""}</div>`;
   }
   function reportHelpHtml(body, title = "Справка о расчётах") {
     return body ? `<details class="report-help" data-report-help><summary>${escape(title)}</summary><div class="report-help-body">${body}</div></details>` : "";
   }
-  const api = { tableHeaderLines, tableHeaderHtml, publishedDeviceMeasure, deviceHeatMaxima, deviceHeatCellHtml, deviceHeatLegendHtml, splitDeviceHistoryCharts,
+  const api = { tableHeaderLines, tableHeaderHtml, publishedDeviceMeasure, deviceMonthCardsHtml, splitDeviceHistoryCharts,
     deviceHistoryTableHtml, deviceHistoryDetailsHtml,
-    clientBaseGroups, overlappingClientBaseGroups, clientBaseDefinitionsHtml, primarySourceGroups, primarySourcesHtml, specializationPrimarySourcesHtml, periodValueStates,
+    clientBaseGroups, overlappingClientBaseGroups, clientBaseDefinitionsHtml, primarySourceGroups, primarySourcesHtml, specializationSourceOrder, specializationPrimarySummaryHtml, periodValueStates,
     clientBaseShareTableHtml, clientBaseCompositionHtml, clientBaseShareCellHtml, clientBaseAveragesHtml, publishedReportCount, publishedClientBaseShare, reportHelpHtml };
   if (typeof module === "object" && module.exports) module.exports = api;
   root.klinvektReportPresentation = api;
@@ -8197,7 +8215,6 @@ function cloudDoctorReport(doctorId, monthKey, comments) {
 
 const SPECIALIZATION_BASE_TITLE = "Динамика с начала года · база за 36 месяцев";
 const SPECIALIZATION_DEVICE_TITLE = "Загрузка аппаратов";
-const SPECIALIZATION_DEVICE_NOTE = "Доля рассчитана от собственной выручки. Аппараты берутся из настроек специализации.";
 const SPECIALIZATION_PRIMARY_NOTE = "Из отчёта «Пациенты по врачам». В итоге пациент учитывается один раз по ФИО. 4+ — первичные пациенты, посетившие врачей этой группы больше трёх раз за тот же месяц.";
 
 function specializationActivityView(month, profile, filter, subFilter = "all", ids = null) {
@@ -8224,19 +8241,28 @@ function specializationActivityView(month, profile, filter, subFilter = "all", i
   return { names, months, history, current, deviceCharts, primaryChart };
 }
 
+function specializationDeviceCards({ current, names }) {
+  const devices = current?.devices;
+  return devices ? names.map((name, index) => ({ name, ...devices.items[index],
+    doctors: current.ids.filter(id => devices.byDoctor[id]).map(id => ({ name: doctorName(id), ...devices.byDoctor[id][index] })),
+  })) : [];
+}
+
 function cloudSpecializationActivitySections(activity) {
-  const { current, names, deviceCharts, primaryChart } = activity;
+  const { current, deviceCharts, primaryChart } = activity;
   if (!current) return { deviceSections: [], primarySections: [] };
-  const { devices, primary, ids } = current;
-  const deviceSections = devices ? [{
-    title: "Аппараты за месяц", note: SPECIALIZATION_DEVICE_NOTE,
-    metrics: [mobilePublicationMetric("Выручка по всем аппаратам", fmtMoney(devices.total)), mobilePublicationMetric("Общая доля аппаратных методик", fmtPct(devices.share))],
+  const { primary, ids } = current;
+  const cards = specializationDeviceCards(activity);
+  const deviceSections = cards.length ? [{
+    title: "Аппараты за месяц",
     columns: ["Аппарат", "Процедуры, шт.", "Выручка"],
-    rows: names.map((name, i) => [name, fmtNum(devices.items[i].q), fmtMoney(devices.items[i].s)]),
-  }, {
-    title: "Аппаратные методики по врачам", columns: ["Врач", "Выручка по аппаратам", "Доля от выручки врача"],
-    rows: ids.map(id => [doctorName(id), fmtMoney(devices.byDoctor[id].total), fmtPct(devices.byDoctor[id].share)]),
-  }, ...(deviceCharts.length ? [{ title: SPECIALIZATION_DEVICE_TITLE, charts: deviceCharts }] : [])] : [];
+    rows: cards.map(({ name, q, s }) => [name, fmtNum(q), fmtMoney(s)]),
+  }] : [];
+  const doctorRows = cards.flatMap(card => card.doctors.map(({ name, q, s }) => [name, card.name, fmtNum(q), fmtMoney(s)]));
+  for (let i = 0; i < doctorRows.length; i += 500) {
+    deviceSections.push({ title: "Аппаратные методики по врачам", columns: ["Врач", "Аппарат", "Процедуры, шт.", "Выручка"], rows: doctorRows.slice(i, i + 500) });
+  }
+  if (deviceCharts.length) deviceSections.push({ title: SPECIALIZATION_DEVICE_TITLE, charts: deviceCharts });
   const sourceGroups = globalThis.klinvektReportPresentation.primarySourceGroups;
   const primarySections = [{
     title: "Первичные пациенты", note: SPECIALIZATION_PRIMARY_NOTE,
@@ -9557,16 +9583,13 @@ function specializationInterdisciplinaryHtml(rows, mk, specializationName, optio
 function renderDept() { return renderPreparedReport("dept", renderDeptNow); }
 function specializationTrendHtml(spec) {
   const id = `chart-${spec.id}`;
-  const format = spec.unit === "₽" ? fmtMoney : fmtNum;
   const device = spec.id.startsWith("specialization-devices-");
+  const heading = `<h3 class="section-title">${esc(spec.title)} ${copyBtn("copyChart", id, "PNG")}</h3>`;
   const canvas = `<div class="chart-box"${device ? ` style="--device-chart-min:${100 + spec.labels.length * 70}px"` : ""}><canvas id="${id}" aria-label="${esc(spec.title)}"></canvas></div>`;
-  const values = device ? globalThis.klinvektReportPresentation.deviceHistoryTableHtml([spec]) : `<table class="data"><tr><th>Месяц</th>${spec.series.map(series => `<th class="num">${esc(series.label)}</th>`).join("")}</tr>
-    ${spec.labels.map((label, i) => `<tr><td>${esc(label)}</td>${spec.series.map(series => `<td class="num">${format(series.values[i])}${series.pointNotes?.[i] ? `<br><small class="muted">${esc(series.pointNotes[i])}</small>` : ""}</td>`).join("")}</tr>`).join("")}</table>`;
-  const html = `<h3 class="section-title">${esc(spec.title)} ${copyBtn("copyChart", id, "PNG")}</h3>
-    ${device ? `<div class="device-history-scroll">${canvas}</div>` : canvas}
+  if (!device) return heading + canvas;
+  return `<section class="device-history-chart" data-device-history-chart>${heading}<div class="device-history-scroll">${canvas}</div>
     <details ${collapsibleListAttrs(`values-${spec.id}`, false)}><summary class="collapsible-list-summary"><span>Точные значения по месяцам</span><span class="collapse-hint"></span></summary>
-    <div class="collapsible-list-body">${values}</div></details>`;
-  return device ? `<section class="device-history-chart" data-device-history-chart>${html}</section>` : html;
+    <div class="collapsible-list-body">${globalThis.klinvektReportPresentation.deviceHistoryTableHtml([spec])}</div></details></section>`;
 }
 
 function renderSpecializationTrend(spec) {
@@ -9711,22 +9734,22 @@ function renderDeptNow() {
   html += "</div>";
 
   const activity = specializationActivityView(mk, UI.deptFilter === "all" ? null : deptProfile(UI.deptFilter), UI.deptFilter, UI.subFilter);
-  const deviceActivity = activity.current?.devices;
-  const deviceCharts = globalThis.klinvektReportPresentation.splitDeviceHistoryCharts(activity.deviceCharts);
-  // тепловая карта экспертных позиций — при выбранной специализации (у каждой свой набор)
-  if (UI.deptFilter !== "all") {
+  const presentation = globalThis.klinvektReportPresentation;
+  const deviceCards = specializationDeviceCards(activity);
+  const deviceCharts = presentation.splitDeviceHistoryCharts(activity.deviceCharts);
+  if (deviceCards.length) {
+    html += `<div class="card" data-specialization-device-month><h2>Аппараты за месяц <span class="small muted">${monthLabel(mk)}</span></h2>
+      ${presentation.deviceMonthCardsHtml(deviceCards, id => copyBtn("copyTable", id))}</div>`;
+  } else if (UI.deptFilter !== "all") {
+    // Для профилей без аппаратов сохраняется тепловая карта услуг.
     const fProfile = deptProfile(UI.deptFilter);
     const devs = (fProfile.expertise.items || []).map(d => d.name);
     const withVy = rows.filter(x => x.r.product);
     if (devs.length && withVy.length && fProfile.expertise.mode !== "none") {
       let maxQ = 1;
-      if (!deviceActivity) for (const x of withVy) for (const dv of devs) maxQ = Math.max(maxQ, x.r.product.expert[dv]?.q ?? 0);
-      const { deviceHeatMaxima, deviceHeatCellHtml, deviceHeatLegendHtml } = globalThis.klinvektReportPresentation;
-      const maxima = deviceActivity ? deviceHeatMaxima(Object.values(deviceActivity.byDoctor).flatMap(doctor => doctor.items)) : null;
-      const deviceHeading = deviceActivity ? "за месяц, шт. и ₽" : "за месяц, шт";
-      html += `<div class="card"><h2>🔥 Тепловая карта: ${esc(fProfile.expertise.title)} <span class="small muted">(${deviceHeading})</span> <span class="spacer"></span>${copyBtn("copyTable", "tblHeat")}</h2>
-        ${deviceActivity ? `<p><b>Выручка по всем аппаратам</b> · ${fmtMoney(deviceActivity.total)} <span class="small muted">· общая доля ${fmtPct(deviceActivity.share)}</span></p>${deviceHeatLegendHtml()}` : ""}
-        <div class="heatmap-scroll"><table class="data heatmap-table" id="tblHeat" style="--heat-table-min:${300 + devs.length * 150}px"><colgroup><col class="heatmap-specialist-col">${devs.map(() => '<col class="heatmap-focus-col">').join("")}<col class="heatmap-total-col">${deviceActivity ? '<col class="heatmap-focus-col">' : ""}</colgroup><tr><th>Специалист</th>` + devs.map(d => `<th class="num heatmap-focus-heading">${esc(d)}</th>`).join("") + `<th class="num">Итого</th>${deviceActivity ? '<th class="num">Доля от выручки</th>' : ""}</tr>`;
+      for (const x of withVy) for (const dv of devs) maxQ = Math.max(maxQ, x.r.product.expert[dv]?.q ?? 0);
+      html += `<div class="card"><h2>🔥 Тепловая карта: ${esc(fProfile.expertise.title)} <span class="small muted">(за месяц, шт.)</span> <span class="spacer"></span>${copyBtn("copyTable", "tblHeat")}</h2>
+        <div class="heatmap-scroll"><table class="data heatmap-table" id="tblHeat" style="--heat-table-min:${300 + devs.length * 150}px"><colgroup><col class="heatmap-specialist-col">${devs.map(() => '<col class="heatmap-focus-col">').join("")}<col class="heatmap-total-col"></colgroup><tr><th>Специалист</th>` + devs.map(d => `<th class="num heatmap-focus-heading">${esc(d)}</th>`).join("") + `<th class="num">Итого</th></tr>`;
       const devTotals = {};
       for (const x of withVy) {
         let rowTotal = 0;
@@ -9736,17 +9759,13 @@ function renderDeptNow() {
           rowTotal += q;
           devTotals[dv] = (devTotals[dv] || 0) + q;
           const alpha = q ? 0.15 + 0.7 * (q / maxQ) : 0;
-          html += `<td class="num heatmap-focus-cell">${deviceActivity
-            ? `<div class="heat-cell device-heat-holder">${deviceHeatCellHtml({ q, s: x.r.product.expert[dv]?.s ?? 0 }, maxima)}</div>`
-            : `<div class="heat-cell" style="background:rgba(37,99,235,${alpha.toFixed(2)});color:${alpha > 0.5 ? "#fff" : "inherit"}">${q || "·"}</div>`}</td>`;
+          html += `<td class="num heatmap-focus-cell"><div class="heat-cell" style="background:rgba(37,99,235,${alpha.toFixed(2)});color:${alpha > 0.5 ? "#fff" : "inherit"}">${q || "·"}</div></td>`;
         }
-        const doctorDevices = deviceActivity?.byDoctor[x.id];
-        html += `<td class="num">${deviceActivity ? deviceHeatCellHtml({ q: rowTotal, s: doctorDevices?.total }) : `<b>${rowTotal}</b>`}</td>${deviceActivity ? `<td class="num"><span class="device-heat-cell">${fmtPct(doctorDevices?.share)}</span></td>` : ""}</tr>`;
+        html += `<td class="num"><b>${rowTotal}</b></td></tr>`;
       }
       const countTotal = Object.values(devTotals).reduce((a, b) => a + b, 0);
-      html += '<tr><td><b>Итого по специализации</b></td>' + devs.map(dv => `<td class="num">${deviceActivity ? deviceHeatCellHtml(deviceActivity.items[activity.names.indexOf(dv)]) : `<b>${devTotals[dv] || 0}</b>`}</td>`).join("") +
-        `<td class="num">${deviceActivity ? deviceHeatCellHtml({ q: countTotal, s: deviceActivity.total }) : `<b>${countTotal}</b>`}</td>${deviceActivity ? `<td class="num"><span class="device-heat-cell">${fmtPct(deviceActivity.share)}</span></td>` : ""}</tr>`;
-      html += `</table></div><p class="small muted">${deviceActivity ? SPECIALIZATION_DEVICE_NOTE : "«·» по всем врачам — простаивающая позиция. Набор настраивается в профиле специализации."}</p></div>`;
+      html += '<tr><td><b>Итого по специализации</b></td>' + devs.map(dv => `<td class="num"><b>${devTotals[dv] || 0}</b></td>`).join("") +
+        `<td class="num"><b>${countTotal}</b></td></tr></table></div><p class="small muted">«·» по всем врачам — простаивающая позиция. Набор настраивается в профиле специализации.</p></div>`;
     }
   } else if (rows.some(x => x.r.product)) {
     html += `<div class="card"><p class="small muted" style="margin:0">🔥 Тепловая карта аппаратов/услуг доступна при выборе конкретной специализации в фильтре сверху — у каждой специализации свой набор отслеживаемых позиций.</p></div>`;
@@ -9760,20 +9779,19 @@ function renderDeptNow() {
     ${deviceCharts.map(specializationTrendHtml).join("")}</div></details></div>`;
   if (activity.current) {
     const primary = activity.current.primary;
+    const counts = rows.map(row => [doctorName(row.id), fmtNum(primary.byDoctor[row.id])]);
+    counts.push([UI.deptFilter === "all" ? "Итого по выборке" : "Итого по специализации", fmtNum(primary.total)]);
     html += `<div class="card" data-specialization-primary><h2>Первичные пациенты <span class="small muted">${monthLabel(mk)}</span><span class="spacer"></span>${copyBtn("copyTable", "tblSpecPrimary")}</h2>
-      <p class="small muted">${SPECIALIZATION_PRIMARY_NOTE} Данные есть у ${primary.covered} из ${rows.length} врачей.</p>
-      ${globalThis.klinvektReportPresentation.specializationPrimarySourcesHtml(primary.sourceCounts)}
-      <table class="data" id="tblSpecPrimary"><tr><th>Специалист</th><th class="num">Первичных за месяц</th></tr>
-      ${rows.map(row => `<tr><td>${esc(doctorName(row.id))}</td><td class="num">${fmtNum(primary.byDoctor[row.id])}</td></tr>`).join("")}
-      <tr><td><b>${UI.deptFilter === "all" ? "Итого по выборке" : "Итого по специализации"}</b></td><td class="num"><b>${fmtNum(primary.total)}</b></td></tr></table>
-      ${activity.primaryChart ? specializationTrendHtml(activity.primaryChart) : '<p class="small muted">Для графика нужны сопоставимые месячные отчёты «Пациенты по врачам».</p>'}</div>`;
+      ${primary.covered < rows.length ? `<p class="small muted">Данные есть у ${primary.covered} из ${rows.length} врачей.</p>` : ""}
+      ${presentation.specializationPrimarySummaryHtml(counts, primary.sourceCounts)}
+      ${activity.primaryChart ? specializationTrendHtml(activity.primaryChart) : '<p class="small muted">Для графика нужны сопоставимые месячные отчёты «Пациенты по врачам».</p>'}
+      ${presentation.reportHelpHtml(`<p>${SPECIALIZATION_PRIMARY_NOTE}</p>`)}</div>`;
   }
   if (UI.deptFilter !== "all") {
     html += specializationInterdisciplinaryHtml(rows, mk, UI.deptFilter);
   }
 
   // Клиентская база: период выбирается вручную, группы с недоступным временным порогом скрываются.
-  const presentation = globalThis.klinvektReportPresentation;
   const kbWin = UI.specializationKbWin;
   const bases = rows.map(x => ({ id: x.id, kb: reportClientBaseSummary(x.id, mk, kbWin) }));
   const baseDefinitions = presentation.clientBaseDefinitionsHtml(clientBaseDefinitionsForDoctors(rows.map(row => row.id)));
@@ -10729,7 +10747,7 @@ async function cloneDashboardForPdf(source) {
 
 async function cloneDashboardForViewer(source) {
   const snapshot = await cloneDashboardSnapshot(source, { chartMimeType: "image/webp", chartQuality: 0.9, waitForPaint: false });
-  snapshot.clone.querySelectorAll("details[data-v3-section], [data-v3-section] details, [data-specialization-device-history], [data-specialization-device-history] details")
+  snapshot.clone.querySelectorAll("details[data-v3-section], [data-v3-section] details, [data-specialization-device-history], [data-specialization-device-history] details, [data-device-month-card] details")
     .forEach(details => { details.open = false; });
   return snapshot;
 }

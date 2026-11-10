@@ -14,9 +14,7 @@ function Test-MatchesAny([string]$Value, [string[]]$Patterns) {
 $allowedPatterns = @(
   '^\.gitattributes$',
   '^\.gitignore$',
-  '^AGENTS\.md$',
   '^\.github/workflows/(ci|release)\.yml$',
-  '^README\.md$',
   '^index\.html$',
   '^package\.json$',
   '^electron-builder\.viewer\.json$',
@@ -32,7 +30,6 @@ $allowedPatterns = @(
   '^mobile-pilot/[^/]+\.(html|css|js|webmanifest)$', # Shared report-presentation.js owns V4 pie, table colours, headers and collapsed help.
   '^mobile-pilot/icons/app-icon-(192|512)\.png$',
   '^mobile-server/[^/]+\.cjs$', # Includes cloud-routes/cloud-auth; online assets use the mobile-pilot source allowlist.
-  '^docs/[^/]+\.md$', # Includes PROJECT_MAP.md and ARCHITECTURE_REVIEW.md; measurements use synthetic data only.
   '^resources/(app-icon\.(ico|png)|update-config\.json)$',
   '^scripts/benchmark-architecture\.cjs$', # Reproducible synthetic-only architecture benchmark.
   '^scripts/benchmark-background\.cjs$', # Synthetic event-loop delay measurement for background workers.
@@ -57,7 +54,7 @@ if ($LASTEXITCODE -ne 0) { throw "Could not read the Git file list." }
 
 $problems = [System.Collections.Generic.List[string]]::new()
 $secretPattern = '(?i)(github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|vibe_(?:app_local|api)_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----)'
-$textExtensions = @('.cjs', '.css', '.html', '.js', '.json', '.md', '.nsh', '.ps1', '.py', '.webmanifest', '.yaml', '.yml')
+$textExtensions = @('.cjs', '.css', '.html', '.js', '.json', '.nsh', '.ps1', '.py', '.webmanifest', '.yaml', '.yml')
 
 foreach ($file in $files) {
   if (-not (Test-MatchesAny $file $allowedPatterns)) {

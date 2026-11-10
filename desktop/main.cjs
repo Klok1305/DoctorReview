@@ -700,23 +700,28 @@ function createWindow() {
                 && !buildDeptReport('2026-02', 'all', 'all').includes('reputation-honor-board')
                 && !buildDepartmentReport('2026-02', 'Косметология').includes('reputation-honor-board')
                 && buildDepartmentReport('2026-02', 'Косметология').includes('42 шт.');
-              const heatmapFocusWidths = [...document.querySelectorAll('#tblHeat .heatmap-focus-heading')]
-                .map(cell => Math.round(cell.getBoundingClientRect().width));
-              const heatmapCellWidths = [...document.querySelectorAll('#tblHeat tr:nth-child(2) .heat-cell')]
-                .map(cell => Math.round(cell.getBoundingClientRect().width));
-              const heatmapLayoutValid = heatmapFocusWidths.length === 2
-                && heatmapCellWidths.length === 2
-                && Math.max(...heatmapFocusWidths) - Math.min(...heatmapFocusWidths) <= 2
-                && Math.max(...heatmapCellWidths) - Math.min(...heatmapCellWidths) <= 2;
-              const secondDeviceCell = document.querySelectorAll('#tblHeat tr:nth-child(2) .device-heat-cell')[1];
-              const deviceBars = [...secondDeviceCell.querySelectorAll('.device-heat-fill')];
-              if (deviceBars.map(bar => bar.style.width).join('|') !== '16.67%|33.33%'
+              const deviceMonth = document.querySelector('[data-specialization-device-month]');
+              const deviceCards = [...deviceMonth.querySelectorAll('[data-device-month-card]')];
+              const heatmapFocusWidths = deviceCards.map(card => Math.round(card.getBoundingClientRect().width));
+              const heatmapLayoutValid = deviceCards.length === 2 && heatmapFocusWidths.every(width => width > 250)
+                && deviceMonth.scrollWidth <= deviceMonth.clientWidth
+                && deviceCards.every(card => !card.querySelector('details').open);
+              const firstDevice = deviceCards[0];
+              firstDevice.querySelector('details').open = true;
+              const firstDeviceCells = [...firstDevice.querySelectorAll('tbody .device-heat-cell')];
+              const heatmapCellWidths = firstDeviceCells.map(cell => Math.round(cell.getBoundingClientRect().width));
+              const doctorDeviceCell = firstDeviceCells.find(cell => cell.textContent.includes(fmtMoney(1000)));
+              const deviceBars = [...doctorDeviceCell.querySelectorAll('.device-heat-fill')];
+              if (deviceBars.map(bar => bar.style.width).join('|') !== '8.33%|8.33%'
                 || deviceBars.some(bar => getComputedStyle(bar).height !== '5px')
-                || getComputedStyle(secondDeviceCell).fontWeight !== '400'
-                || getComputedStyle(secondDeviceCell).fontSize !== '11px'
-                || document.querySelector('#tblHeat tr:last-child .device-heat-track')) throw Error('Invalid device heatmap bars or typography');
+                || getComputedStyle(doctorDeviceCell).fontWeight !== '400'
+                || getComputedStyle(doctorDeviceCell).fontSize !== '11px'
+                || deviceMonth.querySelector('.device-month-summary .device-heat-track')) throw Error('Invalid monthly device bars or typography');
+              firstDevice.querySelector('details').open = false;
               const deviceHistory = document.querySelector('[data-specialization-device-history]');
-              if (!deviceHistory || deviceHistory.open || !document.querySelector('#tblHeat').textContent.includes(fmtMoney(17000))) {
+              if (!deviceHistory || deviceHistory.open || deviceCards.map(card => card.querySelector('h3').textContent).join('|') !== 'ЭхоКГ|Велоэргометрия'
+                || !firstDevice.querySelector('header').textContent.includes(fmtMoney(13000)) || !deviceCards[1].querySelector('header').textContent.includes(fmtMoney(4000))
+                || deviceMonth.textContent.includes(fmtMoney(17000)) || deviceMonth.textContent.includes('Доля от выручки')) {
                 throw Error('Missing monthly device revenue or expandable device history');
               }
               deviceHistory.open = true;
@@ -726,6 +731,12 @@ function createWindow() {
               const deviceTrendTitles = [...deviceHistory.querySelectorAll('[data-device-history-chart] h3')].map(title => title.firstChild.textContent.trim());
               const labels = deviceTrendChart?.config.options.plugins.datalabels;
               const primaryTrend = UI.charts['chart-specialization-primary']?.data.datasets;
+              const primarySummary = document.querySelector('[data-specialization-primary-summary]');
+              const primaryTable = primarySummary?.querySelector('table');
+              const primaryPie = primarySummary?.querySelector('[data-specialization-primary-sources]');
+              if (primaryTable?.querySelector('tfoot td').textContent !== '1' || !primaryPie?.querySelector('svg')
+                || primaryTable.getBoundingClientRect().right >= primaryPie.getBoundingClientRect().left
+                || primarySummary.closest('[data-specialization-primary]').querySelector('[data-list-key="values-specialization-primary"]')) throw Error('Invalid primary patients summary layout');
               if (deviceTrendTitles.join('|') !== 'ЭхоКГ|Велоэргометрия'
                 || deviceTrend?.length !== 1 || deviceTrend[0].data[1] !== 13000 || deviceTrend[0].pointNotes[1] !== '13 шт.'
                 || labels?.formatter(13000, { dataset: deviceTrend[0], dataIndex: 1 }).join('|') !== fmtMoney(13000) + '|13 шт.'
@@ -1519,10 +1530,12 @@ function createWindow() {
           result.specializationFocusScreenshot = specializationFocusScreenshotPath;
           const heatmapScreenshotPath = path.join(artifactRoot, "heatmap-focus-smoke.png");
           const heatmapScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
-            const table = document.getElementById('tblHeat');
-            const element = table ? table.closest('.card') : null;
+            const element = document.querySelector('[data-specialization-device-month]');
             if (!element) return '';
+            const details = element.querySelector('details');
+            if (details) details.open = true;
             const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 1.5, logging: false, windowWidth: 1400 });
+            if (details) details.open = false;
             return canvas.toDataURL('image/png');
           })()`);
           if (!heatmapScreenshot.startsWith('data:image/png;base64,')) throw new Error('Не удалось получить снимок тепловой карты');

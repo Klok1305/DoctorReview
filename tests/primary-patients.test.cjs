@@ -266,8 +266,10 @@ test("source mapping rejects conflicting duplicates and mixed categories without
     {name:'Три',source:'',primary:1,visits:1,revenue:0}]),true)`,c));
   assert.deepEqual(result.counts,[0,0,0,0,3]);assert.equal(result.total,3);
   assert.match(presentation.primarySourcesHtml({year:result,month:result},'Март 2026','2026'),/Противоречивые источники/);
-  assert.match(presentation.specializationPrimarySourcesHtml([0,0,0,0,0]),/Всего <strong>0 чел\.<\/strong>/);
-  assert.doesNotMatch(presentation.specializationPrimarySourcesHtml([0,0,0,0,0]),/specialization-source-bar/);
+  const empty = presentation.specializationPrimarySummaryHtml([["Итого по специализации", "0"]], [0,0,0,0,0]);
+  assert.match(empty, /<tfoot>[\s\S]*Итого по специализации<\/th><td class="num">0<\/td>/);
+  assert.match(empty, /В этом периоде первичных пациентов нет/);
+  assert.doesNotMatch(empty, /<svg/);
 });
 
 test("reputation defaults to total reviews descending, then name and ID; scores and missing totals do not reorder it", () => {

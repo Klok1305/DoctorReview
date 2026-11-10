@@ -202,9 +202,11 @@ test("specialization publishes device revenue and unique monthly primary patient
   assert.deepEqual(devices.rows.map(([name, count, sum]) => [name, count, Number(sum.replace(/[^\d]/g, ""))]), [
     ["Аппарат А", "3", 3000], ["Аппарат Б", "0", 0],
   ]);
-  assert.equal(devices.metrics[1].value, "50%");
+  assert.equal(devices.metrics, undefined);
   const perDoctor = deviceSections.find(section => section.title === "Аппаратные методики по врачам");
-  assert.deepEqual(perDoctor.rows.map(row => row[2]).sort(), ["100%", "40%"]);
+  assert.deepEqual(Object.fromEntries(perDoctor.rows.filter(row => row[1] === "Аппарат А").map(([doctor, , count, sum]) => [doctor, [count, Number(sum.replace(/[^\d]/g, ""))]])), {
+    "Доктор Первый": ["1", 1000], "Доктор Второй": ["2", 2000],
+  });
   const deviceChart = deviceSections.find(section => section.title === "Загрузка аппаратов").charts[0];
   assert.deepEqual(deviceChart.series[0].values, [3000, null, 3000]);
   assert.deepEqual(deviceChart.series[0].pointNotes, ["3 шт.", "", "3 шт."]);
@@ -218,16 +220,30 @@ test("specialization publishes device revenue and unique monthly primary patient
   const januaryPrimary = january.vectors[4].sections.find(section => section.title === "Первичные пациенты");
   assert.deepEqual(Array.from(januaryPrimary.charts.find(chart => chart.id === "specialization-primary-sources").series[0].values), [1, 1, 1, 1, 2]);
   const januaryHtml = renderCloudReport(january, "Специализация X", { kind: "specialization" });
-  assert.match(januaryHtml, /data-specialization-primary-sources[\s\S]+Всего <strong>6 чел\.[\s\S]+Яндекс Карты[\s\S]+Instagram, YouTube, ВК, Дзен[\s\S]+Агрегаторы[\s\S]+Прочие/);
+  assert.match(januaryHtml, /<tfoot>[\s\S]*?Итого по специализации<\/th><td class="num">6<\/td>[\s\S]*?<\/table>[\s\S]*?data-specialization-primary-sources[\s\S]*?<svg/);
+  assert.match(januaryHtml, /Рекомендации[\s\S]*?Социальные сети[\s\S]*?Агрегаторы[\s\S]*?Прочие<\/span><b>2 чел\.<\/b><strong>33,3%<\/strong>/);
+  assert.doesNotMatch(januaryHtml, /specialization-source-bar|Всего <strong>6 чел/);
   assert.doesNotMatch(JSON.stringify(january), /Синтетический .+ Пациент|Сарафанное радио/i);
   const legacy = structuredClone(january);
   const legacyPrimary = legacy.vectors[4].sections.find(section => section.title === "Первичные пациенты");
   legacyPrimary.charts = legacyPrimary.charts.filter(chart => chart.id !== "specialization-primary-sources");
   const legacyHtml = renderCloudReport(legacy, "Специализация X", { kind: "specialization" });
   assert.doesNotMatch(legacyHtml, /data-specialization-primary-sources/);
-  assert.match(legacyHtml, /Итого по специализации<\/td><td>6/);
+  assert.match(legacyHtml, /Итого по специализации<\/th><td class="num">6/);
   assert.doesNotMatch(JSON.stringify(report), /Синтетический (Общий|Другой) Пациент/i);
   const html = renderCloudReport(report, "Специализация X", { kind: "specialization" });
+  const monthly = html.match(/data-specialization-device-month[\s\S]+?<\/section>/)[0];
+  assert.equal((monthly.match(/data-device-month-card>/g) || []).length, 2);
+  assert.match(monthly, /Доктор Первый<\/td>[\s\S]+?1\s000 ₽/);
+  assert.match(monthly, /Доктор Второй<\/td>[\s\S]+?2\s000 ₽/);
+  assert.doesNotMatch(monthly, /Доля от выручки|Выручка по всем аппаратам|Итого/);
+  const legacyDeviceReport = structuredClone(report);
+  const oldDetails = legacyDeviceReport.vectors[1].sections.find(section => section.title === "Аппаратные методики по врачам");
+  oldDetails.columns = ["Врач", "Выручка по аппаратам", "Доля от выручки врача"];
+  oldDetails.rows = [["Доктор Первый", "1 000 ₽", "100%"]];
+  const oldDevices = renderCloudReport(legacyDeviceReport, "Специализация X", { kind: "specialization" });
+  assert.match(oldDevices, /Разбивка по специалистам доступна после новой публикации/);
+  assert.doesNotMatch(oldDevices, /Доля от выручки врача/);
   assert.match(html, /<details[^>]+data-specialization-device-history/);
   assert.match(html, /<h5>Аппарат А<\/h5>/);
   assert.match(html, /<h5>Аппарат Б<\/h5>/);

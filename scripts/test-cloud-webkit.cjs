@@ -81,12 +81,15 @@ async function main() {
       <tr><td>Январь 2026</td><td>15 000 ₽<br><small>3 шт.</small></td><td>12 000 ₽<br><small>2 шт.</small></td></tr>
       </table></details></div></details></div>`
     + '<div class="viewer-dashboard-snapshot"><section data-primary-sources data-legacy-source-fixture><div data-primary-source-composition><svg><title>Не распределено: 3 чел.</title></svg><ul class="client-base-pie-legend"><li><span></span><span>Не распределено</span><b>3 чел.</b></li></ul></div><p>Не распределено: источник не указан</p></section></div>'
-    + `<div class="viewer-dashboard-snapshot" data-legacy-device-fixture><div class="heatmap-scroll"><table class="data heatmap-table">
-      <tr><th>Специалист</th><th>Альтера</th></tr>
-      <tr><td>Врач А</td><td><div class="heat-cell" style="background:blue"><span>22 шт.<span class="heatmap-money">64 500 ₽</span></span></div></td></tr>
-      <tr><td>Врач Б</td><td><div class="heat-cell" style="background:blue"><span>6 шт.<span class="heatmap-money">192 000 ₽</span></span></div></td></tr>
-      <tr><td>Итого</td><td><b><span>28 шт.<span class="heatmap-money">256 500 ₽</span></span></b></td></tr>
-      </table></div></div>`
+    + `<div class="viewer-dashboard-snapshot"><div class="card" data-specialization-primary data-legacy-primary-summary><div data-specialization-primary-sources><ul>${[3, 1, 1, 0, 2].map(count => `<li class="specialization-source-values"><strong>${count} чел.</strong></li>`).join("")}</ul></div>
+      <table id="tblSpecPrimary"><tr><th>Специалист</th><th>Первичных за месяц</th></tr><tr><td>Врач А</td><td>5</td></tr><tr><td>Врач Б</td><td>2</td></tr><tr><td>Итого по специализации</td><td>7</td></tr></table>
+      <details data-list-key="values-specialization-primary"><summary>Точные значения по месяцам</summary><table><tr><td>Сентябрь</td><td>7</td></tr></table></details></div></div>`
+    + `<div class="viewer-dashboard-snapshot" data-legacy-device-fixture><div class="card"><h2>Тепловая карта: Фокусы</h2><p>Выручка по всем аппаратам</p><div class="heatmap-scroll"><table class="data heatmap-table">
+      <tr><th>Специалист</th><th>Альтера</th><th>Дека</th><th>Итого</th><th>Доля от выручки</th></tr>
+      <tr><td>Врач А</td><td><div class="heat-cell" style="background:blue"><span>22 шт.<span class="heatmap-money">64 500 ₽</span></span></div></td><td><span class="device-heat-q"><span>1 шт.</span></span><span class="device-heat-s"><span>3 000 ₽</span></span></td><td>67 500 ₽</td><td>20%</td></tr>
+      <tr><td>Врач Б</td><td><div class="heat-cell" style="background:blue"><span>6 шт.<span class="heatmap-money">192 000 ₽</span></span></div></td><td><span class="device-heat-q"><span>0 шт.</span></span><span class="device-heat-s"><span>0 ₽</span></span></td><td>192 000 ₽</td><td>25%</td></tr>
+      <tr><td>Итого</td><td><b><span>28 шт.<span class="heatmap-money">256 500 ₽</span></span></b></td><td><span class="device-heat-q"><span>1 шт.</span></span><span class="device-heat-s"><span>3 000 ₽</span></span></td><td>259 500 ₽</td><td>24%</td></tr>
+      </table></div></div></div>`
     + `<div class="viewer-dashboard-snapshot"><div data-vector-key="v3" data-legacy-v3-fixture>
       <div class="vhead"><h3>Вектор 3</h3><span class="vscore">5<span> из 6 фокусов</span></span></div>
       <details class="collapsible-list" data-list-key="appointmentConversionBlock" open><summary>Планы лечения <span class="section-detail">· окно 1 мес.</span><strong class="appointment-conversion-summary-value">75%</strong></summary>
@@ -147,11 +150,21 @@ async function main() {
     await legacySources.locator("li > span:nth-child(2)").filter({ hasText: "Прочее" }).waitFor();
     assert.equal(await legacySources.locator("svg title").textContent(), "Прочее: 3 чел.");
     assert.equal(await legacySources.locator("p").textContent(), "Прочее: источник не указан");
+    const legacyPrimary = frame.locator("[data-legacy-primary-summary] [data-specialization-primary-summary]");
+    await legacyPrimary.locator("svg").waitFor();
+    assert.equal(await legacyPrimary.locator("tfoot td").textContent(), "7");
+    assert.deepEqual(await legacyPrimary.locator(".client-base-pie-legend strong").allTextContents(), ["42,9%", "14,3%", "14,3%", "0%", "28,6%"]);
+    assert.equal(await frame.locator('[data-legacy-primary-summary] [data-list-key="values-specialization-primary"]').count(), 0);
     const legacyDevices = frame.locator("[data-legacy-device-fixture]");
     await legacyDevices.locator(".device-heat-legend").waitFor();
-    assert.deepEqual(await legacyDevices.locator(".device-heat-fill").evaluateAll(bars => bars.map(bar => bar.style.width)),
+    assert.deepEqual(await legacyDevices.locator("[data-device-month-card] h3").allTextContents(), ["Альтера", "Дека"]);
+    assert.doesNotMatch(await legacyDevices.innerText(), /Выручка по всем аппаратам|Доля от выручки|259\s500/);
+    const legacyAltera = legacyDevices.locator("[data-device-month-card]").first();
+    await legacyAltera.locator("summary").click();
+    assert.deepEqual(await legacyAltera.locator(".device-heat-fill").evaluateAll(bars => bars.map(bar => bar.style.width)),
       ["100%", "33.59%", "27.27%", "100%"]);
-    assert.equal(await legacyDevices.locator("tr:last-child .device-heat-fill").count(), 0);
+    assert.match(await legacyAltera.locator("header").innerText(), /28 шт\.[\s\S]*256\s500 ₽/);
+    assert.match(await legacyDevices.locator("[data-device-month-card]").nth(1).locator("header").innerText(), /1 шт\.[\s\S]*3\s000 ₽/);
     const legacyV3 = frame.locator("[data-legacy-v3-fixture]");
     await legacyV3.locator('[data-v3-section="focus"]').waitFor();
     assert.deepEqual(await legacyV3.locator("[data-v3-section]").evaluateAll(elements => elements.map(element => element.dataset.v3Section)), ["focus", "revenue", "conversion"]);
@@ -298,7 +311,9 @@ async function main() {
       ] }] });
     const specializationReport = structuredClone(numericReport);
     specializationReport.vectors[1].sections.push({ title: "Аппараты за месяц", columns: ["Аппарат", "Процедуры, шт.", "Выручка"],
-      rows: [["Аппарат А", "22", "64 500 ₽"], ["Аппарат Б", "6", "192 000 ₽"]] });
+      rows: [["Аппарат А", "28", "256 500 ₽"], ["Аппарат Б", "6", "192 000 ₽"]] },
+    { title: "Аппаратные методики по врачам", columns: ["Врач", "Аппарат", "Процедуры, шт.", "Выручка"],
+      rows: [["Врач А", "Аппарат А", "22", "64 500 ₽"], ["Врач Б", "Аппарат А", "6", "192 000 ₽"], ["Врач А", "Аппарат Б", "6", "192 000 ₽"]] });
     const chartLabels = ["Январь 2026", "Февраль 2026", "Март 2026"];
     specializationReport.vectors[1].sections.push({ title: "Загрузка аппаратов", charts: [{
       id: "specialization-devices-0", title: "Выручка по аппаратам", type: "line", labels: chartLabels, unit: "₽",
@@ -306,7 +321,7 @@ async function main() {
         { label: "Аппарат Б", color: "#008475", values: [12000, 19000, 16000], pointNotes: ["2 шт.", "4 шт.", "6 шт."] }],
     }] });
     specializationReport.vectors[4].sections.push({ title: "Первичные пациенты", columns: ["Врач", "Первичных за месяц"],
-      rows: [["Итого по специализации", "7"]], charts: [{
+      rows: [["Врач А", "5"], ["Врач Б", "2"], ["Итого по специализации", "7"]], charts: [{
         id: "specialization-primary", title: "Первичные пациенты по месяцам", type: "line", labels: chartLabels, unit: "чел.",
         series: [{ label: "Первичные пациенты", color: "#2563eb", values: [8, null, 7] },
           { label: "Из них с 4+ посещениями", color: "#16a34a", values: [2, null, 0], pointNotes: ["25% от первичных", "", "0% от первичных"] }],
@@ -471,9 +486,13 @@ async function main() {
     assert.equal(await baseChart.isVisible(), true);
     assert.equal(await baseChart.locator(".line-narrow path").getAttribute("d"), annualPath);
     const deviceMonth = specializationPage.locator(".cloud-section").filter({ has: specializationPage.getByRole("heading", { name: "Аппараты за месяц" }) });
-    assert.deepEqual(await deviceMonth.locator(".device-heat-fill").evaluateAll(bars => bars.map(bar => bar.style.width)),
+    assert.deepEqual(await deviceMonth.locator("[data-device-month-card] h3").allTextContents(), ["Аппарат А", "Аппарат Б"]);
+    const firstDevice = deviceMonth.locator("[data-device-month-card]").first();
+    await firstDevice.locator("summary").click();
+    assert.match(await firstDevice.locator("tbody").innerText(), /Врач А[\s\S]*Врач Б/);
+    assert.deepEqual(await firstDevice.locator(".device-heat-fill").evaluateAll(bars => bars.map(bar => bar.style.width)),
       ["100%", "33.59%", "27.27%", "100%"]);
-    assert.deepEqual(await deviceMonth.locator(".device-heat-fill").evaluateAll(bars => [...new Set(bars.map(bar => getComputedStyle(bar).height))]), ["5px"]);
+    assert.deepEqual(await firstDevice.locator(".device-heat-fill").evaluateAll(bars => [...new Set(bars.map(bar => getComputedStyle(bar).height))]), ["5px"]);
     await deviceMonth.screenshot({ path: path.join(root, "tmp", "device-heatmap-online-390.png") });
     const deviceHistory = specializationPage.locator("[data-specialization-device-history]");
     assert.equal(await deviceHistory.evaluate(element => element.open), false);
@@ -503,20 +522,24 @@ async function main() {
       });
     }), "point labels must fit to the right of the revenue axis");
     await deviceGraph.screenshot({ path: path.join(root, "tmp", "device-history-online.png") });
-    const specializationSources = specializationPage.locator("[data-specialization-primary-sources]");
-    await specializationSources.scrollIntoViewIfNeeded();
-    assert.match(await specializationSources.locator(".specialization-source-heading").innerText(), /Всего\s+7 чел\./);
-    assert.deepEqual(await specializationSources.locator(".specialization-source-values > span").allTextContents(), ["42,9%", "14,3%", "14,3%", "0%", "28,6%"]);
-    assert.equal(await specializationSources.locator(".specialization-source-bar > span").count(), 4);
-    await specializationSources.screenshot({ path: path.join(root, "tmp", "specialization-sources-online-wide.png") });
+    const specializationSummary = specializationPage.locator("[data-specialization-primary-summary]");
+    const specializationSources = specializationSummary.locator("[data-specialization-primary-sources]");
+    await specializationSummary.scrollIntoViewIfNeeded();
+    assert.equal(await specializationSummary.locator("tfoot td").textContent(), "7");
+    assert.deepEqual(await specializationSources.locator(".client-base-pie-legend strong").allTextContents(), ["42,9%", "14,3%", "14,3%", "0%", "28,6%"]);
+    assert.equal(await specializationSources.locator("svg path").count(), 4);
+    assert.ok(await specializationSummary.evaluate(summary => summary.firstElementChild.getBoundingClientRect().right < summary.lastElementChild.getBoundingClientRect().left));
+    await specializationSummary.screenshot({ path: path.join(root, "tmp", "specialization-sources-online-wide.png") });
     await specializationPage.setViewportSize({ width: 390, height: 844 });
+    assert.ok(await specializationSummary.evaluate(summary => summary.firstElementChild.getBoundingClientRect().bottom < summary.lastElementChild.getBoundingClientRect().top));
     assert.ok(await specializationSources.evaluate(section => [...section.querySelectorAll("li")].every(item => item.scrollWidth <= item.clientWidth)));
-    await specializationSources.screenshot({ path: path.join(root, "tmp", "specialization-sources-online-narrow.png") });
+    await specializationSummary.screenshot({ path: path.join(root, "tmp", "specialization-sources-online-narrow.png") });
     await deviceGraph.locator(".chart-data > summary").click();
     assert.match(await deviceGraph.locator(".chart-data tbody").innerText(), /5 шт\./);
     const primaryChart = specializationPage.locator(".report-chart").filter({ hasText: "Первичные пациенты по месяцам" });
     await primaryChart.scrollIntoViewIfNeeded();
     await primaryChart.locator("svg.line-narrow").waitFor();
+    assert.equal(await primaryChart.locator(".chart-data").count(), 0);
     for (const layout of ["narrow", "wide"]) {
       const values = primaryChart.locator(`svg.line-${layout} .line-point-value`);
       assert.deepEqual(await values.allTextContents(), ["8", "2 · 25%", "7", "0 · 0%"]);
