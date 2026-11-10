@@ -143,6 +143,7 @@ function drawPreparedSpecialization(draw, prepared) {
 }
 
 function renderPreparedSpecialization(draw) {
+  if (viewerReportDoctorScope) return draw();
   const eager = UI.reportEager || typeof Worker !== "function";
   const month = eager
     ? (DB.months[UI.deptMonth] ? UI.deptMonth : monthKeysSorted().at(-1))

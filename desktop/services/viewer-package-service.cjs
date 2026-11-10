@@ -30,10 +30,10 @@ const MAX_STANDALONE_BYTES = 400 * 1024 * 1024;
 const PAGE_TYPES = new Set(["department", "specialization", "doctor"]);
 
 function reportDoctorIdsInSnapshot(snapshot, periods = Object.keys(snapshot && snapshot.months || {})) {
-  const known = new Set(Object.keys(snapshot && snapshot.doctors || {}));
+  const doctors = snapshot?.doctors || {};
   return [...new Set(periods.flatMap(periodKey =>
-    Object.keys(snapshot && snapshot.months && snapshot.months[periodKey]?.vyrabotka || {})
-  ))].filter(doctorId => known.has(doctorId));
+    Object.entries(snapshot?.months?.[periodKey]?.vyrabotka || {}).filter(([, report]) => report && typeof report === "object").map(([id]) => id)
+  ))].filter(id => Object.hasOwn(doctors, id) && doctors[id]?.dismissed !== true);
 }
 
 function validateFullViewerExportSelection(snapshot, input, format) {
@@ -42,6 +42,9 @@ function validateFullViewerExportSelection(snapshot, input, format) {
     throw new Error("Полная публикация доступна только для HTML со всеми личными отчётами");
   }
   const selectedIds = new Set(input.doctors.map(doctor => String(doctor.doctorId || "")));
+  if ([...selectedIds].some(id => snapshot.doctors?.[id]?.dismissed === true)) {
+    throw new Error("В публикации выбран уволенный сотрудник");
+  }
   if (reportDoctorIds.some(id => !selectedIds.has(id))) {
     throw new Error("В полной публикации выбраны не все врачи с отчётами");
   }

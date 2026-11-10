@@ -225,10 +225,11 @@ function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, 
     const account = accountFor(request, identity);
     if (publication.version >= 2 && !account) throw error("Выберите ФИО и введите PIN", 401);
     const pages = visibleCloudPages(publication, publication.version >= 2 ? account.accountId : identity.userId);
-    if (!pages.length) throw error("Доступ не назначен. Обратитесь к администратору КлинВекта", 403);
+    const emptyAdminCatalog = account?.admin && !publication.pages.length;
+    if (!pages.length && !emptyAdminCatalog) throw error("Доступ не назначен. Обратитесь к администратору КлинВекта", 403);
     if (request.method === "GET" && url.pathname === "/api/cloud/context") {
       const cursor = Number(url.searchParams.get("cursor") || 0);
-      if (!Number.isInteger(cursor) || cursor < 0 || cursor >= pages.length) throw error("Некорректная позиция каталога");
+      if (!Number.isInteger(cursor) || cursor < 0 || cursor >= Math.max(1, pages.length)) throw error("Некорректная позиция каталога");
       const end = Math.min(cursor + 128, pages.length);
       sendJson(response, 200, { ok: true, userName: publication.version >= 2 ? account.displayName : identity.userName, createdAt: publication.createdAt,
         pages: pages.slice(cursor, end).map(({ html, report, ...descriptor }) => descriptor),

@@ -91,7 +91,7 @@ function validateCloudPublication(value) {
   unique(value.accounts.filter(account => account.pinSyncId).map(account => account.pinSyncId), "ID общего набора PIN");
   if (value.version >= 2 && value.accounts.filter(account => account.admin).length !== 1) fail("нужен администраторский PIN Viewer");
   const pages = list(value.pages, "страницы", 50000);
-  if (!pages.length) fail("нет отчётов");
+  if (!pages.length && value.version < 3) fail("нет отчётов");
   pages.forEach(page => {
     object(page, ["pageId", "kind", "periodKey", "doctorId", "department", "specialization", "title", value.version === 3 ? "report" : "html"], "страница");
     if (!PAGE_KINDS.has(page.kind)) fail("тип страницы");
@@ -155,12 +155,14 @@ function cloudAccountsFromViewer(doctors, settings, credentials) {
   const verifier = item => ({ pinHash: item.pinHash, pinSalt: item.pinSalt,
     pinParams: typeof item.pinParams === "string" ? JSON.parse(item.pinParams) : item.pinParams });
   const heads = new Set(settings.cloudSpecializationHeadDoctorIds || []);
+  const departments = new Set(doctors.map(doctor => doctor.department).filter(Boolean));
   return [{ accountId: "admin", displayName: "Администратор", doctorId: "", admin: true,
     departments: [], specializations: [], ...verifier(credentials.admin) }, ...credentials.doctors.map(item => {
     const doctor = doctors.find(doctor => doctor.doctorId === item.doctorId);
     if (!doctor) fail("неизвестный врач PIN");
     return { accountId: `doctor:${doctor.doctorId}`, displayName: doctor.displayName, doctorId: doctor.doctorId, admin: false,
-      departments: item.headDepartments || [], specializations: heads.has(doctor.doctorId) && doctor.specialization ? [doctor.specialization] : [],
+      departments: (item.headDepartments || []).filter(department => departments.has(department)),
+      specializations: heads.has(doctor.doctorId) && doctor.specialization ? [doctor.specialization] : [],
       ...verifier(item) };
   })];
 }

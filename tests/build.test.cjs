@@ -1042,10 +1042,11 @@ test("full Viewer HTML includes doctors with work reports even when ordinary acc
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
   const context = vm.createContext({
-    DB: { doctors: { head: {}, active: {}, inactive: {}, empty: {} } },
+    DB: { doctors: { head: {}, active: {}, inactive: {}, empty: {}, former: { dismissed: true } } },
+    isPublishableDoctor: id => id !== "former",
     viewerExportDoctorRows: () => [{ doctorId: "head" }, { doctorId: "active" }],
     viewerRecipientHasDashboardData: doctorId => doctorId === "head" || doctorId === "active",
-    doctorHasDashboardData: doctorId => doctorId === "active" || doctorId === "inactive",
+    doctorHasDashboardData: doctorId => ["active", "inactive", "former"].includes(doctorId),
     sortDoctorIdsAlphabetically: ids => [...ids].sort(),
   });
   vm.runInContext(`${adminUi.slice(start, end)}\n;globalThis.fullIds = viewerFullExportDoctorIds(["2026-08"]);`, context);
@@ -1242,6 +1243,7 @@ test("dashboard participation requires an individual work report", () => {
   const context = vm.createContext({
     VIEWER_ACCESS: { departmentHeads: { Терапия: "head" } },
     DB: { doctors: { head: {}, doctor: {} } },
+    isPublishableDoctor: id => id === "head" || id === "doctor",
     resolvedDepartmentName(doctorId) { return doctorId === "doctor" ? "Терапия" : "Администрация"; },
     doctorHasDashboardData(doctorId, periodKey) { return doctorId === "doctor" && periodKey === "2026-01"; },
   });

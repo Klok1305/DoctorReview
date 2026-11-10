@@ -222,6 +222,29 @@ test("specialization publishes device revenue and unique monthly primary patient
   assert.match(html, /50% от первичных/);
 });
 
+test("dismissed doctors are excluded from cloud credentials, pages and totals while Admin keeps their history", async () => {
+  const context = fixtureContext();
+  vm.runInContext(`DB.doctors = { d1: DB.doctors.d1, d2: DB.doctors.d2 };
+    DB.doctors.d2.dismissed = true;
+    globalThis.adminBefore = aggregateDeptMonth("2026-03", "all").econ.sales;
+    pdfTargetSource = () => aggregateDeptMonth("2026-03", "all").econ.sales;
+    globalThis.viewerSales = viewerDashboardSource({tab:"department"}, "2026-03");
+    globalThis.adminAfter = aggregateDeptMonth("2026-03", "all").econ.sales;`, context);
+  assert.equal(context.adminBefore, 3000);
+  assert.equal(context.viewerSales, 1000);
+  assert.equal(context.adminAfter, 3000);
+  const publication = bundle(await vm.runInContext("buildCloudPublicationPayload()", context));
+  assert.deepEqual(Array.from(publication.doctors, doctor => doctor.doctorId), ["d1"]);
+  assert.deepEqual(Array.from(publication.accounts, account => account.accountId), ["admin", "doctor:d1"]);
+  assert.doesNotMatch(JSON.stringify(publication), /Доктор Второй/);
+  const clinic = publication.pages.find(page => page.kind === "clinic" && page.periodKey === "2026-03");
+  assert.match(clinic.report.summary, /^1 врач/);
+  assert.equal(clinic.report.numbers.metrics.find(metric => metric.id === "economy.sales").value, 1000);
+  vm.runInContext("DB.doctors.d1.dismissed = true", context);
+  const empty = await vm.runInContext("buildCloudPublicationPayload()", context);
+  assert.equal(empty.doctors.length + empty.pages.length, 0);
+});
+
 test("cloud privacy permits a labelled doctor who is also a patient but still rejects that name in free text", () => {
   const page = { title: "Доктор Первый · март", report: { sections: [{ columns: ["Врач", "Балл"], rows: [["Доктор Первый", "80"]] }] } };
   const options = { doctorNames: ["Доктор Первый"] };
@@ -259,16 +282,21 @@ test("v3 JSON manual upload, PIN access, report rendering, catalog privacy and d
   const server = createMobileServer({ dataDir: dir, cloudPortalId: "portal" });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(async () => { await new Promise(resolve => server.close(resolve)); fs.rmSync(dir, { recursive: true, force: true }); });
-  const base = `http://127.0.0.1:${server.address().port}`, bytes = Buffer.from(JSON.stringify(publication));
+  const base = `http://127.0.0.1:${server.address().port}`;
   const hash = data => crypto.createHash("sha256").update(data).digest("hex");
   const headers = { "X-Vibe-User-Id": "1", "X-Vibe-Portal-Id": "portal", "X-Vibe-User-Role": "ADMIN", "X-Klinvekt-Cloud-Upload": "1" };
-  const upload = await (await fetch(base + "/api/cloud/manual/uploads", { method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ bytes: bytes.length, sha256: hash(bytes) }) })).json();
-  for (let index = 0, offset = 0; offset < bytes.length; index++, offset += upload.chunkBytes) {
-    const chunk = bytes.subarray(offset, offset + upload.chunkBytes);
-    assert.equal((await fetch(`${base}/api/cloud/manual/uploads/${upload.uploadId}/chunks/${index}`, { method: "PUT", headers: { ...headers, "Content-Type": "application/octet-stream", "X-Chunk-Sha256": hash(chunk) }, body: chunk })).status, 200);
+  async function publish(value) {
+    const bytes = Buffer.from(JSON.stringify(value));
+    const upload = await (await fetch(base + "/api/cloud/manual/uploads", { method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ bytes: bytes.length, sha256: hash(bytes) }) })).json();
+    for (let index = 0, offset = 0; offset < bytes.length; index++, offset += upload.chunkBytes) {
+      const chunk = bytes.subarray(offset, offset + upload.chunkBytes);
+      assert.equal((await fetch(`${base}/api/cloud/manual/uploads/${upload.uploadId}/chunks/${index}`, { method: "PUT", headers: { ...headers, "Content-Type": "application/octet-stream", "X-Chunk-Sha256": hash(chunk) }, body: chunk })).status, 200);
+    }
+    assert.equal((await fetch(`${base}/api/cloud/manual/uploads/${upload.uploadId}/complete`, { method: "POST", headers })).status, 200);
   }
-  assert.equal((await fetch(`${base}/api/cloud/manual/uploads/${upload.uploadId}/complete`, { method: "POST", headers })).status, 200);
-  const login = await fetch(base + "/api/cloud/login", { method: "POST", headers: { ...headers, "Content-Type": "application/json", "X-Klinvekt-Cloud-Auth": "1" }, body: JSON.stringify({ accountId: "doctor:d1", pin: "0123" }) });
+  const signIn = (accountId, pin) => fetch(base + "/api/cloud/login", { method: "POST", headers: { ...headers, "Content-Type": "application/json", "X-Klinvekt-Cloud-Auth": "1" }, body: JSON.stringify({ accountId, pin }) });
+  await publish(publication);
+  const login = await signIn("doctor:d1", "0123");
   assert.equal(login.status, 200); const session = await login.json(); headers["X-Klinvekt-Cloud-Session"] = session.sessionToken;
   const catalog = await (await fetch(base + "/api/cloud/context", { headers })).json();
   assert.equal(catalog.pages.length, 2); assert.doesNotMatch(JSON.stringify(catalog), /report|numbers|pinHash|Kommentar/);
@@ -276,6 +304,15 @@ test("v3 JSON manual upload, PIN access, report rendering, catalog privacy and d
   assert.equal(response.status, 200); assert.match(await response.text(), /cloud-data-report.*Доктор Первый/s);
   const forbidden = publication.pages.find(page => page.kind === "clinic");
   assert.equal((await fetch(base + "/api/cloud/pages/" + forbidden.pageId, { headers })).status, 403);
+  await publish(bundle({ doctors: [], pages: [] }));
+  assert.equal((await fetch(base + "/api/cloud/pages/" + catalog.pages[1].pageId, { headers })).status, 401);
+  const loginOptions = await (await fetch(base + "/api/cloud/admin", { headers })).json();
+  assert.deepEqual(loginOptions.accounts.map(account => account.accountId), ["admin"]);
+  assert.equal((await signIn("doctor:d1", "0123")).status, 401);
+  const adminLogin = await signIn("admin", "654321");
+  assert.equal(adminLogin.status, 200);
+  headers["X-Klinvekt-Cloud-Session"] = (await adminLogin.json()).sessionToken;
+  assert.deepEqual((await (await fetch(base + "/api/cloud/context", { headers })).json()).pages, []);
 });
 
 test("desktop JSON chooses a destination first, validates its owner and writes the complete v3 file atomically", async t => {

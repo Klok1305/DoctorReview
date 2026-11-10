@@ -158,6 +158,13 @@ test("full HTML gives every doctor with a work report their own existing PIN wit
   assert.throws(() => validateFullViewerExportSelection(state, { ...fullSelection, reportModel: { bindings: fullSelection.reportModel.bindings.slice(0, 1) } }, "html"),
     /отсутствует личный отчёт/);
   assert.throws(() => validateFullViewerExportSelection(state, fullSelection, "zip"), /только для HTML/);
+  const afterDismissal = structuredClone(state);
+  afterDismissal.doctors.d2.dismissed = true;
+  assert.deepEqual(reportDoctorIdsInSnapshot(afterDismissal), ["d1"]);
+  assert.throws(() => validateFullViewerExportSelection(afterDismissal, fullSelection, "html"), /уволенный/);
+  assert.deepEqual(validateFullViewerExportSelection(afterDismissal, {
+    ...fullSelection, doctors: [{ doctorId: "d1" }], reportModel: { bindings: fullSelection.reportModel.bindings.slice(0, 1) },
+  }, "html"), ["d1"]);
   assert.throws(() => database.viewerExportCredentials(["d1", "d2"], { adminPin: "654321" }), /Доступ врача d2 не включён/);
   const credentials = database.viewerExportCredentials(["d1", "d2"], {
     adminPin: "654321", allowInactiveDoctorIds: reportDoctorIdsInSnapshot(state),

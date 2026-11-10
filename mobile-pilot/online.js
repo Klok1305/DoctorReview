@@ -13,7 +13,10 @@ async function showReport() {
   reportLoading?.abort(); const controller = new AbortController(); reportLoading = controller;
   const page = catalog.find(page => page.periodKey === periodSelect.value && scopeKey(page) === scopeSelect.value);
   reportFrame.hidden = true; reportFrame.removeAttribute("src"); reportFrame.removeAttribute("srcdoc");
-  if (!page) return;
+  if (!page) {
+    if (!catalog.length) statusLine.textContent = "В публикации нет доступных отчётов.";
+    return;
+  }
   try {
     const response = await fetch(`/api/cloud/pages/${encodeURIComponent(page.pageId)}`, { cache: "no-store",
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]),

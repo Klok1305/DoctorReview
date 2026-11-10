@@ -1362,11 +1362,14 @@ function doctorHasDashboardData(docId, monthKey) {
 }
 
 /* Врачи месяца */
+// Ограничение действует только при синхронном построении страницы Viewer.
+let viewerReportDoctorScope = null;
+
 function doctorsInMonth(monthKey) {
   const m = DB.months[monthKey];
   if (!m) return [];
   return Object.keys(m.vyrabotka || {})
-    .filter(id => doctorHasDashboardData(id, monthKey))
+    .filter(id => (!viewerReportDoctorScope || viewerReportDoctorScope.has(id)) && doctorHasDashboardData(id, monthKey))
     .sort((a, b) => doctorName(a).localeCompare(doctorName(b), "ru"));
 }
 function coreDoctorsInMonth(monthKey) {
@@ -1560,11 +1563,17 @@ function computeDoctorDynamics(docId, endMk) {
 }
 
 /* Агрегат отделения за месяц — «виртуальный r» с теми же полями, что читают dynMetricDefs */
+function reportDoctorScope(doctorIds) {
+  const ids = doctorIds ? [...doctorIds].map(String) : null;
+  if (!viewerReportDoctorScope) return ids?.sort() ?? null;
+  return (ids ? ids.filter(id => viewerReportDoctorScope.has(id)) : [...viewerReportDoctorScope]).sort();
+}
+
 function aggregateDeptCacheKey(mk, deptFilter, subFilter, doctorIds) {
   const normalizedFilter = Array.isArray(deptFilter)
     ? [...deptFilter].map(String).sort()
     : (deptFilter instanceof Set ? [...deptFilter].map(String).sort() : String(deptFilter));
-  const normalizedDoctors = doctorIds ? [...doctorIds].map(String).sort() : null;
+  const normalizedDoctors = reportDoctorScope(doctorIds);
   return JSON.stringify([String(mk), normalizedFilter, String(subFilter), normalizedDoctors]);
 }
 
@@ -1672,7 +1681,7 @@ function specializationClientBasePoint(month, windowMonths, deptFilter, subFilte
 
 function specializationClientBaseHistory(endMk, windowMonths, deptFilter, subFilter = "all", doctorIds = null) {
   const months = calendarMonthKeys(prevMonthKey(endMk, 35), endMk);
-  const scope = doctorIds ? [...doctorIds].sort() : null;
+  const scope = reportDoctorScope(doctorIds);
   const points = months.map(month => specializationClientBasePoint(month, windowMonths, deptFilter, subFilter, scope));
   return { months, windowMonths, series: [
     { label: "Активная база", color: "#16a34a", values: points.map(point => point?.active ?? null) },

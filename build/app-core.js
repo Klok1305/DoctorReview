@@ -1758,6 +1758,7 @@ function mergeDoctors(ids) {
     if (!tgt.department && src.department) tgt.department = src.department;
     if (!tgt.specialization && src.specialization) tgt.specialization = src.specialization;
     if (!tgt.structureManual && src.structureManual) tgt.structureManual = true;
+    if (src.dismissed === true) tgt.dismissed = true;
     if (!tgt.subdept && src.subdept) tgt.subdept = src.subdept;
     if (!tgt.spec && src.spec) tgt.spec = src.spec;
     if (!tgt.metricSettings && src.metricSettings) tgt.metricSettings = src.metricSettings;

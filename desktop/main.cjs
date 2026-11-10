@@ -1682,6 +1682,32 @@ function createWindow() {
             adminFeedbackQa[key] = imagePath;
           }
           result.adminFeedbackQa = adminFeedbackQa;
+          await mainWindow.webContents.executeJavaScript(`(async () => {
+            const id = 'd3', month = '2026-02', specialization = 'Косметология';
+            const name = doctorName(id), oldSelected = UI.setDoctor;
+            try {
+              UI.setDoctor = id; await switchTab('settings');
+              const structure = document.querySelector('[data-page-block="settings.structure"]');
+              if (!structure?.textContent.includes('Отметить уволенным')) throw Error('Нет действия увольнения в структуре');
+              await setDoctorDismissed(id, true);
+              const archived = document.querySelector('[data-page-block="settings.structure.dismissed"]');
+              if (!archived?.textContent.includes(name) || !archived.textContent.includes('Вернуть в штат')
+                || viewerFullExportDoctorIds([month]).includes(id)) throw Error('Уволенный остался среди получателей');
+              const adminSales = aggregateDeptMonth(month, specialization).econ.sales;
+              const target = { tab: 'dept', departmentName: specialization, specializationName: specialization, deptFilter: specialization };
+              const context = { scopeType: 'specialization', scopeId: specialization, periodKey: month, pageType: 'specialization' };
+              const html = await composeViewerDashboardHtml(target, month, context, []);
+              if (html.includes(name) || !html.includes(doctorName('d1'))) throw Error('Неверный список сотрудников в HTML специализации');
+              if (aggregateDeptMonth(month, specialization).econ.sales !== adminSales || !doctorsInMonth(month).includes(id)) {
+                throw Error('Публикация изменила аналитику Admin');
+              }
+            } finally {
+              await setDoctorDismissed(id, false);
+              UI.setDoctor = oldSelected;
+              await switchTab('doctor');
+            }
+            if (!viewerFullExportDoctorIds([month]).includes(id)) throw Error('Сотрудник не вернулся в публикацию');
+          })()`);
           const viewerPatientScreenshotPath = path.join(artifactRoot, "viewer-patient-register-smoke.png");
           const viewerPatientScreenshot = await mainWindow.webContents.executeJavaScript(`(async () => {
             UI.docId = 'd1'; UI.docMonth = '2026-02'; UI.kbWin = 36; await switchTab('doctor');
@@ -1889,12 +1915,12 @@ function registerIpc() {
       throw new Error("Некорректное содержимое публикации Viewer");
     }
     const snapshot = database.loadSnapshot() || {};
-    const knownDoctors = new Set(Object.keys(snapshot.doctors || {}));
+    const knownDoctors = new Set(Object.keys(snapshot.doctors || {}).filter(id => snapshot.doctors[id]?.dismissed !== true));
     const doctorIds = input.doctors.map(doctor => String(doctor.doctorId || ""));
-    if (doctorIds.some(id => !knownDoctors.has(id))) throw new Error("В публикации указан неизвестный врач");
+    if (doctorIds.some(id => !knownDoctors.has(id))) throw new Error("В публикации указан неизвестный или уволенный сотрудник");
     const subjects = Array.isArray(input.subjects) ? input.subjects : input.doctors;
     const subjectIds = subjects.map(doctor => String(doctor.doctorId || ""));
-    if (subjectIds.some(id => !knownDoctors.has(id))) throw new Error("В публикации указан неизвестный врач отделения");
+    if (subjectIds.some(id => !knownDoctors.has(id))) throw new Error("В отчётах указан неизвестный или уволенный сотрудник");
     const format = String(input.format || "html");
     if (format !== "html" && format !== "zip") throw new Error("Неизвестный формат публикации Viewer");
     const allReportDoctors = input.allReportDoctors === true;
@@ -2103,8 +2129,11 @@ function registerIpc() {
       throw new Error("Сначала выберите файл для сохранения обезличенного JSON");
     }
     const snapshot = database.loadSnapshot() || {};
-    if (!Array.isArray(input.doctors) || input.doctors.length !== Object.keys(snapshot.doctors || {}).length
-      || input.doctors.some(doctor => !snapshot.doctors?.[doctor.doctorId])) throw new Error("Некорректный список врачей облачной публикации");
+    const eligible = new Set(Object.keys(snapshot.doctors || {}).filter(id => snapshot.doctors[id]?.dismissed !== true));
+    if (!Array.isArray(input.doctors) || input.doctors.length !== eligible.size
+      || input.doctors.some(doctor => !eligible.delete(doctor?.doctorId))) {
+      throw new Error("Список сотрудников изменился. Сформируйте облачную публикацию заново");
+    }
     database.viewerAccessSnapshot();
     const doctorIds = input.doctors.map(doctor => doctor.doctorId);
     const credentials = database.viewerExportCredentials(doctorIds, { allowInactiveDoctorIds: doctorIds });

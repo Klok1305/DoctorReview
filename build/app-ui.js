@@ -5306,8 +5306,22 @@ function composeViewerReportHtml(rawHtml, context, comments) {
   return root.innerHTML;
 }
 
+function isPublishableDoctor(doctorId) {
+  return Boolean(DB.doctors[doctorId]) && DB.doctors[doctorId].dismissed !== true;
+}
+
+function viewerDashboardSource(target, periodKey) {
+  if (target.tab === "doctor" && !isPublishableDoctor(target.doctorId)) throw new Error("Сотрудник исключён из публикации");
+  const all = Object.keys(DB.doctors);
+  const included = all.filter(isPublishableDoctor);
+  const previousScope = viewerReportDoctorScope;
+  if (included.length !== all.length) viewerReportDoctorScope = new Set(included);
+  try { return pdfTargetSource(target, periodKey); }
+  finally { viewerReportDoctorScope = previousScope; }
+}
+
 async function composeViewerDashboardHtml(target, periodKey, context, comments, { patientRegistry = true } = {}) {
-  const source = pdfTargetSource(target, periodKey);
+  const source = viewerDashboardSource(target, periodKey);
   if (!source) throw new Error("не найден дашборд для Viewer");
   const { clone } = await cloneDashboardForViewer(source);
   const root = document.createElement("div");
@@ -5325,13 +5339,17 @@ async function composeViewerDashboardHtml(target, periodKey, context, comments, 
 }
 
 async function buildCloudPublicationPayload(onProgress = () => {}, isCanceled = () => false) {
-  const doctorIds = sortDoctorIdsAlphabetically(Object.keys(DB.doctors));
+  await saveVisibleCommentDrafts();
+  if (!await saveLocal()) throw new Error("Не удалось сохранить текущую рабочую базу");
+  const doctorIds = sortDoctorIdsAlphabetically(Object.keys(DB.doctors).filter(isPublishableDoctor));
   const doctors = doctorIds.map(doctorId => ({ doctorId, displayName: doctorName(doctorId),
     department: resolvedDepartmentName(doctorId) || "", specialization: resolvedSpecializationName(doctorId) || "" }));
   const periods = monthKeysSorted().filter(periodKey => doctorIds.some(id => doctorHasDashboardData(id, periodKey)));
-  if (!periods.length) throw new Error("Нет рассчитанных периодов с личной «Выработкой»");
-  await saveVisibleCommentDrafts();
-  if (!await saveLocal()) throw new Error("Не удалось сохранить текущую рабочую базу");
+  if (!periods.length) {
+    const hasDismissedReports = Object.keys(DB.doctors).some(id => !isPublishableDoctor(id)
+      && monthKeysSorted().some(period => doctorHasDashboardData(id, period)));
+    if (!hasDismissedReports) throw new Error("Нет рассчитанных периодов с личной «Выработкой»");
+  }
   const pages = [], plans = periods.map(periodKey => {
     const subjects = doctors.filter(doctor => doctorHasDashboardData(doctor.doctorId, periodKey));
     return { periodKey, targets: [
@@ -5385,11 +5403,12 @@ function viewerManagedDepartments(doctorId) {
 }
 
 function viewerRecipientHasDashboardData(doctorId, periodKeys, includeManagedDepartments = false) {
+  if (!isPublishableDoctor(doctorId)) return false;
   if (periodKeys.some(periodKey => doctorHasDashboardData(doctorId, periodKey))) return true;
   if (!includeManagedDepartments) return false;
   const departments = new Set(viewerManagedDepartments(doctorId));
   return departments.size > 0 && Object.keys(DB.doctors).some(subjectDoctorId =>
-    departments.has(resolvedDepartmentName(subjectDoctorId) || "")
+    isPublishableDoctor(subjectDoctorId) && departments.has(resolvedDepartmentName(subjectDoctorId) || "")
       && periodKeys.some(periodKey => doctorHasDashboardData(subjectDoctorId, periodKey))
   );
 }
@@ -5407,7 +5426,7 @@ function viewerExportDoctorRows() {
 
 function viewerFullExportDoctorIds(periodKeys) {
   const withOwnReport = Object.keys(DB.doctors).filter(doctorId =>
-    periodKeys.some(periodKey => doctorHasDashboardData(doctorId, periodKey))
+    isPublishableDoctor(doctorId) && periodKeys.some(periodKey => doctorHasDashboardData(doctorId, periodKey))
   );
   const activeHeads = viewerExportDoctorRows()
     .filter(item => viewerRecipientHasDashboardData(item.doctorId, periodKeys, true))
@@ -5476,7 +5495,7 @@ async function openViewerExportDialog() {
     return;
   }
   document.getElementById("viewerExportFullSummary").textContent =
-    `Получателей: ${fullDoctorIds.length} — все врачи с личной «Выработкой» и включённые заведующие с отчётами отделений. Войдут и врачи с выключенным обычным доступом Viewer. Сохранённые PIN не меняются.`;
+    `Получателей: ${fullDoctorIds.length} — сотрудники в штате с личной «Выработкой» и включённые заведующие с отчётами отделений. Войдут и врачи с выключенным обычным доступом Viewer. Сохранённые PIN не меняются.`;
   const current = UI.repMonth && DB.months[UI.repMonth] ? UI.repMonth : months[months.length - 1];
   document.getElementById("viewerExportPeriods").innerHTML = months.slice().reverse().map(periodKey =>
     `<label><input type="checkbox" value="${esc(periodKey)}" ${periodKey === current ? "checked" : ""}> ${esc(monthLabel(periodKey))}</label>`
@@ -5587,7 +5606,7 @@ async function exportViewerPackage(format = "html", { allReportDoctors = false }
     const subjectIds = new Set(eligibleDoctorIds);
     if (managedDepartments.size) {
       for (const doctorId of Object.keys(DB.doctors)) {
-        if (managedDepartments.has(resolvedDepartmentName(doctorId) || "")
+        if (isPublishableDoctor(doctorId) && managedDepartments.has(resolvedDepartmentName(doctorId) || "")
           && periodKeys.some(periodKey => doctorHasDashboardData(doctorId, periodKey))) {
           subjectIds.add(doctorId);
         }
@@ -6375,11 +6394,13 @@ function renderSettings() {
     : `отделение «${departmentName}»`;
   const departmentNames = Object.keys(departmentGroups());
   const allDoctorIds = sortDoctorIdsAlphabetically(Object.keys(DB.doctors));
+  const employedDoctorIds = allDoctorIds.filter(isPublishableDoctor);
+  const dismissedDoctorIds = allDoctorIds.filter(id => !isPublishableDoctor(id));
   if (!UI.setDoctor || !DB.doctors[UI.setDoctor]) UI.setDoctor = allDoctorIds[0] || null;
   const movableSpecializations = Object.keys(s.depts).filter(name => name !== "По умолчанию" && !specializationNames.includes(name));
   let structureTree = departmentNames.map(depName => {
     const specs = departmentGroups()[depName] || [];
-    const depDoctors = allDoctorIds.filter(id => resolvedDepartmentName(id) === depName);
+    const depDoctors = employedDoctorIds.filter(id => resolvedDepartmentName(id) === depName);
     const directDoctors = depDoctors.filter(id => !resolvedSpecializationName(id));
     const specRows = specs.map(specName => {
       const doctors = depDoctors.filter(id => resolvedSpecializationName(id) === specName);
@@ -6401,16 +6422,24 @@ function renderSettings() {
       ${specRows}${directRow}
     </div>`;
   }).join("");
-  const unassignedDoctors = allDoctorIds.filter(id => !departmentGroups()[resolvedDepartmentName(id)]);
+  const unassignedDoctors = employedDoctorIds.filter(id => !departmentGroups()[resolvedDepartmentName(id)]);
   if (unassignedDoctors.length) {
     structureTree += `<div class="clinic-tree-department clinic-tree-unassigned"><div class="clinic-tree-head"><div><b>Не распределено</b><span class="badge warn">${unassignedDoctors.length}</span>${doctorStructureDragList(unassignedDoctors, "Нет врачей")}</div></div></div>`;
   }
+  structureTree += `<details class="clinic-tree-department" data-page-block="settings.structure.dismissed">
+    <summary class="collapsible-list-summary"><span>Уволенные сотрудники · ${dismissedDoctorIds.length}</span></summary>
+    <div class="collapsible-list-body">
+      ${dismissedDoctorIds.length ? dismissedDoctorIds.map(id => `<div class="metric-row">
+        <span><b>${esc(doctorName(id))}</b> <small class="muted">${esc(doctorStructureLabel(id))}</small></span>
+        <button type="button" class="btn mini" onclick="setDoctorDismissed(${esc(JSON.stringify(id))}, false)">Вернуть в штат</button>
+      </div>`).join("") : '<p class="small muted">Уволенных сотрудников нет.</p>'}
+    </div></details>`;
   let html = viewerAccessSettingsHtml() + cloudPublicationSettingsHtml();
 
   /* --- иерархия отделение -> опциональные специализации --- */
   html += `${pageBlockStart("settings.structure", "🏥 Структура клиники")}
     <div class="toolbar"><label class="small"><input type="checkbox" id="showScoresChk" onchange="DB.settings.showScores=this.checked;saveLocal({settings:true});renderAll()" ${s.showScores ? "checked" : ""}> показывать баллы</label></div>
-    <p class="small muted">Иерархия: клиника → отделение → специализация → врач. <b>Перетащите карточку врача</b> в нужную специализацию или в «Без специализации». Нормативы и веса задаются специализации; цели можно задать отделению, специализации или врачу.</p>
+    <p class="small muted">Иерархия: клиника → отделение → специализация → врач. <b>Перетащите карточку врача</b> в нужную специализацию или в «Без специализации». Уволенные остаются в аналитике Admin и исключаются из новых публикаций Viewer и онлайн.</p>
     <div class="toolbar">
       <label>Отделение: <select id="setDepartmentSel" onchange="UI.setDepartment=this.value;UI.setSpecialization='';renderSettings()">${departmentNames.map(n => `<option value="${esc(n)}" ${n === departmentName ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>
       <input type="text" id="newDepartmentName" placeholder="новое отделение…" style="min-width:190px">
@@ -6431,8 +6460,9 @@ function renderSettings() {
     </div>` : `<div class="notice blue" style="margin-top:10px">Специализации выключены: врачи временно используют резервный профиль отделения. Чтобы настраивать нормативы и веса, включите специализации.</div>`}
     <p class="small muted">Сейчас настраивается: <b>${esc(profileCaption)}</b>. Новая специализация получает стартовые нормативы и веса, а цели сначала наследует от отделения.</p>
     ${allDoctorIds.length ? `<div class="toolbar" style="margin-top:10px">
-      <label>Врач: <select id="structureDoctorSel" onchange="UI.setDoctor=this.value">${allDoctorIds.map(id => `<option value="${esc(id)}" ${id === UI.setDoctor ? "selected" : ""}>${esc(doctorName(id))}</option>`).join("")}</select></label>
+      <label>Врач: <select id="structureDoctorSel" onchange="UI.setDoctor=this.value;renderSettings()">${allDoctorIds.map(id => `<option value="${esc(id)}" ${id === UI.setDoctor ? "selected" : ""}>${esc(doctorName(id))}${isPublishableDoctor(id) ? "" : " · уволен"}</option>`).join("")}</select></label>
       <button class="btn" onclick="openDoctorGoalSettings(document.getElementById('structureDoctorSel').value)">Настроить цели врача</button>
+      ${isPublishableDoctor(UI.setDoctor) ? '<button class="btn" type="button" onclick="setDoctorDismissed(UI.setDoctor, true)">Отметить уволенным</button>' : ""}
     </div>` : ""}
     <div class="clinic-tree">${structureTree}</div>
   </div></details>`;
@@ -6731,7 +6761,7 @@ function renderSettings() {
     const needsSpecializations = departmentUsesSpecializations(effectiveDepartment);
     const subs = (profileForDoctor(id).subdivisions || []);
     html += `<tr><td><input type="checkbox" class="mergeChk" value="${id}"></td>
-      <td><b>${esc(d.name)}</b></td>
+      <td><b>${esc(d.name)}</b>${d.dismissed === true ? ' <span class="badge warn">Уволен</span>' : ""}</td>
       <td><input type="text" value="${esc(d.spec || "")}" placeholder="напр. гинеколог" onchange="setSpec('${id}', this.value)" style="width:170px"></td>
       <td><select onchange="setDoctorDepartment('${id}', this.value)">
         <option value="" ${!d.department ? "selected" : ""}>авто: ${esc(effectiveDepartment)}</option>
@@ -7282,6 +7312,20 @@ function saveDoctorMetricSettings() {
   renderAll();
 }
 /* --- сотрудники --- */
+async function setDoctorDismissed(id, dismissed) {
+  const doctor = DB.doctors[id];
+  if (!doctor || (doctor.dismissed === true) === dismissed) return;
+  const previous = doctor.dismissed;
+  doctor.dismissed = dismissed;
+  if (!await saveLocal({ doctors: [id] })) {
+    if (previous === undefined) delete doctor.dismissed;
+    else doctor.dismissed = previous;
+  } else {
+    toast(dismissed ? "Сотрудник перенесён в раздел «Уволенные»" : "Сотрудник возвращён в штат");
+  }
+  if (UI.tab === "settings") renderSettings();
+}
+
 function setDoctorDepartment(id, val) {
   if (!DB.doctors[id]) return;
   const doctor = DB.doctors[id];
