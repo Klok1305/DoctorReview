@@ -14,7 +14,7 @@ const each = (values, visit) => { if (values != null) { if (!Array.isArray(value
 function charts(values) {
   each(values, chart => {
     fields(chart, ["id", "title", "type", "labels", "series", "unit"]);
-    each(chart.series, series => fields(series, ["label", "values", "color", "colors", "side"]));
+    each(chart.series, series => fields(series, ["label", "values", "color", "colors", "side", "pointNotes"]));
   });
 }
 function metrics(values) {

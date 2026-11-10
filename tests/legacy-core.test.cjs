@@ -2634,6 +2634,19 @@ test("ZIP import rolls back a failed file, defers autosave safely and resumes fr
   } });
   context.JSZip = JSZip;
   const expectedErrors = [];
+  const preparedMonths = [], progressStatus = {}, progressBar = { removeAttribute() { delete this.value; } };
+  context.UI = {};
+  context.document.getElementById = id => id === "importProgress" ? progressStatus : id === "importProgressBar" ? progressBar : null;
+  context.prepareSpecializationYear = async (month, progress) => {
+    const committedMonths = Object.keys(database.loadSnapshot().months);
+    assert.equal(month, committedMonths.at(-1));
+    assert.ok(database.db.prepare("SELECT status FROM import_batches ORDER BY id DESC LIMIT 1").get().status !== "running");
+    progress({ completed: 1, total: committedMonths.length });
+    assert.equal(progressBar.value, 1);
+    assert.equal(progressBar.max, committedMonths.length);
+    assert.match(progressStatus.textContent, /Готовим сводки специализаций/);
+    preparedMonths.push(month);
+  };
   context.console = { ...console, error: (_message, error) => expectedErrors.push(error.message) };
   const zip = new JSZip();
   for (let month = 1; month <= 3; month++) zip.file(month + ".xlsx", "synthetic " + month);
@@ -2665,11 +2678,13 @@ test("ZIP import rolls back a failed file, defers autosave safely and resumes fr
   vm.runInContext(`const originalExpand = expandZips; expandZips = async files => {
     const expanded = await originalExpand(files); for (const file of expanded) file.__source.imported = true; return expanded;
   };`, context);
-  const retried = JSON.parse(JSON.stringify(await vm.runInContext("handleFilesBatch([archive])", context)));
+  const retried = JSON.parse(JSON.stringify(await vm.runInContext("handleFiles([archive])", context)));
   assert.deepEqual(retried, { files: 2, loaded: 2, errors: 0, skipped: 1, unprocessed: 0 });
   assert.deepEqual(Object.keys(database.loadSnapshot().months), ["2026-01", "2026-02", "2026-03"]);
   assert.deepEqual(database.db.prepare("SELECT file_name, successful FROM source_files ORDER BY id").all().map(row => [row.file_name, row.successful]), [["1.xlsx", 1], ["2.xlsx", 1], ["3.xlsx", 1], ["synthetic.zip", 1]]);
   assert.equal(database.db.prepare("SELECT COUNT(*) AS n FROM import_events").get().n, 4);
+  assert.deepEqual(preparedMonths, ["2026-01", "2026-03"]);
+  assert.equal(progressBar.hidden, true);
 });
 
 test("save queue coalesces ordinary snapshots but keeps atomic import commands ordered", async () => {

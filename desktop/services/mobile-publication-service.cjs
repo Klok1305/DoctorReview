@@ -88,6 +88,12 @@ function validateCharts(charts, label) {
       shortText(series.label, `${label}: название ряда`, 300);
       if (!Array.isArray(series.values) || series.values.length !== chart.labels.length) fail(`${label}: значения графика`);
       series.values.forEach(value => finiteNumber(value, `${label}: число графика`, { nullable: true, min: -1e15, max: 1e15 }));
+      if (series.pointNotes != null) {
+        if (chart.type !== "line" || !Array.isArray(series.pointNotes) || series.pointNotes.length !== chart.labels.length) fail(`${label}: подписи точек`);
+        series.pointNotes.forEach(note => {
+          if (note !== "") shortText(note, `${label}: подпись точки`, 100);
+        });
+      }
       if (series.color != null) color(series.color);
       if (series.colors != null) {
         if (!Array.isArray(series.colors) || series.colors.length !== chart.labels.length) fail(`${label}: цвета графика`);

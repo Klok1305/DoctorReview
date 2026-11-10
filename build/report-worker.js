@@ -18,6 +18,56 @@ function reportWorkerSnapshot(source, ids) {
   return { settings: source.settings, doctors: source.doctors, months };
 }
 
+function prepareSpecializationCalculations(year, onProgress = () => {}) {
+  const months = monthKeysSorted();
+  const yearMonths = months.filter(month => month.startsWith(year + "-"));
+  const filters = new Set(yearMonths.flatMap(month => deptListForMonth(month, doctorsInMonth(month))));
+  const scopes = [["all", "all"]];
+  for (const filter of filters) {
+    scopes.push([filter, "all"]);
+    for (const subdivision of deptProfile(filter).subdivisions || []) scopes.push([filter, subdivision]);
+  }
+  const windows = [6, 12, 24, 36];
+  const prepared = { metrics: new Map(), department: new Map(), reportBase: new Map(), basePoints: new Map(), activity: new Map() };
+  const deviceNames = new Map([...filters].map(filter => [filter, specializationDeviceNames(deptProfile(filter))]));
+  if (!yearMonths.length) return prepared;
+  const firstHistoryMonth = prevMonthKey(yearMonths[0], 35);
+  const historyMonths = months.filter(month => month >= firstHistoryMonth && month <= yearMonths.at(-1));
+  specializationCalculations = prepared;
+  preparedMetricsForRender = prepared.metrics;
+  try {
+    onProgress(0, historyMonths.length);
+    for (const [index, month] of historyMonths.entries()) {
+      if (month.startsWith(year + "-")) {
+        const previous = prevMonthKey(month);
+        for (const id of doctorsInMonth(month)) {
+          computeMetrics(id, month);
+          for (const window of windows) {
+            reportClientBaseSummary(id, month, window);
+            reportClientBaseSummary(id, previous, window);
+          }
+        }
+        for (const [filter, subFilter] of scopes) {
+          const totals = aggregateDeptMonth(month, filter, subFilter);
+          specializationActivityMonth(month, filter, subFilter, null, deviceNames.get(filter) || []);
+          // Рендер специализации использует только сводные показатели.
+          for (const base of [totals?.akb?.primary, ...Object.values(totals?.akb?.wins || {})]) {
+            if (base) delete base.clientRows;
+          }
+        }
+      }
+      for (const [filter, subFilter] of scopes) {
+        for (const window of windows) specializationClientBasePoint(month, window, filter, subFilter, null);
+      }
+      onProgress(index + 1, historyMonths.length);
+    }
+    return prepared;
+  } finally {
+    specializationCalculations = null;
+    preparedMetricsForRender = null;
+  }
+}
+
 function prepareReportCalculations(job) {
   preparedMetricsForRender = new Map();
   const months = Object.keys(DB.months).sort();
@@ -40,6 +90,7 @@ function prepareReportCalculations(job) {
   }
   const metrics = [...preparedMetricsForRender];
   preparedMetricsForRender = null;
+  if (job.tab === "dept" && job.baseWindow) specializationClientBaseHistory(job.month, job.baseWindow, job.filter, job.subFilter);
   // Large patient registries are not needed to paint a summary or historical chart.
   // Keep them in the worker; restore their lazy getters only when a list/export asks.
   for (const [, result] of _deptCache) {
@@ -50,10 +101,14 @@ function prepareReportCalculations(job) {
   for (const [key, base] of _adminBaseCache) {
     if (base && JSON.parse(key)[1] !== job.month) Object.defineProperty(base, "clientRows", { enumerable: false });
   }
-  return { metrics, kbSummary: [..._kbSummaryCache], adminBase: [..._adminBaseCache], department: [..._deptCache] };
+  return { metrics, kbSummary: [..._kbSummaryCache], adminBase: [..._adminBaseCache], department: [..._deptCache],
+    specializationBase: [..._specializationBaseCache] };
 }
 
 function adoptReportCalculations(prepared) {
+  for (const [key, point] of prepared.specializationBase || []) {
+    metricsCacheSet(_specializationBaseCache, key, point, METRICS_CACHE_LIMITS.specializationBase);
+  }
   const attachRows = (value, id, month, window) => {
     if (value) Object.defineProperty(value, "clientRows", { configurable: true, enumerable: false,
       get() { return kbClientRows(id, month, window, value); } });

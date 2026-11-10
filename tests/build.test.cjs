@@ -221,13 +221,13 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /Выполнено \+ продано, шт/);
   assert.doesNotMatch(actual, /chNazFocusMoney|Доля выручки фокусов|nazFocusShare/);
   assert.match(actual, /id="completedReferralShare"/);
-  assert.match(actual, /Доля выручки от выполненных направлений/);
+  assert.match(actual, /доля в общей выработке/);
   assert.match(actual, /источник: отчёт «Выработка»/);
   const focusBlockPosition = actual.indexOf("focusTitle = esc");
   const completedReferralSharePosition = actual.indexOf('id="completedReferralShare"');
   const completedReferralDetailsPosition = actual.indexOf('completedReferralDetails');
   assert.ok(focusBlockPosition < completedReferralSharePosition, "revenue share card must be below the focus block");
-  assert.ok(completedReferralSharePosition < completedReferralDetailsPosition, "revenue share card must precede completed-referral details");
+  assert.ok(completedReferralDetailsPosition < completedReferralSharePosition, "revenue details must own the summary tile");
   assert.match(actual, /const lower = lowerGoals\.has\(goal\.key\)/);
   assert.match(actual, /ПАЦИЕНТЫ ДЛЯ РАБОТЫ/);
   assert.match(actual, /collapsible-list-summary/);
@@ -541,7 +541,7 @@ test("unused product positions remain visually emphasized", () => {
 test("appointment details keep conversion separate from current performed revenue", () => {
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
-  const appointmentTable = ui.match(/id="tblNaz"[\s\S]*?if \(nz\.focus\)/);
+  const appointmentTable = ui.match(/id="tblNaz"[\s\S]*?<\/table>/);
   const reportTable = ui.match(/\/\/ назначения[\s\S]*?if \(nz\.focus\)/);
   const sourceCompareCss = css.match(/\.source-compare\s*\{([^}]*)\}/);
 
@@ -550,7 +550,7 @@ test("appointment details keep conversion separate from current performed revenu
   assert.ok(reportTable);
   assert.doesNotMatch(reportTable[0], /<th class="num">Выручка<\/th>|fmtMoney\(b\.soldSum\)|fmtMoney\(nz\.totals\.soldSum\)/);
   assert.doesNotMatch(ui, /<p class="source-compare">Сверка двух источников:/);
-  assert.match(ui, /Выполненные планы лечения и назначения в текущем месяце/);
+  assert.match(ui, /Выполненные направления за месяц/);
   assert.ok(sourceCompareCss);
   assert.match(sourceCompareCss[1], /color:\s*var\(--muted\)/);
   assert.doesNotMatch(sourceCompareCss[1], /background|border|padding/);
@@ -638,7 +638,8 @@ test("appointment conversion block starts compact and parent groups hide their w
   assert.match(vector[0], /collapsibleListAttrs\("appointmentConversionBlock", false\)/);
   assert.match(vector[0], /appointment-conversion-summary/);
   assert.match(vector[0], /appointment-conversion-summary-value/);
-  assert.match(vector[0], /Планы лечения и конверсия в реализацию/);
+  assert.match(vector[0], /Конверсия назначений/);
+  assert.deepEqual([...new Set([...vector[0].matchAll(/data-v3-section="([^"]+)"/g)].map(match => match[1]))], ["focus", "revenue", "conversion"]);
   assert.match(vector[0], /collapsibleListAttrs\("appointmentDetails", false\)/);
   assert.match(vector[0], /collapsibleListAttrs\("interdisciplinaryFocusPositions", false\)/);
   assert.match(vector[0], /collapsibleListAttrs\("completedReferralDetails", false\)/);
@@ -706,7 +707,7 @@ test("dynamics table shows explicit goals and uses compact comparison headings",
   assert.match(ui, />ВЫРУЧКА \$\{copyBtn\("copyChart", blkId \+ "_money", "PNG"\)\}/);
   assert.match(ui, />ПАЦИЕНТЫ \/ ВИЗИТЫ \$\{copyBtn\("copyChart", blkId \+ "_traffic", "PNG"\)\}/);
   assert.match(ui, />ЛОЯЛЬНОСТЬ И ПЕРЕНАПРАВЛЕНИЯ, % \$\{copyBtn\("copyChart", blkId \+ "_pct", "PNG"\)\}/);
-  assert.match(ui, />КЛИЕНТСКАЯ БАЗА \$\{copyBtn\("copyChart", blkId \+ "_base", "PNG"\)\}/);
+  assert.match(ui, />КЛИЕНТСКАЯ БАЗА \$\{hasBase \? copyBtn\("copyChart", blkId \+ "_base", "PNG"\)/);
   assert.doesNotMatch(ui, />ДЕНЬГИ \$\{copyBtn|>ТРАФИК \$\{copyBtn|>УДЕРЖАНИЕ И КОМАНДА/);
 });
 
@@ -843,7 +844,7 @@ test("client-base table shows overlapping groups and omits unavailable values", 
   assert.match(table[0], /<h2>Клиентская база<\/h2>/);
   assert.doesNotMatch(table[0], /Мониторинг базы|<th>Настройки базы<\/th>/);
   assert.match(table[0], /visibleGroups/);
-  assert.match(table[0], /reportClientBaseSummary\(x.id, mk, UI.kbWin\)/);
+  assert.match(table[0], /reportClientBaseSummary\(x.id, mk, kbWin\)/);
   assert.match(table[0], /clientBaseDefinitionsHtml/);
   assert.match(table[0], /kb\.groupAvailable\[key\]/);
   assert.match(table[0], /clientBaseShareCellHtml\(clientBaseGroupPct\(kb, key\)/);

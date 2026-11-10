@@ -536,7 +536,7 @@ function createWindow() {
               };
               DB.settings.depts['Косметология'].expertise = {
                 title: 'Фокусы специализации',
-                mode: 'services',
+                mode: 'devices',
                 group: '',
                 items: [
                   { name: 'ЭхоКГ', syn: ['эхокг'], core: true },
@@ -618,6 +618,9 @@ function createWindow() {
                   { name: 'Первичный Синтетический Два', source: 'Сайт клиники', primary: january ? 1 : 0, primaryClinic: 0, visits: january ? 1 : 2, revenue: 2000 },
                   ...(!january ? [{ name: 'Первичный Синтетический Три', source: 'По рекомендации к доктору', primary: 1, primaryClinic: 1, visits: 1, revenue: 3000 }] : [])
                 ] } } };
+                DB.months[mk].primaryPatients.perDoc.d3 = { patients: [
+                  { name: 'Первичный Синтетический Один', primary: january ? 1 : 0, visits: 3, revenue: 3000 }
+                ] };
                 DB.months[mk].naznach.d1['1'].patientDetailsAvailable = true;
                 DB.months[mk].naznach.d1['1'].patientAssignments = [
                   { name: 'Первичный Синтетический Два', n: 'Приём кардиолога', executor: 'Тестов Терапевт', assigned: 1, goods: false }
@@ -705,6 +708,18 @@ function createWindow() {
                 && heatmapCellWidths.length === 2
                 && Math.max(...heatmapFocusWidths) - Math.min(...heatmapFocusWidths) <= 2
                 && Math.max(...heatmapCellWidths) - Math.min(...heatmapCellWidths) <= 2;
+              const deviceHistory = document.querySelector('[data-specialization-device-history]');
+              if (!deviceHistory || deviceHistory.open || !document.querySelector('#tblHeat').textContent.includes(fmtMoney(17000))) {
+                throw Error('Missing monthly device revenue or expandable device history');
+              }
+              deviceHistory.open = true;
+              flushReportCharts();
+              const deviceTrend = UI.charts['chart-specialization-devices-0']?.data.datasets;
+              const primaryTrend = UI.charts['chart-specialization-primary']?.data.datasets;
+              if (deviceTrend?.[0].data[1] !== 13000 || deviceTrend[0].pointNotes[1] !== '13 шт.'
+                || primaryTrend?.[0].data.join('|') !== '2|1' || primaryTrend?.[1].data.join('|') !== '1|0'
+                || primaryTrend[1].pointNotes[0] !== '50% от первичных') throw Error('Invalid device or primary patient trends');
+              deviceHistory.open = false;
               const specializationFocusTable = document.getElementById('tblSpecializationFocus');
               const specializationFocusNames = specializationFocusTable
                 ? [...specializationFocusTable.querySelectorAll('tr')].slice(1, -1).map(row => row.cells[0]?.textContent.trim())
@@ -890,7 +905,7 @@ function createWindow() {
                 && !appointmentConversionBlock.open;
               const primaryAppointmentCollapseChecks = {
                 initiallyCollapsed: appointmentConversionInitiallyCollapsed,
-                compactSummary: Boolean(appointmentConversionBlock?.querySelector('summary')?.textContent.includes('Планы лечения и конверсия в реализацию')),
+                compactSummary: Boolean(appointmentConversionBlock?.querySelector('summary')?.textContent.includes('Конверсия назначений')),
                 compactValue: Boolean(appointmentConversionBlock?.querySelector('.appointment-conversion-summary-value')?.textContent.includes('75%')),
                 bodyHidden: appointmentConversionCollapsed,
                 detailsInitiallyCollapsed: appointmentDetailsInitiallyCollapsed,
@@ -906,7 +921,7 @@ function createWindow() {
               const anotherDoctorAppointmentBlock = document.querySelector('#blkV3 [data-list-key="appointmentConversionBlock"]');
               const anotherDoctorAppointmentCollapseValid = Boolean(anotherDoctorAppointmentBlock)
                 && !anotherDoctorAppointmentBlock.open
-                && anotherDoctorAppointmentBlock.querySelector('summary')?.textContent.includes('Планы лечения и конверсия в реализацию')
+                && anotherDoctorAppointmentBlock.querySelector('summary')?.textContent.includes('Конверсия назначений')
                 && anotherDoctorAppointmentBlock.querySelector('.appointment-conversion-summary-value')?.textContent.includes('40%');
               UI.docId = 'd1';
               await renderDoctor();
@@ -1000,7 +1015,7 @@ function createWindow() {
                 && mirrorRevenueDetails.gapPixels >= 20;
               const focusResult = computeMetrics('d1', '2026-02');
               const interdisciplinaryFocusDetails = {
-                block: document.getElementById('blkV3').textContent.includes('ФОКУСЫ НАЗНАЧЕНИЙ'),
+                block: document.querySelector('#blkV3 [data-v3-section="focus"] summary strong')?.textContent === '1 из 2',
                 charts: Boolean(UI.charts.chNazFocusAssigned && UI.charts.chNazFocusResult),
                 used: focusResult.cross.naz[1].focus ? focusResult.cross.naz[1].focus.used : null,
                 park: focusResult.cross.naz[1].focus ? focusResult.cross.naz[1].focus.park : null,
@@ -1053,7 +1068,8 @@ function createWindow() {
               const viewerPatientRows = [...viewerDoctorRoot.querySelectorAll('[data-viewer-patient-row]')];
               const viewerKbButtons = [...viewerDoctorRoot.querySelectorAll('[data-viewer-kb-window]')];
               const adminAppointmentTable = document.querySelector('#blkV3 #tblNaz');
-              const viewerAppointmentTable = viewerDoctorRoot.querySelector('[data-vector-key="v3"] table.data');
+              const viewerV3 = [...viewerDoctorRoot.querySelectorAll('[data-vector-key="v3"] > [data-v3-section]')];
+              const viewerAppointmentTable = viewerDoctorRoot.querySelector('[data-v3-section="conversion"] table.data');
               const adminAppointmentRows = [...(adminAppointmentTable?.querySelectorAll('tr') || [])];
               const viewerAppointmentRows = [...(viewerAppointmentTable?.querySelectorAll('tr') || [])];
               const adminAppointmentParity = Boolean(adminAppointmentTable && viewerAppointmentTable)
@@ -1061,7 +1077,8 @@ function createWindow() {
                 && adminAppointmentRows.every((row, index) => row.textContent.trim() === viewerAppointmentRows[index].textContent.trim())
                 && viewerDoctorRoot.querySelectorAll('[data-vector-key="v3"] .source-group-head[data-g]').length > 0
                 && viewerDoctorRoot.querySelectorAll('[data-vector-key="v3"] img[data-pdf-chart]').length >= 2
-                && viewerDoctorRoot.querySelector('[data-vector-key="v3"] .appointment-conversion-summary') !== null;
+                && viewerV3.map(section => section.dataset.v3Section).join('|') === 'focus|revenue|conversion'
+                && viewerV3.every(section => !section.open);
               const viewerPlatformRatings = [...viewerDoctorRoot.querySelectorAll('.rating-platform-card')];
               const viewerRatingsValid = viewerPlatformRatings.length === 4
                 && viewerPlatformRatings.some(card => card.textContent.includes('ПроДокторов'))
@@ -1556,10 +1573,22 @@ function createWindow() {
               clearMetricsCache();
               UI.docId = 'd1'; UI.docMonth = '2026-12'; await switchTab('doctor');
               setDoctorSemanticSections(true);
-              const conversion = document.querySelector('#blkV3 [data-list-key="appointmentConversionBlock"]');
+              const sections = [...document.querySelectorAll('#blkV3 > [data-v3-section]')];
+              if (sections.map(section => section.dataset.v3Section).join('|') !== 'focus|revenue|conversion') throw Error('Admin QA: incorrect Vector 3 order');
+              let [focus, completed, conversion] = sections;
+              if (sections.some(section => section.open)) throw Error('Admin QA: Vector 3 should start compact');
+              if (!/\\d+ из \\d+/.test(focus.querySelector('summary').textContent)) throw Error('Admin QA: focus count missing');
+              const revenueSummary = completed.querySelector('summary').textContent;
+              const selectedWindow = UI.nazSlice;
+              if (document.querySelector('#nazSeg button[data-segment-value="3"]') && document.querySelector('#nazSeg button[data-segment-value="1"]')) {
+                await setNazSlice(selectedWindow === 3 ? 1 : 3);
+                if (document.querySelector('#blkV3 > [data-v3-section="revenue"] summary').textContent !== revenueSummary) throw Error('Admin QA: assignment window changed monthly revenue');
+                await setNazSlice(selectedWindow);
+                [focus, completed, conversion] = document.querySelectorAll('#blkV3 > [data-v3-section]');
+              }
+              focus.open = true;
               conversion.open = true;
               expandAppointmentDetails();
-              const completed = document.querySelector('#blkV3 [data-list-key="completedReferralDetails"]');
               completed.open = true;
               document.querySelectorAll('#tblRef .grp-head[data-g]').forEach(row => { if (!UI.openGroups[row.dataset.g]) toggleGroup(row.dataset.g); });
               flushReportCharts(); for (const instance of Object.values(UI.charts)) { instance.stop(); instance.update('none'); }
@@ -1580,7 +1609,7 @@ function createWindow() {
               const monthCells = [...table.rows[1].cells].slice(2, 14);
               if (monthCells.some(cell => cell.getBoundingClientRect().width < 85)) throw Error('Admin QA: month columns too narrow');
               if (document.querySelector('#tblRef').textContent.includes('Профильные услуги') || document.querySelector('#tblRef').textContent.includes('Другие услуги клиники')) throw Error('Admin QA: legacy service split remains');
-              if (document.querySelector('.completed-referrals-section').textContent.toLowerCase().includes('конверсия')) throw Error('Admin QA: conversion in performed block');
+              if (completed.textContent.toLowerCase().includes('конверсия')) throw Error('Admin QA: conversion in performed block');
               if (document.querySelector('#blkV4 [data-client-base-share-table] thead tr').cells.length !== 13 || document.querySelector('#blkV4 #chSegments, #blkV4 #chClientShares')) throw Error('Admin QA: expected pie and year table');
               const capture = async element => (await html2canvas(element, { backgroundColor: '#ffffff', scale: 1, logging: false, windowWidth: 1400 })).toDataURL('image/png');
               const yearImage = await capture(table);

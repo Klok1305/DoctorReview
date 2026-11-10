@@ -242,8 +242,8 @@ function createCloudRoutes({ dataDir, portalId, publisherKeyIds = [], sendJson, 
       response.setHeader("Cache-Control", "no-store");
       response.setHeader("Content-Type", "text/html; charset=utf-8");
       response.end('<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
-        + '<link rel="stylesheet" href="/mobile/online-report.css?v=10"><script src="/mobile/report-presentation.js?v=4" defer></script><script src="/mobile/report-charts.js?v=2" defer></script><script src="/mobile/online-report.js?v=8" defer></script></head><body class="online-report"'
-        + (page.kind === "specialization" ? ' data-report-kind="specialization"' : "") + ">"
+        + '<link rel="stylesheet" href="/mobile/online-report.css?v=12"><script src="/mobile/report-presentation.js?v=4" defer></script><script src="/mobile/report-charts.js?v=4" defer></script><script src="/mobile/online-report.js?v=9" defer></script></head><body class="online-report"'
+        + (page.kind === "specialization" ? ' data-report-kind="specialization"' : page.kind === "doctor" ? ' data-report-kind="doctor"' : "") + ">"
         + (publication.version === 3 ? reportRenderCache.render(page) : page.html) + "</body></html>"); return;
     }
     throw error("API не найден", 404);

@@ -80,6 +80,62 @@ test("report Worker keeps the caller event loop responsive on a large cohort", a
   } finally { clearInterval(timer); }
 });
 
+test("specialization year preparation is reused across filters, months and recency windows until data changes", async () => {
+  const c = context(); fixture(c);
+  const controls = new Map(), workers = [], updates = [];
+  class MockWorker {
+    constructor() { workers.push(this); }
+    postMessage() {}
+    terminate() {}
+    reply(data) { this.onmessage({ data }); }
+  }
+  Object.assign(c, {
+    UI: { deptMonth: "2026-03", deptFilter: "X", subFilter: "all", specializationKbWin: 36 },
+    Worker: MockWorker, Blob, performance, setTimeout, updates,
+    URL: { createObjectURL: () => "blob:test", revokeObjectURL() {} },
+    requestAnimationFrame: callback => callback(),
+    document: { getElementById: id => {
+      if (!controls.has(id)) controls.set(id, { innerHTML: "", textContent: "source" });
+      return controls.get(id);
+    } },
+  });
+  vm.runInContext(fs.readFileSync(path.join(root, "build/report-performance.js"), "utf8"), c);
+  vm.runInContext(`
+    DB.settings.depts.X.subdivisions=['Группа']; DB.doctors.d1.subdept='Группа'; clearMetricsCache();
+    function readSpecialization() {
+      const month = UI.deptMonth, filter = UI.deptFilter, sub = UI.subFilter, window = UI.specializationKbWin;
+      return { sales: computeMetrics('d1', month).econ.sales, totals: aggregateDeptMonth(month, filter, sub).econ,
+        series: specializationClientBaseHistory(month, window, filter, sub).series,
+        shares: reportClientBaseSummary('d1', month, window)?.seg,
+        previous: reportClientBaseSummary('d1', prevMonthKey(month), window)?.total };
+    }`, c);
+  const expected = plain(vm.runInContext("readSpecialization()", c));
+  const workerContext = context(); fixture(workerContext);
+  vm.runInContext("DB.settings.depts.X.subdivisions=['Группа']; DB.doctors.d1.subdept='Группа'; clearMetricsCache()", workerContext);
+  const prepared = structuredClone(vm.runInContext("prepareSpecializationCalculations('2026')", workerContext));
+  assert.equal(prepared.department.values().next().value.akb.primary?.clientRows, undefined);
+  const preparation = vm.runInContext("prepareSpecializationYear('2026-03', value => updates.push(value))", c);
+  const opening = vm.runInContext("renderPreparedReport('dept', () => { globalThis.firstView = readSpecialization(); })", c);
+  workers[0].reply({ progress: { completed: 1, total: 3 } });
+  workers[0].reply({ prepared });
+  assert.equal(await opening, true);
+  await preparation;
+  assert.deepEqual(plain(c.firstView), expected);
+  assert.deepEqual(updates, [{ completed: 1, total: 3 }]);
+
+  const filtered = plain(vm.runInContext("UI.deptMonth='2026-01'; UI.subFilter='Группа'; UI.specializationKbWin=12; readSpecialization()", c));
+  vm.runInContext(`_mcCache.clear(); _deptCache.clear(); _kbSummaryCache.clear(); _specializationBaseCache.clear();
+    computeMetricsRaw = aggregateDeptMonthRaw = computeKbSummary = () => { throw Error('Unexpected calculation after preparation'); };`, c);
+  assert.deepEqual(plain(await vm.runInContext("renderPreparedReport('dept', readSpecialization)", c)), filtered);
+  assert.equal(workers.length, 1);
+  const stale = vm.runInContext("invalidateMetricsCache({months:['2026-01']}); prepareSpecializationYear('2026-01')", c);
+  assert.equal(workers.length, 2);
+  vm.runInContext("invalidateMetricsCache({settings:true})", c);
+  workers[1].reply({ prepared });
+  assert.equal(await stale, null);
+  assert.equal(vm.runInContext("readySpecializationYear('2026')", c), null);
+});
+
 test("changing the report or calculation revision discards old Worker replies", async () => {
   const c = context(); fixture(c);
   const workers = [], drawn = [];

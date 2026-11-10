@@ -1084,6 +1084,19 @@ function filesFromDataTransfer(dt) {
 let fileImportInProgress = false;
 let fileImportCancelRequested = false;
 
+function setFileImportProgress(message, completed, total) {
+  const status = document.getElementById("importProgress");
+  const bar = document.getElementById("importProgressBar");
+  if (status) status.textContent = message;
+  if (bar) {
+    bar.hidden = !message;
+    if (total > 0) {
+      bar.max = total;
+      bar.value = completed;
+    } else bar.removeAttribute("value");
+  }
+}
+
 function cancelFileImport() {
   if (!fileImportInProgress) return;
   fileImportCancelRequested = true;
@@ -1106,16 +1119,16 @@ async function handleFiles(fileList, options = {}) {
   }
   fileImportInProgress = true;
   fileImportCancelRequested = false;
+  if (typeof cancelSpecializationPreparation === "function") cancelSpecializationPreparation();
   const controlIds = ["btnPickFiles", "btnPickDir", "btnScanInput", "btnReprocessAppointments", "btnReprocessPrimaryReturn"];
   const controls = controlIds.map(id => document.getElementById(id)).filter(Boolean);
   const previousDisabled = controls.map(control => control.disabled);
   controls.forEach(control => { control.disabled = true; });
   const dropzone = document.getElementById("dropzone");
   const cancelButton = document.getElementById("btnCancelImport");
-  const progress = document.getElementById("importProgress");
   if (dropzone) dropzone.setAttribute("aria-busy", "true");
   if (cancelButton) cancelButton.classList.remove("hidden");
-  if (progress) progress.textContent = "Подготавливаем файлы…";
+  setFileImportProgress("Подготавливаем файлы…");
   try {
     return await handleFilesBatch(fileList, options);
   } catch (error) {
@@ -1126,7 +1139,7 @@ async function handleFiles(fileList, options = {}) {
     controls.forEach((control, index) => { control.disabled = previousDisabled[index]; });
     if (dropzone) dropzone.removeAttribute("aria-busy");
     if (cancelButton) cancelButton.classList.add("hidden");
-    if (progress) progress.textContent = "";
+    setFileImportProgress("");
     fileImportInProgress = false;
     fileImportCancelRequested = false;
   }
@@ -1175,8 +1188,7 @@ async function handleFilesBatch(fileList, options = {}) {
       break;
     }
     const f = files[index];
-    const progress = document.getElementById("importProgress");
-    if (progress) progress.textContent = `Обрабатываем ${index + 1} из ${files.length}: ${f.name}`;
+    setFileImportProgress(`Обрабатываем файл ${index + 1} из ${files.length} · ${f.name}`, index, files.length);
     await yieldImportEvents();
     const source = DESKTOP_API ? await ensureDesktopFileSource(f) : null;
     let saved;
@@ -1201,7 +1213,7 @@ async function handleFilesBatch(fileList, options = {}) {
         });
       }
       // Фильтр типа не меняет базу и не подтверждает успешную обработку источника.
-      if (progress) progress.textContent = `Сохраняем ${index + 1} из ${files.length}: ${f.name}`;
+      setFileImportProgress(`Сохраняем файл ${index + 1} из ${files.length} · ${f.name}`, index, files.length);
       const committed = log.skipReason === "filtered-type" || await saveLocal(records);
       if (!committed) {
         DB.doctors = before.doctors;
@@ -1241,6 +1253,21 @@ async function handleFilesBatch(fileList, options = {}) {
       console.error("import batch completion failed", error);
       err++;
       toast("Не удалось записать итог импорта: " + error.message, true);
+    }
+  }
+  if (ok && !fileImportCancelRequested && typeof prepareSpecializationYear === "function") {
+    const month = DB.months[UI.deptMonth] ? UI.deptMonth : monthKeysSorted().at(-1);
+    if (month) {
+      const label = `Готовим сводки специализаций за ${month.slice(0, 4)} год`;
+      document.getElementById("btnCancelImport")?.classList.add("hidden");
+      setFileImportProgress(label + "…");
+      try {
+        await prepareSpecializationYear(month, ({ completed, total }) => {
+          setFileImportProgress(`${label} · обработано ${completed} из ${total} месяцев`, completed, total);
+        });
+      } catch (error) {
+        console.warn("Specialization preparation after import:", error);
+      }
     }
   }
   renderAll();

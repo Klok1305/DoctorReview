@@ -10,11 +10,12 @@
   const numberFormats = [new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }),
     new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1, notation: "compact" })];
   const chartNumber = (value, compact = false) => Number.isFinite(value) ? numberFormats[compact ? 1 : 0].format(value) : "—";
+  const pointNote = (series, index) => series.pointNotes?.[index] || "";
 
   function chartTable(chart) {
     return `<details class="chart-data"><summary>Точные значения${chart.unit ? ` · ${escapeHtml(chart.unit)}` : ""}</summary><div class="chart-data-scroll"><table>
       <thead><tr><th scope="col">${chart.type === "line" || chart.type === "mirror" ? "Период" : "Категория"}</th>${chart.series.map(series => `<th scope="col">${escapeHtml(series.label)}</th>`).join("")}</tr></thead>
-      <tbody>${chart.labels.map((label, i) => `<tr><th scope="row">${escapeHtml(label)}</th>${chart.series.map(series => `<td>${chartNumber(series.values[i])}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`;
+      <tbody>${chart.labels.map((label, i) => `<tr><th scope="row">${escapeHtml(label)}</th>${chart.series.map(series => `<td>${chartNumber(series.values[i])}${pointNote(series, i) ? `<br><small>${escapeHtml(pointNote(series, i))}</small>` : ""}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`;
   }
 
   function chartLegend(chart, series = chart.series) {
@@ -82,12 +83,20 @@
         previous = true;
         return part;
       }).join(" ");
-      return `<path d="${path}" fill="none" stroke="${color}" stroke-width="2.5"/>${item.values.map((value, i) => Number.isFinite(value) ? `<circle cx="${x(i)}" cy="${y(value)}" r="3.5" fill="${color}"><title>${escapeHtml(item.label)} · ${escapeHtml(chart.labels[i])}: ${chartNumber(value)}</title></circle>` : "").join("")}`;
+      return `<path d="${path}" fill="none" stroke="${color}" stroke-width="2.5"/>${item.values.map((value, i) => Number.isFinite(value) ? `<circle cx="${x(i)}" cy="${y(value)}" r="3.5" fill="${color}"><title>${escapeHtml(item.label)} · ${escapeHtml(chart.labels[i])}: ${chartNumber(value)}${pointNote(item, i) ? ` · ${escapeHtml(pointNote(item, i))}` : ""}</title></circle>` : "").join("")}`;
     }).join("");
-    const labelText = label => compact ? String(label).split(/\s+/).map((part, i) => i === 0 ? part.slice(0, 3) : /^\d{4}$/.test(part) ? part.slice(-2) : part).join(" ") : label;
-    return `<svg class="${compact ? "line-narrow" : "line-wide"}" viewBox="0 0 ${width} 235" role="img" aria-label="${escapeHtml(chart.title)}"><text x="${start}" y="16">${escapeHtml(chart.unit || "")}</text>${grid}${lines}${chart.labels.map((label, i) => `<text x="${x(i)}" y="219" text-anchor="middle">${escapeHtml(labelText(label))}</text>`).join("")}</svg>`;
+    const sparse = chart.labels.length > 12;
+    const labelText = label => compact || sparse ? String(label).split(/\s+/).map((part, i) => i === 0 ? part.slice(0, 3) : /^\d{4}$/.test(part) ? part.slice(-2) : part).join(" ") : label;
+    const tickCount = compact ? 6 : 9;
+    const ticks = sparse
+      ? Array.from({ length: tickCount }, (_, i) => Math.round(i * (chart.labels.length - 1) / (tickCount - 1)))
+      : chart.labels.map((_, i) => i);
+    return `<svg class="${compact ? "line-narrow" : "line-wide"}" viewBox="0 0 ${width} 235" role="img" aria-label="${escapeHtml(chart.title)}"><text x="${start}" y="16">${escapeHtml(chart.unit || "")}</text>${grid}${lines}${ticks.map(i => `<text x="${x(i)}" y="219" text-anchor="middle">${escapeHtml(labelText(chart.labels[i]))}</text>`).join("")}</svg>`;
     };
-    return `<div class="line-plot">${lineSvg(false)}${lineSvg(true)}</div>${chartLegend(chart, series)}`;
+    const observed = chart.labels.filter((_, i) => series.some(item => Number.isFinite(item.values[i]))).length;
+    const coverage = chart.id === "specialization-base-history" && observed < chart.labels.length
+      ? `<p class="chart-note">С данными: ${observed} из ${chart.labels.length} месяцев. Пропуски соответствуют отсутствующим или неполным выгрузкам.</p>` : "";
+    return `<div class="line-plot">${lineSvg(false)}${lineSvg(true)}</div>${chartLegend(chart, series)}${coverage}`;
   }
 
   function renderCharts(charts = [], { deferred = false } = {}) {

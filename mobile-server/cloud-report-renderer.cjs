@@ -46,10 +46,21 @@ function renderSections(sections = [], options = {}) {
     const count = row => /^\d[\d\s\u00a0]*(?:\s*шт\.)?$/.test(String(row[index]).trim()) ? Number(String(row[index]).replace(/шт\.|\s/g, "")) : -1;
     return { ...section, rows: [...section.rows].sort((a,b) => count(b) - count(a) || a[0].localeCompare(b[0], "ru")) };
   });
-  return sections.map(section => `<section class="cloud-section"><h3>${esc(section.title)}</h3>${renderSectionNote(section.note, options)}
-    ${renderMetrics(section.metrics)}${section.tree?.length ? renderTree(section.tree, section.columns) : renderTable(section.columns, section.rows)}${section.charts?.some(chart => chart.id.startsWith("primary-sources-"))
-      ? `<div class="primary-source-charts" data-primary-sources>${section.charts.map(chart => `<div data-primary-source-period="${esc(chart.id.replace("primary-sources-", ""))}">${presentation.clientBaseCompositionHtml(chart.series[0].values, "", { groups: presentation.primarySourceGroups, title: chart.title })}</div>`).join("")}</div>`
-      : renderCharts(section.charts, options)}</section>`).join("");
+  return sections.map(section => {
+    const content = renderSectionContent(section, options);
+    if (options.kind === "specialization" && section.title === "Загрузка аппаратов") {
+      return `<details class="collapsible-list cloud-section" data-specialization-device-history><summary class="collapsible-list-summary"><span>${esc(section.title)}</span><span class="collapse-hint"></span></summary><div class="collapsible-list-body">${content}</div></details>`;
+    }
+    return `<section class="cloud-section"><h3>${esc(section.title)}</h3>${renderSectionNote(section.note, options)}
+      ${renderMetrics(section.metrics)}${content}</section>`;
+  }).join("");
+}
+function renderSectionContent(section, options) {
+  const charts = section.charts?.some(chart => chart.id.startsWith("primary-sources-"))
+    ? `<div class="primary-source-charts" data-primary-sources>${section.charts.map(chart => `<div data-primary-source-period="${esc(chart.id.replace("primary-sources-", ""))}">${presentation.clientBaseCompositionHtml(chart.series[0].values, "", { groups: presentation.primarySourceGroups, title: chart.title })}</div>`).join("")}</div>`
+    : renderCharts(section.charts?.map(chart => chart.id === "specialization-base-history" && chart.labels.length === 36
+      ? { ...chart, title: "Динамика в разрезе 3-х лет" } : chart), options);
+  return (section.tree?.length ? renderTree(section.tree, section.columns) : renderTable(section.columns, section.rows)) + charts;
 }
 function renderSectionNote(note, options) {
   if (!note) return "";
@@ -70,12 +81,58 @@ function renderClientBase(vector, report, options) {
     + renderCharts(charts.filter(chart => !["partition", "partition-shares"].includes(chart.id)), options)
     + renderSections(sections.slice(1), options);
 }
+function v3Tile(key, title, notes, metric, caption, body = "") {
+  const content = `<span class="v3-tile-copy"><b>${esc(title)}</b>${notes.filter(Boolean).map(note => `<small>${esc(note)}</small>`).join("")}</span>
+    ${metric ? `<span class="v3-tile-value"><strong class="appointment-conversion-summary-value goal-${esc(metric.state)}">${esc(metric.value)}</strong>${caption ? `<small>${esc(caption)}</small>` : ""}</span>` : ""}`;
+  return body ? `<details class="collapsible-list" data-v3-section="${key}"><summary class="collapsible-list-summary v3-tile">${content}</summary><div class="collapsible-list-body">${body}</div></details>`
+    : `<div class="v3-tile v3-empty" data-v3-section="${key}">${content}</div>`;
+}
+function renderDoctorV3(vector, report, options) {
+  const windows = vector.windows?.length ? vector.windows : [{ sections: vector.sections || [] }];
+  const metric = (section, label) => section?.metrics?.find(item => item.label === label);
+  const windowNote = window => window.label ? `Окно назначений · ${window.label}` : "";
+  const findSection = (window, title) => window.sections.find(section => section.title.startsWith(title));
+  const showWindows = (render) => windows.map((window, index) =>
+    `<div class="v3-window-panel" data-v3-window-panel="${esc(window.id || "")}"${index ? " hidden" : ""}>${render(window)}</div>`).join("");
+  const picker = windows.length > 1 ? `<label class="v3-window-picker">Окно назначений <select data-v3-window>${windows.map(window =>
+    `<option value="${esc(window.id)}">${esc(window.label)}</option>`).join("")}</select></label>` : "";
+  const revenue = findSection(windows[0], "Выполненные направления");
+  const earned = metric(revenue, "Выполнено по выработке");
+  const credited = metric(revenue, "Учтено в перенаправлениях");
+  const total = metric(revenue, "Выручка с перенаправлениями");
+  const share = metric(revenue, "Доля выручки");
+  return picker + showWindows(window => {
+    const focus = findSection(window, "Фокусы междисциплинарного подхода");
+    return v3Tile("focus", "Фокусы междисциплинарного подхода",
+      focus ? [windowNote(window)] : ["Нет выгрузки «Назначения»."], metric(focus, "Позиций выполнено"), "позиций выполнено",
+      focus ? renderSectionContent(focus, options) : "");
+  }) + v3Tile("revenue", "Выполненные направления за месяц", [
+    earned && credited ? `${report.label} · учтено ${credited.value} из ${earned.value} выполненных` : report.label,
+    total && `Выручка с перенаправлениями ${total.value} · источник: отчёт «Выработка»`,
+  ], share, ["доля в общей выработке", share?.target].filter(Boolean).join(" · "), revenue ? renderSectionContent(revenue, options) : "")
+    + showWindows(window => {
+      const summary = findSection(window, "Конверсия назначений");
+      const conversion = metric(summary, "Конверсия");
+      const assigned = metric(summary, "Назначено");
+      const result = metric(summary, "Результат");
+      const detail = findSection(window, "Детали назначений");
+      const counts = assigned && result ? `${result.value} из ${assigned.value} назначений` : "";
+      const body = detail ? `<p class="v3-method">Услуги: выполнено + продано, товары: продано.</p>
+        <details class="collapsible-list"><summary class="collapsible-list-summary"><span>Детализация по услугам и группам 1С</span><span class="collapse-hint"></span></summary>
+        <div class="collapsible-list-body">${detail.note ? `<p>${lines(detail.note)}</p>` : ""}${renderSectionContent(detail, options)}</div></details>` : "";
+      return v3Tile("conversion", "Конверсия назначений",
+        [conversion ? [windowNote(window), counts].filter(Boolean).join(" · ") : "Нет выгрузки «Назначения»."],
+        conversion, conversion?.target || "цель не установлена", body);
+    });
+}
 function renderVector(vector, report, options) {
   const help = [vector.detail, vector.methodologyLabel].filter(Boolean).map(text => `<p>${lines(text)}</p>`);
   const sectionOptions = { ...options, help };
   const partitioned = vector.id === "v4" && vector.methodologyId === "partition-v1-36m";
   const overlapping = vector.id === "v4" && vector.methodologyId === "report-overlap-v1";
-  const body = overlapping ? `<label class="client-base-window-picker">Период базы <select data-client-base-window>${vector.windows.map(window => `<option value="${esc(window.id)}">${esc(window.label)}</option>`).join("")}</select></label>`
+  const doctorV3 = vector.id === "v3" && (options.kind === "doctor" || (!options.kind && vector.windowPickerLabel === "Окно назначений"));
+  const body = doctorV3 ? renderDoctorV3(vector, report, options)
+    : overlapping ? `<label class="client-base-window-picker">Период базы <select data-client-base-window>${vector.windows.map(window => `<option value="${esc(window.id)}">${esc(window.label)}</option>`).join("")}</select></label>`
     + vector.windows.map((window, index) => `<div data-client-base-window-panel="${esc(window.id)}"${index ? " hidden" : ""}>${window.sections.map(section => {
       if (section.title === "Клиентская база · сравнение врачей" && section.columns?.[3] === "Изменение базы") {
         return renderClientBaseComparison(section, sectionOptions);

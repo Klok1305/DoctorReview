@@ -75,6 +75,15 @@ async function main() {
     || '<div class="viewer-dashboard-snapshot"><div class="card"><h2>Синтетический отчёт</h2><p>43 визита</p><p>Комментарий администратора</p></div></div>')
     + '<section class="reputation-honor-board"><h2>Доска почёта · старый HTML</h2></section>'
     + legacyClientBaseHtml()
+    + `<div class="viewer-dashboard-snapshot"><div data-vector-key="v3" data-legacy-v3-fixture>
+      <div class="vhead"><h3>Вектор 3</h3><span class="vscore">5<span> из 6 фокусов</span></span></div>
+      <details class="collapsible-list" data-list-key="appointmentConversionBlock" open><summary>Планы лечения <span class="section-detail">· окно 1 мес.</span><strong class="appointment-conversion-summary-value">75%</strong></summary>
+      <div class="appointment-conversion-body"><div class="tracked-metric"><div class="tracked-note">Услуги: выполнено + продано · 6 из 8</div><div class="tracked-goal">цель ≥ 30%</div></div>
+      <details class="collapsible-list" data-list-key="appointmentDetails" open><summary>Детализация по услугам и группам 1С</summary><p>Группа 1С</p></details>
+      <h3 class="appointment-focus-title">Фокусы междисциплинарного подхода</h3><div class="grid">Список фокусов</div></div></details>
+      <section class="completed-referrals-section"><h3>Выполненные планы</h3><p>Сентябрь 2026 · источник: отчёт «Выработка»</p>
+      <div class="tracked-metric"><div class="tracked-note">Учтено 200 ₽ из 300 ₽ выполненных</div><strong class="tracked-value">20%</strong></div><div>Позиции из выработки</div></section>
+      </div></div>`
     + '<div class="viewer-dashboard-snapshot"><div class="card" data-legacy-specialization-fixture><table class="data" id="tblRisk"><tr><th>Специалист</th><th>Период</th><th>Общая база</th><th>Активные</th></tr><tr><td>Врач А</td><td>12 мес.</td><td><b>3</b></td><td><b>1</b><br><span class="small muted">33,3%</span></td></tr><tr><td>Врач Б</td><td>12 мес.</td><td><b>5</b></td><td><b>0</b><br><span class="small muted">0%</span></td></tr></table><table id="tblCompare"><tr><th>Метрика</th><th>Итог</th><th>Врач А</th></tr><tr><td>Визиты за месяц</td><td>7</td><td>3</td></tr><tr><td>Пациенты за месяц</td><td>3</td><td>2</td></tr></table></div></div>'
     + '<section class="reputation-report" data-legacy-reputation-fixture><table><tr><th>Сотрудник</th><th>Всего отзывов</th><th>Общий балл</th></tr><tr><td>Врач В</td><td>5 шт.</td><td>100</td></tr><tr><td>Врач Б</td><td>50 шт.</td><td>10</td></tr><tr><td>Врач А</td><td>50 шт.</td><td>1</td></tr></table></section>'
     + '<div class="card"><table class="data" id="tblDepartmentYear"><tr><th>Выручка с перенаправлениями</th><th>Доля перенаправлений от выручки</th><th>Возвращаемость первички за 3 месяца</th></tr><tr><td>3 000 ₽</td><td>20%</td><td>50%</td></tr></table></div>';
@@ -112,6 +121,19 @@ async function main() {
       frameHeight: document.getElementById("onlineFrame").clientHeight }));
     assert.ok(narrow.overflow <= 2); assert.ok(narrow.frameHeight > 200);
     const frame = page.frameLocator("#onlineFrame");
+    const legacyV3 = frame.locator("[data-legacy-v3-fixture]");
+    await legacyV3.locator('[data-v3-section="focus"]').waitFor();
+    assert.deepEqual(await legacyV3.locator("[data-v3-section]").evaluateAll(elements => elements.map(element => element.dataset.v3Section)), ["focus", "revenue", "conversion"]);
+    assert.equal(await legacyV3.locator('[data-v3-section="focus"] strong').textContent(), "5 из 6");
+    assert.equal(await legacyV3.locator('[data-v3-section="revenue"] strong').textContent(), "20%");
+    const legacyConversion = legacyV3.locator('[data-v3-section="conversion"]');
+    assert.equal(await legacyConversion.evaluate(element => element.open), false);
+    await legacyConversion.locator(":scope > summary").click();
+    const legacyBreakdown = legacyConversion.locator('[data-list-key="appointmentDetails"]');
+    assert.equal(await legacyBreakdown.evaluate(element => element.open), false);
+    await legacyBreakdown.locator("summary").click();
+    await legacyBreakdown.locator("p").waitFor({ state: "visible" });
+    await legacyConversion.locator(":scope > summary").click();
     assert.equal(await frame.locator(".reputation-honor-board").count(), 0, "old HTML publications must also lose the honor board");
     assert.equal(await frame.locator("#tblDepartmentYear .report-table-heading-line").count(), 6);
     assert.equal(await frame.locator("[data-viewer-patient-register]").count(), 0);
@@ -217,13 +239,59 @@ async function main() {
       vectors: Array.from({ length: 6 }, (_, i) => ({ id: `v${i + 1}`, number: i + 1, title: `Вектор ${i + 1}`, score: 80, sections: [] })), goals: [], comments: [] });
     numericReport.id = "2026-09";
     numericReport.label = "Сентябрь 2026"; numericReport.shortLabel = "Сентябрь";
+    delete numericReport.vectors[2].sections;
+    Object.assign(numericReport.vectors[2], {
+      windowPickerLabel: "Окно назначений",
+      windows: [1, 3].map(window => ({
+        id: String(window), label: `${window} мес.`, period: `Сентябрь 2026 · ${window} мес.`,
+        sections: [
+          { title: `Конверсия назначений · ${window} мес.`, metrics: [
+            { label: "Конверсия", value: window === 1 ? "75%" : "50%", target: "цель ≥ 30%", state: "good" },
+            { label: "Назначено", value: "8" }, { label: "Результат", value: window === 1 ? "6" : "4" },
+          ] },
+          { title: "Детали назначений", columns: ["Группа", "Назначено"], rows: [["Группа 1С", "8"]] },
+          { title: "Фокусы междисциплинарного подхода", metrics: [{ label: "Позиций выполнено", value: window === 1 ? "5 из 6" : "6 из 6" }],
+            columns: ["Фокус", "Назначено"], rows: [["Фокус А", "4"]] },
+          { title: "Выполненные направления", metrics: [
+            { label: "Выполнено по выработке", value: "300 ₽" }, { label: "Учтено в перенаправлениях", value: "200 ₽" },
+            { label: "Выручка с перенаправлениями", value: "1 000 ₽" }, { label: "Доля выручки", value: "20%" },
+          ], columns: ["Тип", "Учтено"], rows: [["Услуги", "200 ₽"]] },
+        ],
+      })),
+    });
     numericReport.vectors[0].sections.push({ title: "Годовая таблица показателей", columns: ["Выручка с перенаправлениями", "Доля перенаправлений от выручки", "Возвращаемость первички за 3 месяца"], rows: [["3 000 ₽", "20%", "50%"]] });
     numericReport.vectors[0].sections.push({ title: "Точные данные графика", charts: [{ id: "precision", title: "Проверка графика", type: "line",
       labels: ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь"], unit: "₽", series: [
         { label: "Первая серия", color: "#2563eb", values: [25.25, null, 31.375, 35, 36, 37, 38, 39, 40] },
         { label: "Вторая серия", color: "#16a34a", values: [100, null, 150, 160, 170, 180, 190, 200, 210] },
       ] }] });
-    const dataPublication = createCloudPublication({ ...pinPublication, version: 3, pages: pinUpdated.pages.map(({ html, id, ...metadata }) => ({ ...metadata, periodKey: '2026-09', report: numericReport })) });
+    const specializationReport = structuredClone(numericReport);
+    const chartLabels = ["Январь 2026", "Февраль 2026", "Март 2026"];
+    specializationReport.vectors[1].sections.push({ title: "Загрузка аппаратов", charts: [{
+      id: "specialization-devices-0", title: "Выручка по аппаратам", type: "line", labels: chartLabels, unit: "₽",
+      series: [{ label: "Аппарат А", color: "#2563eb", values: [15000, null, 25000], pointNotes: ["3 шт.", "", "5 шт."] }],
+    }] });
+    specializationReport.vectors[4].sections.push({ title: "Первичные пациенты", columns: ["Врач", "Первичных за месяц"],
+      rows: [["Итого по специализации", "7"]], charts: [{
+        id: "specialization-primary", title: "Первичные пациенты по месяцам", type: "line", labels: chartLabels, unit: "чел.",
+        series: [{ label: "Первичные пациенты", color: "#2563eb", values: [8, null, 7] },
+          { label: "Из них с 4+ посещениями", color: "#16a34a", values: [2, null, 1], pointNotes: ["25% от первичных", "", "14,3% от первичных"] }],
+      }] });
+    const baseLabels = Array.from({ length: 36 }, (_, i) => {
+      const date = new Date(Date.UTC(2023, 9 + i));
+      return date.toLocaleDateString("ru-RU", { month: "long", year: "numeric", timeZone: "UTC" }).replace(/ г\.$/, "");
+    });
+    Object.assign(specializationReport.vectors[3], {
+      methodologyId: "report-overlap-v1", sections: [],
+      windows: [36, 12].map(window => ({ id: String(window), label: `${window} мес.`, period: `Давность посещений · ${window} мес.`,
+        sections: [{ title: "Динамика клиентской базы", charts: [{ id: "specialization-base-history", type: "line", unit: "чел.",
+          title: `«Давность посещений» · ${window} мес. · Октябрь 2023 — Сентябрь 2026`, labels: baseLabels,
+          series: [{ label: "Активная база", color: "#16a34a", values: [...Array(33).fill(null), window, null, 10] }],
+        }] }],
+      })),
+    });
+    const dataPublication = createCloudPublication({ ...pinPublication, version: 3, pages: pinUpdated.pages.map(({ html, id, ...metadata }) =>
+      ({ ...metadata, periodKey: "2026-09", report: metadata.kind === "specialization" ? specializationReport : numericReport })) });
     if (!await pinPage.locator("#onlineUploadPanel").evaluate(element => element.open)) await pinPage.locator("#onlineUploadPanel > summary").click();
     await pinPage.locator("#onlineUploadFile").setInputFiles({ name: "numeric-json.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(dataPublication)) });
     await pinPage.locator("#onlineUploadButton").click();
@@ -232,6 +300,23 @@ async function main() {
     await pinPage.locator("#onlinePin").fill("0123"); await pinPage.locator("#onlineLoginButton").click();
     const numericFrame = pinPage.frameLocator("#onlineFrame");
     await numericFrame.locator(".cloud-data-report").waitFor();
+    const numericV3 = numericFrame.locator('[data-vector-key="v3"]');
+    const visibleV3 = numericV3.locator("[data-v3-section]:visible");
+    assert.deepEqual(await visibleV3.evaluateAll(elements => elements.map(element => element.dataset.v3Section)), ["focus", "revenue", "conversion"]);
+    assert.deepEqual(await visibleV3.locator("summary strong").allTextContents(), ["5 из 6", "20%", "75%"]);
+    const revenueSummary = numericV3.locator('[data-v3-section="revenue"] > summary');
+    const revenueText = await revenueSummary.textContent();
+    await numericV3.locator("[data-v3-window]").selectOption("3");
+    assert.deepEqual(await visibleV3.locator("summary strong").allTextContents(), ["6 из 6", "20%", "50%"]);
+    assert.equal(await revenueSummary.textContent(), revenueText);
+    const conversion = numericV3.locator('[data-v3-section="conversion"]:visible');
+    assert.equal(await conversion.evaluate(element => element.open), false);
+    await conversion.locator(":scope > summary").click();
+    const breakdown = conversion.locator("details");
+    assert.equal(await breakdown.evaluate(element => element.open), false);
+    await breakdown.locator("summary").click();
+    await breakdown.locator("td", { hasText: "Группа 1С" }).waitFor({ state: "visible" });
+    await conversion.locator(":scope > summary").click();
     await auditLayout(pinPage, "numeric-report", true);
     assert.equal(await pinPage.locator("#onlineScope option").count(), 1);
     assert.equal(await numericFrame.locator("[data-viewer-patient-register], [data-primary-patient-register], canvas, img").count(), 0);
@@ -307,6 +392,12 @@ async function main() {
       assert.ok(await reportFrame.evaluate(() => document.documentElement.scrollWidth - innerWidth <= 2), "numeric report fits the phone viewport");
       assert.ok(await numericFrame.locator(".cloud-kpis .kpi").evaluateAll(elements => elements.every(element => element.getBoundingClientRect().right <= innerWidth + 2)));
       const screenName = viewport.width === 320 ? "compact" : viewport.width === 390 ? "iphone" : "landscape";
+      assert.ok(await visibleV3.evaluateAll(sections => sections.every(section => {
+        const summary = section.querySelector("summary");
+        const rect = summary.getBoundingClientRect();
+        return rect.left >= 0 && rect.right <= innerWidth + 2 && summary.scrollWidth <= summary.clientWidth + 2;
+      })), "Vector 3 summary tiles fit the phone viewport");
+      if (viewport.width === 390) await numericV3.screenshot({ path: path.join(root, "tmp", "cloud-v3-iphone.png") });
       await pinPage.screenshot({ path: path.join(root, "tmp", `cloud-json-${screenName}.png`) });
       await chart.screenshot({ path: path.join(root, "tmp", `cloud-json-chart-${screenName}.png`) });
       await headerTable.screenshot({ path: path.join(root, "tmp", `cloud-table-headers-${screenName}.png`) });
@@ -319,6 +410,42 @@ async function main() {
       window.dispatchEvent(new Event("beforeprint"));
       if (document.querySelector("[data-chart-deferred]")) throw Error("Print left unrendered charts");
     });
+    const specializationPage = await pinContext.newPage();
+    await specializationPage.setViewportSize({ width: 390, height: 844 });
+    const { renderCloudReport } = require("../mobile-server/cloud-report-renderer.cjs");
+    const publicRoot = path.join(root, "tmp", "klinvekt-mobile-server", "public");
+    await specializationPage.setContent(`<meta name="viewport" content="width=device-width,initial-scale=1"><body class="online-report">
+      ${renderCloudReport(specializationReport, "Специализация X", { deferred: true, kind: "specialization" })}</body>`);
+    await specializationPage.addStyleTag({ path: path.join(publicRoot, "online-report.css") });
+    for (const asset of ["report-presentation.js", "report-charts.js", "online-report.js"]) {
+      await specializationPage.addScriptTag({ path: path.join(publicRoot, asset) });
+    }
+    const scopeBase = specializationPage.locator('[data-vector-key="v4"]');
+    const baseChart = window => scopeBase.locator(`[data-client-base-window-panel="${window}"] .report-chart`);
+    const basePath = async window => {
+      const chart = baseChart(window);
+      await chart.scrollIntoViewIfNeeded();
+      assert.equal(await chart.locator("h5").textContent(), "Динамика в разрезе 3-х лет");
+      await chart.locator("svg.line-narrow").waitFor();
+      return chart.locator(".line-narrow path").getAttribute("d");
+    };
+    const longPath = await basePath(36);
+    await baseChart(36).screenshot({ path: path.join(root, "tmp", "specialization-base-online-390.png") });
+    await scopeBase.locator("[data-client-base-window]").selectOption("12");
+    assert.equal(await baseChart(36).isVisible(), false);
+    assert.notEqual(await basePath(12), longPath);
+    const deviceHistory = specializationPage.locator("[data-specialization-device-history]");
+    assert.equal(await deviceHistory.evaluate(element => element.open), false);
+    await deviceHistory.locator(":scope > summary").click();
+    await deviceHistory.locator("svg.line-narrow").waitFor();
+    assert.match(await deviceHistory.locator("svg.line-narrow circle title").first().textContent(), /3 шт\./);
+    await deviceHistory.locator(".chart-data > summary").click();
+    assert.match(await deviceHistory.locator(".chart-data tbody").innerText(), /5 шт\./);
+    const primaryChart = specializationPage.locator(".report-chart").filter({ hasText: "Первичные пациенты по месяцам" });
+    await primaryChart.scrollIntoViewIfNeeded();
+    await primaryChart.locator("svg.line-narrow").waitFor();
+    assert.match(await primaryChart.locator("svg.line-narrow").textContent(), /25% от первичных/);
+    assert.ok(await specializationPage.evaluate(() => document.documentElement.scrollWidth - innerWidth <= 2));
     await pinContext.close();
     // Model the HTTPS app inside a different Bitrix origin with production
     // Secure cookies. WebKit blocks these third-party cookies by default.

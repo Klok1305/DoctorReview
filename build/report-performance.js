@@ -1,6 +1,8 @@
 "use strict";
 let reportTask = null, reportTaskNumber = 0;
 const preparedReportKeys = new Map();
+const preparedSpecializationYears = new Map();
+let specializationYearTask = null;
 
 function cancelReportPreparation() {
   reportTaskNumber++;
@@ -39,31 +41,146 @@ function reportCalculationJob(tab) {
   selectFilter.disabled = false;
   const subs = UI.deptFilter === "all" ? [] : deptProfile(UI.deptFilter).subdivisions || [];
   if (UI.subFilter !== "all" && !subs.includes(UI.subFilter)) UI.subFilter = "all";
-  return { tab, month, filter: UI.deptFilter, subFilter: UI.subFilter };
+  return { tab, month, filter: UI.deptFilter, subFilter: UI.subFilter, baseWindow: UI.specializationKbWin };
+}
+
+function createReportWorker() {
+  const sources = ["report-core-source", "report-parsers-source", "report-metrics-source", "report-worker-source"].map(id => document.getElementById(id)?.textContent);
+  if (sources.some(source => !source) || typeof Worker !== "function") return null;
+  const bootstrap = 'const window = {}; const localStorage = {getItem(){return null},setItem(){}};\n';
+  const handler = `
+onmessage = event => {
+  try {
+    const m = event.data;
+    if (m.type === "start") { DB = m.snapshot; clearMetricsCache(); }
+    else if (m.type === "month") DB.months[m.key] = m.month;
+    else if (m.type === "specializations") {
+      const prepared = prepareSpecializationCalculations(m.year, (completed, total) => postMessage({ progress: { completed, total } }));
+      postMessage({ prepared });
+    } else if (m.type === "calculate") postMessage({ prepared: prepareReportCalculations(m.job) });
+  } catch (error) { postMessage({ error: error.message }); }
+};`;
+  const url = URL.createObjectURL(new Blob([bootstrap, ...sources.map(source => source + "\n"), handler], { type: "text/javascript" }));
+  try { return new Worker(url); }
+  catch (_) { return null; }
+  finally { URL.revokeObjectURL(url); }
+}
+
+async function sendReportWorkerData(worker, ids, command, isCurrent) {
+  await new Promise(resolve => requestAnimationFrame(resolve));
+  if (!isCurrent()) return;
+  const snapshot = reportWorkerSnapshot(DB, ids);
+  worker.postMessage({ type: "start", snapshot: { ...snapshot, months: {} } });
+  // Copy months separately so structured cloning can yield between large messages.
+  for (const [key, month] of Object.entries(snapshot.months)) {
+    if (!isCurrent()) return;
+    worker.postMessage({ type: "month", key, month });
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  if (isCurrent()) worker.postMessage(command);
+}
+
+function readySpecializationYear(year) {
+  const entry = preparedSpecializationYears.get(year);
+  if (entry?.revision !== metricsCalculationRevision) return null;
+  preparedSpecializationYears.delete(year);
+  preparedSpecializationYears.set(year, entry);
+  return entry.prepared;
+}
+
+function cancelSpecializationPreparation() {
+  specializationYearTask?.finish({});
+}
+
+function prepareSpecializationYear(month, onProgress) {
+  if (!month) return Promise.resolve(null);
+  const year = month.slice(0, 4), revision = metricsCalculationRevision;
+  const ready = readySpecializationYear(year);
+  if (ready) return Promise.resolve(ready);
+  if (specializationYearTask?.year === year && specializationYearTask.revision === revision) {
+    if (onProgress) {
+      specializationYearTask.onProgress = onProgress;
+      if (specializationYearTask.progress) onProgress(specializationYearTask.progress);
+    }
+    return specializationYearTask.promise;
+  }
+  cancelSpecializationPreparation();
+  const worker = createReportWorker();
+  if (!worker) return Promise.resolve(null);
+  const task = { year, revision, onProgress, progress: null };
+  specializationYearTask = task;
+  task.promise = new Promise(resolve => {
+    const isCurrent = () => specializationYearTask === task && revision === metricsCalculationRevision;
+    task.finish = ({ prepared, error }) => {
+      if (specializationYearTask !== task) return;
+      worker.terminate();
+      specializationYearTask = null;
+      if (error) console.warn("Specialization preparation:", error);
+      if (!prepared || revision !== metricsCalculationRevision) return resolve(null);
+      preparedSpecializationYears.set(year, { revision, prepared });
+      while (preparedSpecializationYears.size > 2) preparedSpecializationYears.delete(preparedSpecializationYears.keys().next().value);
+      resolve(prepared);
+    };
+    worker.onmessage = ({ data }) => {
+      if (!data.progress || !isCurrent()) return task.finish(data);
+      task.progress = data.progress;
+      task.onProgress?.(data.progress);
+    };
+    worker.onerror = event => { event.preventDefault(); task.finish({ error: event.message }); };
+    sendReportWorkerData(worker, Object.keys(DB.doctors), { type: "specializations", year }, isCurrent)
+      .then(() => { if (!isCurrent()) task.finish({}); }, error => task.finish({ error: error.message }));
+  });
+  return task.promise;
+}
+
+function drawPreparedSpecialization(draw, prepared) {
+  if (!prepared) return draw();
+  const previousCalculations = specializationCalculations, previousMetrics = preparedMetricsForRender;
+  specializationCalculations = prepared;
+  preparedMetricsForRender = prepared.metrics;
+  try { return draw(); }
+  finally { specializationCalculations = previousCalculations; preparedMetricsForRender = previousMetrics; }
+}
+
+function renderPreparedSpecialization(draw) {
+  const eager = UI.reportEager || typeof Worker !== "function";
+  const month = eager
+    ? (DB.months[UI.deptMonth] ? UI.deptMonth : monthKeysSorted().at(-1))
+    : reportCalculationJob("dept")?.month;
+  if (!month) return draw();
+  const ready = readySpecializationYear(month.slice(0, 4));
+  if (ready || eager) return drawPreparedSpecialization(draw, ready);
+  const body = document.getElementById("deptBody");
+  body.innerHTML = '<div class="card" role="status">Подготавливаются сводки специализаций…</div>';
+  const number = reportTaskNumber, revision = metricsCalculationRevision, started = performance.now();
+  return prepareSpecializationYear(month).then(prepared => {
+    if (number !== reportTaskNumber) return false;
+    if (revision !== metricsCalculationRevision) return renderPreparedReport("dept", draw);
+    const drawAt = performance.now();
+    drawPreparedSpecialization(draw, prepared);
+    UI.reportTiming = { tab: "dept", backgroundMs: drawAt - started, renderMs: performance.now() - drawAt, worker: Boolean(prepared) };
+    return true;
+  });
 }
 
 function renderPreparedReport(tab, draw) {
   cancelReportPreparation();
   if (!UI.reportEager) document.getElementById(tab === "doctor" ? "doctorBody" : tab === "department" ? "departmentBody" : "deptBody")?.removeAttribute?.("data-report-export");
+  if (tab === "dept") return renderPreparedSpecialization(draw);
   if (UI.reportEager || typeof Worker !== "function") return draw();
   const job = reportCalculationJob(tab);
   if (!job) return draw();
   const key = JSON.stringify([metricsCalculationRevision, job]);
   const cached = preparedReportKeys.get(key);
-  if (cached && cached.every(([name, keys]) => keys.every(key => ({ metrics: _mcCache, kbSummary: _kbSummaryCache, adminBase: _adminBaseCache, department: _deptCache })[name].has(key)))) return draw();
+  const caches = { metrics: _mcCache, kbSummary: _kbSummaryCache, adminBase: _adminBaseCache, department: _deptCache,
+    specializationBase: _specializationBaseCache };
+  if (cached && cached.every(([name, keys]) => keys.every(key => caches[name].has(key)))) return draw();
   const body = document.getElementById(tab === "doctor" ? "doctorBody" : tab === "department" ? "departmentBody" : "deptBody");
   body.innerHTML = '<div class="card" role="status">Подготавливается отчёт…</div>';
   const number = reportTaskNumber, revision = metricsCalculationRevision;
   const ids = tab === "doctor" ? [job.doctorId] : Object.keys(DB.doctors);
-  const snapshot = reportWorkerSnapshot(DB, ids);
-  const sources = ["report-core-source", "report-parsers-source", "report-metrics-source", "report-worker-source"].map(id => document.getElementById(id)?.textContent);
-  if (sources.some(source => !source)) return draw();
-  const bootstrap = 'const window = {}; const localStorage = {getItem(){return null},setItem(){}};\n';
-  const handler = '\nonmessage = event => { try { const m=event.data; if(m.type==="start") { DB=m.snapshot;clearMetricsCache(); } else if(m.type==="month") DB.months[m.key]=m.month; else if(m.type==="calculate") postMessage({prepared:prepareReportCalculations(m.job)}); } catch(error) { postMessage({error:error.message}); } };';
-  const url = URL.createObjectURL(new Blob([bootstrap, ...sources.map(source => source + "\n"), handler], { type: "text/javascript" }));
-  let worker;
-  try { worker = new Worker(url); } catch (error) { URL.revokeObjectURL(url); return draw(); }
-  URL.revokeObjectURL(url);
+  const worker = createReportWorker();
+  if (!worker) return draw();
   return new Promise((resolve, reject) => {
     const started = performance.now();
     reportTask = { worker, resolve };
@@ -85,21 +202,8 @@ function renderPreparedReport(tab, draw) {
     };
     worker.onmessage = event => finish(event.data);
     worker.onerror = event => { event.preventDefault(); finish({ error: event.message }); };
-    // Let the loading state paint before copying the selected doctor's data.
-    requestAnimationFrame(async () => {
-      if (number !== reportTaskNumber) return;
-      try {
-        worker.postMessage({ type: "start", snapshot: { ...snapshot, months: {} } });
-        // A single large structured clone can itself stall the caller. Copy months
-        // separately and return control between messages; the worker processes them in order.
-        for (const [key, month] of Object.entries(snapshot.months)) {
-          if (number !== reportTaskNumber) return;
-          worker.postMessage({ type: "month", key, month });
-          await new Promise(resolve => setTimeout(resolve, 0));
-        }
-        if (number === reportTaskNumber) worker.postMessage({ type: "calculate", job });
-      } catch (error) { if (number === reportTaskNumber) finish({ error: error.message }); }
-    });
+    sendReportWorkerData(worker, ids, { type: "calculate", job }, () => number === reportTaskNumber)
+      .catch(error => { if (number === reportTaskNumber) finish({ error: error.message }); });
   });
 }
 

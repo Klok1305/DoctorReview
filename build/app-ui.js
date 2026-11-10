@@ -24,7 +24,8 @@ const UI = {
   setDoctor: null,
   pvSlice: 3,     // тогл первички: 3/6/12
   nazSlice: 1,    // тогл назначений: 1/3
-  kbWin: 12,      // общее точное окно врача и специализации: 6/12/24/36
+  kbWin: 12,      // точное окно врача: 6/12/24/36
+  specializationKbWin: 36,
   clientSegment: "newRisk",
   showLabels: true, // цифры на графиках
   charts: {},
@@ -1052,6 +1053,32 @@ function specializationInterdisciplinaryHtml(rows, mk, specializationName, optio
 }
 
 function renderDept() { return renderPreparedReport("dept", renderDeptNow); }
+function specializationTrendHtml(spec) {
+  const id = `chart-${spec.id}`;
+  const format = spec.unit === "₽" ? fmtMoney : fmtNum;
+  return `<h3 class="section-title">${esc(spec.title)} ${copyBtn("copyChart", id, "PNG")}</h3>
+    <div class="chart-box"><canvas id="${id}" aria-label="${esc(spec.title)}"></canvas></div>
+    <details ${collapsibleListAttrs(`values-${spec.id}`, false)}><summary class="collapsible-list-summary"><span>Точные значения по месяцам</span><span class="collapse-hint"></span></summary>
+    <div class="collapsible-list-body"><table class="data"><tr><th>Месяц</th>${spec.series.map(series => `<th class="num">${esc(series.label)}</th>`).join("")}</tr>
+    ${spec.labels.map((label, i) => `<tr><td>${esc(label)}</td>${spec.series.map(series => `<td class="num">${format(series.values[i])}${series.pointNotes?.[i] ? `<br><small class="muted">${esc(series.pointNotes[i])}</small>` : ""}</td>`).join("")}</tr>`).join("")}</table></div></details>`;
+}
+
+function renderSpecializationTrend(spec) {
+  const format = spec.unit === "₽" ? fmtMoney : fmtNum;
+  chart(`chart-${spec.id}`, {
+    type: "line",
+    data: { labels: spec.labels, datasets: spec.series.map(series => ({
+      label: series.label, data: series.values, pointNotes: series.pointNotes,
+      borderColor: series.color, backgroundColor: series.color, pointRadius: 3, borderWidth: 2, spanGaps: false,
+    })) },
+    options: { maintainAspectRatio: false, interaction: { mode: "nearest", intersect: false },
+      scales: { y: { beginAtZero: true, ticks: { callback: value => spec.unit === "₽" ? fmtMoney(value) : fmtNum(value) } } },
+      plugins: { legend: { position: "bottom" }, tooltip: { callbacks: {
+        label: item => [`${item.dataset.label}: ${format(item.raw)}`, item.dataset.pointNotes?.[item.dataIndex]].filter(Boolean).join(" · "),
+      } } } },
+  });
+}
+
 function renderDeptNow() {
   const months = monthKeysSorted();
   const sel = document.getElementById("deptMonth");
@@ -1163,6 +1190,8 @@ function renderDeptNow() {
   html += lb("🤝 Наивысшая доля выручки от перенаправлений", r => r.cross.crossShare, fmtPct);
   html += "</div>";
 
+  const activity = specializationActivityView(mk, UI.deptFilter === "all" ? null : deptProfile(UI.deptFilter), UI.deptFilter, UI.subFilter);
+  const deviceActivity = activity.current?.devices;
   // тепловая карта экспертных позиций — при выбранной специализации (у каждой свой набор)
   if (UI.deptFilter !== "all") {
     const fProfile = deptProfile(UI.deptFilter);
@@ -1171,8 +1200,11 @@ function renderDeptNow() {
     if (devs.length && withVy.length && fProfile.expertise.mode !== "none") {
       let maxQ = 1;
       for (const x of withVy) for (const dv of devs) maxQ = Math.max(maxQ, x.r.product.expert[dv] ? x.r.product.expert[dv].q : 0);
-      html += `<div class="card"><h2>🔥 Тепловая карта: ${esc(fProfile.expertise.title)} <span class="small muted">(за месяц, шт)</span> <span class="spacer"></span>${copyBtn("copyTable", "tblHeat")}</h2>
-        <div class="heatmap-scroll"><table class="data heatmap-table" id="tblHeat" style="--heat-table-min:${300 + devs.length * 150}px"><colgroup><col class="heatmap-specialist-col">${devs.map(() => '<col class="heatmap-focus-col">').join("")}<col class="heatmap-total-col"></colgroup><tr><th>Специалист</th>` + devs.map(d => `<th class="num heatmap-focus-heading">${esc(d)}</th>`).join("") + '<th class="num">Итого</th></tr>';
+      const deviceHeading = deviceActivity ? "за месяц, шт. и ₽" : "за месяц, шт";
+      const deviceCell = (q, s) => deviceActivity ? `<span>${fmtNum(q)} шт.<span class="heatmap-money">${fmtMoney(s)}</span></span>` : (q || "·");
+      html += `<div class="card"><h2>🔥 Тепловая карта: ${esc(fProfile.expertise.title)} <span class="small muted">(${deviceHeading})</span> <span class="spacer"></span>${copyBtn("copyTable", "tblHeat")}</h2>
+        ${deviceActivity ? `<p><b>Выручка по всем аппаратам · ${fmtMoney(deviceActivity.total)}</b> <span class="small muted">· общая доля ${fmtPct(deviceActivity.share)}</span></p>` : ""}
+        <div class="heatmap-scroll"><table class="data heatmap-table" id="tblHeat" style="--heat-table-min:${300 + devs.length * 150}px"><colgroup><col class="heatmap-specialist-col">${devs.map(() => '<col class="heatmap-focus-col">').join("")}<col class="heatmap-total-col">${deviceActivity ? '<col class="heatmap-focus-col">' : ""}</colgroup><tr><th>Специалист</th>` + devs.map(d => `<th class="num heatmap-focus-heading">${esc(d)}</th>`).join("") + `<th class="num">Итого</th>${deviceActivity ? '<th class="num">Доля от выручки</th>' : ""}</tr>`;
       const devTotals = {};
       for (const x of withVy) {
         let rowTotal = 0;
@@ -1182,31 +1214,49 @@ function renderDeptNow() {
           rowTotal += q;
           devTotals[dv] = (devTotals[dv] || 0) + q;
           const alpha = q ? 0.15 + 0.7 * (q / maxQ) : 0;
-          html += `<td class="num heatmap-focus-cell"><div class="heat-cell" style="background:rgba(37,99,235,${alpha.toFixed(2)});color:${alpha > 0.5 ? "#fff" : "inherit"}">${q || "·"}</div></td>`;
+          html += `<td class="num heatmap-focus-cell"><div class="heat-cell" style="background:rgba(37,99,235,${alpha.toFixed(2)});color:${alpha > 0.5 ? "#fff" : "inherit"}">${deviceCell(q, x.r.product.expert[dv]?.s ?? 0)}</div></td>`;
         }
-        html += `<td class="num"><b>${rowTotal}</b></td></tr>`;
+        const doctorDevices = deviceActivity?.byDoctor[x.id];
+        html += `<td class="num"><b>${deviceCell(rowTotal, doctorDevices?.total)}</b></td>${deviceActivity ? `<td class="num"><b>${fmtPct(doctorDevices?.share)}</b></td>` : ""}</tr>`;
       }
-      html += '<tr><td><b>Итого по специализации</b></td>' + devs.map(dv => `<td class="num"><b>${devTotals[dv] || 0}</b></td>`).join("") + `<td class="num"><b>${Object.values(devTotals).reduce((a, b) => a + b, 0)}</b></td></tr>`;
-      html += '</table></div><p class="small muted">«·» по всем врачам — простаивающая позиция. Набор настраивается в профиле специализации.</p></div>';
+      const countTotal = Object.values(devTotals).reduce((a, b) => a + b, 0);
+      html += '<tr><td><b>Итого по специализации</b></td>' + devs.map(dv => `<td class="num"><b>${deviceActivity ? deviceCell(devTotals[dv] || 0, deviceActivity.items[activity.names.indexOf(dv)].s) : devTotals[dv] || 0}</b></td>`).join("") +
+        `<td class="num"><b>${deviceCell(countTotal, deviceActivity?.total)}</b></td>${deviceActivity ? `<td class="num"><b>${fmtPct(deviceActivity.share)}</b></td>` : ""}</tr>`;
+      html += `</table></div><p class="small muted">${deviceActivity ? SPECIALIZATION_DEVICE_NOTE : "«·» по всем врачам — простаивающая позиция. Набор настраивается в профиле специализации."}</p></div>`;
     }
   } else if (rows.some(x => x.r.product)) {
     html += `<div class="card"><p class="small muted" style="margin:0">🔥 Тепловая карта аппаратов/услуг доступна при выборе конкретной специализации в фильтре сверху — у каждой специализации свой набор отслеживаемых позиций.</p></div>`;
   }
 
+  if (activity.deviceCharts.length) html += `<div class="card"><details ${collapsibleListAttrs("specializationDeviceHistory", false)} data-specialization-device-history>
+    <summary class="collapsible-list-summary"><span>${SPECIALIZATION_DEVICE_TITLE}</span><span class="collapse-hint"></span></summary>
+    <div class="collapsible-list-body"><p class="small muted">Выручка по месяцам с начала года. Количество процедур видно у точек и в таблице.</p>
+    ${activity.deviceCharts.map(specializationTrendHtml).join("")}</div></details></div>`;
+  if (activity.current) {
+    const primary = activity.current.primary;
+    html += `<div class="card" data-specialization-primary><h2>Первичные пациенты <span class="small muted">${monthLabel(mk)}</span><span class="spacer"></span>${copyBtn("copyTable", "tblSpecPrimary")}</h2>
+      <p class="small muted">${SPECIALIZATION_PRIMARY_NOTE} Данные есть у ${primary.covered} из ${rows.length} врачей.</p>
+      <table class="data" id="tblSpecPrimary"><tr><th>Специалист</th><th class="num">Первичных за месяц</th></tr>
+      ${rows.map(row => `<tr><td>${esc(doctorName(row.id))}</td><td class="num">${fmtNum(primary.byDoctor[row.id])}</td></tr>`).join("")}
+      <tr><td><b>${UI.deptFilter === "all" ? "Итого по выборке" : "Итого по специализации"}</b></td><td class="num"><b>${fmtNum(primary.total)}</b></td></tr></table>
+      ${activity.primaryChart ? specializationTrendHtml(activity.primaryChart) : '<p class="small muted">Для графика нужны сопоставимые месячные отчёты «Пациенты по врачам».</p>'}</div>`;
+  }
   if (UI.deptFilter !== "all") {
     html += specializationInterdisciplinaryHtml(rows, mk, UI.deptFilter);
   }
 
   // Клиентская база: период выбирается вручную, группы с недоступным временным порогом скрываются.
   const presentation = globalThis.klinvektReportPresentation;
-  const bases = rows.map(x => ({ id: x.id, kb: reportClientBaseSummary(x.id, mk, UI.kbWin) }));
+  const kbWin = UI.specializationKbWin;
+  const bases = rows.map(x => ({ id: x.id, kb: reportClientBaseSummary(x.id, mk, kbWin) }));
+  const kbControls = segToggle("specializationKbWin", [6,12,24,36].map(v => ({v, label: v + " мес."})), kbWin, "setSpecializationKbWin");
   const withKb = bases.filter(x => x.kb);
   if (withKb.length) {
     const previousMonth = prevMonthKey(mk, 1);
     const visibleGroups = presentation.overlappingClientBaseGroups.filter(group => withKb.some(x => x.kb.groupAvailable[group.key]));
     const averages = presentation.clientBaseAveragesHtml(visibleGroups.map(group => group.label),
       bases.map(({ kb }) => visibleGroups.map(group => clientBaseGroupPct(kb, group.key))));
-    html += `<div class="card"><div class="client-base-heading"><h2>Клиентская база</h2>${averages}<div class="client-base-controls">${segToggle("specializationKbWin", [6,12,24,36].map(v => ({v, label: v + " мес."})), UI.kbWin, "setKbWin")} ${copyBtn("copyTable", "tblRisk")}</div></div><table class="data" id="tblRisk"><tr><th>Специалист</th><th class="num">Период</th><th class="num">Общая база</th>${visibleGroups.map(group => `<th class="num">${esc(group.label)}</th>`).join("")}</tr>`;
+    html += `<div class="card"><div class="client-base-heading"><h2>Клиентская база</h2>${averages}<div class="client-base-controls">${kbControls} ${copyBtn("copyTable", "tblRisk")}</div></div><table class="data" id="tblRisk"><tr><th>Специалист</th><th class="num">Период</th><th class="num">Общая база</th>${visibleGroups.map(group => `<th class="num">${esc(group.label)}</th>`).join("")}</tr>`;
     for (const x of withKb) {
       const kb = x.kb;
       const previousKb = reportClientBaseSummary(x.id, previousMonth, kb.window);
@@ -1216,7 +1266,7 @@ function renderDeptNow() {
     }
     html += `</table>${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml()}</div>`;
   } else {
-    html += `<div class="card"><h2>Клиентская база ${segToggle("specializationKbWin", [6,12,24,36].map(v => ({v, label: v + " мес."})), UI.kbWin, "setKbWin")}</h2><p class="muted">Нет точной выгрузки за ${fmtNum(UI.kbWin)} мес. для выбранных врачей и месяца. Другой период не подставляется.</p>${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml()}</div>`;
+    html += `<div class="card"><h2>Клиентская база ${kbControls}</h2><p class="muted">Нет точной выгрузки за ${fmtNum(kbWin)} мес. для выбранных врачей и месяца. Другой период не подставляется.</p>${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml()}</div>`;
   }
 
   // профайлы специалистов — все врачи фильтра, метрики в строках
@@ -1229,18 +1279,19 @@ function renderDeptNow() {
   /* ---- динамика специализации: точки роста и риска ---- */
   html += reputationReportHtml(rows, mk, UI.deptFilter === "all" ? "Клиника" : scoreScope);
   const deptDyn = computeDeptDynamics(mk, UI.deptFilter, UI.subFilter);
+  const baseHistory = specializationClientBaseHistory(mk, kbWin, UI.deptFilter, UI.subFilter);
   if (deptDyn && deptDyn.months.length) {
     html += dynamicsHtml(deptDyn, "blkDeptDyn", "Динамика специализации: точки роста и риска",
       `${UI.deptFilter === "all" ? "Все врачи с данными" : "Специализация «" + esc(UI.deptFilter) + "»"} · с января по ${monthLabel(mk)}. Месяцы без данных оставлены пустыми. Последний месяц сравнивается с прошлым и со средним предыдущих месяцев года. Деньги и визиты суммируются, пациенты дедуплицируются, доли и конверсии взвешиваются; средний балл включает только врачей с полнотой данных от 80%.`,
-      `dept|${mk}|${UI.deptFilter}|${UI.subFilter}`);
+      `dept|${mk}|${UI.deptFilter}|${UI.subFilter}`, "", true, baseHistory);
     html += "</div>";
   }
 
   document.getElementById("deptBody").innerHTML = html;
   renderCompare(mk, rows);
-  if (deptDyn && deptDyn.months.length >= 2) {
-    renderDynCharts(deptDyn, "blkDeptDyn");
-  }
+  activity.deviceCharts.forEach(renderSpecializationTrend);
+  if (activity.primaryChart) renderSpecializationTrend(activity.primaryChart);
+  if (deptDyn) renderDynCharts(deptDyn, "blkDeptDyn", baseHistory);
 }
 
 function renderCompare(mk, rows) {
@@ -1260,8 +1311,8 @@ function renderCompare(mk, rows) {
     const focus = profileForDoctor(row.id).crossFocus;
     return Boolean(focus && focus.items && focus.items.length);
   });
-  const comparisonKb = (r, doctorId) => doctorId ? reportClientBaseSummary(doctorId, mk, UI.kbWin)
-    : selectedClientBaseSummary(r, aggregateProfile, UI.kbWin);
+  const comparisonKb = (r, doctorId) => doctorId ? reportClientBaseSummary(doctorId, mk, UI.specializationKbWin)
+    : selectedClientBaseSummary(r, aggregateProfile, UI.specializationKbWin);
   const exactBaseShare = (r, doctorId, key) => {
     const kb = comparisonKb(r, doctorId);
     return kb && kb[key] != null ? kb[key] : null;
@@ -1352,7 +1403,7 @@ async function exportDeptXlsx() {
   const aoa = [["Сводная по векторам за " + monthLabel(mk)], [], header];
   const num = v => (v == null || isNaN(v)) ? null : Math.round(v * 100) / 100;
   for (const x of rows) {
-    const r = x.r, baseProfile = clientBaseReportProfile(), kb = reportClientBaseSummary(x.id, mk, UI.kbWin), pv = r.loyalty.pvSlices[UI.pvSlice], nz = r.cross.naz[UI.nazSlice];
+    const r = x.r, baseProfile = clientBaseReportProfile(), kb = reportClientBaseSummary(x.id, mk, UI.specializationKbWin), pv = r.loyalty.pvSlices[UI.pvSlice], nz = r.cross.naz[UI.nazSlice];
     const groupValue = (group, value) => kb && kb.groupAvailable[group] ? value : null;
     aoa.push([
       doctorName(x.id), resolvedDepartmentName(x.id), resolvedSpecializationName(x.id) || "—",
@@ -1415,10 +1466,14 @@ function openDoctor(id, mk) {
 /* ================= СТРАНИЦА: ВРАЧ ================= */
 
 function setPvSlice(v) { UI.pvSlice = v; renderAll(); }
-function setNazSlice(v) { UI.nazSlice = v; renderAll(); }
+function setNazSlice(v) { UI.nazSlice = v; return renderAll(); }
 function setKbWin(v) {
   UI.kbWin = Number(v);
   renderAll();
+}
+function setSpecializationKbWin(v) {
+  UI.specializationKbWin = Number(v);
+  return renderDept();
 }
 function setReportKbWin(v) {
   UI.repKbWin = Number(v);
@@ -2132,7 +2187,10 @@ async function cloneDashboardForPdf(source) {
 }
 
 async function cloneDashboardForViewer(source) {
-  return cloneDashboardSnapshot(source, { chartMimeType: "image/webp", chartQuality: 0.9, waitForPaint: false });
+  const snapshot = await cloneDashboardSnapshot(source, { chartMimeType: "image/webp", chartQuality: 0.9, waitForPaint: false });
+  snapshot.clone.querySelectorAll("details[data-v3-section], [data-v3-section] details, [data-specialization-device-history], [data-specialization-device-history] details")
+    .forEach(details => { details.open = false; });
+  return snapshot;
 }
 
 function splitDynamicPdfSection(section) {
@@ -2415,11 +2473,12 @@ function sparkSvg(row) {
 }
 
 /* панель графиков динамики: деньги / трафик / проценты / база */
-function renderDynCharts(dyn, blkId) {
-  if (!dyn || dyn.months.length < 2) return;
+function renderDynCharts(dyn, blkId, baseHistory = null) {
+  if (!dyn || (dyn.months.length < 2 && !baseHistory)) return;
   const labels = dyn.months.map(monthLabel);
   const val = key => { const row = dyn.rows.find(x => x.key === key); return row ? row.values : null; };
-  const mk = (canvas, series, fmt, tickCb) => {
+  const mk = (canvas, series, fmt, tickCb, history = null) => {
+    const chartLabels = history ? history.months.map(monthLabel) : labels;
     const datasets = series.filter(s => s.data && s.data.some(v => v != null)).map(s => ({
       label: s.label, data: s.data, borderColor: s.color, backgroundColor: s.color,
       borderWidth: 2, pointRadius: 3, spanGaps: false, tension: 0.25, borderDash: s.dash || [],
@@ -2430,10 +2489,11 @@ function renderDynCharts(dyn, blkId) {
     const numFmt = v => (typeof v === "number" ? fmt(v) : "");
     chart(canvas, {
       type: "line",
-      data: { labels, datasets },
+      data: { labels: chartLabels, datasets },
       options: {
         maintainAspectRatio: false,
         plugins: {
+          title: history ? { display: true, text: SPECIALIZATION_BASE_TITLE } : undefined,
           legend: { position: "bottom", labels: { boxWidth: 12, font: { size: 11 } } },
           datalabels: {
             display: ctx => UI.showLabels && ctx.dataIndex === ctx.dataset.data.length - 1 && ctx.dataset.data[ctx.dataIndex] != null,
@@ -2442,7 +2502,9 @@ function renderDynCharts(dyn, blkId) {
           },
           tooltip: { callbacks: { label: c => c.dataset.label + ": " + numFmt(c.raw) } },
         },
-        scales: { y: { beginAtZero: true, ticks: tickCb ? { callback: v => (typeof v === "number" ? tickCb(v) : v) } : {} } },
+        scales: { ...(history ? { x: { ticks: { maxTicksLimit: 9, maxRotation: 0,
+          callback: index => chartLabels[index].replace(/^(\S{3})\S* \d{2}(\d{2})$/, "$1 $2") } } } : {}),
+          y: { beginAtZero: true, ticks: tickCb ? { callback: v => (typeof v === "number" ? tickCb(v) : v) } : {} } },
       },
     });
   };
@@ -2460,10 +2522,11 @@ function renderDynCharts(dyn, blkId) {
     { label: "Доля выручки от перенаправлений", data: val("cross"), color: "#16a34a" },
     { label: "Конверсия назнач.", data: val("nazConv"), color: "#db2777" },
   ], v => fmtPct(v), v => v + "%");
-  mk(blkId + "_base", [
+  const baseSeries = baseHistory ? baseHistory.series.map(item => ({ ...item, data: item.values })) : [
     { label: "Активная база", data: val("akb"), color: "#16a34a" },
     { label: "Потерянные", data: val("lost"), color: "#dc2626" },
-  ], v => fmtNum(v) + " чел.");
+  ];
+  mk(blkId + "_base", baseSeries, v => fmtNum(v) + " чел.", undefined, baseHistory);
 }
 
 function dynamicsRow(dyn, key) {
@@ -2853,19 +2916,25 @@ function primaryPatientsReportHtml(docId, monthKey, { registry = true } = {}) {
   }
   return html + breakdown + globalThis.klinvektReportPresentation.reportHelpHtml(`<p>Первичный пациент впервые пришёл к выбранному врачу. Посещения и выручка считаются только у этого врача, с первого месяца пациента до ${esc(monthLabel(monthKey))} включительно.</p><p>В итогах 1 / 2 / 3+ учитывается и первое посещение. У тех, кто пришёл недавно, было меньше времени вернуться.</p><p>${esc(referralNote)}</p>`) + "</section>";
 }
-function dynamicsHtml(dyn, blkId, title, subtitle, noteKey, detailTailHtml = "", includeOutcome = true) {
+function dynamicsHtml(dyn, blkId, title, subtitle, noteKey, detailTailHtml = "", includeOutcome = true, baseHistory = null) {
   if (!dyn || dyn.months.length < 1) return "";
   const single = dyn.months.length < 2;
   const narrative = dynamicNarrativeValue(noteKey || `${blkId}|${dyn.months[dyn.months.length - 1]}`, dyn);
   let html = `<div class="card ${includeOutcome ? "dynamics-final-card" : "dynamics-history-card"}" id="${blkId}"><div class="vhead"><h3 class="mt0">📈 ${title}</h3><span>${blockBtn(blkId)}</span></div>
     <p class="small muted" style="margin-top:0">${subtitle}${single ? " Пока загружен один месяц — тренды появятся после загрузки следующего." : ""}</p>`;
   // панель графиков динамики (деньги / трафик / проценты / база)
-  if (!single) {
+  if (!single || baseHistory) {
+    const hasBase = !baseHistory || baseHistory.series.some(series => series.values.some(Number.isFinite));
+    const baseCaption = baseHistory ? SPECIALIZATION_BASE_TITLE : "Клиентская база";
     html += `<div class="grid cols-2" style="margin-bottom:12px">
+      ${single ? "" : `
       <div><h3 class="small muted" style="margin:0 0 4px">ВЫРУЧКА ${copyBtn("copyChart", blkId + "_money", "PNG")}</h3><div class="chart-box"><canvas id="${blkId}_money"></canvas></div></div>
       <div><h3 class="small muted" style="margin:0 0 4px">ПАЦИЕНТЫ / ВИЗИТЫ ${copyBtn("copyChart", blkId + "_traffic", "PNG")}</h3><div class="chart-box"><canvas id="${blkId}_traffic"></canvas></div></div>
       <div><h3 class="small muted" style="margin:0 0 4px">ЛОЯЛЬНОСТЬ И ПЕРЕНАПРАВЛЕНИЯ, % ${copyBtn("copyChart", blkId + "_pct", "PNG")}</h3><div class="chart-box"><canvas id="${blkId}_pct"></canvas></div></div>
-      <div><h3 class="small muted" style="margin:0 0 4px">КЛИЕНТСКАЯ БАЗА ${copyBtn("copyChart", blkId + "_base", "PNG")}</h3><div class="chart-box"><canvas id="${blkId}_base"></canvas></div></div>
+      `}
+      <div><h3 class="small muted" style="margin:0 0 4px">КЛИЕНТСКАЯ БАЗА ${hasBase ? copyBtn("copyChart", blkId + "_base", "PNG") : ""}</h3>
+        ${hasBase ? `<div class="chart-box"><canvas id="${blkId}_base" aria-label="${esc(baseCaption)}"></canvas></div>`
+          : `<p class="small muted">${esc(baseCaption)}. Нет сопоставимых выгрузок.</p>`}</div>
     </div>`;
   }
   // таблица по месяцам: жирным зелёным — лучший месяц метрики, красным — худший
@@ -3483,10 +3552,10 @@ function mobilePublicationReferralSection(result, profile) {
 function mobilePublicationAppointmentSections(result, profile, windowMonths) {
   const slice = result.cross.naz && result.cross.naz[windowMonths];
   if (!slice) {
-    return [{
+    return [mobilePublicationReferralSection(result, profile), {
       title: "Конверсия назначений",
       metrics: [mobilePublicationMetric("Данные", "Нет точной выгрузки", `окно ${windowMonths} мес.`)],
-    }, mobilePublicationReferralSection(result, profile)];
+    }];
   }
   const target = mobilePublicationBenchmark(profile.scoring && profile.scoring.benchmarks, "nazConv");
   const sourceRows = Array.isArray(slice.sourceGroups) && slice.sourceGroups.length
@@ -3499,12 +3568,21 @@ function mobilePublicationAppointmentSections(result, profile, windowMonths) {
     : REF_TYPES.map(type => [type, slice.byType && slice.byType[type]])
       .filter(([, item]) => item && (item.assigned || item.done || item.soldQ))
       .map(([type, item]) => [type, fmtNum(item.assigned), fmtNum(item.done), fmtNum(item.soldQ), fmtPct(item.conv)]);
-  const focusRows = slice.focus && slice.focus.items
-    ? Object.entries(slice.focus.items)
-      .filter(([, item]) => item && (item.assigned || item.resultQ))
-      .map(([name, item]) => [name, fmtNum(item.assigned), fmtNum(item.resultQ)])
-    : [];
+  const focusItems = slice.focus?.items || {};
+  const focusNames = new Set([...(profile.crossFocus?.items || []).map(item => item.name), ...Object.keys(focusItems)]);
+  const focusRows = [...focusNames].map(name => [name, fmtNum(focusItems[name]?.assigned || 0), fmtNum(focusItems[name]?.resultQ || 0)]);
   return [
+    {
+      title: "Фокусы междисциплинарного подхода",
+      metrics: slice.focus?.park ? [mobilePublicationMetric("Позиций выполнено", `${fmtNum(slice.focus.used)} из ${fmtNum(slice.focus.park)}`)] : [],
+      columns: ["Фокус", "Назначено", "Выполнено + продано"],
+      rows: focusRows.length ? focusRows : [["Нет настроенных фокусов", "—", "—"]],
+      charts: [
+        mobilePublicationPie("focus-assigned", "Назначено по фокусам", Object.entries(focusItems).map(([name, item]) => [name, item.assigned, crossFocusColor(profile, name)]), "шт."),
+        mobilePublicationPie("focus-result", "Выполнено + продано по фокусам", Object.entries(focusItems).map(([name, item]) => [name, item.resultQ, crossFocusColor(profile, name)]), "шт."),
+      ].filter(Boolean),
+    },
+    mobilePublicationReferralSection(result, profile),
     {
       title: `Конверсия назначений · ${windowMonths} мес.`,
       metrics: [
@@ -3522,16 +3600,6 @@ function mobilePublicationAppointmentSections(result, profile, windowMonths) {
       tree: mobilePublicationAppointmentTree(slice),
       note: slice.sourceGroups && slice.sourceGroups.length ? "Раскройте вид услуги, затем группу и номенклатуру. Итоги родительских групп включают все вложенные позиции." : "В исходной выгрузке нет иерархии 1С: показаны типы направлений и номенклатура.",
     },
-    {
-      title: "Фокусы междисциплинарного подхода",
-      columns: ["Фокус", "Назначено", "Выполнено + продано"],
-      rows: focusRows.length ? focusRows : [["Нет настроенных фокусов", "—", "—"]],
-      charts: [
-        mobilePublicationPie("focus-assigned", "Назначено по фокусам", Object.entries(slice.focus && slice.focus.items || {}).map(([name, item]) => [name, item.assigned, crossFocusColor(profile, name)]), "шт."),
-        mobilePublicationPie("focus-result", "Выполнено + продано по фокусам", Object.entries(slice.focus && slice.focus.items || {}).map(([name, item]) => [name, item.resultQ, crossFocusColor(profile, name)]), "шт."),
-      ].filter(Boolean),
-    },
-    mobilePublicationReferralSection(result, profile),
   ];
 }
 
@@ -4225,25 +4293,133 @@ function renderDoctorNow() {
   const shownV3Score = shownVecScores ? shownVecScores.v3 : undefined;
   html += `<div class="card vector-card" id="blkV3" data-vector-key="v3" style="border-top-color:${VECTOR_META.v3.color}">
     <div class="vhead"><h3 class="mt0">Вектор 3. Междисциплинарный подход <span class="badge ${VECTOR_META.v3.cls}">${VECTOR_META.v3.tag}</span></h3>
-    <span>${vecBadge("v3", r, docProfile, shownV3Score)} ${blockBtn("blkV3")} ${nz && nz.focus && nz.focus.park ? `<span class="vscore">${nz.focus.used}<span class="small muted"> из ${nz.focus.park} фокусов</span></span>` : ""} ${r.cross.nazSlices.length ? segToggle("nazSeg", r.cross.nazSlices.map(s => ({ v: s, label: "назначения " + s + " мес" })), nazCur, "setNazSlice") : ""}</span></div>`;
+    <span>${vecBadge("v3", r, docProfile, shownV3Score)} ${blockBtn("blkV3")} ${r.cross.nazSlices.length ? segToggle("nazSeg", r.cross.nazSlices.map(s => ({ v: s, label: "назначения " + s + " мес" })), nazCur, "setNazSlice") : ""}</span></div>`;
+  if (nz?.focus) {
+    const focusOrder = (docProfile.crossFocus.items || []).map(item => item.name);
+    for (const name of Object.keys(nz.focus.items)) if (!focusOrder.includes(name)) focusOrder.push(name);
+    const configuredFocusNames = new Set((docProfile.crossFocus.items || []).map(item => item.name));
+    const focusEntries = focusOrder.filter(name => configuredFocusNames.has(name) || nz.focus.items[name]);
+    const focusAssignedEntries = focusEntries.filter(name => nz.focus.items[name] && nz.focus.items[name].assigned > 0);
+    const focusResultEntries = focusEntries.filter(name => nz.focus.items[name] && nz.focus.items[name].resultQ > 0);
+    const focusTitle = esc(nz.focus.title || "Фокусы междисциплинарного подхода");
+    html += `<details ${collapsibleListAttrs("interdisciplinaryFocusPositions", false)} data-v3-section="focus">
+      <summary class="collapsible-list-summary v3-tile">
+        <span class="v3-tile-copy"><b>${focusTitle}</b><small>Окно назначений · ${nazCur} мес.</small></span>
+        ${nz.focus.park ? `<span class="v3-tile-value"><strong>${fmtNum(nz.focus.used)} из ${fmtNum(nz.focus.park)}</strong><small>позиций выполнено</small></span>` : ""}
+      </summary>
+      <div class="collapsible-list-body"><div class="toolbar no-print">${copyBtn("copyTable", "tblNazFocus")}</div>
+        <table class="data" id="tblNazFocus"><tr><th>Наименование услуги</th><th class="num">Назначено, шт</th><th class="num">Выполнено + продано, шт</th></tr>
+        ${focusEntries.map(name => { const item = nz.focus.items[name] || { assigned: 0, resultQ: 0 }; return `<tr><td>${esc(name)}</td><td class="num">${fmtNum(item.assigned)}</td><td class="num">${fmtNum(item.resultQ)}</td></tr>`; }).join("")}
+        </table>
+        <div class="grid cols-2 v3-charts">
+        <div>${focusAssignedEntries.length ? `<h3 class="small muted" style="margin-bottom:6px">НАЗНАЧЕНО ПО ФОКУСАМ, ШТ. ${copyBtn("copyChart", "chNazFocusAssigned", "PNG")}</h3><div class="chart-box"><canvas id="chNazFocusAssigned"></canvas></div>` : '<p class="muted small">По фокусам пока нет назначений.</p>'}</div>
+        <div>${focusResultEntries.length ? `<h3 class="small muted" style="margin-bottom:6px">ВЫПОЛНЕНО + ПРОДАНО ПО ФОКУСАМ, ШТ. ${copyBtn("copyChart", "chNazFocusResult", "PNG")}</h3><div class="chart-box"><canvas id="chNazFocusResult"></canvas></div>` : '<p class="muted small">По фокусам пока нет выполненных или проданных услуг.</p>'}</div>
+        </div>
+      </div></details>`;
+  } else {
+    html += `<div class="v3-tile v3-empty" data-v3-section="focus"><span class="v3-tile-copy"><b>Фокусы междисциплинарного подхода</b><small>${nz ? "Фокусы не настроены." : "Нет выгрузки «Назначения»."}</small></span></div>`;
+  }
+  if (r.cross.refByType && Object.keys(r.cross.refByType).length) {
+    html += `<details ${collapsibleListAttrs("completedReferralDetails", false)} data-v3-section="revenue">
+      <summary class="collapsible-list-summary v3-tile" id="completedReferralShare">
+        <span class="v3-tile-copy"><b>Выполненные направления за месяц</b>
+          <small>${monthLabel(mk)} · учтено ${fmtMoney(refCreditedTotal)} из ${fmtMoney(refWorkTotal)} выполненных</small>
+          <small>Выручка с перенаправлениями ${fmtMoney(r.econ.revenueWithRef)} · источник: отчёт «Выработка»</small>
+        </span>
+        <span class="v3-tile-value"><strong class="tracked-value appointment-conversion-summary-value ${completedReferralState}">${fmtPct(r.cross.crossShare)}</strong>
+          <small>доля в общей выработке${hasCompletedReferralTarget ? ` · цель ≥ ${fmtPct(Number(completedReferralTarget))}` : ""}</small>
+        </span>
+      </summary>
+      <div class="collapsible-list-body"><div class="toolbar no-print">${copyBtn("copyTable", "tblRef")}</div>
+      ${hasReferralRevenueFiltering ? `<div class="notice blue"><b>Правило учёта выручки:</b> все выполненные позиции показаны ниже, но ${fmtMoney(refWorkTotal - refCreditedTotal)} не входят в выручку от перенаправлений согласно настройкам профиля.</div>` : ""}
+      ${hasCompletedReferralGrouping && completedReferralGrouping.unmatchedItems ? `<div class="notice warn"><b>Не сопоставлено с группами 1С:</b> ${fmtNum(completedReferralGrouping.unmatchedItems)} поз. Они показаны отдельной группой; остальные услуги объединены по структуре отчёта «Назначения».</div>` : ""}
+      <table class="data referral-details-table" id="tblRef"><tr><th>${hasCompletedReferralGrouping ? "Тип / группа 1С / номенклатура" : "Тип"}</th><th class="num">Штук</th><th class="num">Выполнено</th><th class="num">Учтено в перенаправлениях</th></tr>`;
+    let rtIdx = 0;
+    if (hasCompletedReferralGrouping) {
+      const sourceTree = new Map();
+      for (const group of completedReferralGrouping.groups) {
+        let siblings = sourceTree;
+        let target = null;
+        for (const part of [adminReferralType(group.type), ...(group.path || [])]) {
+          if (!siblings.has(part)) siblings.set(part, { name: part, children: new Map(), items: {}, q: 0, s: 0, includedS: 0 });
+          target = siblings.get(part);
+          target.q += group.q || 0;
+          target.s += group.s || 0;
+          target.includedS += group.includedS || 0;
+          siblings = target.children;
+        }
+        if (target) {
+          for (const [name, values] of Object.entries(group.items || {})) {
+            if (!target.items[name]) target.items[name] = { q: 0, s: 0, includedS: 0, excludedS: 0, inclusionReason: values.inclusionReason || "" };
+            target.items[name].q += values.q || 0;
+            target.items[name].s += values.s || 0;
+            target.items[name].includedS += values.includedS || 0;
+            target.items[name].excludedS += values.excludedS || 0;
+          }
+        }
+      }
+      const renderCompletedReferralNodes = (nodes, depth = 0, ancestorKeys = []) => {
+        for (const node of nodes.values()) {
+          const itemEntries = Object.entries(node.items || {}).sort((a, b) => b[1].s - a[1].s);
+          const groupKey = "rt" + rtIdx++;
+          const open = !!UI.openGroups[groupKey];
+          const hasChildren = node.children.size > 0;
+          const expandable = hasChildren || itemEntries.length > 0;
+          const ancestors = [...ancestorKeys, groupKey];
+          const ancestorAttr = ancestorKeys.length ? ` data-group-ancestors="${ancestorKeys.join(" ")}"` : "";
+          const visible = ancestorKeys.every(key => Boolean(UI.openGroups[key]));
+          html += `<tr class="grp-head source-group-head source-group-depth-${Math.min(depth, 3)}" data-g="${groupKey}"${ancestorAttr}${expandable ? ` onclick="toggleGroup('${groupKey}')"` : ""}${visible ? (expandable ? ' style="cursor:pointer"' : "") : ' style="display:none"'}>
+            <td style="padding-left:${10 + depth * 22}px"><span id="tri_${groupKey}" class="muted">${expandable ? (open ? "▾" : "▸") : "·"}</span> <b>${esc(node.name)}</b></td>
+            <td class="num"><b>${fmtNum(node.q)}</b></td><td class="num"><b>${fmtMoney(node.s)}</b></td><td class="num"><b>${fmtMoney(node.includedS)}</b></td></tr>`;
+          if (hasChildren) renderCompletedReferralNodes(node.children, depth + 1, ancestors);
+          for (const [name, values] of itemEntries) {
+            const itemVisible = ancestors.every(key => Boolean(UI.openGroups[key]));
+            const exclusionBadge = values.excludedS > 0 ? ` <span class="badge warn" title="${esc(values.inclusionReason || "Не учитывается по настройке")}">не учитывается</span>` : "";
+            html += `<tr class="grp-sub ${groupKey}" data-group-ancestors="${ancestors.join(" ")}" ${itemVisible ? "" : 'style="display:none"'}><td class="small muted source-nomenclature" style="padding-left:${10 + (depth + 1) * 22}px">${esc(name)}${exclusionBadge}</td>
+              <td class="num small muted">${fmtNum(values.q)}</td><td class="num small muted">${fmtMoney(values.s)}</td><td class="num small muted">${fmtMoney(values.includedS)}</td></tr>`;
+          }
+        }
+      };
+      renderCompletedReferralNodes(sourceTree);
+    } else {
+      for (const t of ["Товары", "Приемы", "Анализы", "Услуги"]) {
+        const b = adminReferrals[t];
+        if (!b) continue;
+        const itEntries = Object.entries(b.items || {}).sort((a, bb) => bb[1].s - a[1].s);
+        const gKey = "rt" + rtIdx++;
+        const open = !!UI.openGroups[gKey];
+        html += `<tr class="grp-head" data-g="${gKey}" ${itEntries.length ? `onclick="toggleGroup('${gKey}')" style="cursor:pointer"` : ""}>
+          <td><span id="tri_${gKey}" class="muted">${itEntries.length ? (open ? "▾" : "▸") : "·"}</span> <b>${esc(t)}</b></td>
+          <td class="num"><b>${fmtNum(b.q)}</b></td><td class="num"><b>${fmtMoney(b.s)}</b></td><td class="num"><b>${fmtMoney(b.includedS)}</b></td></tr>`;
+        for (const [n, v] of itEntries) {
+          const exclusionBadge = v.excludedS > 0 ? ` <span class="badge warn" title="${esc(v.inclusionReason || "Не учитывается по настройке")}">не учитывается</span>` : "";
+          html += `<tr class="grp-sub ${gKey}" ${open ? "" : 'style="display:none"'}><td class="small muted" style="padding-left:26px">${esc(n)}${exclusionBadge}</td>
+            <td class="num small muted">${fmtNum(v.q)}</td><td class="num small muted">${fmtMoney(v.s)}</td><td class="num small muted">${fmtMoney(v.includedS)}</td></tr>`;
+        }
+      }
+    }
+    html += `<tr><td><b>Всего выполнено</b></td><td class="num"></td><td class="num"><b>${fmtMoney(refWorkTotal)}</b></td><td class="num"></td></tr>
+      <tr><td><b>Учтено в выручке от перенаправлений</b></td><td class="num"></td><td class="num"></td><td class="num"><b>${fmtMoney(refCreditedTotal)}</b></td></tr></table>
+      <div class="v3-charts"><h3 class="section-title" style="margin:0 0 6px">ВЫРАБОТКА ОТ ПЕРЕНАПРАВЛЕНИЙ ${copyBtn("copyChart", "chNazStruct", "PNG")}</h3>
+      <div class="chart-box"><canvas id="chNazStruct"></canvas></div></div></div></details>`;
+  } else {
+    html += `<div class="v3-tile v3-empty" data-v3-section="revenue"><span class="v3-tile-copy"><b>Выполненные направления за месяц</b><small>${monthLabel(mk)} · нет выполненных направлений в «Выработке».</small></span>
+      <span class="v3-tile-value"><strong>${fmtPct(r.cross.crossShare)}</strong><small>доля в общей выработке</small></span></div>`;
+  }
   if (nz) {
     const convTarget = docProfile.scoring && docProfile.scoring.benchmarks ? docProfile.scoring.benchmarks.nazConv : null;
     const convState = trackedMetricState(nz.totals.conv, convTarget);
     const hasConvTarget = convTarget != null && convTarget !== "" && !isNaN(convTarget) && Number(convTarget) > 0;
     const hasSourceGrouping = Boolean(nz.sourceGroups && nz.sourceGroups.length);
-    html += `<details ${collapsibleListAttrs("appointmentConversionBlock", false)}><summary class="collapsible-list-summary appointment-conversion-summary">
-      <span>Планы лечения и конверсия в реализацию <span class="section-detail">· окно ${nazCur} мес.</span></span>
-      <strong class="appointment-conversion-summary-value ${convState}">${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</strong>
-      <span class="collapse-hint"></span>
+    html += `<details ${collapsibleListAttrs("appointmentConversionBlock", false)} data-v3-section="conversion"><summary class="collapsible-list-summary v3-tile appointment-conversion-summary">
+      <span class="v3-tile-copy"><b>Конверсия назначений</b><small>Окно ${nazCur} мес. · ${fmtNum(nz.totals.resultQ)} из ${fmtNum(nz.totals.assigned)} назначений</small></span>
+      <span class="v3-tile-value"><strong class="appointment-conversion-summary-value ${convState}">${fmtPct(nz.totals.conv)}</strong><small>${hasConvTarget ? `цель ≥ ${fmtPct(Number(convTarget))}` : "цель не установлена"}</small></span>
       </summary><div class="collapsible-list-body appointment-conversion-body">
-      <div class="toolbar no-print appointment-conversion-actions"><button class="btn mini" onclick="expandAppointmentDetails()">Раскрыть все услуги</button>${copyBtn("copyTable", "tblNaz")}</div>
       ${nz.totals.valid === false ? `<div class="notice bad"><b>Конверсия не рассчитана:</b> ${esc(nz.totals.issue)}. Проверьте состав исходной выгрузки.</div>` : ""}
-      <div class="tracked-metric ${convState}">
-        <div><div class="tracked-title">Конверсия за ${nazCur} мес.</div><div class="tracked-note">Услуги: выполнено + продано; товары: продано · ${fmtNum(nz.totals.resultQ)} из ${fmtNum(nz.totals.assigned)}</div></div>
-        <div class="tracked-side"><div class="tracked-goal">${hasConvTarget ? `цель ≥ ${fmtPct(Number(convTarget))}` : "цель не установлена"}</div></div>
-      </div>
+      <p class="small muted v3-method">Услуги: выполнено + продано; товары: продано.</p>
       <details ${collapsibleListAttrs("appointmentDetails", false)}><summary class="collapsible-list-summary"><span>Детализация по услугам и группам 1С</span><span class="collapse-hint"></span></summary>
       <div class="collapsible-list-body">
+      <div class="toolbar no-print appointment-conversion-actions"><button class="btn mini" onclick="expandAppointmentDetails()">Раскрыть все услуги</button>${copyBtn("copyTable", "tblNaz")}</div>
       ${hasSourceGrouping ? "" : `<div class="notice warn appointment-source-grouping-warning"><b>Нет группировки из 1С.</b> Эти назначения были загружены старой версией. Повторно обработайте исходные файлы на вкладке «Данные». <button class="btn mini no-print" type="button" onclick="switchTab('data')">Перейти к данным</button></div>`}
       <table class="data" id="tblNaz"><tr><th>${hasSourceGrouping ? "Вид услуги / специализация / номенклатура" : "Тип направления"}</th><th class="num">Назначено, шт</th><th class="num">Выполнено, шт</th><th class="num">Продано, шт</th><th class="num">Конверсия</th></tr>`;
     let ntIdx = 0;
@@ -4318,108 +4494,9 @@ function renderDoctorNow() {
       }
     }
     html += `<tr><td><b>Итого</b></td><td class="num"><b>${fmtNum(nz.totals.assigned)}</b></td><td class="num"><b>${fmtNum(nz.totals.done)}</b></td><td class="num"><b>${fmtNum(nz.totals.soldQ)}</b></td><td class="num"><b>${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</b></td></tr></table></div></details>`;
-    if (nz.focus) {
-      const focusOrder = (docProfile.crossFocus.items || []).map(item => item.name);
-      for (const name of Object.keys(nz.focus.items)) if (!focusOrder.includes(name)) focusOrder.push(name);
-      const configuredFocusNames = new Set((docProfile.crossFocus.items || []).map(item => item.name));
-      const focusEntries = focusOrder.filter(name => configuredFocusNames.has(name) || nz.focus.items[name]);
-      const focusAssignedEntries = focusEntries.filter(name => nz.focus.items[name] && nz.focus.items[name].assigned > 0);
-      const focusResultEntries = focusEntries.filter(name => nz.focus.items[name] && nz.focus.items[name].resultQ > 0);
-      const focusTitle = esc((nz.focus.title || "Фокусы междисциплинарного подхода").toUpperCase());
-      html += `<h3 class="section-title appointment-focus-title" style="margin:14px 0 6px">${focusTitle}</h3>
-        <div class="grid cols-3" style="margin-top:12px">
-          <div>${focusAssignedEntries.length ? `<h3 class="small muted" style="margin-bottom:6px">НАЗНАЧЕНО ПО ФОКУСАМ, ШТ. ${copyBtn("copyChart", "chNazFocusAssigned", "PNG")}</h3><div class="chart-box"><canvas id="chNazFocusAssigned"></canvas></div>` : '<p class="muted small">По фокусам пока нет назначений.</p>'}</div>
-          <div>${focusResultEntries.length ? `<h3 class="small muted" style="margin-bottom:6px">ВЫПОЛНЕНО + ПРОДАНО ПО ФОКУСАМ, ШТ. ${copyBtn("copyChart", "chNazFocusResult", "PNG")}</h3><div class="chart-box"><canvas id="chNazFocusResult"></canvas></div>` : '<p class="muted small">По фокусам пока нет выполненных или проданных услуг.</p>'}</div>
-          <div><details ${collapsibleListAttrs("interdisciplinaryFocusPositions", false)}><summary class="collapsible-list-summary"><span>${focusTitle}: СПИСОК</span><span class="collapse-hint"></span></summary>
-            <div class="collapsible-list-body"><div class="toolbar no-print">${copyBtn("copyTable", "tblNazFocus")}</div><table class="data" id="tblNazFocus"><tr><th>Наименование услуги</th><th class="num">Назначено, шт</th><th class="num">Выполнено + продано, шт</th></tr>
-            ${focusEntries.map(name => { const item = nz.focus.items[name] || { assigned: 0, resultQ: 0 }; return `<tr><td>${esc(name)}</td><td class="num">${fmtNum(item.assigned)}</td><td class="num">${fmtNum(item.resultQ)}</td></tr>`; }).join("")}
-            </table></div></details></div>
-        </div>`;
-    }
     html += `</div></details>`;
   } else {
-    html += '<p class="muted small" style="margin-top:8px">Нет выгрузки «Назначения» за этот месяц — конверсии недоступны.</p>';
-  }
-  if (r.cross.refByType && Object.keys(r.cross.refByType).length) {
-    html += `<section class="completed-referrals-section"><h3>Выполненные планы лечения и назначения в текущем месяце</h3><p class="small muted">${monthLabel(mk)} · только фактически выполненные позиции из отчёта «Выработка». Окно назначений выше не меняет суммы этого месяца.</p><div class="tracked-metric ${completedReferralState}" id="completedReferralShare" style="margin:12px 0">
-      <div><div class="tracked-title">Доля выручки от выполненных направлений</div>
-      <div class="tracked-note">Учтено ${fmtMoney(refCreditedTotal)} из ${fmtMoney(refWorkTotal)} выполненных · выручка с перенаправлениями ${fmtMoney(r.econ.revenueWithRef)} · источник: отчёт «Выработка»</div></div>
-      <div class="tracked-side"><div class="tracked-value">${fmtPct(r.cross.crossShare)}</div><div class="tracked-goal">${hasCompletedReferralTarget ? `цель ≥ ${fmtPct(Number(completedReferralTarget))}` : "цель не установлена"}</div></div>
-    </div>
-    <div class="grid cols-2" style="margin-top:12px"><div>
-      <details ${collapsibleListAttrs("completedReferralDetails", false)}><summary class="collapsible-list-summary"><span>Выполненные позиции <span class="section-detail">· всего ${fmtMoney(refWorkTotal)} · учтено ${fmtMoney(refCreditedTotal)}</span></span><span class="collapse-hint"></span></summary>
-      <div class="collapsible-list-body"><div class="toolbar no-print">${copyBtn("copyTable", "tblRef")}</div>
-      ${hasReferralRevenueFiltering ? `<div class="notice blue"><b>Правило учёта выручки:</b> все выполненные позиции показаны ниже, но ${fmtMoney(refWorkTotal - refCreditedTotal)} не входят в выручку от перенаправлений согласно настройкам профиля.</div>` : ""}
-      ${hasCompletedReferralGrouping && completedReferralGrouping.unmatchedItems ? `<div class="notice warn"><b>Не сопоставлено с группами 1С:</b> ${fmtNum(completedReferralGrouping.unmatchedItems)} поз. Они показаны отдельной группой; остальные услуги объединены по структуре отчёта «Назначения».</div>` : ""}
-      <table class="data referral-details-table" id="tblRef"><tr><th>${hasCompletedReferralGrouping ? "Тип / группа 1С / номенклатура" : "Тип"}</th><th class="num">Штук</th><th class="num">Выполнено</th><th class="num">Учтено в перенаправлениях</th></tr>`;
-    let rtIdx = 0;
-    if (hasCompletedReferralGrouping) {
-      const sourceTree = new Map();
-      for (const group of completedReferralGrouping.groups) {
-        let siblings = sourceTree;
-        let target = null;
-        for (const part of [adminReferralType(group.type), ...(group.path || [])]) {
-          if (!siblings.has(part)) siblings.set(part, { name: part, children: new Map(), items: {}, q: 0, s: 0, includedS: 0 });
-          target = siblings.get(part);
-          target.q += group.q || 0;
-          target.s += group.s || 0;
-          target.includedS += group.includedS || 0;
-          siblings = target.children;
-        }
-        if (target) {
-          for (const [name, values] of Object.entries(group.items || {})) {
-            if (!target.items[name]) target.items[name] = { q: 0, s: 0, includedS: 0, excludedS: 0, inclusionReason: values.inclusionReason || "" };
-            target.items[name].q += values.q || 0;
-            target.items[name].s += values.s || 0;
-            target.items[name].includedS += values.includedS || 0;
-            target.items[name].excludedS += values.excludedS || 0;
-          }
-        }
-      }
-      const renderCompletedReferralNodes = (nodes, depth = 0, ancestorKeys = []) => {
-        for (const node of nodes.values()) {
-          const itemEntries = Object.entries(node.items || {}).sort((a, b) => b[1].s - a[1].s);
-          const groupKey = "rt" + rtIdx++;
-          const open = !!UI.openGroups[groupKey];
-          const hasChildren = node.children.size > 0;
-          const expandable = hasChildren || itemEntries.length > 0;
-          const ancestors = [...ancestorKeys, groupKey];
-          const ancestorAttr = ancestorKeys.length ? ` data-group-ancestors="${ancestorKeys.join(" ")}"` : "";
-          const visible = ancestorKeys.every(key => Boolean(UI.openGroups[key]));
-          html += `<tr class="grp-head source-group-head source-group-depth-${Math.min(depth, 3)}" data-g="${groupKey}"${ancestorAttr}${expandable ? ` onclick="toggleGroup('${groupKey}')"` : ""}${visible ? (expandable ? ' style="cursor:pointer"' : "") : ' style="display:none"'}>
-            <td style="padding-left:${10 + depth * 22}px"><span id="tri_${groupKey}" class="muted">${expandable ? (open ? "▾" : "▸") : "·"}</span> <b>${esc(node.name)}</b></td>
-            <td class="num"><b>${fmtNum(node.q)}</b></td><td class="num"><b>${fmtMoney(node.s)}</b></td><td class="num"><b>${fmtMoney(node.includedS)}</b></td></tr>`;
-          if (hasChildren) renderCompletedReferralNodes(node.children, depth + 1, ancestors);
-          for (const [name, values] of itemEntries) {
-            const itemVisible = ancestors.every(key => Boolean(UI.openGroups[key]));
-            const exclusionBadge = values.excludedS > 0 ? ` <span class="badge warn" title="${esc(values.inclusionReason || "Не учитывается по настройке")}">не учитывается</span>` : "";
-            html += `<tr class="grp-sub ${groupKey}" data-group-ancestors="${ancestors.join(" ")}" ${itemVisible ? "" : 'style="display:none"'}><td class="small muted source-nomenclature" style="padding-left:${10 + (depth + 1) * 22}px">${esc(name)}${exclusionBadge}</td>
-              <td class="num small muted">${fmtNum(values.q)}</td><td class="num small muted">${fmtMoney(values.s)}</td><td class="num small muted">${fmtMoney(values.includedS)}</td></tr>`;
-          }
-        }
-      };
-      renderCompletedReferralNodes(sourceTree);
-    } else {
-      for (const t of ["Товары", "Приемы", "Анализы", "Услуги"]) {
-        const b = adminReferrals[t];
-        if (!b) continue;
-        const itEntries = Object.entries(b.items || {}).sort((a, bb) => bb[1].s - a[1].s);
-        const gKey = "rt" + rtIdx++;
-        const open = !!UI.openGroups[gKey];
-        html += `<tr class="grp-head" data-g="${gKey}" ${itEntries.length ? `onclick="toggleGroup('${gKey}')" style="cursor:pointer"` : ""}>
-          <td><span id="tri_${gKey}" class="muted">${itEntries.length ? (open ? "▾" : "▸") : "·"}</span> <b>${esc(t)}</b></td>
-          <td class="num"><b>${fmtNum(b.q)}</b></td><td class="num"><b>${fmtMoney(b.s)}</b></td><td class="num"><b>${fmtMoney(b.includedS)}</b></td></tr>`;
-        for (const [n, v] of itEntries) {
-          const exclusionBadge = v.excludedS > 0 ? ` <span class="badge warn" title="${esc(v.inclusionReason || "Не учитывается по настройке")}">не учитывается</span>` : "";
-          html += `<tr class="grp-sub ${gKey}" ${open ? "" : 'style="display:none"'}><td class="small muted" style="padding-left:26px">${esc(n)}${exclusionBadge}</td>
-            <td class="num small muted">${fmtNum(v.q)}</td><td class="num small muted">${fmtMoney(v.s)}</td><td class="num small muted">${fmtMoney(v.includedS)}</td></tr>`;
-        }
-      }
-    }
-    html += `<tr><td><b>Всего выполнено</b></td><td class="num"></td><td class="num"><b>${fmtMoney(refWorkTotal)}</b></td><td class="num"></td></tr>
-      <tr><td><b>Учтено в выручке от перенаправлений</b></td><td class="num"></td><td class="num"></td><td class="num"><b>${fmtMoney(refCreditedTotal)}</b></td></tr></table></div></details></div>
-      <div><h3 class="section-title" style="margin:0 0 6px">ВЫРАБОТКА ОТ ПЕРЕНАПРАВЛЕНИЙ ${copyBtn("copyChart", "chNazStruct", "PNG")}</h3>
-      <div class="chart-box"><canvas id="chNazStruct"></canvas></div></div></div></section>`;
+    html += `<div class="v3-tile v3-empty" data-v3-section="conversion"><span class="v3-tile-copy"><b>Конверсия назначений</b><small>Нет выгрузки «Назначения».</small></span></div>`;
   }
   html += "</div>";
 
@@ -7378,6 +7455,11 @@ async function initApp() {
     });
   }
   switchTab("data");
+  if (DESKTOP_API) {
+    setTimeout(() => {
+      if (!fileImportInProgress) prepareSpecializationYear(monthKeysSorted().at(-1));
+    }, 0);
+  }
 }
 
 document.addEventListener("toggle", event => {

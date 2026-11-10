@@ -445,6 +445,8 @@ details > summary { outline: none; }
 }
 .dropzone.dragover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 .dropzone[aria-busy="true"] { opacity: .65; cursor: wait; pointer-events: none; }
+.dropzone[aria-busy="true"] #btnCancelImport { pointer-events: auto; }
+#importProgressBar { width: min(100%, 360px); accent-color: var(--accent); }
 .dropzone .big { font-size: 16px; font-weight: 600; color: var(--ink); margin-bottom: 6px; }
 table.data {
   width: 100%;
@@ -707,7 +709,7 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .collapsible-list-summary > span:first-of-type { flex: 1; min-width: 0; }
 .collapse-hint { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0; }
 .collapse-hint::after { content: "Развернуть"; }
-.collapsible-list[open] .collapse-hint::after { content: "Свернуть"; }
+.collapsible-list[open] > .collapsible-list-summary .collapse-hint::after { content: "Свернуть"; }
 .collapsible-list-body { padding: 8px 10px 10px; overflow-x: auto; }
 .collapsible-list-body > .data { margin-top: 0; }
 .appointment-conversion-summary { margin-top: 12px; padding-top: 11px; padding-bottom: 11px; }
@@ -724,6 +726,42 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .appointment-conversion-summary-value.goal-bad { color: var(--bad); }
 .appointment-conversion-body { padding: 10px 12px 12px; overflow: visible; }
 .appointment-conversion-actions { justify-content: flex-end; margin: 0 0 6px; }
+.v3-tile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 15px;
+  background: #f7f9fc;
+  letter-spacing: normal;
+  color: var(--ink);
+}
+[data-v3-section] { min-width: 0; margin: 9px 0; }
+[data-v3-section="focus"] > .v3-tile { background: #f5effb; }
+[data-v3-section="revenue"] > .v3-tile { background: #eef8f6; }
+.v3-tile.appointment-conversion-summary { margin: 0; }
+.v3-tile-copy { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.v3-tile-copy > b { display: block; font-size: 14px; }
+.v3-tile small { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.3; font-weight: 400; }
+.v3-tile-value { max-width: 45%; text-align: right; }
+.v3-tile-value > strong { font-size: 20px; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.v3-empty { border: 1px solid var(--line); border-radius: 8px; }
+.v3-charts { margin-top: 12px; }
+.v3-method { margin: 2px 0 10px; }
+.v3-window-picker { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 12px 0 8px; font-size: 13px; }
+.v3-window-picker select { padding: 5px; font: inherit; max-width: 100%; }
+@media (max-width: 600px) {
+  .v3-tile { display: grid; grid-template-columns: 9px minmax(0, 1fr) minmax(0, 38%); gap: 4px 7px; padding: 10px; }
+  .v3-tile::before { grid-area: 1 / 1; }
+  .v3-tile-copy { display: contents; }
+  .v3-tile-copy > b { grid-area: 1 / 2; }
+  .v3-tile-copy > small { grid-column: 2 / -1; }
+  .v3-tile-value { grid-area: 1 / 3; max-width: none; }
+  .v3-tile:not(:has(.v3-tile-value)) .v3-tile-copy > b { grid-column-end: -1; }
+  .v3-tile-value > strong { font-size: 17px; }
+  .v3-tile small { font-size: 11px; }
+}
+.v3-window-panel[hidden] { display: none; }
+.heatmap-money { display: block; font-weight: 700; white-space: nowrap; }
 .appointment-focus-title { padding: 10px 12px; border-left: 4px solid #7c3aed; border-radius: 6px; background: #f3e8ff; color: #5b21b6; }
 .completed-referrals-section { margin-top: 24px; padding-top: 18px; border-top: 3px solid #0d9488; }
 .completed-referrals-section > h3 { color: #0f766e; }
@@ -1360,6 +1398,7 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
       <button class="btn danger hidden" id="btnCancelImport" type="button">Остановить импорт</button>
     </div>
     <div class="small muted" id="importProgress" role="status" aria-live="polite"></div>
+    <progress id="importProgressBar" aria-label="Ход импорта и подготовки сводок" hidden></progress>
   </div>
   <input type="file" id="fileInput" multiple accept=".xls,.xlsx,.json,.zip" class="hidden">
   <input type="file" id="dirInput" webkitdirectory class="hidden">
@@ -5290,6 +5329,19 @@ function filesFromDataTransfer(dt) {
 let fileImportInProgress = false;
 let fileImportCancelRequested = false;
 
+function setFileImportProgress(message, completed, total) {
+  const status = document.getElementById("importProgress");
+  const bar = document.getElementById("importProgressBar");
+  if (status) status.textContent = message;
+  if (bar) {
+    bar.hidden = !message;
+    if (total > 0) {
+      bar.max = total;
+      bar.value = completed;
+    } else bar.removeAttribute("value");
+  }
+}
+
 function cancelFileImport() {
   if (!fileImportInProgress) return;
   fileImportCancelRequested = true;
@@ -5312,16 +5364,16 @@ async function handleFiles(fileList, options = {}) {
   }
   fileImportInProgress = true;
   fileImportCancelRequested = false;
+  if (typeof cancelSpecializationPreparation === "function") cancelSpecializationPreparation();
   const controlIds = ["btnPickFiles", "btnPickDir", "btnScanInput", "btnReprocessAppointments", "btnReprocessPrimaryReturn"];
   const controls = controlIds.map(id => document.getElementById(id)).filter(Boolean);
   const previousDisabled = controls.map(control => control.disabled);
   controls.forEach(control => { control.disabled = true; });
   const dropzone = document.getElementById("dropzone");
   const cancelButton = document.getElementById("btnCancelImport");
-  const progress = document.getElementById("importProgress");
   if (dropzone) dropzone.setAttribute("aria-busy", "true");
   if (cancelButton) cancelButton.classList.remove("hidden");
-  if (progress) progress.textContent = "Подготавливаем файлы…";
+  setFileImportProgress("Подготавливаем файлы…");
   try {
     return await handleFilesBatch(fileList, options);
   } catch (error) {
@@ -5332,7 +5384,7 @@ async function handleFiles(fileList, options = {}) {
     controls.forEach((control, index) => { control.disabled = previousDisabled[index]; });
     if (dropzone) dropzone.removeAttribute("aria-busy");
     if (cancelButton) cancelButton.classList.add("hidden");
-    if (progress) progress.textContent = "";
+    setFileImportProgress("");
     fileImportInProgress = false;
     fileImportCancelRequested = false;
   }
@@ -5381,8 +5433,7 @@ async function handleFilesBatch(fileList, options = {}) {
       break;
     }
     const f = files[index];
-    const progress = document.getElementById("importProgress");
-    if (progress) progress.textContent = `Обрабатываем ${index + 1} из ${files.length}: ${f.name}`;
+    setFileImportProgress(`Обрабатываем файл ${index + 1} из ${files.length} · ${f.name}`, index, files.length);
     await yieldImportEvents();
     const source = DESKTOP_API ? await ensureDesktopFileSource(f) : null;
     let saved;
@@ -5407,7 +5458,7 @@ async function handleFilesBatch(fileList, options = {}) {
         });
       }
       // Фильтр типа не меняет базу и не подтверждает успешную обработку источника.
-      if (progress) progress.textContent = `Сохраняем ${index + 1} из ${files.length}: ${f.name}`;
+      setFileImportProgress(`Сохраняем файл ${index + 1} из ${files.length} · ${f.name}`, index, files.length);
       const committed = log.skipReason === "filtered-type" || await saveLocal(records);
       if (!committed) {
         DB.doctors = before.doctors;
@@ -5447,6 +5498,21 @@ async function handleFilesBatch(fileList, options = {}) {
       console.error("import batch completion failed", error);
       err++;
       toast("Не удалось записать итог импорта: " + error.message, true);
+    }
+  }
+  if (ok && !fileImportCancelRequested && typeof prepareSpecializationYear === "function") {
+    const month = DB.months[UI.deptMonth] ? UI.deptMonth : monthKeysSorted().at(-1);
+    if (month) {
+      const label = `Готовим сводки специализаций за ${month.slice(0, 4)} год`;
+      document.getElementById("btnCancelImport")?.classList.add("hidden");
+      setFileImportProgress(label + "…");
+      try {
+        await prepareSpecializationYear(month, ({ completed, total }) => {
+          setFileImportProgress(`${label} · обработано ${completed} из ${total} месяцев`, completed, total);
+        });
+      } catch (error) {
+        console.warn("Specialization preparation after import:", error);
+      }
     }
   }
   renderAll();
@@ -6131,6 +6197,11 @@ function clientBaseActiveVisits(docId, monthKey) {
 }
 function reportClientBaseSummary(docId, monthKey, windowMonths = 12) {
   const key = JSON.stringify([String(docId), String(monthKey), Number(windowMonths), "report-overlap-v1"]);
+  if (specializationCalculations?.reportBase) {
+    const bases = specializationCalculations.reportBase;
+    if (!bases.has(key)) bases.set(key, computeKbSummary(docId, monthKey, windowMonths, clientBaseReportProfile(), true));
+    return bases.get(key);
+  }
   const cached = metricsCacheGet(_kbSummaryCache, key, "kbSummary");
   if (cached !== undefined) return cached;
   return metricsCacheSet(_kbSummaryCache, key,
@@ -6429,14 +6500,16 @@ function reputationSummary(raw) {
 
 /* ---------- главный расчёт ---------- */
 /* Кэши ограничены LRU и инвалидируются только для затронутых данных. */
-const METRICS_CACHE_LIMITS = Object.freeze({ metrics: 480, kbSummary: 720, kbDetails: 48, adminBase: 120, department: 180 });
+const METRICS_CACHE_LIMITS = Object.freeze({ metrics: 480, kbSummary: 720, kbDetails: 48, adminBase: 120, department: 180, specializationBase: 720 });
 let _mcCache = new Map();
 let metricsCalculationRevision = 0;
 let preparedMetricsForRender = null;
+let specializationCalculations = null;
 let _kbSummaryCache = new Map();
 let _kbDetailsCache = new Map();
 let _adminBaseCache = new Map();
 let _deptCache = new Map();
+let _specializationBaseCache = new Map();
 let _metricsCacheCounters = {};
 
 function metricsCacheGet(cache, key, name) {
@@ -6467,6 +6540,7 @@ function clearMetricsCache() {
   _kbDetailsCache = new Map();
   _adminBaseCache = new Map();
   _deptCache = new Map();
+  _specializationBaseCache = new Map();
   _metricsCacheCounters = {};
 }
 
@@ -6500,13 +6574,16 @@ function invalidateMetricsCache(change = null) {
     deleteCacheWhere(_kbDetailsCache, affected);
     deleteCacheWhere(_adminBaseCache, affected);
   }
-  if (change.departmentScope || change.doctors === true || doctors.size) _deptCache.clear();
-  else if (months.size) deleteCacheWhere(_deptCache, parts => months.has(String(parts[0])));
+  for (const cache of [_deptCache, _specializationBaseCache]) {
+    if (change.departmentScope || change.doctors === true || doctors.size) cache.clear();
+    else if (months.size) deleteCacheWhere(cache, parts => months.has(String(parts[0])));
+  }
 }
 
 function metricsCacheStats() {
   return {
-    sizes: { metrics: _mcCache.size, kbSummary: _kbSummaryCache.size, kbDetails: _kbDetailsCache.size, adminBase: _adminBaseCache.size, department: _deptCache.size },
+    sizes: { metrics: _mcCache.size, kbSummary: _kbSummaryCache.size, kbDetails: _kbDetailsCache.size,
+      adminBase: _adminBaseCache.size, department: _deptCache.size, specializationBase: _specializationBaseCache.size },
     limits: { ...METRICS_CACHE_LIMITS },
     counters: JSON.parse(JSON.stringify(_metricsCacheCounters)),
   };
@@ -7018,21 +7095,173 @@ function aggregateDeptCacheKey(mk, deptFilter, subFilter, doctorIds) {
 
 function aggregateDeptMonth(mk, deptFilter, subFilter = "all", doctorIds = null) {
   const cacheKey = aggregateDeptCacheKey(mk, deptFilter, subFilter, doctorIds);
+  if (specializationCalculations?.department) {
+    if (!DB.months[mk]) return null;
+    const totals = specializationCalculations.department;
+    if (!totals.has(cacheKey)) totals.set(cacheKey, aggregateDeptMonthRaw(mk, deptFilter, subFilter, doctorIds));
+    return totals.get(cacheKey);
+  }
   const cached = metricsCacheGet(_deptCache, cacheKey, "department");
   if (cached !== undefined) return cached;
   return metricsCacheSet(_deptCache, cacheKey, aggregateDeptMonthRaw(mk, deptFilter, subFilter, doctorIds), METRICS_CACHE_LIMITS.department);
 }
 
-function aggregateDeptMonthRaw(mk, deptFilter, subFilter = "all", doctorIds = null) {
+function mergeClientBaseSummaries(baseRows, expectedCount = baseRows.length) {
+  const clients = new Map();
+  for (const kb of baseRows) {
+    for (const c of kb.clientRows) {
+      const old = clients.get(c.key);
+      if (!old) clients.set(c.key, { ...c, groups: [...(c.groups || [])] });
+      else {
+        old.v += c.v || 0;
+        old.s += c.s || 0;
+        if (c.r != null && (old.r == null || c.r < old.r)) old.r = c.r;
+        old.loyal = old.loyal || c.loyal;
+        old.groups = [...new Set([...(old.groups || []), ...(c.groups || [])])];
+      }
+    }
+  }
+  if (!baseRows.length) return null;
+  const groupNames = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+  const allDoctorsCovered = baseRows.length === expectedCount;
+  const sameWindow = new Set(baseRows.map(kb => kb.window)).size === 1;
+  const groupAvailable = Object.fromEntries(groupNames.map(group => [group, allDoctorsCovered && sameWindow && baseRows.every(kb => kb.groupAvailable && kb.groupAvailable[group])]));
+  const seg = { loyal: 0, active: 0, newRisk: 0, loyalSleep: 0, lost: 0, unknown: 0 };
+  let visits = 0, totalSum = 0, loyalCount = 0;
+  for (const c of clients.values()) {
+    for (const group of (c.groups || [])) if (Object.prototype.hasOwnProperty.call(seg, group)) seg[group]++;
+    if (c.r == null) seg.unknown++;
+    visits += c.v || 0;
+    totalSum += c.s || 0;
+    if (c.loyal) loyalCount++;
+  }
+  for (const group of groupNames) if (!groupAvailable[group]) seg[group] = null;
+  seg.risk = seg.newRisk;
+  seg.sleep = seg.loyalSleep;
+  const total = clients.size;
+  const sourceWindowComplete = allDoctorsCovered && sameWindow && baseRows.every(kb => kb.sourceWindowComplete);
+  const windows = [...new Set(baseRows.map(kb => Number(kb.window)).filter(Number.isFinite))].sort((a, b) => a - b);
+  const clientRows = [...clients.values()];
+  const atRiskRows = clientRows.filter(c => (c.groups || []).some(group => ["newRisk", "loyalSleep", "lost"].includes(group)));
+  return {
+    total, seg, clientRows, visits, totalSum, loyalCount,
+    loyalPct: groupAvailable.loyal && total ? loyalCount / total * 100 : null,
+    activeBasePct: groupAvailable.active && total ? seg.active / total * 100 : null,
+    newRiskPct: groupAvailable.newRisk && total ? seg.newRisk / total * 100 : null,
+    loyalSleepPct: groupAvailable.loyalSleep && total ? seg.loyalSleep / total * 100 : null,
+    riskShare: groupAvailable.newRisk && total ? seg.newRisk / total * 100 : null,
+    lostPct: groupAvailable.lost && total ? seg.lost / total * 100 : null,
+    revenueAtRisk: atRiskRows.reduce((sum, c) => sum + (c.s || 0), 0),
+    sourceWindowComplete, groupAvailable,
+    requiredWindowM: baseRows.reduce((max, kb) => Math.max(max, Number(kb.requiredWindowM) || 0), 0),
+    windows,
+    coveredDoctors: baseRows.length,
+    expectedDoctors: expectedCount,
+  };
+}
+
+function scopeDoctorsInMonth(mk, deptFilter, subFilter = "all", doctorIds = null) {
   const requestedIds = doctorIds ? new Set(doctorIds) : null;
   const requestedSpecs = Array.isArray(deptFilter)
     ? new Set(deptFilter)
     : (deptFilter instanceof Set ? deptFilter : null);
-  const ids = doctorsForScopeInMonth(mk, deptFilter !== "all").filter(id =>
+  return doctorsForScopeInMonth(mk, deptFilter !== "all").filter(id =>
     (deptFilter === "all" || (requestedSpecs ? requestedSpecs.has(doctorDept(id)) : doctorDept(id) === deptFilter)) &&
     (subFilter === "all" || (DB.doctors[id] && DB.doctors[id].subdept) === subFilter) &&
     (!requestedIds || requestedIds.has(id))
   );
+}
+
+function specializationClientBasePoint(month, windowMonths, deptFilter, subFilter, scope) {
+  if (!DB.months[month]) return null;
+  const key = JSON.stringify([month, windowMonths, deptFilter, subFilter, scope]);
+  const prepared = specializationCalculations?.basePoints;
+  if (prepared?.has(key)) return prepared.get(key);
+  if (!prepared) {
+    const cached = metricsCacheGet(_specializationBaseCache, key, "specializationBase");
+    if (cached !== undefined) return cached;
+  }
+  const totals = specializationCalculations?.department.get(aggregateDeptCacheKey(month, deptFilter, subFilter, scope))?.akb?.wins;
+  let base;
+  if (totals && Object.hasOwn(totals, windowMonths)) base = totals[windowMonths];
+  else {
+    const ids = scopeDoctorsInMonth(month, deptFilter, subFilter, scope);
+    const bases = ids.map(id => kbSummary(id, month, windowMonths));
+    base = bases.every(Boolean) ? mergeClientBaseSummaries(bases) : null;
+  }
+  const point = base ? { active: base.seg.active, lost: base.seg.lost } : null;
+  if (prepared) prepared.set(key, point);
+  else metricsCacheSet(_specializationBaseCache, key, point, METRICS_CACHE_LIMITS.specializationBase);
+  return point;
+}
+
+function specializationClientBaseHistory(endMk, windowMonths, deptFilter, subFilter = "all", doctorIds = null) {
+  const months = calendarMonthKeys(prevMonthKey(endMk, 35), endMk);
+  const scope = doctorIds ? [...doctorIds].sort() : null;
+  const points = months.map(month => specializationClientBasePoint(month, windowMonths, deptFilter, subFilter, scope));
+  return { months, windowMonths, series: [
+    { label: "Активная база", color: "#16a34a", values: points.map(point => point?.active ?? null) },
+    { label: "Потерянные", color: "#dc2626", values: points.map(point => point?.lost ?? null) },
+  ] };
+}
+
+function specializationActivityMonth(month, filter, subFilter, doctorIds, deviceNames) {
+  if (!DB.months[month]) return null;
+  const key = aggregateDeptCacheKey(month, filter, subFilter, doctorIds);
+  const cache = specializationCalculations?.activity;
+  if (cache?.has(key)) return cache.get(key);
+  const ids = scopeDoctorsInMonth(month, filter, subFilter, doctorIds);
+  if (!ids.length) return null;
+
+  const source = DB.months[month].primaryPatients?.perDoc;
+  const patients = new Map(), primaryByDoctor = {};
+  const isCount = value => Number.isSafeInteger(value) && value >= 0;
+  for (const id of ids) {
+    const report = source?.[id];
+    const rows = report ? primaryPatientRows(report.patients) : null;
+    primaryByDoctor[id] = rows?.every(row => isCount(row.primary)) ? rows.filter(row => row.primary > 0).length : null;
+    for (const row of rows || []) {
+      const entry = patients.get(row.key) || { primary: false, visits: 0 };
+      entry.primary ||= row.primary > 0;
+      entry.visits = entry.visits != null && isCount(row.visits) ? entry.visits + row.visits : null;
+      patients.set(row.key, entry);
+    }
+  }
+  const primary = [...patients.values()].filter(patient => patient.primary);
+  const covered = ids.filter(id => primaryByDoctor[id] != null).length;
+  const primaryTotal = covered === ids.length ? primary.length : null;
+  const frequent = primaryTotal != null && primary.every(patient => patient.visits != null)
+    ? primary.filter(patient => patient.visits > 3).length : null;
+
+  let devices = null;
+  if (deviceNames.length) {
+    const byDoctor = {};
+    const items = deviceNames.map(() => ({ q: 0, s: 0 }));
+    let sales = 0, total = 0;
+    for (const id of ids) {
+      const result = computeMetrics(id, month);
+      const doctorItems = deviceNames.map(name => result?.product?.expert[name] || { q: 0, s: 0 });
+      const sum = doctorItems.reduce((value, item) => value + item.s, 0);
+      doctorItems.forEach(({ q, s }, index) => { items[index].q += q; items[index].s += s; });
+      const own = result?.econ.sales;
+      byDoctor[id] = { items: doctorItems, total: sum, share: own > 0 ? sum / own * 100 : null };
+      sales += own || 0;
+      total += sum;
+    }
+    devices = { byDoctor, items, total, share: sales > 0 ? total / sales * 100 : null };
+  }
+  const activity = { ids, devices, primary: { byDoctor: primaryByDoctor, total: primaryTotal, frequent,
+    share: frequent != null && primaryTotal > 0 ? frequent / primaryTotal * 100 : null, covered } };
+  cache?.set(key, activity);
+  return activity;
+}
+
+function specializationDeviceNames(profile) {
+  return profile?.expertise?.mode === "devices" ? [...new Set(profile.expertise.items.map(item => item.name))] : [];
+}
+
+function aggregateDeptMonthRaw(mk, deptFilter, subFilter = "all", doctorIds = null) {
+  const ids = scopeDoctorsInMonth(mk, deptFilter, subFilter, doctorIds);
   if (!ids.length) return null;
   const records = ids.map(id => ({ id, r: computeMetrics(id, mk) })).filter(x => Boolean(x.r));
   const rs = records.map(x => x.r);
@@ -7049,65 +7278,12 @@ function aggregateDeptMonthRaw(mk, deptFilter, subFilter = "all", doctorIds = nu
     const complete = completeFor(key, r => Number.isFinite(numeratorFor(r)) && Number.isFinite(denominatorFor(r)));
     return complete && numerator != null && denominator > 0 ? numerator / denominator * scale : null;
   };
-  const uniqueClientBase = (baseRows, expectedCount = baseRows.length) => {
-    const clients = new Map();
-    for (const kb of baseRows) {
-      for (const c of kb.clientRows) {
-        const old = clients.get(c.key);
-        if (!old) clients.set(c.key, { ...c, groups: [...(c.groups || [])] });
-        else {
-          old.v += c.v || 0;
-          old.s += c.s || 0;
-          if (c.r != null && (old.r == null || c.r < old.r)) old.r = c.r;
-          old.loyal = old.loyal || c.loyal;
-          old.groups = [...new Set([...(old.groups || []), ...(c.groups || [])])];
-        }
-      }
-    }
-    if (!baseRows.length) return null;
-    const groupNames = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
-    const allDoctorsCovered = baseRows.length === expectedCount;
-    const sameWindow = new Set(baseRows.map(kb => kb.window)).size === 1;
-    const groupAvailable = Object.fromEntries(groupNames.map(group => [group, allDoctorsCovered && sameWindow && baseRows.every(kb => kb.groupAvailable && kb.groupAvailable[group])]));
-    const seg = { loyal: 0, active: 0, newRisk: 0, loyalSleep: 0, lost: 0, unknown: 0 };
-    let visits = 0, totalSum = 0, loyalCount = 0;
-    for (const c of clients.values()) {
-      for (const group of (c.groups || [])) if (Object.prototype.hasOwnProperty.call(seg, group)) seg[group]++;
-      if (c.r == null) seg.unknown++;
-      visits += c.v || 0;
-      totalSum += c.s || 0;
-      if (c.loyal) loyalCount++;
-    }
-    for (const group of groupNames) if (!groupAvailable[group]) seg[group] = null;
-    seg.risk = seg.newRisk;
-    seg.sleep = seg.loyalSleep;
-    const total = clients.size;
-    const sourceWindowComplete = allDoctorsCovered && sameWindow && baseRows.every(kb => kb.sourceWindowComplete);
-    const windows = [...new Set(baseRows.map(kb => Number(kb.window)).filter(Number.isFinite))].sort((a, b) => a - b);
-    const clientRows = [...clients.values()];
-    const atRiskRows = clientRows.filter(c => (c.groups || []).some(group => ["newRisk", "loyalSleep", "lost"].includes(group)));
-    return {
-      total, seg, clientRows, visits, totalSum, loyalCount,
-      loyalPct: groupAvailable.loyal && total ? loyalCount / total * 100 : null,
-      activeBasePct: groupAvailable.active && total ? seg.active / total * 100 : null,
-      newRiskPct: groupAvailable.newRisk && total ? seg.newRisk / total * 100 : null,
-      loyalSleepPct: groupAvailable.loyalSleep && total ? seg.loyalSleep / total * 100 : null,
-      riskShare: groupAvailable.newRisk && total ? seg.newRisk / total * 100 : null,
-      lostPct: groupAvailable.lost && total ? seg.lost / total * 100 : null,
-      revenueAtRisk: atRiskRows.reduce((sum, c) => sum + (c.s || 0), 0),
-      sourceWindowComplete, groupAvailable,
-      requiredWindowM: baseRows.reduce((max, kb) => Math.max(max, Number(kb.requiredWindowM) || 0), 0),
-      windows,
-      coveredDoctors: baseRows.length,
-      expectedDoctors: expectedCount,
-    };
-  };
-  const uniqueWindow = win => uniqueClientBase(records.map(({ r }) => r.akb.wins[win]).filter(Boolean), records.length);
+  const uniqueWindow = win => mergeClientBaseSummaries(records.map(({ r }) => r.akb.wins[win]).filter(Boolean), records.length);
   const unique1 = uniqueWindow(1);
   const unique12 = uniqueWindow(12);
   const unique24 = uniqueWindow(24);
   const unique36 = uniqueWindow(36);
-  const primaryBase = uniqueClientBase(records.map(({ r }) => r.akb.primary).filter(Boolean), records.length);
+  const primaryBase = mergeClientBaseSummaries(records.map(({ r }) => r.akb.primary).filter(Boolean), records.length);
   const sales = sum(r => r.econ.sales);
   const withRef = sum(r => r.econ.revenueWithRef);
   const refSum = sum(r => r.econ.refRevenue);
@@ -7265,6 +7441,56 @@ function reportWorkerSnapshot(source, ids) {
   return { settings: source.settings, doctors: source.doctors, months };
 }
 
+function prepareSpecializationCalculations(year, onProgress = () => {}) {
+  const months = monthKeysSorted();
+  const yearMonths = months.filter(month => month.startsWith(year + "-"));
+  const filters = new Set(yearMonths.flatMap(month => deptListForMonth(month, doctorsInMonth(month))));
+  const scopes = [["all", "all"]];
+  for (const filter of filters) {
+    scopes.push([filter, "all"]);
+    for (const subdivision of deptProfile(filter).subdivisions || []) scopes.push([filter, subdivision]);
+  }
+  const windows = [6, 12, 24, 36];
+  const prepared = { metrics: new Map(), department: new Map(), reportBase: new Map(), basePoints: new Map(), activity: new Map() };
+  const deviceNames = new Map([...filters].map(filter => [filter, specializationDeviceNames(deptProfile(filter))]));
+  if (!yearMonths.length) return prepared;
+  const firstHistoryMonth = prevMonthKey(yearMonths[0], 35);
+  const historyMonths = months.filter(month => month >= firstHistoryMonth && month <= yearMonths.at(-1));
+  specializationCalculations = prepared;
+  preparedMetricsForRender = prepared.metrics;
+  try {
+    onProgress(0, historyMonths.length);
+    for (const [index, month] of historyMonths.entries()) {
+      if (month.startsWith(year + "-")) {
+        const previous = prevMonthKey(month);
+        for (const id of doctorsInMonth(month)) {
+          computeMetrics(id, month);
+          for (const window of windows) {
+            reportClientBaseSummary(id, month, window);
+            reportClientBaseSummary(id, previous, window);
+          }
+        }
+        for (const [filter, subFilter] of scopes) {
+          const totals = aggregateDeptMonth(month, filter, subFilter);
+          specializationActivityMonth(month, filter, subFilter, null, deviceNames.get(filter) || []);
+          // Рендер специализации использует только сводные показатели.
+          for (const base of [totals?.akb?.primary, ...Object.values(totals?.akb?.wins || {})]) {
+            if (base) delete base.clientRows;
+          }
+        }
+      }
+      for (const [filter, subFilter] of scopes) {
+        for (const window of windows) specializationClientBasePoint(month, window, filter, subFilter, null);
+      }
+      onProgress(index + 1, historyMonths.length);
+    }
+    return prepared;
+  } finally {
+    specializationCalculations = null;
+    preparedMetricsForRender = null;
+  }
+}
+
 function prepareReportCalculations(job) {
   preparedMetricsForRender = new Map();
   const months = Object.keys(DB.months).sort();
@@ -7287,6 +7513,7 @@ function prepareReportCalculations(job) {
   }
   const metrics = [...preparedMetricsForRender];
   preparedMetricsForRender = null;
+  if (job.tab === "dept" && job.baseWindow) specializationClientBaseHistory(job.month, job.baseWindow, job.filter, job.subFilter);
   // Large patient registries are not needed to paint a summary or historical chart.
   // Keep them in the worker; restore their lazy getters only when a list/export asks.
   for (const [, result] of _deptCache) {
@@ -7297,10 +7524,14 @@ function prepareReportCalculations(job) {
   for (const [key, base] of _adminBaseCache) {
     if (base && JSON.parse(key)[1] !== job.month) Object.defineProperty(base, "clientRows", { enumerable: false });
   }
-  return { metrics, kbSummary: [..._kbSummaryCache], adminBase: [..._adminBaseCache], department: [..._deptCache] };
+  return { metrics, kbSummary: [..._kbSummaryCache], adminBase: [..._adminBaseCache], department: [..._deptCache],
+    specializationBase: [..._specializationBaseCache] };
 }
 
 function adoptReportCalculations(prepared) {
+  for (const [key, point] of prepared.specializationBase || []) {
+    metricsCacheSet(_specializationBaseCache, key, point, METRICS_CACHE_LIMITS.specializationBase);
+  }
   const attachRows = (value, id, month, window) => {
     if (value) Object.defineProperty(value, "clientRows", { configurable: true, enumerable: false,
       get() { return kbClientRows(id, month, window, value); } });
@@ -7345,6 +7576,8 @@ function adoptReportCalculations(prepared) {
 "use strict";
 let reportTask = null, reportTaskNumber = 0;
 const preparedReportKeys = new Map();
+const preparedSpecializationYears = new Map();
+let specializationYearTask = null;
 
 function cancelReportPreparation() {
   reportTaskNumber++;
@@ -7383,31 +7616,146 @@ function reportCalculationJob(tab) {
   selectFilter.disabled = false;
   const subs = UI.deptFilter === "all" ? [] : deptProfile(UI.deptFilter).subdivisions || [];
   if (UI.subFilter !== "all" && !subs.includes(UI.subFilter)) UI.subFilter = "all";
-  return { tab, month, filter: UI.deptFilter, subFilter: UI.subFilter };
+  return { tab, month, filter: UI.deptFilter, subFilter: UI.subFilter, baseWindow: UI.specializationKbWin };
+}
+
+function createReportWorker() {
+  const sources = ["report-core-source", "report-parsers-source", "report-metrics-source", "report-worker-source"].map(id => document.getElementById(id)?.textContent);
+  if (sources.some(source => !source) || typeof Worker !== "function") return null;
+  const bootstrap = 'const window = {}; const localStorage = {getItem(){return null},setItem(){}};\n';
+  const handler = `
+onmessage = event => {
+  try {
+    const m = event.data;
+    if (m.type === "start") { DB = m.snapshot; clearMetricsCache(); }
+    else if (m.type === "month") DB.months[m.key] = m.month;
+    else if (m.type === "specializations") {
+      const prepared = prepareSpecializationCalculations(m.year, (completed, total) => postMessage({ progress: { completed, total } }));
+      postMessage({ prepared });
+    } else if (m.type === "calculate") postMessage({ prepared: prepareReportCalculations(m.job) });
+  } catch (error) { postMessage({ error: error.message }); }
+};`;
+  const url = URL.createObjectURL(new Blob([bootstrap, ...sources.map(source => source + "\n"), handler], { type: "text/javascript" }));
+  try { return new Worker(url); }
+  catch (_) { return null; }
+  finally { URL.revokeObjectURL(url); }
+}
+
+async function sendReportWorkerData(worker, ids, command, isCurrent) {
+  await new Promise(resolve => requestAnimationFrame(resolve));
+  if (!isCurrent()) return;
+  const snapshot = reportWorkerSnapshot(DB, ids);
+  worker.postMessage({ type: "start", snapshot: { ...snapshot, months: {} } });
+  // Copy months separately so structured cloning can yield between large messages.
+  for (const [key, month] of Object.entries(snapshot.months)) {
+    if (!isCurrent()) return;
+    worker.postMessage({ type: "month", key, month });
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  if (isCurrent()) worker.postMessage(command);
+}
+
+function readySpecializationYear(year) {
+  const entry = preparedSpecializationYears.get(year);
+  if (entry?.revision !== metricsCalculationRevision) return null;
+  preparedSpecializationYears.delete(year);
+  preparedSpecializationYears.set(year, entry);
+  return entry.prepared;
+}
+
+function cancelSpecializationPreparation() {
+  specializationYearTask?.finish({});
+}
+
+function prepareSpecializationYear(month, onProgress) {
+  if (!month) return Promise.resolve(null);
+  const year = month.slice(0, 4), revision = metricsCalculationRevision;
+  const ready = readySpecializationYear(year);
+  if (ready) return Promise.resolve(ready);
+  if (specializationYearTask?.year === year && specializationYearTask.revision === revision) {
+    if (onProgress) {
+      specializationYearTask.onProgress = onProgress;
+      if (specializationYearTask.progress) onProgress(specializationYearTask.progress);
+    }
+    return specializationYearTask.promise;
+  }
+  cancelSpecializationPreparation();
+  const worker = createReportWorker();
+  if (!worker) return Promise.resolve(null);
+  const task = { year, revision, onProgress, progress: null };
+  specializationYearTask = task;
+  task.promise = new Promise(resolve => {
+    const isCurrent = () => specializationYearTask === task && revision === metricsCalculationRevision;
+    task.finish = ({ prepared, error }) => {
+      if (specializationYearTask !== task) return;
+      worker.terminate();
+      specializationYearTask = null;
+      if (error) console.warn("Specialization preparation:", error);
+      if (!prepared || revision !== metricsCalculationRevision) return resolve(null);
+      preparedSpecializationYears.set(year, { revision, prepared });
+      while (preparedSpecializationYears.size > 2) preparedSpecializationYears.delete(preparedSpecializationYears.keys().next().value);
+      resolve(prepared);
+    };
+    worker.onmessage = ({ data }) => {
+      if (!data.progress || !isCurrent()) return task.finish(data);
+      task.progress = data.progress;
+      task.onProgress?.(data.progress);
+    };
+    worker.onerror = event => { event.preventDefault(); task.finish({ error: event.message }); };
+    sendReportWorkerData(worker, Object.keys(DB.doctors), { type: "specializations", year }, isCurrent)
+      .then(() => { if (!isCurrent()) task.finish({}); }, error => task.finish({ error: error.message }));
+  });
+  return task.promise;
+}
+
+function drawPreparedSpecialization(draw, prepared) {
+  if (!prepared) return draw();
+  const previousCalculations = specializationCalculations, previousMetrics = preparedMetricsForRender;
+  specializationCalculations = prepared;
+  preparedMetricsForRender = prepared.metrics;
+  try { return draw(); }
+  finally { specializationCalculations = previousCalculations; preparedMetricsForRender = previousMetrics; }
+}
+
+function renderPreparedSpecialization(draw) {
+  const eager = UI.reportEager || typeof Worker !== "function";
+  const month = eager
+    ? (DB.months[UI.deptMonth] ? UI.deptMonth : monthKeysSorted().at(-1))
+    : reportCalculationJob("dept")?.month;
+  if (!month) return draw();
+  const ready = readySpecializationYear(month.slice(0, 4));
+  if (ready || eager) return drawPreparedSpecialization(draw, ready);
+  const body = document.getElementById("deptBody");
+  body.innerHTML = '<div class="card" role="status">Подготавливаются сводки специализаций…</div>';
+  const number = reportTaskNumber, revision = metricsCalculationRevision, started = performance.now();
+  return prepareSpecializationYear(month).then(prepared => {
+    if (number !== reportTaskNumber) return false;
+    if (revision !== metricsCalculationRevision) return renderPreparedReport("dept", draw);
+    const drawAt = performance.now();
+    drawPreparedSpecialization(draw, prepared);
+    UI.reportTiming = { tab: "dept", backgroundMs: drawAt - started, renderMs: performance.now() - drawAt, worker: Boolean(prepared) };
+    return true;
+  });
 }
 
 function renderPreparedReport(tab, draw) {
   cancelReportPreparation();
   if (!UI.reportEager) document.getElementById(tab === "doctor" ? "doctorBody" : tab === "department" ? "departmentBody" : "deptBody")?.removeAttribute?.("data-report-export");
+  if (tab === "dept") return renderPreparedSpecialization(draw);
   if (UI.reportEager || typeof Worker !== "function") return draw();
   const job = reportCalculationJob(tab);
   if (!job) return draw();
   const key = JSON.stringify([metricsCalculationRevision, job]);
   const cached = preparedReportKeys.get(key);
-  if (cached && cached.every(([name, keys]) => keys.every(key => ({ metrics: _mcCache, kbSummary: _kbSummaryCache, adminBase: _adminBaseCache, department: _deptCache })[name].has(key)))) return draw();
+  const caches = { metrics: _mcCache, kbSummary: _kbSummaryCache, adminBase: _adminBaseCache, department: _deptCache,
+    specializationBase: _specializationBaseCache };
+  if (cached && cached.every(([name, keys]) => keys.every(key => caches[name].has(key)))) return draw();
   const body = document.getElementById(tab === "doctor" ? "doctorBody" : tab === "department" ? "departmentBody" : "deptBody");
   body.innerHTML = '<div class="card" role="status">Подготавливается отчёт…</div>';
   const number = reportTaskNumber, revision = metricsCalculationRevision;
   const ids = tab === "doctor" ? [job.doctorId] : Object.keys(DB.doctors);
-  const snapshot = reportWorkerSnapshot(DB, ids);
-  const sources = ["report-core-source", "report-parsers-source", "report-metrics-source", "report-worker-source"].map(id => document.getElementById(id)?.textContent);
-  if (sources.some(source => !source)) return draw();
-  const bootstrap = 'const window = {}; const localStorage = {getItem(){return null},setItem(){}};\n';
-  const handler = '\nonmessage = event => { try { const m=event.data; if(m.type==="start") { DB=m.snapshot;clearMetricsCache(); } else if(m.type==="month") DB.months[m.key]=m.month; else if(m.type==="calculate") postMessage({prepared:prepareReportCalculations(m.job)}); } catch(error) { postMessage({error:error.message}); } };';
-  const url = URL.createObjectURL(new Blob([bootstrap, ...sources.map(source => source + "\n"), handler], { type: "text/javascript" }));
-  let worker;
-  try { worker = new Worker(url); } catch (error) { URL.revokeObjectURL(url); return draw(); }
-  URL.revokeObjectURL(url);
+  const worker = createReportWorker();
+  if (!worker) return draw();
   return new Promise((resolve, reject) => {
     const started = performance.now();
     reportTask = { worker, resolve };
@@ -7429,21 +7777,8 @@ function renderPreparedReport(tab, draw) {
     };
     worker.onmessage = event => finish(event.data);
     worker.onerror = event => { event.preventDefault(); finish({ error: event.message }); };
-    // Let the loading state paint before copying the selected doctor's data.
-    requestAnimationFrame(async () => {
-      if (number !== reportTaskNumber) return;
-      try {
-        worker.postMessage({ type: "start", snapshot: { ...snapshot, months: {} } });
-        // A single large structured clone can itself stall the caller. Copy months
-        // separately and return control between messages; the worker processes them in order.
-        for (const [key, month] of Object.entries(snapshot.months)) {
-          if (number !== reportTaskNumber) return;
-          worker.postMessage({ type: "month", key, month });
-          await new Promise(resolve => setTimeout(resolve, 0));
-        }
-        if (number === reportTaskNumber) worker.postMessage({ type: "calculate", job });
-      } catch (error) { if (number === reportTaskNumber) finish({ error: error.message }); }
-    });
+    sendReportWorkerData(worker, ids, { type: "calculate", job }, () => number === reportTaskNumber)
+      .catch(error => { if (number === reportTaskNumber) finish({ error: error.message }); });
   });
 }
 
@@ -7719,12 +8054,67 @@ function cloudDoctorReport(doctorId, monthKey, comments) {
   return report;
 }
 
+const SPECIALIZATION_BASE_TITLE = "Динамика в разрезе 3-х лет";
+const SPECIALIZATION_DEVICE_TITLE = "Загрузка аппаратов";
+const SPECIALIZATION_DEVICE_NOTE = "Доля рассчитана от собственной выручки. Аппараты берутся из настроек специализации.";
+const SPECIALIZATION_PRIMARY_NOTE = "Из отчёта «Пациенты по врачам». В итоге пациент учитывается один раз по ФИО. 4+ — первичные пациенты, посетившие врачей этой группы больше трёх раз за тот же месяц.";
+
+function specializationActivityView(month, profile, filter, subFilter = "all", ids = null) {
+  const names = specializationDeviceNames(profile);
+  const months = calendarYearMonthKeys(month);
+  const history = months.map(key => specializationActivityMonth(key, filter, subFilter, ids, names));
+  const current = history.at(-1);
+  const labels = months.map(monthLabel);
+  const deviceSeries = names.map((name, index) => ({
+    label: name, color: deviceColor(profile, name),
+    values: history.map(entry => entry?.devices?.items[index].s ?? null),
+    pointNotes: history.map(entry => entry?.devices ? `${fmtNum(entry.devices.items[index].q)} шт.` : ""),
+  }));
+  const deviceCharts = [];
+  for (let i = 0; i < deviceSeries.length && deviceCharts.length < 12; i += 30) {
+    const chart = mobilePublicationChart(`specialization-devices-${i}`, "Выручка по аппаратам", "line", labels, deviceSeries.slice(i, i + 30), "₽");
+    if (chart) deviceCharts.push(chart);
+  }
+  const primaryChart = mobilePublicationChart("specialization-primary", "Первичные пациенты по месяцам", "line", labels, [
+    { label: "Первичные пациенты", color: "#2563eb", values: history.map(entry => entry?.primary.total ?? null) },
+    { label: "Из них с 4+ посещениями", color: "#16a34a", values: history.map(entry => entry?.primary.frequent ?? null),
+      pointNotes: history.map(entry => entry?.primary.share != null ? `${fmtPct(entry.primary.share)} от первичных` : "") },
+  ], "чел.");
+  return { names, months, history, current, deviceCharts, primaryChart };
+}
+
+function cloudSpecializationActivitySections(activity) {
+  const { current, names, deviceCharts, primaryChart } = activity;
+  if (!current) return { deviceSections: [], primarySections: [] };
+  const { devices, primary, ids } = current;
+  const deviceSections = devices ? [{
+    title: "Аппараты за месяц", note: SPECIALIZATION_DEVICE_NOTE,
+    metrics: [mobilePublicationMetric("Выручка по всем аппаратам", fmtMoney(devices.total)), mobilePublicationMetric("Общая доля аппаратных методик", fmtPct(devices.share))],
+    columns: ["Аппарат", "Процедуры, шт.", "Выручка"],
+    rows: names.map((name, i) => [name, fmtNum(devices.items[i].q), fmtMoney(devices.items[i].s)]),
+  }, {
+    title: "Аппаратные методики по врачам", columns: ["Врач", "Выручка по аппаратам", "Доля от выручки врача"],
+    rows: ids.map(id => [doctorName(id), fmtMoney(devices.byDoctor[id].total), fmtPct(devices.byDoctor[id].share)]),
+  }, ...(deviceCharts.length ? [{ title: SPECIALIZATION_DEVICE_TITLE, charts: deviceCharts }] : [])] : [];
+  const primarySections = [{
+    title: "Первичные пациенты", note: SPECIALIZATION_PRIMARY_NOTE,
+    columns: ["Врач", "Первичных за месяц"],
+    rows: [...ids.map(id => [doctorName(id), fmtNum(primary.byDoctor[id])]), ["Итого по специализации", fmtNum(primary.total)]],
+    metrics: [mobilePublicationMetric("Врачи с данными", `${primary.covered} из ${ids.length}`)],
+    charts: primaryChart ? [primaryChart] : [],
+  }];
+  return { deviceSections, primarySections };
+}
+
 function cloudGroupReport(item, monthKey, comments, doctors) {
   const ids = doctors.filter(doctor => item.kind === "clinic" || (item.kind === "department" ? doctor.department === item.department : doctor.specialization === item.specialization)).map(doctor => doctor.doctorId);
   const getResult = key => aggregateDeptMonth(key, "all", "all", ids);
   const result = getResult(monthKey);
   if (!result) throw new Error("Нет показателей сводного отчёта");
   const profile = item.kind === "specialization" ? deptProfile(item.specialization) : departmentProfile(item.department);
+  const specialization = item.kind === "specialization";
+  const activity = specialization ? cloudSpecializationActivitySections(specializationActivityView(monthKey, profile, "all", "all", ids))
+    : { deviceSections: [], primarySections: [] };
   const metric = (label, value, formatter = fmtNum, note = "") => mobilePublicationMetric(label, formatter(value), note);
   const section = (title, metrics, extra = {}) => ({ title, metrics, ...extra });
   const records = ids.filter(id => doctorHasDashboardData(id, monthKey)).map(id => ({ id, result: computeMetrics(id, monthKey) }));
@@ -7749,7 +8139,7 @@ function cloudGroupReport(item, monthKey, comments, doctors) {
     [section("Экспертный профиль", [metric("Использовано позиций", result.product?.devicesUsed), metric("Доля экспертных услуг", result.product?.expertShare, fmtPct)], {
       columns: ["Категория", "Количество", "Выручка"], rows: [...revenueGroups].map(([name, group]) => [name, fmtNum(group.q), fmtMoney(group.s)]),
       charts: [mobilePublicationPie("revenue", "Структура выручки", [...revenueGroups].map(([name, group], index) => [name, group.s, ["#2563eb", "#7c3aed", "#16a34a", "#d97706"][index % 4]]), "₽")].filter(Boolean),
-    })],
+    }), ...activity.deviceSections],
     [section("Направления", [metric("Выручка от направлений", result.econ.refRevenue, fmtMoney), metric("Доля направлений", result.cross.crossShare, fmtPct)]),
       ...[1, 3].map(window => section(`Назначения · ${window} мес.`, [metric("Назначено", result.cross.naz[window]?.totals.assigned),
         metric("Выполнено + продано", result.cross.naz[window]?.totals.resultQ), metric("Конверсия", result.cross.naz[window]?.totals.conv, fmtPct)]))],
@@ -7760,7 +8150,7 @@ function cloudGroupReport(item, monthKey, comments, doctors) {
     [section("Лояльность", [metric("Расписание", result.loyalty.sched?.pct, fmtPct), metric("Собственная запись", result.loyalty.ownRec?.pct, fmtPct),
       metric("Курсовое лечение", result.loyalty.courseIdx, fmtPct), metric("Частота за 12 мес.", result.loyalty.freq12, value => fmtNum(value, 2))], {
       columns: ["Первичка", "Первичных", "Вернулось", "Возвращаемость"], rows: [3, 6, 12].map(window => [`${window} мес.`, fmtNum(result.loyalty.pvSlices[window]?.first), fmtNum(result.loyalty.pvSlices[window]?.ret), fmtPct(result.loyalty.pvSlices[window]?.pct)]),
-    })],
+    }), ...activity.primarySections],
     [section("Репутация", [metric("Средний рейтинг", result.rep.avgRating, value => fmtNum(value, 2)), metric("NPS", result.rep.nps, fmtPct),
       metric("Новые отзывы", result.rep.reviews), metric("Всего отзывов", result.rep.totalReviews)], {
       columns: ["Врач", "Балл", "Полнота", "Отзывы"], rows: [...records].sort((a, b) => (b.result.rep?.totalReviews ?? -1) - (a.result.rep?.totalReviews ?? -1)
@@ -7773,15 +8163,19 @@ function cloudGroupReport(item, monthKey, comments, doctors) {
     detail: "Сводные показатели включённых врачей. Несопоставимые значения остаются незаданными.", sections: vectorSections[index] }));
   vectors[3].methodologyId = "report-overlap-v1";
   vectors[3].sections = [];
-  vectors[3].windows = [12, 6, 24, 36].map(window => {
+  vectors[3].windows = (specialization ? [36, 6, 12, 24] : [12, 6, 24, 36]).map(window => {
     const bases = records.map(({id}) => ({ id, base: reportClientBaseSummary(id, monthKey, window), previous: reportClientBaseSummary(id, prevMonthKey(monthKey), window) }));
     const visible = groups.filter(group => bases.some(row => row.base?.groupAvailable[group]));
+    const history = specialization ? specializationClientBaseHistory(monthKey, window, "all", "all", ids) : null;
+    const baseChart = history && mobilePublicationChart("specialization-base-history", SPECIALIZATION_BASE_TITLE, "line",
+      history.months.map(monthLabel), history.series, "чел.");
     return { id: String(window), label: `${window} мес.`, period: `Точное окно ${window} месяцев`, sections: [{ title: "Клиентская база · сравнение врачей",
-      note: "Единая методика с личным В4. Незаданные показатели не заменяются нулями; для активных нужна выгрузка за 6 месяцев.",
+      note: "Единая методика с личным В4. Незаданные показатели не заменяются нулями; для активных нужна выгрузка за 6 месяцев."
+        + (history && !baseChart ? ` Неполные данные: нет сопоставимых выгрузок «Давность посещений» за ${window} мес.` : ""),
       columns: ["Врач", "Период", "Общая база", "Изменение базы", ...visible.map(clientBaseGroupLabel)],
       rows: bases.map(({id, base, previous}) => [doctorName(id), `${window} мес.`, fmtNum(base?.total), mobilePublicationPercentChange(base && previous?.total ? (base.total - previous.total) / previous.total * 100 : null),
         ...visible.map(group => base?.groupAvailable[group] ? `${fmtNum(base.seg[group])} · ${fmtPct(clientBaseGroupPct(base, group))}` : "—")]),
-    }] };
+    }, ...(baseChart ? [{ title: "Динамика клиентской базы", charts: [baseChart] }] : [])] };
   });
   const overall = Number.isFinite(result.scores.total) ? Math.round(result.scores.total) : null;
   const previous = getResult(prevMonthKey(monthKey))?.scores?.total;
@@ -7927,7 +8321,8 @@ const UI = {
   setDoctor: null,
   pvSlice: 3,     // тогл первички: 3/6/12
   nazSlice: 1,    // тогл назначений: 1/3
-  kbWin: 12,      // общее точное окно врача и специализации: 6/12/24/36
+  kbWin: 12,      // точное окно врача: 6/12/24/36
+  specializationKbWin: 36,
   clientSegment: "newRisk",
   showLabels: true, // цифры на графиках
   charts: {},
@@ -8955,6 +9350,32 @@ function specializationInterdisciplinaryHtml(rows, mk, specializationName, optio
 }
 
 function renderDept() { return renderPreparedReport("dept", renderDeptNow); }
+function specializationTrendHtml(spec) {
+  const id = `chart-${spec.id}`;
+  const format = spec.unit === "₽" ? fmtMoney : fmtNum;
+  return `<h3 class="section-title">${esc(spec.title)} ${copyBtn("copyChart", id, "PNG")}</h3>
+    <div class="chart-box"><canvas id="${id}" aria-label="${esc(spec.title)}"></canvas></div>
+    <details ${collapsibleListAttrs(`values-${spec.id}`, false)}><summary class="collapsible-list-summary"><span>Точные значения по месяцам</span><span class="collapse-hint"></span></summary>
+    <div class="collapsible-list-body"><table class="data"><tr><th>Месяц</th>${spec.series.map(series => `<th class="num">${esc(series.label)}</th>`).join("")}</tr>
+    ${spec.labels.map((label, i) => `<tr><td>${esc(label)}</td>${spec.series.map(series => `<td class="num">${format(series.values[i])}${series.pointNotes?.[i] ? `<br><small class="muted">${esc(series.pointNotes[i])}</small>` : ""}</td>`).join("")}</tr>`).join("")}</table></div></details>`;
+}
+
+function renderSpecializationTrend(spec) {
+  const format = spec.unit === "₽" ? fmtMoney : fmtNum;
+  chart(`chart-${spec.id}`, {
+    type: "line",
+    data: { labels: spec.labels, datasets: spec.series.map(series => ({
+      label: series.label, data: series.values, pointNotes: series.pointNotes,
+      borderColor: series.color, backgroundColor: series.color, pointRadius: 3, borderWidth: 2, spanGaps: false,
+    })) },
+    options: { maintainAspectRatio: false, interaction: { mode: "nearest", intersect: false },
+      scales: { y: { beginAtZero: true, ticks: { callback: value => spec.unit === "₽" ? fmtMoney(value) : fmtNum(value) } } },
+      plugins: { legend: { position: "bottom" }, tooltip: { callbacks: {
+        label: item => [`${item.dataset.label}: ${format(item.raw)}`, item.dataset.pointNotes?.[item.dataIndex]].filter(Boolean).join(" · "),
+      } } } },
+  });
+}
+
 function renderDeptNow() {
   const months = monthKeysSorted();
   const sel = document.getElementById("deptMonth");
@@ -9066,6 +9487,8 @@ function renderDeptNow() {
   html += lb("🤝 Наивысшая доля выручки от перенаправлений", r => r.cross.crossShare, fmtPct);
   html += "</div>";
 
+  const activity = specializationActivityView(mk, UI.deptFilter === "all" ? null : deptProfile(UI.deptFilter), UI.deptFilter, UI.subFilter);
+  const deviceActivity = activity.current?.devices;
   // тепловая карта экспертных позиций — при выбранной специализации (у каждой свой набор)
   if (UI.deptFilter !== "all") {
     const fProfile = deptProfile(UI.deptFilter);
@@ -9074,8 +9497,11 @@ function renderDeptNow() {
     if (devs.length && withVy.length && fProfile.expertise.mode !== "none") {
       let maxQ = 1;
       for (const x of withVy) for (const dv of devs) maxQ = Math.max(maxQ, x.r.product.expert[dv] ? x.r.product.expert[dv].q : 0);
-      html += `<div class="card"><h2>🔥 Тепловая карта: ${esc(fProfile.expertise.title)} <span class="small muted">(за месяц, шт)</span> <span class="spacer"></span>${copyBtn("copyTable", "tblHeat")}</h2>
-        <div class="heatmap-scroll"><table class="data heatmap-table" id="tblHeat" style="--heat-table-min:${300 + devs.length * 150}px"><colgroup><col class="heatmap-specialist-col">${devs.map(() => '<col class="heatmap-focus-col">').join("")}<col class="heatmap-total-col"></colgroup><tr><th>Специалист</th>` + devs.map(d => `<th class="num heatmap-focus-heading">${esc(d)}</th>`).join("") + '<th class="num">Итого</th></tr>';
+      const deviceHeading = deviceActivity ? "за месяц, шт. и ₽" : "за месяц, шт";
+      const deviceCell = (q, s) => deviceActivity ? `<span>${fmtNum(q)} шт.<span class="heatmap-money">${fmtMoney(s)}</span></span>` : (q || "·");
+      html += `<div class="card"><h2>🔥 Тепловая карта: ${esc(fProfile.expertise.title)} <span class="small muted">(${deviceHeading})</span> <span class="spacer"></span>${copyBtn("copyTable", "tblHeat")}</h2>
+        ${deviceActivity ? `<p><b>Выручка по всем аппаратам · ${fmtMoney(deviceActivity.total)}</b> <span class="small muted">· общая доля ${fmtPct(deviceActivity.share)}</span></p>` : ""}
+        <div class="heatmap-scroll"><table class="data heatmap-table" id="tblHeat" style="--heat-table-min:${300 + devs.length * 150}px"><colgroup><col class="heatmap-specialist-col">${devs.map(() => '<col class="heatmap-focus-col">').join("")}<col class="heatmap-total-col">${deviceActivity ? '<col class="heatmap-focus-col">' : ""}</colgroup><tr><th>Специалист</th>` + devs.map(d => `<th class="num heatmap-focus-heading">${esc(d)}</th>`).join("") + `<th class="num">Итого</th>${deviceActivity ? '<th class="num">Доля от выручки</th>' : ""}</tr>`;
       const devTotals = {};
       for (const x of withVy) {
         let rowTotal = 0;
@@ -9085,31 +9511,49 @@ function renderDeptNow() {
           rowTotal += q;
           devTotals[dv] = (devTotals[dv] || 0) + q;
           const alpha = q ? 0.15 + 0.7 * (q / maxQ) : 0;
-          html += `<td class="num heatmap-focus-cell"><div class="heat-cell" style="background:rgba(37,99,235,${alpha.toFixed(2)});color:${alpha > 0.5 ? "#fff" : "inherit"}">${q || "·"}</div></td>`;
+          html += `<td class="num heatmap-focus-cell"><div class="heat-cell" style="background:rgba(37,99,235,${alpha.toFixed(2)});color:${alpha > 0.5 ? "#fff" : "inherit"}">${deviceCell(q, x.r.product.expert[dv]?.s ?? 0)}</div></td>`;
         }
-        html += `<td class="num"><b>${rowTotal}</b></td></tr>`;
+        const doctorDevices = deviceActivity?.byDoctor[x.id];
+        html += `<td class="num"><b>${deviceCell(rowTotal, doctorDevices?.total)}</b></td>${deviceActivity ? `<td class="num"><b>${fmtPct(doctorDevices?.share)}</b></td>` : ""}</tr>`;
       }
-      html += '<tr><td><b>Итого по специализации</b></td>' + devs.map(dv => `<td class="num"><b>${devTotals[dv] || 0}</b></td>`).join("") + `<td class="num"><b>${Object.values(devTotals).reduce((a, b) => a + b, 0)}</b></td></tr>`;
-      html += '</table></div><p class="small muted">«·» по всем врачам — простаивающая позиция. Набор настраивается в профиле специализации.</p></div>';
+      const countTotal = Object.values(devTotals).reduce((a, b) => a + b, 0);
+      html += '<tr><td><b>Итого по специализации</b></td>' + devs.map(dv => `<td class="num"><b>${deviceActivity ? deviceCell(devTotals[dv] || 0, deviceActivity.items[activity.names.indexOf(dv)].s) : devTotals[dv] || 0}</b></td>`).join("") +
+        `<td class="num"><b>${deviceCell(countTotal, deviceActivity?.total)}</b></td>${deviceActivity ? `<td class="num"><b>${fmtPct(deviceActivity.share)}</b></td>` : ""}</tr>`;
+      html += `</table></div><p class="small muted">${deviceActivity ? SPECIALIZATION_DEVICE_NOTE : "«·» по всем врачам — простаивающая позиция. Набор настраивается в профиле специализации."}</p></div>`;
     }
   } else if (rows.some(x => x.r.product)) {
     html += `<div class="card"><p class="small muted" style="margin:0">🔥 Тепловая карта аппаратов/услуг доступна при выборе конкретной специализации в фильтре сверху — у каждой специализации свой набор отслеживаемых позиций.</p></div>`;
   }
 
+  if (activity.deviceCharts.length) html += `<div class="card"><details ${collapsibleListAttrs("specializationDeviceHistory", false)} data-specialization-device-history>
+    <summary class="collapsible-list-summary"><span>${SPECIALIZATION_DEVICE_TITLE}</span><span class="collapse-hint"></span></summary>
+    <div class="collapsible-list-body"><p class="small muted">Выручка по месяцам с начала года. Количество процедур видно у точек и в таблице.</p>
+    ${activity.deviceCharts.map(specializationTrendHtml).join("")}</div></details></div>`;
+  if (activity.current) {
+    const primary = activity.current.primary;
+    html += `<div class="card" data-specialization-primary><h2>Первичные пациенты <span class="small muted">${monthLabel(mk)}</span><span class="spacer"></span>${copyBtn("copyTable", "tblSpecPrimary")}</h2>
+      <p class="small muted">${SPECIALIZATION_PRIMARY_NOTE} Данные есть у ${primary.covered} из ${rows.length} врачей.</p>
+      <table class="data" id="tblSpecPrimary"><tr><th>Специалист</th><th class="num">Первичных за месяц</th></tr>
+      ${rows.map(row => `<tr><td>${esc(doctorName(row.id))}</td><td class="num">${fmtNum(primary.byDoctor[row.id])}</td></tr>`).join("")}
+      <tr><td><b>${UI.deptFilter === "all" ? "Итого по выборке" : "Итого по специализации"}</b></td><td class="num"><b>${fmtNum(primary.total)}</b></td></tr></table>
+      ${activity.primaryChart ? specializationTrendHtml(activity.primaryChart) : '<p class="small muted">Для графика нужны сопоставимые месячные отчёты «Пациенты по врачам».</p>'}</div>`;
+  }
   if (UI.deptFilter !== "all") {
     html += specializationInterdisciplinaryHtml(rows, mk, UI.deptFilter);
   }
 
   // Клиентская база: период выбирается вручную, группы с недоступным временным порогом скрываются.
   const presentation = globalThis.klinvektReportPresentation;
-  const bases = rows.map(x => ({ id: x.id, kb: reportClientBaseSummary(x.id, mk, UI.kbWin) }));
+  const kbWin = UI.specializationKbWin;
+  const bases = rows.map(x => ({ id: x.id, kb: reportClientBaseSummary(x.id, mk, kbWin) }));
+  const kbControls = segToggle("specializationKbWin", [6,12,24,36].map(v => ({v, label: v + " мес."})), kbWin, "setSpecializationKbWin");
   const withKb = bases.filter(x => x.kb);
   if (withKb.length) {
     const previousMonth = prevMonthKey(mk, 1);
     const visibleGroups = presentation.overlappingClientBaseGroups.filter(group => withKb.some(x => x.kb.groupAvailable[group.key]));
     const averages = presentation.clientBaseAveragesHtml(visibleGroups.map(group => group.label),
       bases.map(({ kb }) => visibleGroups.map(group => clientBaseGroupPct(kb, group.key))));
-    html += `<div class="card"><div class="client-base-heading"><h2>Клиентская база</h2>${averages}<div class="client-base-controls">${segToggle("specializationKbWin", [6,12,24,36].map(v => ({v, label: v + " мес."})), UI.kbWin, "setKbWin")} ${copyBtn("copyTable", "tblRisk")}</div></div><table class="data" id="tblRisk"><tr><th>Специалист</th><th class="num">Период</th><th class="num">Общая база</th>${visibleGroups.map(group => `<th class="num">${esc(group.label)}</th>`).join("")}</tr>`;
+    html += `<div class="card"><div class="client-base-heading"><h2>Клиентская база</h2>${averages}<div class="client-base-controls">${kbControls} ${copyBtn("copyTable", "tblRisk")}</div></div><table class="data" id="tblRisk"><tr><th>Специалист</th><th class="num">Период</th><th class="num">Общая база</th>${visibleGroups.map(group => `<th class="num">${esc(group.label)}</th>`).join("")}</tr>`;
     for (const x of withKb) {
       const kb = x.kb;
       const previousKb = reportClientBaseSummary(x.id, previousMonth, kb.window);
@@ -9119,7 +9563,7 @@ function renderDeptNow() {
     }
     html += `</table>${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml()}</div>`;
   } else {
-    html += `<div class="card"><h2>Клиентская база ${segToggle("specializationKbWin", [6,12,24,36].map(v => ({v, label: v + " мес."})), UI.kbWin, "setKbWin")}</h2><p class="muted">Нет точной выгрузки за ${fmtNum(UI.kbWin)} мес. для выбранных врачей и месяца. Другой период не подставляется.</p>${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml()}</div>`;
+    html += `<div class="card"><h2>Клиентская база ${kbControls}</h2><p class="muted">Нет точной выгрузки за ${fmtNum(kbWin)} мес. для выбранных врачей и месяца. Другой период не подставляется.</p>${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml()}</div>`;
   }
 
   // профайлы специалистов — все врачи фильтра, метрики в строках
@@ -9132,18 +9576,19 @@ function renderDeptNow() {
   /* ---- динамика специализации: точки роста и риска ---- */
   html += reputationReportHtml(rows, mk, UI.deptFilter === "all" ? "Клиника" : scoreScope);
   const deptDyn = computeDeptDynamics(mk, UI.deptFilter, UI.subFilter);
+  const baseHistory = specializationClientBaseHistory(mk, kbWin, UI.deptFilter, UI.subFilter);
   if (deptDyn && deptDyn.months.length) {
     html += dynamicsHtml(deptDyn, "blkDeptDyn", "Динамика специализации: точки роста и риска",
       `${UI.deptFilter === "all" ? "Все врачи с данными" : "Специализация «" + esc(UI.deptFilter) + "»"} · с января по ${monthLabel(mk)}. Месяцы без данных оставлены пустыми. Последний месяц сравнивается с прошлым и со средним предыдущих месяцев года. Деньги и визиты суммируются, пациенты дедуплицируются, доли и конверсии взвешиваются; средний балл включает только врачей с полнотой данных от 80%.`,
-      `dept|${mk}|${UI.deptFilter}|${UI.subFilter}`);
+      `dept|${mk}|${UI.deptFilter}|${UI.subFilter}`, "", true, baseHistory);
     html += "</div>";
   }
 
   document.getElementById("deptBody").innerHTML = html;
   renderCompare(mk, rows);
-  if (deptDyn && deptDyn.months.length >= 2) {
-    renderDynCharts(deptDyn, "blkDeptDyn");
-  }
+  activity.deviceCharts.forEach(renderSpecializationTrend);
+  if (activity.primaryChart) renderSpecializationTrend(activity.primaryChart);
+  if (deptDyn) renderDynCharts(deptDyn, "blkDeptDyn", baseHistory);
 }
 
 function renderCompare(mk, rows) {
@@ -9163,8 +9608,8 @@ function renderCompare(mk, rows) {
     const focus = profileForDoctor(row.id).crossFocus;
     return Boolean(focus && focus.items && focus.items.length);
   });
-  const comparisonKb = (r, doctorId) => doctorId ? reportClientBaseSummary(doctorId, mk, UI.kbWin)
-    : selectedClientBaseSummary(r, aggregateProfile, UI.kbWin);
+  const comparisonKb = (r, doctorId) => doctorId ? reportClientBaseSummary(doctorId, mk, UI.specializationKbWin)
+    : selectedClientBaseSummary(r, aggregateProfile, UI.specializationKbWin);
   const exactBaseShare = (r, doctorId, key) => {
     const kb = comparisonKb(r, doctorId);
     return kb && kb[key] != null ? kb[key] : null;
@@ -9255,7 +9700,7 @@ async function exportDeptXlsx() {
   const aoa = [["Сводная по векторам за " + monthLabel(mk)], [], header];
   const num = v => (v == null || isNaN(v)) ? null : Math.round(v * 100) / 100;
   for (const x of rows) {
-    const r = x.r, baseProfile = clientBaseReportProfile(), kb = reportClientBaseSummary(x.id, mk, UI.kbWin), pv = r.loyalty.pvSlices[UI.pvSlice], nz = r.cross.naz[UI.nazSlice];
+    const r = x.r, baseProfile = clientBaseReportProfile(), kb = reportClientBaseSummary(x.id, mk, UI.specializationKbWin), pv = r.loyalty.pvSlices[UI.pvSlice], nz = r.cross.naz[UI.nazSlice];
     const groupValue = (group, value) => kb && kb.groupAvailable[group] ? value : null;
     aoa.push([
       doctorName(x.id), resolvedDepartmentName(x.id), resolvedSpecializationName(x.id) || "—",
@@ -9318,10 +9763,14 @@ function openDoctor(id, mk) {
 /* ================= СТРАНИЦА: ВРАЧ ================= */
 
 function setPvSlice(v) { UI.pvSlice = v; renderAll(); }
-function setNazSlice(v) { UI.nazSlice = v; renderAll(); }
+function setNazSlice(v) { UI.nazSlice = v; return renderAll(); }
 function setKbWin(v) {
   UI.kbWin = Number(v);
   renderAll();
+}
+function setSpecializationKbWin(v) {
+  UI.specializationKbWin = Number(v);
+  return renderDept();
 }
 function setReportKbWin(v) {
   UI.repKbWin = Number(v);
@@ -10035,7 +10484,10 @@ async function cloneDashboardForPdf(source) {
 }
 
 async function cloneDashboardForViewer(source) {
-  return cloneDashboardSnapshot(source, { chartMimeType: "image/webp", chartQuality: 0.9, waitForPaint: false });
+  const snapshot = await cloneDashboardSnapshot(source, { chartMimeType: "image/webp", chartQuality: 0.9, waitForPaint: false });
+  snapshot.clone.querySelectorAll("details[data-v3-section], [data-v3-section] details, [data-specialization-device-history], [data-specialization-device-history] details")
+    .forEach(details => { details.open = false; });
+  return snapshot;
 }
 
 function splitDynamicPdfSection(section) {
@@ -10318,11 +10770,12 @@ function sparkSvg(row) {
 }
 
 /* панель графиков динамики: деньги / трафик / проценты / база */
-function renderDynCharts(dyn, blkId) {
-  if (!dyn || dyn.months.length < 2) return;
+function renderDynCharts(dyn, blkId, baseHistory = null) {
+  if (!dyn || (dyn.months.length < 2 && !baseHistory)) return;
   const labels = dyn.months.map(monthLabel);
   const val = key => { const row = dyn.rows.find(x => x.key === key); return row ? row.values : null; };
-  const mk = (canvas, series, fmt, tickCb) => {
+  const mk = (canvas, series, fmt, tickCb, history = null) => {
+    const chartLabels = history ? history.months.map(monthLabel) : labels;
     const datasets = series.filter(s => s.data && s.data.some(v => v != null)).map(s => ({
       label: s.label, data: s.data, borderColor: s.color, backgroundColor: s.color,
       borderWidth: 2, pointRadius: 3, spanGaps: false, tension: 0.25, borderDash: s.dash || [],
@@ -10333,10 +10786,11 @@ function renderDynCharts(dyn, blkId) {
     const numFmt = v => (typeof v === "number" ? fmt(v) : "");
     chart(canvas, {
       type: "line",
-      data: { labels, datasets },
+      data: { labels: chartLabels, datasets },
       options: {
         maintainAspectRatio: false,
         plugins: {
+          title: history ? { display: true, text: SPECIALIZATION_BASE_TITLE } : undefined,
           legend: { position: "bottom", labels: { boxWidth: 12, font: { size: 11 } } },
           datalabels: {
             display: ctx => UI.showLabels && ctx.dataIndex === ctx.dataset.data.length - 1 && ctx.dataset.data[ctx.dataIndex] != null,
@@ -10345,7 +10799,9 @@ function renderDynCharts(dyn, blkId) {
           },
           tooltip: { callbacks: { label: c => c.dataset.label + ": " + numFmt(c.raw) } },
         },
-        scales: { y: { beginAtZero: true, ticks: tickCb ? { callback: v => (typeof v === "number" ? tickCb(v) : v) } : {} } },
+        scales: { ...(history ? { x: { ticks: { maxTicksLimit: 9, maxRotation: 0,
+          callback: index => chartLabels[index].replace(/^(\S{3})\S* \d{2}(\d{2})$/, "$1 $2") } } } : {}),
+          y: { beginAtZero: true, ticks: tickCb ? { callback: v => (typeof v === "number" ? tickCb(v) : v) } : {} } },
       },
     });
   };
@@ -10363,10 +10819,11 @@ function renderDynCharts(dyn, blkId) {
     { label: "Доля выручки от перенаправлений", data: val("cross"), color: "#16a34a" },
     { label: "Конверсия назнач.", data: val("nazConv"), color: "#db2777" },
   ], v => fmtPct(v), v => v + "%");
-  mk(blkId + "_base", [
+  const baseSeries = baseHistory ? baseHistory.series.map(item => ({ ...item, data: item.values })) : [
     { label: "Активная база", data: val("akb"), color: "#16a34a" },
     { label: "Потерянные", data: val("lost"), color: "#dc2626" },
-  ], v => fmtNum(v) + " чел.");
+  ];
+  mk(blkId + "_base", baseSeries, v => fmtNum(v) + " чел.", undefined, baseHistory);
 }
 
 function dynamicsRow(dyn, key) {
@@ -10756,19 +11213,25 @@ function primaryPatientsReportHtml(docId, monthKey, { registry = true } = {}) {
   }
   return html + breakdown + globalThis.klinvektReportPresentation.reportHelpHtml(`<p>Первичный пациент впервые пришёл к выбранному врачу. Посещения и выручка считаются только у этого врача, с первого месяца пациента до ${esc(monthLabel(monthKey))} включительно.</p><p>В итогах 1 / 2 / 3+ учитывается и первое посещение. У тех, кто пришёл недавно, было меньше времени вернуться.</p><p>${esc(referralNote)}</p>`) + "</section>";
 }
-function dynamicsHtml(dyn, blkId, title, subtitle, noteKey, detailTailHtml = "", includeOutcome = true) {
+function dynamicsHtml(dyn, blkId, title, subtitle, noteKey, detailTailHtml = "", includeOutcome = true, baseHistory = null) {
   if (!dyn || dyn.months.length < 1) return "";
   const single = dyn.months.length < 2;
   const narrative = dynamicNarrativeValue(noteKey || `${blkId}|${dyn.months[dyn.months.length - 1]}`, dyn);
   let html = `<div class="card ${includeOutcome ? "dynamics-final-card" : "dynamics-history-card"}" id="${blkId}"><div class="vhead"><h3 class="mt0">📈 ${title}</h3><span>${blockBtn(blkId)}</span></div>
     <p class="small muted" style="margin-top:0">${subtitle}${single ? " Пока загружен один месяц — тренды появятся после загрузки следующего." : ""}</p>`;
   // панель графиков динамики (деньги / трафик / проценты / база)
-  if (!single) {
+  if (!single || baseHistory) {
+    const hasBase = !baseHistory || baseHistory.series.some(series => series.values.some(Number.isFinite));
+    const baseCaption = baseHistory ? SPECIALIZATION_BASE_TITLE : "Клиентская база";
     html += `<div class="grid cols-2" style="margin-bottom:12px">
+      ${single ? "" : `
       <div><h3 class="small muted" style="margin:0 0 4px">ВЫРУЧКА ${copyBtn("copyChart", blkId + "_money", "PNG")}</h3><div class="chart-box"><canvas id="${blkId}_money"></canvas></div></div>
       <div><h3 class="small muted" style="margin:0 0 4px">ПАЦИЕНТЫ / ВИЗИТЫ ${copyBtn("copyChart", blkId + "_traffic", "PNG")}</h3><div class="chart-box"><canvas id="${blkId}_traffic"></canvas></div></div>
       <div><h3 class="small muted" style="margin:0 0 4px">ЛОЯЛЬНОСТЬ И ПЕРЕНАПРАВЛЕНИЯ, % ${copyBtn("copyChart", blkId + "_pct", "PNG")}</h3><div class="chart-box"><canvas id="${blkId}_pct"></canvas></div></div>
-      <div><h3 class="small muted" style="margin:0 0 4px">КЛИЕНТСКАЯ БАЗА ${copyBtn("copyChart", blkId + "_base", "PNG")}</h3><div class="chart-box"><canvas id="${blkId}_base"></canvas></div></div>
+      `}
+      <div><h3 class="small muted" style="margin:0 0 4px">КЛИЕНТСКАЯ БАЗА ${hasBase ? copyBtn("copyChart", blkId + "_base", "PNG") : ""}</h3>
+        ${hasBase ? `<div class="chart-box"><canvas id="${blkId}_base" aria-label="${esc(baseCaption)}"></canvas></div>`
+          : `<p class="small muted">${esc(baseCaption)}. Нет сопоставимых выгрузок.</p>`}</div>
     </div>`;
   }
   // таблица по месяцам: жирным зелёным — лучший месяц метрики, красным — худший
@@ -11386,10 +11849,10 @@ function mobilePublicationReferralSection(result, profile) {
 function mobilePublicationAppointmentSections(result, profile, windowMonths) {
   const slice = result.cross.naz && result.cross.naz[windowMonths];
   if (!slice) {
-    return [{
+    return [mobilePublicationReferralSection(result, profile), {
       title: "Конверсия назначений",
       metrics: [mobilePublicationMetric("Данные", "Нет точной выгрузки", `окно ${windowMonths} мес.`)],
-    }, mobilePublicationReferralSection(result, profile)];
+    }];
   }
   const target = mobilePublicationBenchmark(profile.scoring && profile.scoring.benchmarks, "nazConv");
   const sourceRows = Array.isArray(slice.sourceGroups) && slice.sourceGroups.length
@@ -11402,12 +11865,21 @@ function mobilePublicationAppointmentSections(result, profile, windowMonths) {
     : REF_TYPES.map(type => [type, slice.byType && slice.byType[type]])
       .filter(([, item]) => item && (item.assigned || item.done || item.soldQ))
       .map(([type, item]) => [type, fmtNum(item.assigned), fmtNum(item.done), fmtNum(item.soldQ), fmtPct(item.conv)]);
-  const focusRows = slice.focus && slice.focus.items
-    ? Object.entries(slice.focus.items)
-      .filter(([, item]) => item && (item.assigned || item.resultQ))
-      .map(([name, item]) => [name, fmtNum(item.assigned), fmtNum(item.resultQ)])
-    : [];
+  const focusItems = slice.focus?.items || {};
+  const focusNames = new Set([...(profile.crossFocus?.items || []).map(item => item.name), ...Object.keys(focusItems)]);
+  const focusRows = [...focusNames].map(name => [name, fmtNum(focusItems[name]?.assigned || 0), fmtNum(focusItems[name]?.resultQ || 0)]);
   return [
+    {
+      title: "Фокусы междисциплинарного подхода",
+      metrics: slice.focus?.park ? [mobilePublicationMetric("Позиций выполнено", `${fmtNum(slice.focus.used)} из ${fmtNum(slice.focus.park)}`)] : [],
+      columns: ["Фокус", "Назначено", "Выполнено + продано"],
+      rows: focusRows.length ? focusRows : [["Нет настроенных фокусов", "—", "—"]],
+      charts: [
+        mobilePublicationPie("focus-assigned", "Назначено по фокусам", Object.entries(focusItems).map(([name, item]) => [name, item.assigned, crossFocusColor(profile, name)]), "шт."),
+        mobilePublicationPie("focus-result", "Выполнено + продано по фокусам", Object.entries(focusItems).map(([name, item]) => [name, item.resultQ, crossFocusColor(profile, name)]), "шт."),
+      ].filter(Boolean),
+    },
+    mobilePublicationReferralSection(result, profile),
     {
       title: `Конверсия назначений · ${windowMonths} мес.`,
       metrics: [
@@ -11425,16 +11897,6 @@ function mobilePublicationAppointmentSections(result, profile, windowMonths) {
       tree: mobilePublicationAppointmentTree(slice),
       note: slice.sourceGroups && slice.sourceGroups.length ? "Раскройте вид услуги, затем группу и номенклатуру. Итоги родительских групп включают все вложенные позиции." : "В исходной выгрузке нет иерархии 1С: показаны типы направлений и номенклатура.",
     },
-    {
-      title: "Фокусы междисциплинарного подхода",
-      columns: ["Фокус", "Назначено", "Выполнено + продано"],
-      rows: focusRows.length ? focusRows : [["Нет настроенных фокусов", "—", "—"]],
-      charts: [
-        mobilePublicationPie("focus-assigned", "Назначено по фокусам", Object.entries(slice.focus && slice.focus.items || {}).map(([name, item]) => [name, item.assigned, crossFocusColor(profile, name)]), "шт."),
-        mobilePublicationPie("focus-result", "Выполнено + продано по фокусам", Object.entries(slice.focus && slice.focus.items || {}).map(([name, item]) => [name, item.resultQ, crossFocusColor(profile, name)]), "шт."),
-      ].filter(Boolean),
-    },
-    mobilePublicationReferralSection(result, profile),
   ];
 }
 
@@ -12128,25 +12590,133 @@ function renderDoctorNow() {
   const shownV3Score = shownVecScores ? shownVecScores.v3 : undefined;
   html += `<div class="card vector-card" id="blkV3" data-vector-key="v3" style="border-top-color:${VECTOR_META.v3.color}">
     <div class="vhead"><h3 class="mt0">Вектор 3. Междисциплинарный подход <span class="badge ${VECTOR_META.v3.cls}">${VECTOR_META.v3.tag}</span></h3>
-    <span>${vecBadge("v3", r, docProfile, shownV3Score)} ${blockBtn("blkV3")} ${nz && nz.focus && nz.focus.park ? `<span class="vscore">${nz.focus.used}<span class="small muted"> из ${nz.focus.park} фокусов</span></span>` : ""} ${r.cross.nazSlices.length ? segToggle("nazSeg", r.cross.nazSlices.map(s => ({ v: s, label: "назначения " + s + " мес" })), nazCur, "setNazSlice") : ""}</span></div>`;
+    <span>${vecBadge("v3", r, docProfile, shownV3Score)} ${blockBtn("blkV3")} ${r.cross.nazSlices.length ? segToggle("nazSeg", r.cross.nazSlices.map(s => ({ v: s, label: "назначения " + s + " мес" })), nazCur, "setNazSlice") : ""}</span></div>`;
+  if (nz?.focus) {
+    const focusOrder = (docProfile.crossFocus.items || []).map(item => item.name);
+    for (const name of Object.keys(nz.focus.items)) if (!focusOrder.includes(name)) focusOrder.push(name);
+    const configuredFocusNames = new Set((docProfile.crossFocus.items || []).map(item => item.name));
+    const focusEntries = focusOrder.filter(name => configuredFocusNames.has(name) || nz.focus.items[name]);
+    const focusAssignedEntries = focusEntries.filter(name => nz.focus.items[name] && nz.focus.items[name].assigned > 0);
+    const focusResultEntries = focusEntries.filter(name => nz.focus.items[name] && nz.focus.items[name].resultQ > 0);
+    const focusTitle = esc(nz.focus.title || "Фокусы междисциплинарного подхода");
+    html += `<details ${collapsibleListAttrs("interdisciplinaryFocusPositions", false)} data-v3-section="focus">
+      <summary class="collapsible-list-summary v3-tile">
+        <span class="v3-tile-copy"><b>${focusTitle}</b><small>Окно назначений · ${nazCur} мес.</small></span>
+        ${nz.focus.park ? `<span class="v3-tile-value"><strong>${fmtNum(nz.focus.used)} из ${fmtNum(nz.focus.park)}</strong><small>позиций выполнено</small></span>` : ""}
+      </summary>
+      <div class="collapsible-list-body"><div class="toolbar no-print">${copyBtn("copyTable", "tblNazFocus")}</div>
+        <table class="data" id="tblNazFocus"><tr><th>Наименование услуги</th><th class="num">Назначено, шт</th><th class="num">Выполнено + продано, шт</th></tr>
+        ${focusEntries.map(name => { const item = nz.focus.items[name] || { assigned: 0, resultQ: 0 }; return `<tr><td>${esc(name)}</td><td class="num">${fmtNum(item.assigned)}</td><td class="num">${fmtNum(item.resultQ)}</td></tr>`; }).join("")}
+        </table>
+        <div class="grid cols-2 v3-charts">
+        <div>${focusAssignedEntries.length ? `<h3 class="small muted" style="margin-bottom:6px">НАЗНАЧЕНО ПО ФОКУСАМ, ШТ. ${copyBtn("copyChart", "chNazFocusAssigned", "PNG")}</h3><div class="chart-box"><canvas id="chNazFocusAssigned"></canvas></div>` : '<p class="muted small">По фокусам пока нет назначений.</p>'}</div>
+        <div>${focusResultEntries.length ? `<h3 class="small muted" style="margin-bottom:6px">ВЫПОЛНЕНО + ПРОДАНО ПО ФОКУСАМ, ШТ. ${copyBtn("copyChart", "chNazFocusResult", "PNG")}</h3><div class="chart-box"><canvas id="chNazFocusResult"></canvas></div>` : '<p class="muted small">По фокусам пока нет выполненных или проданных услуг.</p>'}</div>
+        </div>
+      </div></details>`;
+  } else {
+    html += `<div class="v3-tile v3-empty" data-v3-section="focus"><span class="v3-tile-copy"><b>Фокусы междисциплинарного подхода</b><small>${nz ? "Фокусы не настроены." : "Нет выгрузки «Назначения»."}</small></span></div>`;
+  }
+  if (r.cross.refByType && Object.keys(r.cross.refByType).length) {
+    html += `<details ${collapsibleListAttrs("completedReferralDetails", false)} data-v3-section="revenue">
+      <summary class="collapsible-list-summary v3-tile" id="completedReferralShare">
+        <span class="v3-tile-copy"><b>Выполненные направления за месяц</b>
+          <small>${monthLabel(mk)} · учтено ${fmtMoney(refCreditedTotal)} из ${fmtMoney(refWorkTotal)} выполненных</small>
+          <small>Выручка с перенаправлениями ${fmtMoney(r.econ.revenueWithRef)} · источник: отчёт «Выработка»</small>
+        </span>
+        <span class="v3-tile-value"><strong class="tracked-value appointment-conversion-summary-value ${completedReferralState}">${fmtPct(r.cross.crossShare)}</strong>
+          <small>доля в общей выработке${hasCompletedReferralTarget ? ` · цель ≥ ${fmtPct(Number(completedReferralTarget))}` : ""}</small>
+        </span>
+      </summary>
+      <div class="collapsible-list-body"><div class="toolbar no-print">${copyBtn("copyTable", "tblRef")}</div>
+      ${hasReferralRevenueFiltering ? `<div class="notice blue"><b>Правило учёта выручки:</b> все выполненные позиции показаны ниже, но ${fmtMoney(refWorkTotal - refCreditedTotal)} не входят в выручку от перенаправлений согласно настройкам профиля.</div>` : ""}
+      ${hasCompletedReferralGrouping && completedReferralGrouping.unmatchedItems ? `<div class="notice warn"><b>Не сопоставлено с группами 1С:</b> ${fmtNum(completedReferralGrouping.unmatchedItems)} поз. Они показаны отдельной группой; остальные услуги объединены по структуре отчёта «Назначения».</div>` : ""}
+      <table class="data referral-details-table" id="tblRef"><tr><th>${hasCompletedReferralGrouping ? "Тип / группа 1С / номенклатура" : "Тип"}</th><th class="num">Штук</th><th class="num">Выполнено</th><th class="num">Учтено в перенаправлениях</th></tr>`;
+    let rtIdx = 0;
+    if (hasCompletedReferralGrouping) {
+      const sourceTree = new Map();
+      for (const group of completedReferralGrouping.groups) {
+        let siblings = sourceTree;
+        let target = null;
+        for (const part of [adminReferralType(group.type), ...(group.path || [])]) {
+          if (!siblings.has(part)) siblings.set(part, { name: part, children: new Map(), items: {}, q: 0, s: 0, includedS: 0 });
+          target = siblings.get(part);
+          target.q += group.q || 0;
+          target.s += group.s || 0;
+          target.includedS += group.includedS || 0;
+          siblings = target.children;
+        }
+        if (target) {
+          for (const [name, values] of Object.entries(group.items || {})) {
+            if (!target.items[name]) target.items[name] = { q: 0, s: 0, includedS: 0, excludedS: 0, inclusionReason: values.inclusionReason || "" };
+            target.items[name].q += values.q || 0;
+            target.items[name].s += values.s || 0;
+            target.items[name].includedS += values.includedS || 0;
+            target.items[name].excludedS += values.excludedS || 0;
+          }
+        }
+      }
+      const renderCompletedReferralNodes = (nodes, depth = 0, ancestorKeys = []) => {
+        for (const node of nodes.values()) {
+          const itemEntries = Object.entries(node.items || {}).sort((a, b) => b[1].s - a[1].s);
+          const groupKey = "rt" + rtIdx++;
+          const open = !!UI.openGroups[groupKey];
+          const hasChildren = node.children.size > 0;
+          const expandable = hasChildren || itemEntries.length > 0;
+          const ancestors = [...ancestorKeys, groupKey];
+          const ancestorAttr = ancestorKeys.length ? ` data-group-ancestors="${ancestorKeys.join(" ")}"` : "";
+          const visible = ancestorKeys.every(key => Boolean(UI.openGroups[key]));
+          html += `<tr class="grp-head source-group-head source-group-depth-${Math.min(depth, 3)}" data-g="${groupKey}"${ancestorAttr}${expandable ? ` onclick="toggleGroup('${groupKey}')"` : ""}${visible ? (expandable ? ' style="cursor:pointer"' : "") : ' style="display:none"'}>
+            <td style="padding-left:${10 + depth * 22}px"><span id="tri_${groupKey}" class="muted">${expandable ? (open ? "▾" : "▸") : "·"}</span> <b>${esc(node.name)}</b></td>
+            <td class="num"><b>${fmtNum(node.q)}</b></td><td class="num"><b>${fmtMoney(node.s)}</b></td><td class="num"><b>${fmtMoney(node.includedS)}</b></td></tr>`;
+          if (hasChildren) renderCompletedReferralNodes(node.children, depth + 1, ancestors);
+          for (const [name, values] of itemEntries) {
+            const itemVisible = ancestors.every(key => Boolean(UI.openGroups[key]));
+            const exclusionBadge = values.excludedS > 0 ? ` <span class="badge warn" title="${esc(values.inclusionReason || "Не учитывается по настройке")}">не учитывается</span>` : "";
+            html += `<tr class="grp-sub ${groupKey}" data-group-ancestors="${ancestors.join(" ")}" ${itemVisible ? "" : 'style="display:none"'}><td class="small muted source-nomenclature" style="padding-left:${10 + (depth + 1) * 22}px">${esc(name)}${exclusionBadge}</td>
+              <td class="num small muted">${fmtNum(values.q)}</td><td class="num small muted">${fmtMoney(values.s)}</td><td class="num small muted">${fmtMoney(values.includedS)}</td></tr>`;
+          }
+        }
+      };
+      renderCompletedReferralNodes(sourceTree);
+    } else {
+      for (const t of ["Товары", "Приемы", "Анализы", "Услуги"]) {
+        const b = adminReferrals[t];
+        if (!b) continue;
+        const itEntries = Object.entries(b.items || {}).sort((a, bb) => bb[1].s - a[1].s);
+        const gKey = "rt" + rtIdx++;
+        const open = !!UI.openGroups[gKey];
+        html += `<tr class="grp-head" data-g="${gKey}" ${itEntries.length ? `onclick="toggleGroup('${gKey}')" style="cursor:pointer"` : ""}>
+          <td><span id="tri_${gKey}" class="muted">${itEntries.length ? (open ? "▾" : "▸") : "·"}</span> <b>${esc(t)}</b></td>
+          <td class="num"><b>${fmtNum(b.q)}</b></td><td class="num"><b>${fmtMoney(b.s)}</b></td><td class="num"><b>${fmtMoney(b.includedS)}</b></td></tr>`;
+        for (const [n, v] of itEntries) {
+          const exclusionBadge = v.excludedS > 0 ? ` <span class="badge warn" title="${esc(v.inclusionReason || "Не учитывается по настройке")}">не учитывается</span>` : "";
+          html += `<tr class="grp-sub ${gKey}" ${open ? "" : 'style="display:none"'}><td class="small muted" style="padding-left:26px">${esc(n)}${exclusionBadge}</td>
+            <td class="num small muted">${fmtNum(v.q)}</td><td class="num small muted">${fmtMoney(v.s)}</td><td class="num small muted">${fmtMoney(v.includedS)}</td></tr>`;
+        }
+      }
+    }
+    html += `<tr><td><b>Всего выполнено</b></td><td class="num"></td><td class="num"><b>${fmtMoney(refWorkTotal)}</b></td><td class="num"></td></tr>
+      <tr><td><b>Учтено в выручке от перенаправлений</b></td><td class="num"></td><td class="num"></td><td class="num"><b>${fmtMoney(refCreditedTotal)}</b></td></tr></table>
+      <div class="v3-charts"><h3 class="section-title" style="margin:0 0 6px">ВЫРАБОТКА ОТ ПЕРЕНАПРАВЛЕНИЙ ${copyBtn("copyChart", "chNazStruct", "PNG")}</h3>
+      <div class="chart-box"><canvas id="chNazStruct"></canvas></div></div></div></details>`;
+  } else {
+    html += `<div class="v3-tile v3-empty" data-v3-section="revenue"><span class="v3-tile-copy"><b>Выполненные направления за месяц</b><small>${monthLabel(mk)} · нет выполненных направлений в «Выработке».</small></span>
+      <span class="v3-tile-value"><strong>${fmtPct(r.cross.crossShare)}</strong><small>доля в общей выработке</small></span></div>`;
+  }
   if (nz) {
     const convTarget = docProfile.scoring && docProfile.scoring.benchmarks ? docProfile.scoring.benchmarks.nazConv : null;
     const convState = trackedMetricState(nz.totals.conv, convTarget);
     const hasConvTarget = convTarget != null && convTarget !== "" && !isNaN(convTarget) && Number(convTarget) > 0;
     const hasSourceGrouping = Boolean(nz.sourceGroups && nz.sourceGroups.length);
-    html += `<details ${collapsibleListAttrs("appointmentConversionBlock", false)}><summary class="collapsible-list-summary appointment-conversion-summary">
-      <span>Планы лечения и конверсия в реализацию <span class="section-detail">· окно ${nazCur} мес.</span></span>
-      <strong class="appointment-conversion-summary-value ${convState}">${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</strong>
-      <span class="collapse-hint"></span>
+    html += `<details ${collapsibleListAttrs("appointmentConversionBlock", false)} data-v3-section="conversion"><summary class="collapsible-list-summary v3-tile appointment-conversion-summary">
+      <span class="v3-tile-copy"><b>Конверсия назначений</b><small>Окно ${nazCur} мес. · ${fmtNum(nz.totals.resultQ)} из ${fmtNum(nz.totals.assigned)} назначений</small></span>
+      <span class="v3-tile-value"><strong class="appointment-conversion-summary-value ${convState}">${fmtPct(nz.totals.conv)}</strong><small>${hasConvTarget ? `цель ≥ ${fmtPct(Number(convTarget))}` : "цель не установлена"}</small></span>
       </summary><div class="collapsible-list-body appointment-conversion-body">
-      <div class="toolbar no-print appointment-conversion-actions"><button class="btn mini" onclick="expandAppointmentDetails()">Раскрыть все услуги</button>${copyBtn("copyTable", "tblNaz")}</div>
       ${nz.totals.valid === false ? `<div class="notice bad"><b>Конверсия не рассчитана:</b> ${esc(nz.totals.issue)}. Проверьте состав исходной выгрузки.</div>` : ""}
-      <div class="tracked-metric ${convState}">
-        <div><div class="tracked-title">Конверсия за ${nazCur} мес.</div><div class="tracked-note">Услуги: выполнено + продано; товары: продано · ${fmtNum(nz.totals.resultQ)} из ${fmtNum(nz.totals.assigned)}</div></div>
-        <div class="tracked-side"><div class="tracked-goal">${hasConvTarget ? `цель ≥ ${fmtPct(Number(convTarget))}` : "цель не установлена"}</div></div>
-      </div>
+      <p class="small muted v3-method">Услуги: выполнено + продано; товары: продано.</p>
       <details ${collapsibleListAttrs("appointmentDetails", false)}><summary class="collapsible-list-summary"><span>Детализация по услугам и группам 1С</span><span class="collapse-hint"></span></summary>
       <div class="collapsible-list-body">
+      <div class="toolbar no-print appointment-conversion-actions"><button class="btn mini" onclick="expandAppointmentDetails()">Раскрыть все услуги</button>${copyBtn("copyTable", "tblNaz")}</div>
       ${hasSourceGrouping ? "" : `<div class="notice warn appointment-source-grouping-warning"><b>Нет группировки из 1С.</b> Эти назначения были загружены старой версией. Повторно обработайте исходные файлы на вкладке «Данные». <button class="btn mini no-print" type="button" onclick="switchTab('data')">Перейти к данным</button></div>`}
       <table class="data" id="tblNaz"><tr><th>${hasSourceGrouping ? "Вид услуги / специализация / номенклатура" : "Тип направления"}</th><th class="num">Назначено, шт</th><th class="num">Выполнено, шт</th><th class="num">Продано, шт</th><th class="num">Конверсия</th></tr>`;
     let ntIdx = 0;
@@ -12221,108 +12791,9 @@ function renderDoctorNow() {
       }
     }
     html += `<tr><td><b>Итого</b></td><td class="num"><b>${fmtNum(nz.totals.assigned)}</b></td><td class="num"><b>${fmtNum(nz.totals.done)}</b></td><td class="num"><b>${fmtNum(nz.totals.soldQ)}</b></td><td class="num"><b>${nz.totals.conv != null ? fmtPct(nz.totals.conv) : "—"}</b></td></tr></table></div></details>`;
-    if (nz.focus) {
-      const focusOrder = (docProfile.crossFocus.items || []).map(item => item.name);
-      for (const name of Object.keys(nz.focus.items)) if (!focusOrder.includes(name)) focusOrder.push(name);
-      const configuredFocusNames = new Set((docProfile.crossFocus.items || []).map(item => item.name));
-      const focusEntries = focusOrder.filter(name => configuredFocusNames.has(name) || nz.focus.items[name]);
-      const focusAssignedEntries = focusEntries.filter(name => nz.focus.items[name] && nz.focus.items[name].assigned > 0);
-      const focusResultEntries = focusEntries.filter(name => nz.focus.items[name] && nz.focus.items[name].resultQ > 0);
-      const focusTitle = esc((nz.focus.title || "Фокусы междисциплинарного подхода").toUpperCase());
-      html += `<h3 class="section-title appointment-focus-title" style="margin:14px 0 6px">${focusTitle}</h3>
-        <div class="grid cols-3" style="margin-top:12px">
-          <div>${focusAssignedEntries.length ? `<h3 class="small muted" style="margin-bottom:6px">НАЗНАЧЕНО ПО ФОКУСАМ, ШТ. ${copyBtn("copyChart", "chNazFocusAssigned", "PNG")}</h3><div class="chart-box"><canvas id="chNazFocusAssigned"></canvas></div>` : '<p class="muted small">По фокусам пока нет назначений.</p>'}</div>
-          <div>${focusResultEntries.length ? `<h3 class="small muted" style="margin-bottom:6px">ВЫПОЛНЕНО + ПРОДАНО ПО ФОКУСАМ, ШТ. ${copyBtn("copyChart", "chNazFocusResult", "PNG")}</h3><div class="chart-box"><canvas id="chNazFocusResult"></canvas></div>` : '<p class="muted small">По фокусам пока нет выполненных или проданных услуг.</p>'}</div>
-          <div><details ${collapsibleListAttrs("interdisciplinaryFocusPositions", false)}><summary class="collapsible-list-summary"><span>${focusTitle}: СПИСОК</span><span class="collapse-hint"></span></summary>
-            <div class="collapsible-list-body"><div class="toolbar no-print">${copyBtn("copyTable", "tblNazFocus")}</div><table class="data" id="tblNazFocus"><tr><th>Наименование услуги</th><th class="num">Назначено, шт</th><th class="num">Выполнено + продано, шт</th></tr>
-            ${focusEntries.map(name => { const item = nz.focus.items[name] || { assigned: 0, resultQ: 0 }; return `<tr><td>${esc(name)}</td><td class="num">${fmtNum(item.assigned)}</td><td class="num">${fmtNum(item.resultQ)}</td></tr>`; }).join("")}
-            </table></div></details></div>
-        </div>`;
-    }
     html += `</div></details>`;
   } else {
-    html += '<p class="muted small" style="margin-top:8px">Нет выгрузки «Назначения» за этот месяц — конверсии недоступны.</p>';
-  }
-  if (r.cross.refByType && Object.keys(r.cross.refByType).length) {
-    html += `<section class="completed-referrals-section"><h3>Выполненные планы лечения и назначения в текущем месяце</h3><p class="small muted">${monthLabel(mk)} · только фактически выполненные позиции из отчёта «Выработка». Окно назначений выше не меняет суммы этого месяца.</p><div class="tracked-metric ${completedReferralState}" id="completedReferralShare" style="margin:12px 0">
-      <div><div class="tracked-title">Доля выручки от выполненных направлений</div>
-      <div class="tracked-note">Учтено ${fmtMoney(refCreditedTotal)} из ${fmtMoney(refWorkTotal)} выполненных · выручка с перенаправлениями ${fmtMoney(r.econ.revenueWithRef)} · источник: отчёт «Выработка»</div></div>
-      <div class="tracked-side"><div class="tracked-value">${fmtPct(r.cross.crossShare)}</div><div class="tracked-goal">${hasCompletedReferralTarget ? `цель ≥ ${fmtPct(Number(completedReferralTarget))}` : "цель не установлена"}</div></div>
-    </div>
-    <div class="grid cols-2" style="margin-top:12px"><div>
-      <details ${collapsibleListAttrs("completedReferralDetails", false)}><summary class="collapsible-list-summary"><span>Выполненные позиции <span class="section-detail">· всего ${fmtMoney(refWorkTotal)} · учтено ${fmtMoney(refCreditedTotal)}</span></span><span class="collapse-hint"></span></summary>
-      <div class="collapsible-list-body"><div class="toolbar no-print">${copyBtn("copyTable", "tblRef")}</div>
-      ${hasReferralRevenueFiltering ? `<div class="notice blue"><b>Правило учёта выручки:</b> все выполненные позиции показаны ниже, но ${fmtMoney(refWorkTotal - refCreditedTotal)} не входят в выручку от перенаправлений согласно настройкам профиля.</div>` : ""}
-      ${hasCompletedReferralGrouping && completedReferralGrouping.unmatchedItems ? `<div class="notice warn"><b>Не сопоставлено с группами 1С:</b> ${fmtNum(completedReferralGrouping.unmatchedItems)} поз. Они показаны отдельной группой; остальные услуги объединены по структуре отчёта «Назначения».</div>` : ""}
-      <table class="data referral-details-table" id="tblRef"><tr><th>${hasCompletedReferralGrouping ? "Тип / группа 1С / номенклатура" : "Тип"}</th><th class="num">Штук</th><th class="num">Выполнено</th><th class="num">Учтено в перенаправлениях</th></tr>`;
-    let rtIdx = 0;
-    if (hasCompletedReferralGrouping) {
-      const sourceTree = new Map();
-      for (const group of completedReferralGrouping.groups) {
-        let siblings = sourceTree;
-        let target = null;
-        for (const part of [adminReferralType(group.type), ...(group.path || [])]) {
-          if (!siblings.has(part)) siblings.set(part, { name: part, children: new Map(), items: {}, q: 0, s: 0, includedS: 0 });
-          target = siblings.get(part);
-          target.q += group.q || 0;
-          target.s += group.s || 0;
-          target.includedS += group.includedS || 0;
-          siblings = target.children;
-        }
-        if (target) {
-          for (const [name, values] of Object.entries(group.items || {})) {
-            if (!target.items[name]) target.items[name] = { q: 0, s: 0, includedS: 0, excludedS: 0, inclusionReason: values.inclusionReason || "" };
-            target.items[name].q += values.q || 0;
-            target.items[name].s += values.s || 0;
-            target.items[name].includedS += values.includedS || 0;
-            target.items[name].excludedS += values.excludedS || 0;
-          }
-        }
-      }
-      const renderCompletedReferralNodes = (nodes, depth = 0, ancestorKeys = []) => {
-        for (const node of nodes.values()) {
-          const itemEntries = Object.entries(node.items || {}).sort((a, b) => b[1].s - a[1].s);
-          const groupKey = "rt" + rtIdx++;
-          const open = !!UI.openGroups[groupKey];
-          const hasChildren = node.children.size > 0;
-          const expandable = hasChildren || itemEntries.length > 0;
-          const ancestors = [...ancestorKeys, groupKey];
-          const ancestorAttr = ancestorKeys.length ? ` data-group-ancestors="${ancestorKeys.join(" ")}"` : "";
-          const visible = ancestorKeys.every(key => Boolean(UI.openGroups[key]));
-          html += `<tr class="grp-head source-group-head source-group-depth-${Math.min(depth, 3)}" data-g="${groupKey}"${ancestorAttr}${expandable ? ` onclick="toggleGroup('${groupKey}')"` : ""}${visible ? (expandable ? ' style="cursor:pointer"' : "") : ' style="display:none"'}>
-            <td style="padding-left:${10 + depth * 22}px"><span id="tri_${groupKey}" class="muted">${expandable ? (open ? "▾" : "▸") : "·"}</span> <b>${esc(node.name)}</b></td>
-            <td class="num"><b>${fmtNum(node.q)}</b></td><td class="num"><b>${fmtMoney(node.s)}</b></td><td class="num"><b>${fmtMoney(node.includedS)}</b></td></tr>`;
-          if (hasChildren) renderCompletedReferralNodes(node.children, depth + 1, ancestors);
-          for (const [name, values] of itemEntries) {
-            const itemVisible = ancestors.every(key => Boolean(UI.openGroups[key]));
-            const exclusionBadge = values.excludedS > 0 ? ` <span class="badge warn" title="${esc(values.inclusionReason || "Не учитывается по настройке")}">не учитывается</span>` : "";
-            html += `<tr class="grp-sub ${groupKey}" data-group-ancestors="${ancestors.join(" ")}" ${itemVisible ? "" : 'style="display:none"'}><td class="small muted source-nomenclature" style="padding-left:${10 + (depth + 1) * 22}px">${esc(name)}${exclusionBadge}</td>
-              <td class="num small muted">${fmtNum(values.q)}</td><td class="num small muted">${fmtMoney(values.s)}</td><td class="num small muted">${fmtMoney(values.includedS)}</td></tr>`;
-          }
-        }
-      };
-      renderCompletedReferralNodes(sourceTree);
-    } else {
-      for (const t of ["Товары", "Приемы", "Анализы", "Услуги"]) {
-        const b = adminReferrals[t];
-        if (!b) continue;
-        const itEntries = Object.entries(b.items || {}).sort((a, bb) => bb[1].s - a[1].s);
-        const gKey = "rt" + rtIdx++;
-        const open = !!UI.openGroups[gKey];
-        html += `<tr class="grp-head" data-g="${gKey}" ${itEntries.length ? `onclick="toggleGroup('${gKey}')" style="cursor:pointer"` : ""}>
-          <td><span id="tri_${gKey}" class="muted">${itEntries.length ? (open ? "▾" : "▸") : "·"}</span> <b>${esc(t)}</b></td>
-          <td class="num"><b>${fmtNum(b.q)}</b></td><td class="num"><b>${fmtMoney(b.s)}</b></td><td class="num"><b>${fmtMoney(b.includedS)}</b></td></tr>`;
-        for (const [n, v] of itEntries) {
-          const exclusionBadge = v.excludedS > 0 ? ` <span class="badge warn" title="${esc(v.inclusionReason || "Не учитывается по настройке")}">не учитывается</span>` : "";
-          html += `<tr class="grp-sub ${gKey}" ${open ? "" : 'style="display:none"'}><td class="small muted" style="padding-left:26px">${esc(n)}${exclusionBadge}</td>
-            <td class="num small muted">${fmtNum(v.q)}</td><td class="num small muted">${fmtMoney(v.s)}</td><td class="num small muted">${fmtMoney(v.includedS)}</td></tr>`;
-        }
-      }
-    }
-    html += `<tr><td><b>Всего выполнено</b></td><td class="num"></td><td class="num"><b>${fmtMoney(refWorkTotal)}</b></td><td class="num"></td></tr>
-      <tr><td><b>Учтено в выручке от перенаправлений</b></td><td class="num"></td><td class="num"></td><td class="num"><b>${fmtMoney(refCreditedTotal)}</b></td></tr></table></div></details></div>
-      <div><h3 class="section-title" style="margin:0 0 6px">ВЫРАБОТКА ОТ ПЕРЕНАПРАВЛЕНИЙ ${copyBtn("copyChart", "chNazStruct", "PNG")}</h3>
-      <div class="chart-box"><canvas id="chNazStruct"></canvas></div></div></div></section>`;
+    html += `<div class="v3-tile v3-empty" data-v3-section="conversion"><span class="v3-tile-copy"><b>Конверсия назначений</b><small>Нет выгрузки «Назначения».</small></span></div>`;
   }
   html += "</div>";
 
@@ -15281,6 +15752,11 @@ async function initApp() {
     });
   }
   switchTab("data");
+  if (DESKTOP_API) {
+    setTimeout(() => {
+      if (!fileImportInProgress) prepareSpecializationYear(monthKeysSorted().at(-1));
+    }, 0);
+  }
 }
 
 document.addEventListener("toggle", event => {

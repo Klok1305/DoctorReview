@@ -12,6 +12,101 @@ for (const picker of document.querySelectorAll("[data-client-base-window]")) {
     for (const panel of section.querySelectorAll("[data-client-base-window-panel]")) panel.hidden = panel.dataset.clientBaseWindowPanel !== picker.value;
   });
 }
+for (const picker of document.querySelectorAll("[data-v3-window]")) {
+  const vector = picker.closest('[data-vector-key="v3"]');
+  picker.addEventListener("change", () => {
+    for (const panel of vector.querySelectorAll("[data-v3-window-panel]")) panel.hidden = panel.dataset.v3WindowPanel !== picker.value;
+  });
+}
+for (const vector of document.querySelectorAll('body[data-report-kind="doctor"] .viewer-dashboard-snapshot [data-vector-key="v3"]')) {
+  const conversion = vector.querySelector(':scope > [data-list-key="appointmentConversionBlock"]');
+  const summary = conversion?.querySelector(":scope > summary");
+  if (!summary || conversion.dataset.v3Section) continue;
+  const focusTitle = conversion.querySelector(".appointment-focus-title");
+  const focusGrid = focusTitle?.nextElementSibling;
+  const revenue = vector.querySelector(":scope > .completed-referrals-section");
+  const revenueMetric = revenue?.querySelector(":scope > .tracked-metric");
+  const breakdown = conversion.querySelector('[data-list-key="appointmentDetails"]');
+  const conversionMetric = conversion.querySelector(".appointment-conversion-body > .tracked-metric");
+  const count = [...vector.querySelectorAll(".vhead .vscore")].find(item => /\d\s+из\s+\d+\s+фокусов/.test(item.textContent));
+  const tile = (title, notes, value, caption) => {
+    const summary = document.createElement("summary");
+    summary.className = "collapsible-list-summary v3-tile";
+    const text = document.createElement("span");
+    text.className = "v3-tile-copy";
+    const heading = document.createElement("b");
+    heading.textContent = title;
+    text.append(heading);
+    const addNote = (parent, note) => {
+      if (!note) return;
+      const small = document.createElement("small");
+      small.textContent = note;
+      parent.append(small);
+    };
+    for (const note of notes) addNote(text, note);
+    summary.append(text);
+    if (value) {
+      const side = document.createElement("span");
+      side.className = "v3-tile-value";
+      side.append(value);
+      addNote(side, caption);
+      summary.append(side);
+    }
+    return summary;
+  };
+  const addBlock = (key, summary, body) => {
+    const block = document.createElement(body ? "details" : "div");
+    block.dataset.v3Section = key;
+    if (body) {
+      block.className = "collapsible-list";
+      block.append(summary, body);
+    } else {
+      block.className = "v3-tile v3-empty";
+      block.append(...summary.childNodes);
+    }
+    conversion.before(block);
+  };
+  const period = summary.querySelector(".section-detail")?.textContent.replace(/^\s*·\s*/, "").trim();
+  const focusValue = count && document.createElement("strong");
+  if (focusValue) focusValue.textContent = count.textContent.trim().replace(/\s+фокусов$/, "");
+  count?.remove();
+  focusTitle?.remove();
+  if (focusGrid) {
+    focusGrid.classList.add("collapsible-list-body");
+    const list = focusGrid.querySelector('[data-list-key="interdisciplinaryFocusPositions"]');
+    if (list) list.open = false;
+  }
+  addBlock("focus", tile("Фокусы междисциплинарного подхода", [period], focusValue, "позиций выполнено"), focusGrid);
+  const revenueBody = revenueMetric?.nextElementSibling;
+  const revenueValue = revenueMetric?.querySelector(".tracked-value");
+  const revenueGoal = revenueMetric?.querySelector(".tracked-goal")?.textContent;
+  if (revenueValue) revenueValue.className = `appointment-conversion-summary-value ${revenueMetric.className}`.replace("tracked-metric", "").trim();
+  if (revenueBody) {
+    revenueBody.classList.add("collapsible-list-body");
+    const list = revenueBody.querySelector('[data-list-key="completedReferralDetails"]');
+    if (list) list.open = true;
+  }
+  const revenueNotes = revenueMetric ? [
+    revenue.querySelector("p")?.textContent.split(" · ")[0],
+    revenueMetric.querySelector(".tracked-note")?.textContent,
+  ] : ["Нет выполненных направлений в «Выработке»."];
+  addBlock("revenue", tile("Выполненные направления за месяц", revenueNotes, revenueValue, ["доля в общей выработке", revenueGoal].filter(Boolean).join(" · ")), revenueBody);
+  revenue?.remove();
+  const note = conversionMetric?.querySelector(".tracked-note")?.textContent;
+  const goal = conversionMetric?.querySelector(".tracked-goal")?.textContent;
+  const convertedSummary = tile("Конверсия назначений", [[period, note?.split(" · ").at(-1)].filter(Boolean).join(" · ")],
+    summary.querySelector(".appointment-conversion-summary-value"), goal);
+  summary.replaceWith(convertedSummary);
+  conversion.dataset.v3Section = "conversion";
+  conversion.open = false;
+  if (breakdown) breakdown.open = false;
+  if (note && conversionMetric) {
+    const method = document.createElement("p");
+    method.className = "small muted v3-method";
+    method.textContent = note.split(" · ")[0];
+    conversionMetric.replaceWith(method);
+  }
+}
 // Previous HTML already contains review totals: reorder it without altering values.
 for (const table of document.querySelectorAll(".reputation-report table")) {
   const header = [...table.rows].find(row => [...row.cells].some(cell => cell.textContent.trim() === "Всего отзывов"));
