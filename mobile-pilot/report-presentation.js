@@ -6,6 +6,7 @@
     "Возвращаемость первички за 3 месяца": ["Возвращаемость первички", "за 3 месяца"],
     "Возвращаемость первички за 6 месяцев": ["Возвращаемость первички", "за 6 месяцев"],
     "Активные пациенты": ["Активные", "пациенты"],
+    "Активные лояльные": ["Активные", "лояльные"],
     "Потерянные пациенты": ["Потерянные", "пациенты"],
     "Загрузка отделения за месяц": ["Загрузка отделения", "за месяц"],
     "К прошлому месяцу": ["К прошлому", "месяцу"],
@@ -90,10 +91,10 @@
     return table ? `<details class="chart-data"${combined ? " data-device-history-summary" : ""}><summary>Точные значения по месяцам</summary><div class="chart-data-scroll">${table}</div></details>` : "";
   }
   const clientBaseGroups = [
-    { key: "active", label: "Активные лояльные", color: "#16a34a", lowerBetter: false },
-    { key: "loyalSleep", label: "Лояльные спящие", color: "#94a3b8", lowerBetter: true },
-    { key: "newRisk", label: "Новые в риске", color: "#d97706", lowerBetter: true },
-    { key: "lost", label: "Потерянные", color: "#dc2626", lowerBetter: true },
+    { key: "active", label: "Активные лояльные", color: "#afe7e9", lowerBetter: false },
+    { key: "loyalSleep", label: "Лояльные спящие", color: "#64748b", lowerBetter: true },
+    { key: "newRisk", label: "Новые в риске", color: "#fbbf24", lowerBetter: true },
+    { key: "lost", label: "Потерянные", color: "#a80000", lowerBetter: true },
   ];
   const overlappingClientBaseGroups = [
     { key: "loyal", label: "Лояльные", color: "#2563eb", lowerBetter: false },
@@ -104,14 +105,13 @@
   ];
   function clientBaseDefinitionsHtml(definitions) {
     const rules = definitions ? (definitions.rows?.length ? `<ul>${definitions.rows.map(([label, rule]) => `<li><b>${escape(label)}:</b> ${escape(rule.endsWith(".") ? rule : rule + ".")}</li>`).join("")}</ul>` : "") : `<ul>
-      <li><b>Лояльные:</b> не менее 4 визитов, последний визит не более 12 месяцев назад.</li>
-      <li><b>Активные:</b> не менее 4 визитов за последние 6 месяцев.</li>
-      <li><b>Новые, риск:</b> от 1 до 2 визитов, последний визит более 6 месяцев назад.</li>
-      <li><b>Лояльные, спящие:</b> не менее 4 визитов, последний визит более 6 месяцев назад.</li>
-      <li><b>Потерянные:</b> от 1 до 2 визитов, последний визит более 12 месяцев назад.</li></ul>`;
+      <li><b>Активные лояльные:</b> достигли порога лояльности, последний визит в пределах срока активности.</li>
+      <li><b>Лояльные спящие:</b> достигли порога лояльности, последний визит за пределами срока активности.</li>
+      <li><b>Новые в риске:</b> не достигли порога лояльности, срок потери ещё не превышен.</li>
+      <li><b>Потерянные:</b> последний визит за пределами срока потери, с учётом настройки потери лояльных.</li></ul>`;
     return `<section class="client-base-table-note small muted" data-client-base-definitions><h3>Что означают группы?</h3>${rules}
       ${definitions?.note ? `<p>${escape(definitions.note)}</p>` : ""}
-      <p>Проценты считаются от общей клиентской базы. Группы могут пересекаться. Если порог превышает выбранный период, группа скрывается и ноль не подставляется. Для активных нужна точная выгрузка за ${definitions ? "период из настроек" : "6 месяцев"}.</p></section>`;
+      <p>Каждый пациент относится ровно к одной из четырёх групп. Проценты считаются от всей базы выбранного периода; сумма групп равна общей базе. Число визитов берётся из выбранной выгрузки, давность — с последнего визита. Пороги задаются в настройках специализации.</p></section>`;
   }
   const primarySourceGroups = ["Все рекомендации", "Интернет", "Агрегаторы", "Социальные сети", "Прочее"]
     .map((label, i) => ({ label, color: ["#16a34a", "#2563eb", "#7c3aed", "#d97706", "#94a3b8"][i] }));
@@ -184,12 +184,12 @@
       groups, title: "Источники первичных пациентов", missingText: "Для общей разбивки нужны данные по всем врачам выборки.",
     })}</div>`;
   }
-  function specializationPrimarySummaryHtml(rows, counts) {
+  function specializationPrimarySummaryHtml(rows, counts, { tableId = "tblSpecPrimary", totalLabel = null } = {}) {
     const lastRow = rows.at(-1);
-    const total = lastRow && /^Итого по (?:специализации|выборке)$/i.test(lastRow[0]) ? lastRow : null;
+    const total = lastRow && (lastRow[0] === totalLabel || /^Итого по (?:специализации|выборке)$/i.test(lastRow[0])) ? lastRow : null;
     const doctors = total ? rows.slice(0, -1) : rows;
     return `<div class="specialization-primary-summary${counts ? " has-sources" : ""}" data-specialization-primary-summary>
-      <table class="data specialization-primary-table" id="tblSpecPrimary"><thead><tr><th scope="col">Специалист</th><th scope="col" class="num">Первичных</th></tr></thead>
+      <table class="data specialization-primary-table" id="${escape(tableId)}"><thead><tr><th scope="col">Специалист</th><th scope="col" class="num">Первичных</th></tr></thead>
       <tbody>${doctors.map(([name, count]) => `<tr><td>${escape(name)}</td><td class="num">${escape(count)}</td></tr>`).join("")}</tbody>
       ${total ? `<tfoot><tr><th scope="row">${escape(total[0])}</th><td class="num">${escape(total[1])}</td></tr></tfoot>` : ""}</table>
       ${counts ? specializationPrimarySourcesHtml(counts) : ""}</div>`;

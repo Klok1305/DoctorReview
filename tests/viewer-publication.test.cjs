@@ -375,7 +375,7 @@ test("renderer sanitizes Viewer HTML before hashing pages and the service verifi
     /Содержимое страницы не соответствует её идентификатору/);
 });
 
-test("Viewer imports legacy format 3 into an atomic catalog generation", async t => {
+test("Viewer retries temporary Windows locks and imports legacy format 3 into an atomic catalog generation", async t => {
   const { root, database } = fixture(t);
   database.setViewerAdminPin("654321");
   database.updateViewerDoctorAccess({ doctorId: "d1", active: true, pin: "1357" });
@@ -388,7 +388,18 @@ test("Viewer imports legacy format 3 into an atomic catalog generation", async t
   fs.mkdirSync(storageRoot, { recursive: true });
   const viewer = new ViewerStorageService({ configPath: path.join(root, "legacy-viewer-config.json") });
   viewer.setStorageRoot(storageRoot);
-  const imported = await viewer.importPackageFile(archive, { bootstrapPin: "654321" });
+  const originalRename = fs.renameSync;
+  let temporaryLocks = 0, imported;
+  fs.renameSync = (source, destination) => {
+    if (String(source).includes(".staging-") && temporaryLocks < 2) {
+      temporaryLocks++;
+      throw Object.assign(new Error("temporary Windows directory lock"), { code: "EPERM" });
+    }
+    return originalRename(source, destination);
+  };
+  try { imported = await viewer.importPackageFile(archive, { bootstrapPin: "654321" }); }
+  finally { fs.renameSync = originalRename; }
+  assert.equal(temporaryLocks, 2);
   assert.ok(imported.generationId);
   assert.equal(JSON.parse(fs.readFileSync(path.join(storageRoot, "_viewer", "current.json"), "utf8")).generationId, imported.generationId);
   const report = viewer.readReport(viewer.doctorLogin({ doctorId: "d1", pin: "1357" }), {

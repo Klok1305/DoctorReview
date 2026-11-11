@@ -211,11 +211,6 @@ function reportHelpBody(section) {
 }
 for (const section of document.querySelectorAll('.viewer-dashboard-snapshot [data-vector-key="v4"][data-client-base-methodology="partition-v1-36m"]')) {
   if (section.querySelector('.kb-summary-card[data-client-base-group="loyal"]')) continue;
-  if (!section.querySelector("[data-client-base-legacy-note]")) {
-    const note = document.createElement("p"); note.className = "notice blue"; note.dataset.clientBaseLegacyNote = "";
-    note.textContent = "Этот отчёт сохранён с прежними четырьмя группами. Для пяти групп и сравнения по единой методике сформируйте новую публикацию в обновлённом Админ.";
-    section.querySelector(".vhead,h3")?.insertAdjacentElement("afterend", note);
-  }
   const help = reportHelpBody(section);
   for (const note of section.querySelectorAll('[data-client-base-methodology-note], .kb-source, .kb-vector-key-note, .kb-group-rules, .kb-action')) {
     if (!note.closest("[data-report-help]")) help.appendChild(note);

@@ -60,24 +60,24 @@ function cloudDoctorReport(doctorId, monthKey, comments) {
   const result = computeMetrics(doctorId, monthKey), profile = profileForDoctor(doctorId);
   const report = buildMobilePublicationPeriod(doctorId, monthKey, result,
     doctorHasDashboardData(doctorId, prevMonthKey(monthKey)) ? computeMetrics(doctorId, prevMonthKey(monthKey)) : null, comments, { includeDynamics: false });
-  const groups = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+  const groups = ["active", "loyalSleep", "newRisk", "lost"];
   Object.assign(report.vectors[3], {
-    methodologyId: "report-overlap-v1", scoreMethodologyId: "legacy-overlap-v1",
-    methodologyLabel: "Единые пять пересекающихся групп врача и специализации. Балл В4 использует сохранённые нормативы.",
-    detail: "Точное окно базы выбирается вручную. Для активных нужны визиты за срок из настроек специализации.",
+    methodologyId: "report-partition-v1", scoreMethodologyId: "legacy-overlap-v1",
+    methodologyLabel: "Единые четыре непересекающиеся группы во всех отчётах. Балл В4 использует сохранённые нормативы.",
+    detail: "Четыре группы рассчитываются по тем же правилам, что на графике динамики. По умолчанию выбрана база за 36 месяцев.",
     sections: [clientBaseDefinitionSection(profile), clientBasePartitionHistorySection(doctorId, monthKey)],
-    windows: [12, 6, 24, 36].map(window => {
+    windows: [36, 6, 12, 24].map(window => {
       const base = reportClientBaseSummary(doctorId, monthKey, window);
       const previous = reportClientBaseSummary(doctorId, prevMonthKey(monthKey), window);
       const series = adminClientBaseSeries(doctorId, monthKey, window);
       const visible = groups.filter(group => base?.groupAvailable[group]);
-      return { id: String(window), label: `${window} мес.`, period: `Точное окно ${window} месяцев`, methodologyId: "report-overlap-v1", sections: [{
+      return { id: String(window), label: `${window} мес.`, period: `Точное окно ${window} месяцев`, methodologyId: "report-partition-v1", sections: [{
         title: "Клиентская база", note: !base ? `Нет точной выгрузки за ${window} месяцев. Другой период не подставляется.`
-          : !base.groupAvailable.active ? `Неполные данные: для активных нужно выбрать окно не короче ${base.activeWindow} мес. и загрузить «Давность посещений» ровно за ${base.activeWindow} мес.` : "",
+          : "",
         metrics: [mobilePublicationMetric("Общая база", fmtNum(base?.total), previous && base ? mobilePublicationPercentChange(previous.total ? (base.total - previous.total) / previous.total * 100 : null) : "Нет данных за предыдущий месяц"),
           ...visible.map(group => mobilePublicationMetric(clientBaseGroupLabel(group), fmtPct(clientBaseGroupPct(base, group)), `${fmtNum(base.seg[group])} чел. · ${clientBaseShareMovement(clientBaseGroupPct(base, group), previous?.groupAvailable[group] ? clientBaseGroupPct(previous, group) : null)}`))],
         columns: ["Группа", "Пациенты", "Доля", "Условие"], rows: visible.map(group => [clientBaseGroupLabel(group), fmtNum(base.seg[group]), fmtPct(clientBaseGroupPct(base, group)), clientBaseGroupDescription(base, group)]),
-        charts: [mobilePublicationChart("overlap-shares", "Доли по месяцам", "line", series.months.map(monthLabel),
+        charts: [mobilePublicationChart("partition-shares", "Доли по месяцам", "line", series.months.map(monthLabel),
           groups.filter(group => series.bases.some(value => value?.groupAvailable[group])).map(group => ({ label: clientBaseGroupLabel(group), values: series.bases.map(value => value?.groupAvailable[group] ? clientBaseGroupPct(value, group) : null) })), "%")].filter(Boolean),
       }] };
     }),
@@ -100,7 +100,7 @@ function cloudDoctorReport(doctorId, monthKey, comments) {
     rows: [...primary.buckets.map(bucket => [bucket.visits === 3 ? "3 и более" : String(bucket.visits), fmtNum(bucket.count), fmtPct(bucket.share)]),
       ...(primary.unknownVisits ? [["Неполные данные", fmtNum(primary.unknownVisits), fmtPct(primary.patients.length ? primary.unknownVisits / primary.patients.length * 100 : null)]] : [])],
   });
-  report.dynamics = cloudReportDynamics(monthKey, key => doctorHasDashboardData(doctorId, key) ? computeMetrics(doctorId, key) : null,
+  report.dynamics = cloudReportDynamics(monthKey, key => doctorHasDashboardData(doctorId, key) ? doctorReportMetrics(doctorId, key) : null,
     profile, `doctor|${monthKey}|${doctorId}`);
   const scoreChart = report.dynamics?.charts.find(chart => chart.id === "scores");
   for (const vector of report.vectors) {
@@ -209,7 +209,7 @@ function cloudGroupReport(item, monthKey, comments, doctors) {
     total.q += group.q || 0; total.s += group.s || 0; revenueGroups.set(name, total);
   }
   const base = result.akb.primary;
-  const groups = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+  const groups = ["active", "loyalSleep", "newRisk", "lost"];
   const missing = Object.entries(result.coverage).filter(([, value]) => !value.complete).map(([key, value]) => `${key}: данные ${value.coveredDoctors} из ${value.expectedDoctors} врачей`);
   const monthlyTrafficRow = (label, { traffic }) => [label, fmtNum(traffic.visits), fmtNum(traffic.patients), fmtNum(traffic.freq, 2)];
   const vectorSections = [
@@ -227,7 +227,7 @@ function cloudGroupReport(item, monthKey, comments, doctors) {
       ...[1, 3].map(window => section(`Назначения · ${window} мес.`, [metric("Назначено", result.cross.naz[window]?.totals.assigned),
         metric("Выполнено + продано", result.cross.naz[window]?.totals.resultQ), metric("Конверсия", result.cross.naz[window]?.totals.conv, fmtPct)]))],
     [section("Клиентская база", [metric("Общая база", base?.total), metric("Активная база", base?.activeBasePct, fmtPct), metric("Потерянные", base?.lostPct, fmtPct)], {
-      note: "Сводная совместимая методика: группы могут пересекаться. При разных окнах или неполном покрытии доли не рассчитываются.",
+      note: "Четыре непересекающиеся группы. При неполном покрытии доли не рассчитываются.",
       columns: ["Группа", "Пациенты"], rows: groups.map(group => [clientBaseGroupLabel(group), fmtNum(base?.seg[group])]),
     })],
     [section("Лояльность", [metric("Расписание", result.loyalty.sched?.pct, fmtPct), metric("Собственная запись", result.loyalty.ownRec?.pct, fmtPct),
@@ -244,7 +244,7 @@ function cloudGroupReport(item, monthKey, comments, doctors) {
   const vectors = ["v1", "v2", "v3", "v4", "v5", "v6"].map((id, index) => ({ id, number: index + 1, title: VECTOR_META[id].name,
     score: Number.isFinite(result.vecAvg[id]) ? Math.round(result.vecAvg[id]) : null, delta: null, coverage: null, preliminary: false,
     detail: "Сводные показатели включённых врачей. Несопоставимые значения остаются незаданными.", sections: vectorSections[index] }));
-  vectors[3].methodologyId = "report-overlap-v1";
+  vectors[3].methodologyId = "report-partition-v1";
   vectors[3].sections = [clientBaseDefinitionsForDoctors(records.map(({ id }) => id))];
   if (specialization) {
     const history = specializationClientBaseHistory(monthKey, "all", "all", ids);
@@ -252,11 +252,11 @@ function cloudGroupReport(item, monthKey, comments, doctors) {
     vectors[3].sections.push({ title: "Динамика клиентской базы", charts: chart ? [chart] : [],
       note: chart ? "" : "Неполные данные: нет сопоставимых выгрузок «Давность посещений» за 36 месяцев." });
   }
-  vectors[3].windows = (specialization ? [36, 6, 12, 24] : [12, 6, 24, 36]).map(window => {
+  vectors[3].windows = [36, 6, 12, 24].map(window => {
     const bases = records.map(({id}) => ({ id, base: reportClientBaseSummary(id, monthKey, window), previous: reportClientBaseSummary(id, prevMonthKey(monthKey), window) }));
     const visible = groups.filter(group => bases.some(row => row.base?.groupAvailable[group]));
     return { id: String(window), label: `${window} мес.`, period: `Точное окно ${window} месяцев`, sections: [{ title: "Клиентская база · сравнение врачей",
-      note: "Единая методика с личным В4. Для активных нужна выгрузка за срок из настроек специализации.",
+      note: "Те же четыре группы, что в личном В4 и на графике динамики. Каждый пациент входит ровно в одну группу.",
       columns: ["Врач", "Период", "Общая база", "Изменение базы", ...visible.map(clientBaseGroupLabel)],
       rows: bases.map(({id, base, previous}) => [doctorName(id), `${window} мес.`, fmtNum(base?.total), mobilePublicationPercentChange(base && previous?.total ? (base.total - previous.total) / previous.total * 100 : null),
         ...visible.map(group => base?.groupAvailable[group] ? `${fmtNum(base.seg[group])} · ${fmtPct(clientBaseGroupPct(base, group))}` : "—")]),

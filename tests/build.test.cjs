@@ -240,7 +240,7 @@ test("assembled HTML is reproducible and complete", () => {
   assert.match(actual, /Справка о расчётах/);
   assert.match(actual, /openClientSegment/);
   assert.match(actual, /data-client-base-definitions/);
-  assert.match(actual, /Четыре группы для графика В4 за 36 месяцев/);
+  assert.match(actual, /Четыре группы клиентской базы/);
   assert.doesNotMatch(actual, /id="np_(?:loyal|active|newRisk|sleep|lost)(?:Visits|M|Within)"/);
   assert.match(actual, /clientBaseRequiredWindow/);
   assert.match(actual, /reportClientBaseSummary/);
@@ -654,14 +654,14 @@ test("appointment conversion block starts compact and parent groups hide their w
   assert.match(css, /\.appointment-conversion-body\s*\{/);
 });
 
-test("Admin client-base vector uses five shared groups and a manually selected exact window", () => {
+test("Admin client-base vector uses four exclusive groups and a manually selected exact window", () => {
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
   const vector = ui.match(/\/\* ---- В4 Клиентская база ---- \*\/[\s\S]*?\/\* ---- В5 Лояльность ---- \*\//);
 
   assert.ok(vector);
   assert.doesNotMatch(vector[0], /disabled:/);
-  assert.match(vector[0], /const groupOrder = \["loyal", "active", "newRisk", "loyalSleep", "lost"\]/);
+  assert.match(vector[0], /const groupOrder = \["active", "loyalSleep", "newRisk", "lost"\]/);
   assert.match(vector[0], /reportClientBaseSummary\(UI.docId, mk, UI.kbWin\)/);
   assert.doesNotMatch(vector[0], /kbWinSeg|Остальные/);
   assert.match(vector[0], /filter\(group => kb\.groupAvailable\[group\]\)/);
@@ -675,7 +675,7 @@ test("Admin client-base vector uses five shared groups and a manually selected e
   for (const label of ["Общая база", "отсутствие выгрузки не означает ноль пациентов"]) {
     assert.match(vector[0], new RegExp(label));
   }
-  for (const label of ["Лояльные", "Активные", "Новые, риск", "Лояльные, спящие", "Потерянные"]) assert.match(ui, new RegExp(label));
+  for (const label of ["Активные лояльные", "Лояльные спящие", "Новые в риске", "Потерянные"]) assert.match(ui, new RegExp(label));
   assert.match(vector[0], /openClientSegment\('newRisk'\)/);
   assert.match(vector[0], /openClientSegment\('loyalSleep'\)/);
   assert.match(vector[0], /clientBaseDefinitionsHtml/);
@@ -834,7 +834,7 @@ test("specialization service heatmap gives every focus an equal-width column", (
   assert.match(css, /\.heat-cell \{[\s\S]*?width: 100%;/);
 });
 
-test("client-base table shows overlapping groups and omits unavailable values", () => {
+test("client-base table shows four exclusive groups and omits unavailable values", () => {
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
   const table = ui.match(/\/\/ Клиентская база: период выбирается вручную[\s\S]*?\/\/ профайлы специалистов/);
@@ -850,9 +850,9 @@ test("client-base table shows overlapping groups and omits unavailable values", 
   assert.match(table[0], /clientBaseShareCellHtml\(clientBaseGroupPct\(kb, key\)/);
   assert.doesNotMatch(table[0], /от A|база A/);
   const presentation = fs.readFileSync(path.join(root, "mobile-pilot/report-presentation.js"), "utf8");
-  assert.match(presentation, /Проценты считаются от общей клиентской базы/);
-  assert.match(presentation, /Группы могут пересекаться/);
-  assert.match(presentation, /ноль не подставляется/);
+  assert.match(presentation, /Проценты считаются от всей базы выбранного периода/);
+  assert.match(presentation, /Каждый пациент относится ровно к одной из четырёх групп/);
+  assert.match(presentation, /сумма групп равна общей базе/);
   assert.match(table[0], /compactBaseTrend\(kb\.total,/);
   assert.ok(trendMatch);
   const compactBaseTrend = new Function("kbTrendMarkup", `${trendMatch[0]}; return compactBaseTrend;`)((current, previous, lower, mode) => `${current}|${previous}|${lower}|${mode}`);
@@ -1127,11 +1127,11 @@ test("Viewer doctor HTML mirrors the Admin client-base methodology and keeps pro
   assert.match(adminUi, /function viewerClientBaseHtml\(target, periodKey\)/);
   assert.match(adminUi, /target\.tab !== "doctor"/);
   assert.match(adminUi, /const kb = reportClientBaseSummary\(doctorId, periodKey, UI.kbWin\)/);
-  assert.match(adminUi, /data-client-base-methodology="report-overlap-v1"/);
+  assert.match(adminUi, /data-client-base-methodology="report-partition-v1"/);
   assert.match(adminUi, /reportHelpHtml\(clientBaseHelp/);
   assert.match(adminUi, /originalClientBase\.insertAdjacentHTML\("beforeend", clientBase\)/);
   assert.match(adminUi, /Источник данных:[\s\S]*periodStr\(kb\.period\)/);
-  assert.match(adminUi, /const groups = partitioned \? \["active", "loyalSleep", "newRisk", "lost"\]/);
+  assert.match(adminUi, /const groups = \["active", "loyalSleep", "newRisk", "lost"\]/);
   assert.match(adminUi, /data-viewer-patient-row/);
   assert.match(adminUi, /data-viewer-patient-search/);
   assert.match(adminUi, /data-viewer-patient-segment/);

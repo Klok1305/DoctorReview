@@ -69,7 +69,7 @@ async function main() {
   const sample = fs.existsSync(samplePath) ? JSON.parse(fs.readFileSync(samplePath, "utf8")) : null;
   const samplePage = sample?.pages.filter(page => page.kind === "doctor"
     && page.report?.numbers?.metrics.some(metric => metric.id === "primary.year.count" && metric.value > 0)
-    && page.report.vectors[3]?.windows?.some(window => window.sections.some(section => section.charts?.some(chart => chart.id === "overlap-shares")))).at(-1)
+    && page.report.vectors[3]?.windows?.some(window => window.sections.some(section => section.charts?.some(chart => chart.id === "partition-shares")))).at(-1)
     || sample?.pages.find(page => page.kind === "doctor");
   const html = ((samplePage?.report ? require("../mobile-server/cloud-report-renderer.cjs").renderCloudReport(samplePage.report, samplePage.title) : samplePage?.html)
     || '<div class="viewer-dashboard-snapshot"><div class="card"><h2>Синтетический отчёт</h2><p>43 визита</p><p>Комментарий администратора</p></div></div>')
@@ -193,7 +193,7 @@ async function main() {
     assert.equal(await legacyBase.locator("[data-client-base-methodology-note]").isVisible(), false);
     assert.equal(await legacyBase.locator("[data-report-help]").evaluate(element => element.open), false);
     assert.doesNotMatch(await legacyBase.innerText(), /partition-v1|legacy-overlap/);
-    assert.equal(await legacyBase.locator("[data-client-base-legacy-note]").isVisible(),true);
+    assert.equal(await legacyBase.locator("[data-client-base-legacy-note]").count(),0);
     assert.deepEqual(await frame.locator("[data-legacy-reputation-fixture] tr td:first-child").allTextContents(),["Врач А","Врач Б","Врач В"]);
     assert.equal(await legacyBase.locator('tr[data-client-base-group="active"] td.period-best').textContent(), "20%");
     assert.equal(await legacyBase.locator('tr[data-client-base-group="lost"] td.period-best').textContent(), "20%");
@@ -384,18 +384,18 @@ async function main() {
       await clientBase.locator("[data-client-base-definitions]").waitFor();
       const sourceBase = samplePage.report.vectors[3].windows[0].sections[0];
       assert.equal(await clientBase.locator("[data-client-base-composition]").count(), 0);
-      const visibleBase = clientBase.locator('[data-client-base-window-panel="12"]');
-      const history = sourceBase.charts.find(chart=>chart.id==='overlap-shares');
+      const visibleBase = clientBase.locator('[data-client-base-window-panel="36"]');
+      const history = sourceBase.charts.find(chart=>chart.id==='partition-shares');
       assert.deepEqual(await visibleBase.locator("[data-client-base-share-table] tbody tr").evaluateAll(rows=>rows.map(row=>JSON.parse(row.dataset.periodValues))),history.series.map(series=>series.values));
       assert.equal(await clientBase.locator("[data-report-help]").evaluate(element=>element.open), false);
-      assert.equal(await visibleBase.locator("[data-client-base-share-table] tbody tr").count(), 5);
-      await clientBase.locator("[data-client-base-window]").selectOption("36");
+      assert.equal(await visibleBase.locator("[data-client-base-share-table] tbody tr").count(), 4);
+      await clientBase.locator("[data-client-base-window]").selectOption("12");
       assert.equal(await visibleBase.isVisible(),false);
-      assert.equal(await clientBase.locator('[data-client-base-window-panel="36"]').isVisible(),true);
+      assert.equal(await clientBase.locator('[data-client-base-window-panel="12"]').isVisible(),true);
       await clientBase.locator("[data-client-base-window]").selectOption("6");
       const shortRows=clientBase.locator('[data-client-base-window-panel="6"] .cloud-section').first().locator('table').first().locator('tbody tr');
-      assert.equal(await shortRows.count(),3);
-      assert.doesNotMatch(await shortRows.allTextContents().then(rows=>rows.join("|")),/^Лояльные|Потерянные/);
+      assert.equal(await shortRows.count(),4);
+      assert.match(await shortRows.allTextContents().then(rows=>rows.join("|")),/Активные лояльные[\s\S]*Лояльные спящие[\s\S]*Новые в риске[\s\S]*Потерянные/);
       await clientBase.locator("[data-client-base-window]").selectOption("12");
       assert.equal(await clientBase.locator('.report-chart[data-chart*="partition-shares"]').count(), 0);
       const partitionHistory = clientBase.locator("[data-client-base-partition-history]");

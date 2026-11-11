@@ -56,7 +56,7 @@ test("cloud JSON exports all periods without DOM/charts, retains numeric Admin r
   assert.equal(number(personal, "traffic.patients"), vm.runInContext("computeMetrics('d1','2026-03').traffic.patients", context));
   assert.equal(number(personal, "economy.sales"), 1000);
   assert.equal(personal.report.overallDelta, null, "February gap must not compare March to January");
-  assert.equal(personal.report.vectors[3].methodologyId, "report-overlap-v1");
+  assert.equal(personal.report.vectors[3].methodologyId, "report-partition-v1");
   assert.equal(personal.report.dynamics.conclusion, "Ручной вывод\nНоль & пропуск А");
   const money = personal.report.dynamics.charts.find(chart => chart.id === "money");
   assert.equal(money.labels.length, 3); assert.equal(money.series[0].values[1], null);
@@ -93,7 +93,7 @@ test("online doctor and group graphs keep the entire calendar year even when Jan
   assert.equal(payload.pages.filter(page => page.periodKey === '2026-09').length, 6);
 });
 
-test("doctor V4 keeps overlapping shares and shows a separate four-group stack from exact 36-month data", async () => {
+test("doctor V4 uses the same four groups in cards, shares and the exact 36-month stack", async () => {
   const context = fixtureContext();
   vm.runInContext(`
     DB.settings.depts.X.clientBasePartition = { loyalVisits: 3, activeM: 6, lostM: 12, lostAnyVisits: false };
@@ -115,7 +115,7 @@ test("doctor V4 keeps overlapping shares and shows a separate four-group stack f
   assert.deepEqual(chart.series.map(series => series.label), ["Активные лояльные", "Лояльные спящие", "Новые в риске", "Потерянные"]);
   assert.deepEqual(chart.series.map(series => series.values), Array.from({ length: 4 }, () => [1, null, null]));
   assert.match(history.note, /Февраль 2026, Март 2026/);
-  assert.ok(vector.windows.find(window => window.id === "12").sections[0].charts.some(chart => chart.id === "overlap-shares"));
+  assert.ok(vector.windows.find(window => window.id === "12").sections[0].charts.some(chart => chart.id === "partition-shares"));
   const html = renderCloudReport(personal.report, personal.title);
   assert.match(html, /data-client-base-share-table/);
   assert.deepEqual([...html.matchAll(/data-stack-total>(\d+)</g)].map(match => Number(match[1])), [4]);
@@ -143,10 +143,10 @@ test("online specialization shows monthly visit frequency and averages individua
   const html = renderCloudReport(page.report, page.title);
   const longWindow = html.split('data-client-base-window-panel="36"')[1];
   assert.match(longWindow, /Потерянные<\/span> <strong>25%<\/strong>/);
-  assert.match(longWindow, /Активные<\/span> <strong>0%<\/strong> <small>1 из 2 врачей/);
+  assert.match(longWindow, /Активные лояльные<\/span> <strong>37,5%<\/strong>/);
   assert.match(longWindow, /<strong class="client-base-cell-share">50%<\/strong><small class="client-base-cell-count">1 чел\./);
   const shortWindow = html.split('data-client-base-window-panel="6"')[1].split('data-client-base-window-panel="12"')[0];
-  assert.doesNotMatch(shortWindow, /Потерянные/);
+  assert.match(shortWindow, /Потерянные/);
   assert.equal(page.report.dynamics.charts.some(chart => chart.id === "scores"), false);
   const archived = JSON.parse(JSON.stringify(page));
   archived.report.dynamics.rows.push({ label: "Общий балл", values: ["78", "—", "80"], delta: "—" });
@@ -162,7 +162,7 @@ test("specialization charts January through the selected month using the 36-mont
   const context = fixtureContext();
   vm.runInContext(`
     DB.doctors.d2.specialization = 'X';
-    DB.settings.depts.X.clientBaseReport = { activeM: 12, activeVisits: 5, lostM: 15 };
+    DB.settings.depts.X.clientBasePartition = { activeM: 12, loyalVisits: 5, lostM: 15, lostAnyVisits: false };
     DB.months['2023-04'] = structuredMonth('2026-01');
     DB.months['2023-03'] = structuredMonth('2026-01');
     function structuredMonth(key) { return JSON.parse(JSON.stringify(DB.months[key])); }
@@ -191,8 +191,8 @@ test("specialization charts January through the selected month using the 36-mont
   assert.equal(report.dynamics.columns.length, 3);
   const doctor = payload.pages.find(page => page.doctorId === "d1" && page.periodKey === "2026-03").report;
   const personal = doctor.vectors[3].windows.find(window => window.id === "36").sections[0];
-  assert.deepEqual(Array.from(personal.rows.find(row => row[0] === "Активные").slice(1)), ["1", "50%", "не менее 5 визитов за последние 12 мес."]);
-  assert.match(renderCloudReport(report, "Специализация X", { kind: "specialization" }), /не менее 5 визитов за последние 12 мес/);
+  assert.deepEqual(Array.from(personal.rows.find(row => row[0] === "Активные лояльные").slice(1)), ["1", "50%", "не менее 5 визитов за 36 мес.; последний визит не более 12 мес. назад"]);
+  assert.match(renderCloudReport(report, "Специализация X", { kind: "specialization" }), /не менее 5 визитов в выбранной выгрузке/);
 
   const canvas = new Map();
   context.chart = (id, config) => canvas.set(id, config);

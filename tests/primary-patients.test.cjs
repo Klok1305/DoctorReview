@@ -165,7 +165,7 @@ test("V4 share series preserves missing calendar months and compares percentages
   assert.equal(vm.runInContext("clientBaseShareMovement(75,50)",c),'Доля выросла на 25 п.п.');
   assert.equal(vm.runInContext("clientBaseShareMovement(50,null)",c),'Нет данных за предыдущий месяц');
   const report=plain(vm.runInContext("cloudDoctorReport('d1','2026-03',[])",c));
-  const chart=report.vectors[3].windows[0].sections[0].charts.find(c=>c.id==='overlap-shares');
+  const chart=report.vectors[3].windows[0].sections[0].charts.find(c=>c.id==='partition-shares');
   assert.deepEqual(chart.series[0].values,[50,null,75]);
   const html = renderCloudReport(report, 'Врач');
   assert.match(html, /data-client-base-definitions/);
@@ -196,28 +196,37 @@ test("V4 circular composition includes exact counts/shares and handles empty, mi
   assert.doesNotMatch(presentation.reportHelpHtml('<p>Пояснение</p>'),/<details[^>]*\sopen/);
 });
 
-test("five report groups use fixed boundaries, overlap, exact windows and actual six-month visits", () => {
+test("all report groups use the same exclusive partition as the 36-month chart and retain exact windows", () => {
   const c=context();
   vm.runInContext(`const m=ensureMonth('2026-03');
     const rows=[{patientId:'a',name:'А',v:4,r:183,s:100},{patientId:'b',name:'Б',v:9,r:20,s:200},
       {patientId:'c',name:'В',v:4,r:184,s:300},{patientId:'d',name:'Г',v:2,r:366,s:400},
       {patientId:'e',name:'Д',v:2,r:183,s:500},{patientId:'f',name:'Е',v:4,r:365,s:600}];
     m.kb.d1={12:{clients:rows},36:{clients:rows},6:{clients:[{patientId:'a',name:'А',v:4,r:183},{patientId:'b',name:'Б',v:3,r:20},{patientId:'e',name:'Д',v:2,r:183}]}};
-    DB.settings.depts['Косметология'].loyalVisits=9;
+    DB.settings.departmentProfiles['Косметология'].clientBasePartition={loyalVisits:4,activeM:6,lostM:12,lostAnyVisits:false};
+    DB.settings.depts['Косметология'].clientBaseReport={activeVisits:50,loyalVisits:50};
     clearMetricsCache();`,c);
   const base=plain(vm.runInContext("reportClientBaseSummary('d1','2026-03',12)",c));
-  assert.deepEqual(Object.fromEntries(['loyal','active','newRisk','loyalSleep','lost'].map(k=>[k,base.seg[k]])),{loyal:4,active:1,newRisk:1,loyalSleep:2,lost:1});
-  assert.ok(Math.abs(base.activeBasePct-100/6)<1e-10);
+  assert.deepEqual(base.seg,{active:2,loyalSleep:2,newRisk:1,lost:1});
+  assert.equal(Object.values(base.seg).reduce((sum,count)=>sum+count,0),base.total);
+  assert.ok(Math.abs(base.activeBasePct-200/6)<1e-10);
   const rows=plain(vm.runInContext("reportClientBaseSummary('d1','2026-03',12).clientRows",c));
-  assert.deepEqual(rows[0].groups,['loyal','active']);
-  assert.deepEqual(rows[2].groups,['loyal','loyalSleep']);
-  assert.deepEqual(rows[3].groups,['newRisk','lost']);
-  assert.equal(rows[1].groups.includes('active'),false,'9 visits over a year do not mean 4 in six months');
+  assert.deepEqual(rows[0].groups,['active']);
+  assert.deepEqual(rows[2].groups,['loyalSleep']);
+  assert.deepEqual(rows[3].groups,['lost']);
+  assert.deepEqual(rows[1].groups,['active']);
+  assert.ok(rows.every(row=>row.groups.length===1));
+  const long=plain(vm.runInContext("reportClientBaseSummary('d1','2026-03',36)",c));
+  assert.deepEqual(long.seg,plain(vm.runInContext("adminClientBaseSummary('d1','2026-03').seg",c)));
+  const history=plain(vm.runInContext("clientBasePartitionHistorySection('d1','2026-03')",c));
+  assert.deepEqual(history.charts[0].series.map(series=>series.values.at(-1)),Object.values(long.seg));
+  assert.deepEqual(plain(vm.runInContext("clientBaseDefinitionSection(deptParams('d1')).rows.map(row=>row[0])",c)),presentation.clientBaseGroups.map(group=>group.label));
   const short=plain(vm.runInContext("reportClientBaseSummary('d1','2026-03',6)",c));
-  assert.equal(short.groupAvailable.loyal,false);assert.equal(short.seg.loyal,null);assert.equal(short.seg.lost,null);
+  assert.deepEqual(short.seg,{active:1,loyalSleep:0,newRisk:2,lost:0});
+  assert.deepEqual(Object.keys(short.groupAvailable),['active','loyalSleep','newRisk','lost']);
   assert.equal(vm.runInContext("reportClientBaseSummary('d1','2026-03',24)",c),null,'no window substitution');
   vm.runInContext("delete DB.months['2026-03'].kb.d1[6]; invalidateMetricsCache({months:['2026-03']});",c);
-  assert.equal(vm.runInContext("reportClientBaseSummary('d1','2026-03',12).activeBasePct",c),null);
+  assert.ok(Math.abs(vm.runInContext("reportClientBaseSummary('d1','2026-03',12).activeBasePct",c)-200/6)<1e-10);
 });
 
 test("primary source pies share exact counts and whole-cohort percentages, with unknown/ambiguous sources retained", () => {
@@ -270,6 +279,91 @@ test("source mapping rejects conflicting duplicates and mixed categories without
   assert.match(empty, /<tfoot>[\s\S]*Итого по специализации<\/th><td class="num">0<\/td>/);
   assert.match(empty, /В этом периоде первичных пациентов нет/);
   assert.doesNotMatch(empty, /<svg/);
+});
+
+function departmentPrimaryFixture(c) {
+  vm.runInContext(`
+    DB.settings.departments = { 'Отделение А': ['X'], 'Отделение Б': ['X'] };
+    DB.settings.depts.X = defaultProfile();
+    DB.doctors = Object.fromEntries(['d1','d2','d3','old'].map((id, i) => [id, {
+      name: 'Врач ' + i, aliases: [], department: id === 'd3' ? 'Отделение Б' : 'Отделение А',
+      specialization: 'X', structureManual: true,
+    }]));
+    DB.months = Object.fromEntries(['2025-12','2026-01','2026-03','2026-04'].map(key => [key, emptyMonth()]));
+    const p = (name, visits = 1, source = 'Рекомендация', primary = 1) => ({ name, visits, source, primary });
+    for (const [key, month] of Object.entries(DB.months)) {
+      for (const id of ['d1','d2','d3', ...(key === '2026-01' ? ['old'] : [])]) {
+        month.vyrabotka[id] = { items: [{ n: 'Приём', q: 1, sOwn: 100, goods: false }] };
+      }
+      month.primaryPatients = { perDoc: {
+        d1: { patients: [p('Общий Пациент'), p('  ОБЩИЙ   ПАЦИЕНТ  '), p('Повторный Пациент', 3, '', 0)] },
+        d2: { patients: [p('Общий Пациент', 2), p('Второй Пациент', 1, 'Сайт')] },
+        d3: { patients: [p('Пациент другого отделения')] },
+        ...(key === '2026-01' ? { old: { patients: [p('Пациент бывшего врача')] } } : {}),
+      } };
+    }
+    UI.departmentMonth = '2026-03'; UI.departmentFilter = 'Отделение А';
+    clearMetricsCache();
+  `, c);
+}
+
+test("department primary block deduplicates patients, respects departments and uses each month's doctors", () => {
+  const c = context(); departmentPrimaryFixture(c);
+  const activity = plain(vm.runInContext("departmentPrimaryPatientsView('2026-03', 'Отделение А')", c));
+  assert.deepEqual(activity.current.ids, ['d1', 'd2']);
+  assert.deepEqual(activity.current.primary.byDoctor, { d1: 1, d2: 2 });
+  assert.equal(activity.current.primary.total, 2);
+  assert.equal(activity.current.primary.frequent, 1);
+  assert.deepEqual(activity.current.primary.sourceCounts, [1,1,0,0,0]);
+  assert.deepEqual(activity.primaryChart.series[0].values, [3,null,2]);
+  assert.deepEqual(activity.primaryChart.series[1].values, [1,null,1]);
+  assert.equal(vm.runInContext("departmentPrimaryPatientsView('2026-03', 'all').current.primary.total", c), 3);
+  const html = vm.runInContext("departmentPrimaryPatientsHtml(departmentPrimaryPatientsView('2026-03'), '2026-03', 'Отделение А')", c);
+  assert.match(html, /id="tblDepartmentPrimary"/);
+  assert.match(html, /<tfoot>[\s\S]*Итого по отделению<\/th><td class="num">2<\/td>/);
+  assert.match(html, /id="chart-department-primary"/);
+  assert.match(html, /data-specialization-primary-sources[\s\S]*<svg/);
+  assert.doesNotMatch(html, /Общий Пациент|Врач 2|id="tblSpecPrimary"/);
+  vm.runInContext("viewerReportDoctorScope = new Set(['d1']);", c);
+  assert.equal(vm.runInContext("departmentPrimaryPatientsView('2026-03','all').current.primary.total", c), 1);
+});
+
+test("department primary block distinguishes missing, invalid and empty reports", () => {
+  const c = context(); departmentPrimaryFixture(c);
+  vm.runInContext("delete DB.months['2026-03'].primaryPatients.perDoc.d2;", c);
+  let activity = plain(vm.runInContext("departmentPrimaryPatientsView('2026-03')", c));
+  assert.equal(activity.current.primary.total, null);
+  assert.equal(activity.current.primary.byDoctor.d2, null);
+  assert.deepEqual(activity.current.primary.sourceCounts, [null,null,null,null,null]);
+  assert.deepEqual(activity.primaryChart.series[0].values, [3,null,null]);
+  let html = vm.runInContext("departmentPrimaryPatientsHtml(departmentPrimaryPatientsView('2026-03'), '2026-03', 'Отделение А')", c);
+  assert.match(html, /Данные есть у 1 из 2 врачей/);
+  assert.match(html, /Итого по отделению<\/th><td class="num">—<\/td>/);
+  vm.runInContext("DB.months['2026-03'].primaryPatients.perDoc.d2 = {patients:[{name:'Ошибка',primary:null,visits:1}]};", c);
+  assert.equal(vm.runInContext("departmentPrimaryPatientsView('2026-03').current.primary.total", c), null);
+  vm.runInContext("for (const id of ['d1','d2']) DB.months['2026-03'].primaryPatients.perDoc[id] = {patients:[]};", c);
+  activity = plain(vm.runInContext("departmentPrimaryPatientsView('2026-03')", c));
+  assert.equal(activity.current.primary.total, 0);
+  assert.deepEqual(activity.primaryChart.series[0].values, [3,null,0]);
+  html = vm.runInContext("departmentPrimaryPatientsHtml(departmentPrimaryPatientsView('2026-03'), '2026-03', 'Отделение А')", c);
+  assert.match(html, /В этом периоде первичных пациентов нет/);
+  assert.doesNotMatch(html, /Данные есть у/);
+});
+
+test("department dashboard renders primary patients after the leaderboard and draws its chart", () => {
+  const c = context(); departmentPrimaryFixture(c);
+  const controls = new Map();
+  c.document.getElementById = id => {
+    if (!controls.has(id)) controls.set(id, { innerHTML: '', disabled: false });
+    return controls.get(id);
+  };
+  vm.runInContext(`renderDepartmentCharts = () => {}; renderSpecializationTrend = spec => { globalThis.drawnPrimaryChart = spec; };
+    renderDepartmentNow();`, c);
+  const html = controls.get('departmentBody').innerHTML;
+  assert.ok(html.indexOf('data-department-primary') > html.indexOf('doctor-score-leaderboard'));
+  assert.match(html, /Итого по отделению<\/th><td class="num">2<\/td>/);
+  assert.equal(c.drawnPrimaryChart.id, 'department-primary');
+  assert.deepEqual(Array.from(c.drawnPrimaryChart.series[0].values), [3,null,2]);
 });
 
 test("reputation defaults to total reviews descending, then name and ID; scores and missing totals do not reorder it", () => {

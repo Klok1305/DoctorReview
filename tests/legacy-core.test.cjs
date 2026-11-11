@@ -143,7 +143,7 @@ test("Admin September feedback preserves referral totals, item conversion, year 
   assert.equal(x.noDenominator, '—');
 });
 
-test("five-group Admin history uses the selected exact window and retains old patients and missing months", () => {
+test("four-group Admin history uses the selected exact window and retains old patients and missing months", () => {
   const context = createContext();
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   vm.runInContext(ui.slice(ui.indexOf("function adminYearMonths"), ui.indexOf("function dynamicsHtml")), context);
@@ -160,8 +160,8 @@ test("five-group Admin history uses the selected exact window and retains old pa
     return { ...series, settings: clientBasePartitionSettings(DB.settings.depts['Косметология']) };
   })()`, context);
   const x = JSON.parse(JSON.stringify(result));
-  assert.deepEqual(x.datasets.map(row => row.label), ['Лояльные', 'Активные', 'Лояльные, спящие', 'Новые, риск', 'Потерянные']);
-  assert.deepEqual(x.datasets.map(row => row.data[0]), [0, null, 0, 3, 2]);
+  assert.deepEqual(x.datasets.map(row => row.label), ['Активные лояльные', 'Лояльные спящие', 'Новые в риске', 'Потерянные']);
+  assert.deepEqual(x.datasets.map(row => row.data[0]), [1, 1, 1, 2]);
   assert.equal(x.totals[0], 5);
   assert.ok(x.datasets.every(row => row.data[1] === null));
   assert.equal(x.totals[1], null);
@@ -386,13 +386,13 @@ test("mobile publication preserves preliminary score coverage, missing sources a
   assert.equal(v4.preliminary, true);
   assert.deepEqual(plain.publication.methodologies, {
     score: "score-v1",
-    clientBase: "legacy-overlap-v1",
-    adminViewerClientBase: "report-overlap-v1",
+    clientBase: "report-partition-v1",
+    adminViewerClientBase: "report-partition-v1",
   });
-  assert.equal(v4.methodologyId, "legacy-overlap-v1");
+  assert.equal(v4.methodologyId, "report-partition-v1");
   assert.equal(v4.scoreMethodologyId, "legacy-overlap-v1");
-  assert.match(v4.methodologyLabel, /Мобильные группы используют сохранённые нормативы/);
-  assert.ok(v4.windows.every(window => window.methodologyId === "legacy-overlap-v1"));
+  assert.match(v4.methodologyLabel, /Единые четыре группы/);
+  assert.ok(v4.windows.every(window => window.methodologyId === "report-partition-v1"));
   assert.deepEqual({ target: unsetRevenueGoal.target, hasTarget: unsetRevenueGoal.hasTarget, progress: unsetRevenueGoal.progress },
     { target: "не задана", hasTarget: false, progress: 0 });
   assert.ok(period.vectors[4].sections[0].metrics.every(metric => !Object.prototype.hasOwnProperty.call(metric, "target")));
@@ -766,7 +766,7 @@ test("long-threshold groups are absent at 12 months and available at 36 months",
         doctorWindow: shortDoctor.akb.primaryWin,
         lostAvailable: shortDoctor.akb.primary.groupAvailable.lost,
         lostCount: shortDoctor.akb.primary.seg.lost,
-        aggregateLostAvailable: shortAggregate.akb.primary.groupAvailable.lost,
+        aggregateBase: shortAggregate.akb.primary,
       },
       both: {
         primaryWindow: bothDoctor.akb.primaryWin,
@@ -782,7 +782,7 @@ test("long-threshold groups are absent at 12 months and available at 36 months",
     doctorWindow: 12,
     lostAvailable: false,
     lostCount: null,
-    aggregateLostAvailable: false,
+    aggregateBase: null,
   });
   assert.deepEqual(plain.both, {
     primaryWindow: 12,
@@ -1968,7 +1968,7 @@ test("department ratios require comparable data for every included doctor", () =
   assert.match(notice, /показаны как «—»/);
 });
 
-test("department patient union uses IDs first, name fallback and overlapping doctor relationships", () => {
+test("department patient union uses IDs first, name fallback and one prioritized group per patient", () => {
   const context = createContext();
   const result = vm.runInContext(`(() => {
     DB.doctors = { d1: { name: 'Synthetic One', aliases: [], dept: 'По умолчанию' }, d2: { name: 'Synthetic Two', aliases: [], dept: 'По умолчанию' } };
@@ -1995,7 +1995,7 @@ test("department patient union uses IDs first, name fallback and overlapping doc
       mixed: { windows: mixed.windows, complete: mixed.sourceWindowComplete, active: mixed.activeBasePct } };
   })()`, context);
   const x = JSON.parse(JSON.stringify(result));
-  assert.deepEqual(x, { total: 4, active: 75, lost: 75, visits: 12, mixed: { windows: [12, 36], complete: false, active: null } });
+  assert.deepEqual(x, { total: 4, active: 75, lost: 25, visits: 12, mixed: { windows: [36], complete: false, active: null } });
 });
 
 test("legacy v1 database migrates to the current schema", () => {

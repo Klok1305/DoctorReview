@@ -105,7 +105,8 @@ function adoptReportCalculations(prepared) {
   }
   const attachRows = (value, id, month, window) => {
     if (value) Object.defineProperty(value, "clientRows", { configurable: true, enumerable: false,
-      get() { return kbClientRows(id, month, window, value); } });
+      get() { return value.partition ? partitionClientBase(kbSummary(id, month, window), deptParams(id))?.clientRows || []
+        : kbClientRows(id, month, window, value); } });
   };
   for (const [key, value] of prepared.kbSummary) {
     const [id, month, window] = JSON.parse(key);

@@ -653,16 +653,6 @@ function doctorPrimarySources(summary) {
     month: primarySourcesSummary(summary.current?.patients || [], summary.current != null, summary.current?.count != null) };
 }
 
-// Shared report thresholds are stored separately from scoring thresholds.
-const CLIENT_BASE_REPORT_DEFAULTS = { loyalVisits: 4, loyalM: 12, activeVisits: 4, activeM: 6, newRiskVisits: 2,
-  newRiskM: 6, sleepVisits: 4, sleepM: 6, lostVisits: 2, lostM: 12 };
-const clientBaseReportLimit = key => key.endsWith("M") ? 36 : 50;
-function clientBaseReportProfile(profile) {
-  return Object.fromEntries(Object.entries(CLIENT_BASE_REPORT_DEFAULTS).map(([key, fallback]) => {
-    const value = Number(profile?.clientBaseReport?.[key]);
-    return [key, Number.isInteger(value) && value >= 1 && value <= clientBaseReportLimit(key) ? value : fallback];
-  }));
-}
 function kbClientIdentity(client) {
   const id = String(client.patientId || "").trim().toLowerCase();
   const name = normFio(client.name || "");
@@ -676,8 +666,15 @@ function clientBaseActiveVisits(docId, monthKey, windowMonths) {
   return visits;
 }
 function reportClientBaseSummary(docId, monthKey, windowMonths = 12) {
-  const key = JSON.stringify([String(docId), String(monthKey), Number(windowMonths), "report-overlap-v1"]);
-  const calculate = () => computeKbSummary(docId, monthKey, windowMonths, clientBaseReportProfile(deptParams(docId)), true);
+  const profile = deptParams(docId);
+  const key = JSON.stringify([String(docId), String(monthKey), Number(windowMonths), "report-partition-v1", clientBasePartitionSettings(profile)]);
+  const calculate = () => {
+    const base = kbSummary(docId, monthKey, windowMonths);
+    const summary = partitionClientBase(base, profile);
+    if (summary) Object.defineProperty(summary, "clientRows", { configurable: true, enumerable: false,
+      get() { return partitionClientBase(base, profile).clientRows; } });
+    return summary;
+  };
   if (specializationCalculations?.reportBase) {
     const bases = specializationCalculations.reportBase;
     if (!bases.has(key)) bases.set(key, calculate());
@@ -743,15 +740,21 @@ function partitionClientBase(base, profile) {
       group = "newRisk";
     }
     seg[group]++;
-    return { ...client, groups: [group], partitioned: true, provisional: !validVisits || !validRecency };
+    return { ...client, loyal: group === "active" || group === "loyalSleep", groups: [group], partitioned: true, provisional: !validVisits || !validRecency };
   });
   const total = clientRows.length;
   const share = group => total ? seg[group] / total * 100 : null;
   const work = clientRows.filter(c => c.groups[0] === "newRisk" || c.groups[0] === "loyalSleep");
-  return { ...base, partition: t, seg, provisional, clientRows, total,
+  const sum = group => clientRows.filter(c => c.groups[0] === group).reduce((value, c) => value + (c.s || 0), 0);
+  return { ...base, methodologyId: "report-partition-v1", partition: t, seg, provisional, clientRows, total,
+    sourceWindowComplete: true, requiredWindowM: Number(base.window) || 36,
     groupAvailable: { active: true, loyalSleep: true, newRisk: true, lost: true },
     activeBasePct: share("active"), loyalSleepPct: share("loyalSleep"), newRiskPct: share("newRisk"), lostPct: share("lost"),
-    reactivationCandidates: work.length, reactivationSum: work.reduce((sum, c) => sum + c.s, 0) };
+    activeBase: seg.active, activeSum: sum("active"), sleepSum: sum("loyalSleep"), riskSum: sum("newRisk"), lostSum: sum("lost"),
+    loyalCount: seg.active + seg.loyalSleep, loyalPct: total ? (seg.active + seg.loyalSleep) / total * 100 : null,
+    riskShare: share("newRisk"), sleepRiskShare: total ? work.length / total * 100 : null,
+    revenueAtRisk: sum("loyalSleep") + sum("newRisk") + sum("lost"),
+    reactivationCandidates: work.length, reactivationSum: work.reduce((sum, c) => sum + (c.s || 0), 0) };
 }
 
 function adminClientBaseSummary(docId, monthKey) {
@@ -1489,7 +1492,7 @@ function dynMetricDefs(profile) {
   const B = (profile && profile.scoring && profile.scoring.benchmarks) || defaultBenchmarks();
   const pvM = (profile && profile.pervichkaM) || 3;
   const exTitle = (profile && profile.expertise && profile.expertise.title) || "экспертных услуг";
-  const baseThresholds = clientBaseThresholds(profile);
+  const baseThresholds = clientBasePartitionSettings(profile);
   const base = r => selectedClientBaseSummary(r, profile);
   return [
     { key: "sales", name: "Выручка", fmt: fmtMoney, get: r => r.econ.sales, target: B.revenue },
@@ -1509,8 +1512,8 @@ function dynMetricDefs(profile) {
     { key: "nazConv", name: "Конверсия назначений (1 мес)", fmt: fmtPct, get: r => r.cross.naz[1] ? r.cross.naz[1].totals.conv : null, target: B.nazConv },
     { key: "nazFocusAssigned", name: "Назначено по фокусам (1 мес)", fmt: v => fmtNum(v) + " шт.", get: r => r.cross.naz[1] && r.cross.naz[1].focus ? r.cross.naz[1].focus.assigned : null },
     { key: "nazFocusResult", name: "Выполнено + продано по фокусам (1 мес)", fmt: v => fmtNum(v) + " шт.", get: r => r.cross.naz[1] && r.cross.naz[1].focus ? r.cross.naz[1].focus.resultQ : null },
-    { key: "akb", name: `Активные (≥${fmtNum(baseThresholds.activeVisits)} виз. за ${fmtNum(baseThresholds.activeM)} мес.)`, fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb && kb.groupAvailable.active ? kb.seg.active : null; } },
-    { key: "lost", name: `Потерянные (1–2 виз., отсутствуют >${fmtNum(baseThresholds.lostM)} мес.)`, fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb && kb.groupAvailable.lost ? kb.seg.lost : null; }, lower: true },
+    { key: "akb", name: "Активные лояльные", fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb && kb.groupAvailable.active ? kb.seg.active : null; } },
+    { key: "lost", name: `Потерянные (отсутствуют >${fmtNum(baseThresholds.lostM)} мес.)`, fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb && kb.groupAvailable.lost ? kb.seg.lost : null; }, lower: true },
     { key: "score", name: "Общий балл", fmt: v => fmtNum(v, 0), get: r => DB.settings.showScores && r.scores ? r.scores.total : null },
   ];
 }
@@ -1561,10 +1564,17 @@ function computeDoctorDynamics(docId, endMk) {
   return buildDynamics(
     calendarYearMonthKeys(endMk),
     endMk,
-    k => doctorHasDashboardData(docId, k) ? computeMetrics(docId, k) : null,
+    k => doctorHasDashboardData(docId, k) ? doctorReportMetrics(docId, k) : null,
     12,
     profileForDoctor(docId)
   );
+}
+
+function doctorReportMetrics(docId, monthKey) {
+  const result = computeMetrics(docId, monthKey);
+  if (!result) return null;
+  const primary = reportClientBaseSummary(docId, monthKey, 36);
+  return { ...result, akb: { ...result.akb, primary, primaryWin: 36 } };
 }
 
 /* Агрегат отделения за месяц — «виртуальный r» с теми же полями, что читают dynMetricDefs */
@@ -1596,6 +1606,7 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all", doctorIds = null)
 }
 
 function mergeClientBaseSummaries(baseRows, expectedCount = baseRows.length) {
+  const partitioned = baseRows.length > 0 && baseRows.every(base => base.partition || base.methodologyId === "report-partition-v1");
   const clients = new Map();
   for (const kb of baseRows) {
     for (const c of kb.clientRows) {
@@ -1611,28 +1622,32 @@ function mergeClientBaseSummaries(baseRows, expectedCount = baseRows.length) {
     }
   }
   if (!baseRows.length) return null;
-  const groupNames = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+  const groupNames = partitioned ? ["active", "loyalSleep", "newRisk", "lost"] : ["loyal", "active", "newRisk", "loyalSleep", "lost"];
   const allDoctorsCovered = baseRows.length === expectedCount;
   const sameWindow = new Set(baseRows.map(kb => kb.window)).size === 1;
   const groupAvailable = Object.fromEntries(groupNames.map(group => [group, allDoctorsCovered && sameWindow && baseRows.every(kb => kb.groupAvailable && kb.groupAvailable[group])]));
-  const seg = { loyal: 0, active: 0, newRisk: 0, loyalSleep: 0, lost: 0, unknown: 0 };
+  const seg = Object.fromEntries(groupNames.map(group => [group, 0]));
+  if (!partitioned) seg.unknown = 0;
   let visits = 0, totalSum = 0, loyalCount = 0;
   for (const c of clients.values()) {
+    // В сводке приоритет у текущих отношений: активный пациент одного врача
+    // не становится потерянным из-за давнего визита к другому врачу.
+    if (partitioned) c.groups = [groupNames.find(group => c.groups.includes(group)) || "newRisk"];
     for (const group of (c.groups || [])) if (Object.prototype.hasOwnProperty.call(seg, group)) seg[group]++;
-    if (c.r == null) seg.unknown++;
+    if (c.r == null && !partitioned) seg.unknown = (seg.unknown || 0) + 1;
     visits += c.v || 0;
     totalSum += c.s || 0;
     if (c.loyal) loyalCount++;
   }
   for (const group of groupNames) if (!groupAvailable[group]) seg[group] = null;
-  seg.risk = seg.newRisk;
-  seg.sleep = seg.loyalSleep;
+  if (!partitioned) { seg.risk = seg.newRisk; seg.sleep = seg.loyalSleep; }
   const total = clients.size;
   const sourceWindowComplete = allDoctorsCovered && sameWindow && baseRows.every(kb => kb.sourceWindowComplete);
   const windows = [...new Set(baseRows.map(kb => Number(kb.window)).filter(Number.isFinite))].sort((a, b) => a - b);
   const clientRows = [...clients.values()];
   const atRiskRows = clientRows.filter(c => (c.groups || []).some(group => ["newRisk", "loyalSleep", "lost"].includes(group)));
   return {
+    ...(partitioned ? { methodologyId: "report-partition-v1" } : {}),
     total, seg, clientRows, visits, totalSum, loyalCount,
     loyalPct: groupAvailable.loyal && total ? loyalCount / total * 100 : null,
     activeBasePct: groupAvailable.active && total ? seg.active / total * 100 : null,
@@ -1765,12 +1780,12 @@ function aggregateDeptMonthRaw(mk, deptFilter, subFilter = "all", doctorIds = nu
     const complete = completeFor(key, r => Number.isFinite(numeratorFor(r)) && Number.isFinite(denominatorFor(r)));
     return complete && numerator != null && denominator > 0 ? numerator / denominator * scale : null;
   };
-  const uniqueWindow = win => mergeClientBaseSummaries(records.map(({ r }) => r.akb.wins[win]).filter(Boolean), records.length);
+  const uniqueWindow = win => mergeClientBaseSummaries(records.map(({ id }) => reportClientBaseSummary(id, mk, win)).filter(Boolean), records.length);
   const unique1 = uniqueWindow(1);
   const unique12 = uniqueWindow(12);
   const unique24 = uniqueWindow(24);
   const unique36 = uniqueWindow(36);
-  const primaryBase = mergeClientBaseSummaries(records.map(({ r }) => r.akb.primary).filter(Boolean), records.length);
+  const primaryBase = unique36;
   const sales = sum(r => r.econ.sales);
   const withRef = sum(r => r.econ.revenueWithRef);
   const refSum = sum(r => r.econ.refRevenue);

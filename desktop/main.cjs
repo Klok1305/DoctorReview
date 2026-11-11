@@ -731,7 +731,7 @@ function createWindow() {
               const deviceTrendTitles = [...deviceHistory.querySelectorAll('[data-device-history-chart] h3')].map(title => title.firstChild.textContent.trim());
               const labels = deviceTrendChart?.config.options.plugins.datalabels;
               const primaryTrend = UI.charts['chart-specialization-primary']?.data.datasets;
-              const primarySummary = document.querySelector('[data-specialization-primary-summary]');
+              const primarySummary = document.querySelector('#deptBody [data-specialization-primary-summary]');
               const primaryTable = primarySummary?.querySelector('table');
               const primaryPie = primarySummary?.querySelector('[data-specialization-primary-sources]');
               if (primaryTable?.querySelector('tfoot td').textContent !== '1' || !primaryPie?.querySelector('svg')
@@ -828,10 +828,10 @@ function createWindow() {
               const activeBaseCard = clientBaseCard('active');
               const lostBaseCard = clientBaseCard('lost');
               const totalBaseCard = clientBaseCard('total');
-              const clientBaseDynamicsValid = clientBaseCards.length === 6
+              const clientBaseDynamicsValid = clientBaseCards.length === 5
                 && specializationBaseShares.join('|') === clientBaseCards.slice(1).map(card => card.querySelector('.kb-summary-value').textContent).join('|')
                 && specializationBaseCounts.join('|') === clientBaseCards.slice(1).map(card => card.querySelector('.kb-summary-value-line .kb-summary-meta').textContent).join('|')
-                && specializationAverages.length === 5
+                && specializationAverages.length === 4
                 && specializationAverages.map(item => item.querySelector('strong').textContent).join('|') === specializationBaseShares.join('|')
                 && specializationAverages.every(item => item.querySelector('small')?.textContent === '1 из 2 врачей')
                 && clientBaseCards.every(card => card.querySelectorAll('.kb-summary-trends > div').length === 2)
@@ -846,14 +846,14 @@ function createWindow() {
                 && document.querySelectorAll('#tblPrimaryMonth tbody tr').length === 1
                 && document.querySelectorAll('#tblPrimaryYear tbody tr').length === 3
                 && document.getElementById('tblPrimaryYear').textContent.includes('Приём кардиолога')
-                && document.querySelectorAll('#blkV4 .kb-share-movement').length === 5
+                && document.querySelectorAll('#blkV4 .kb-share-movement').length === 4
                 && document.querySelectorAll('#blkV5 [data-primary-source-composition] svg').length === 2;
               flushReportCharts();
               const clientBasePie = document.querySelector('#blkV4 [data-client-base-composition]');
               const activeShares = document.querySelector('#blkV4 [data-client-base-share-table] tr[data-client-base-group="active"]');
               const baseStack = UI.charts.chSegments;
               const clientShareChartValid = !clientBasePie
-                && document.querySelectorAll('#blkV4 [data-client-base-share-table] tbody tr').length === 5
+                && document.querySelectorAll('#blkV4 [data-client-base-share-table] tbody tr').length === 4
                 && document.querySelector('#blkV4 [data-client-base-definitions]')
                 && activeShares?.cells[1].classList.contains('period-worst') && activeShares?.cells[2].classList.contains('period-best')
                 && [...document.querySelectorAll('#blkV4 [data-report-help]')].every(help => !help.open)
@@ -861,7 +861,7 @@ function createWindow() {
                 && baseStack?.options.indexAxis === 'y' && baseStack.options.scales.x.stacked
                 && baseStack.data.datasets.map(row => row.label).join('|') === 'Активные лояльные|Лояльные спящие|Новые в риске|Потерянные'
                 && JSON.stringify(baseStack.data.datasets.map(row => row.data)) === '[[1,2],[1,1],[1,1],[2,1]]';
-              const riskActionButton = [...document.querySelectorAll('.kb-action-controls button')].find(button => button.textContent.includes('Новые, риск'));
+              const riskActionButton = [...document.querySelectorAll('.kb-action-controls button')].find(button => button.textContent.includes('Новые в риске'));
               if (riskActionButton) riskActionButton.click();
               await new Promise(resolve => setTimeout(resolve, 100));
               const clientActionOpened = Boolean(document.getElementById('clientSegmentPatients')?.open)
@@ -1133,7 +1133,7 @@ function createWindow() {
                   && register.querySelector('[data-viewer-patient-segment]')),
                 kbWindows: viewerKbButtons.map(button => button.dataset.viewerKbWindow),
                 adminAppointmentParity,
-                clientBaseMethodology: viewerDoctorRoot.querySelector('[data-vector-key="v4"][data-client-base-methodology="report-overlap-v1"]') !== null,
+                clientBaseMethodology: viewerDoctorRoot.querySelector('[data-vector-key="v4"][data-client-base-methodology="report-partition-v1"]') !== null,
                 clientBasePartitionChart: !!viewerDoctorRoot.querySelector('[data-client-base-partition-history] img'),
                 clientBaseGroups: [...viewerDoctorRoot.querySelectorAll('[data-vector-key="v4"] [data-client-base-group]')]
                   .map(card => card.dataset.clientBaseGroup),
@@ -1148,7 +1148,7 @@ function createWindow() {
                 && viewerPatientRegisterDetails.kbWindows.length === 0
                 && viewerPatientRegisterDetails.clientBaseMethodology
                 && viewerPatientRegisterDetails.clientBasePartitionChart
-                && ['total', 'loyal', 'active', 'loyalSleep', 'newRisk', 'lost'].every(group => viewerPatientRegisterDetails.clientBaseGroups.includes(group))
+                && ['total', 'active', 'loyalSleep', 'newRisk', 'lost'].every(group => viewerPatientRegisterDetails.clientBaseGroups.includes(group))
                 && viewerPatientRegisterDetails.adminAppointmentParity
                 && viewerPatientRegisterDetails.sourcePeriod
                 && viewerPatientRegisterDetails.legacyTableRemoved;
@@ -1626,7 +1626,7 @@ function createWindow() {
               await new Promise(resolve => setTimeout(resolve, 100));
               const table = document.getElementById('blkDyn_tbl');
               const shareRows = [...document.querySelectorAll('#blkV4 [data-client-base-share-table] tbody tr')];
-              if (shareRows.map(row => row.dataset.clientBaseGroup).join('|') !== 'loyal|active|newRisk|loyalSleep|lost') throw Error('Admin QA: expected five client-base groups');
+              if (shareRows.map(row => row.dataset.clientBaseGroup).join('|') !== 'active|loyalSleep|newRisk|lost') throw Error('Admin QA: expected four client-base groups');
               if (document.querySelector('#blkV4 [data-client-base-composition]')) throw Error('Admin QA: overlapping groups cannot form a pie');
               if (shareRows.some(row => JSON.parse(row.dataset.periodValues).length !== 12)) throw Error('Admin QA: client-base year missing months');
               if ([...table.rows].some(row => row.cells[0].textContent.trim() === 'Визиты')) throw Error('Admin QA: visits row remains');
@@ -1659,19 +1659,14 @@ function createWindow() {
               const originalPartition = { ...curSetProfile().clientBasePartition };
               const legacyFields = ['loyalVisits', 'loyalM', 'activeVisits', 'activeM', 'newRiskVisits', 'newRiskM', 'newRiskWithin', 'sleepVisits', 'sleepM', 'lostVisits', 'lostM', 'minVisits', 'riskM'];
               const originalLegacy = JSON.stringify(legacyFields.map(key => curSetProfile()[key]));
-              const definition = document.querySelector('#settingsBody [data-client-base-definitions]');
-              if (!definition || definition.querySelectorAll('li').length !== 5 || document.querySelectorAll('[data-client-base-report-settings] input').length !== 10) throw Error('Admin QA: five editable report groups missing');
+              const definition = document.querySelector('#settingsBody [data-client-base-report-settings]');
+              if (!definition || definition.querySelectorAll('tbody tr').length !== 4 || document.querySelectorAll('[id^="cb_report_"]').length) throw Error('Admin QA: four shared report groups missing');
               const normCard = definition.closest('details.card'); normCard.open = true;
               const settingsImage = await capture(normCard);
-              const originalReportThresholds = curSetProfile().clientBaseReport;
-              document.getElementById('cb_report_activeVisits').value = '5';
-              document.getElementById('cb_report_activeM').value = '12';
-              document.getElementById('cb_report_sleepM').value = '9';
               document.getElementById('cb_loyalVisits').value = String(originalPartition.loyalVisits + 1);
               saveDeptBasics();
-              const doctorThresholds = clientBaseReportProfile(deptParams('d1'));
-              if (doctorThresholds.activeVisits !== 5 || doctorThresholds.activeM !== 12 || doctorThresholds.sleepM !== 9 || !document.querySelector('#settingsBody [data-client-base-definitions]').textContent.includes('не менее 5 визитов за последние 12 мес.')) throw Error('Admin QA: report thresholds do not reach doctor and settings');
-              curSetProfile().clientBaseReport = originalReportThresholds;
+              const doctorThresholds = clientBasePartitionSettings(deptParams('d1'));
+              if (doctorThresholds.loyalVisits !== originalPartition.loyalVisits + 1 || !document.querySelector('#settingsBody [data-client-base-report-settings]').textContent.includes('не менее ' + doctorThresholds.loyalVisits + ' визитов')) throw Error('Admin QA: report thresholds do not reach doctor and settings');
               if (curSetProfile().clientBasePartition.loyalVisits !== originalPartition.loyalVisits + 1) throw Error('Admin QA: partition threshold was not saved');
               if (JSON.stringify(legacyFields.map(key => curSetProfile()[key])) !== originalLegacy) throw Error('Admin QA: legacy KPI settings changed');
               curSetProfile().clientBasePartition = originalPartition;

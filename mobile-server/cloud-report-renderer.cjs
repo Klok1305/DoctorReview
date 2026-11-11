@@ -101,7 +101,7 @@ function renderClientBase(vector, report, options) {
   const charts = current.charts || [], composition = charts.find(chart => chart.id === "partition"), history = charts.find(chart => chart.id === "partition-shares");
   if (current.columns?.includes("Условие")) options.help.push(`<ul>${(current.rows || []).map(row => `<li><b>${esc(row[0])}:</b> ${esc(row[row.length - 1])}</li>`).join("")}</ul>`);
   options.help.push('<p>Зелёным в таблице показаны лучшие значения за период, красным — худшие. Для активных лояльных лучше большая доля, для остальных групп — меньшая.</p>');
-  return '<p class="cloud-completeness">Этот отчёт сохранён с прежними четырьмя группами. Для пяти групп и сравнения по единой методике сформируйте новую публикацию в обновлённом Админ.</p>' + renderSectionNote(current.note, options) + renderMetrics(current.metrics)
+  return renderSectionNote(current.note, options) + renderMetrics(current.metrics)
     + presentation.clientBaseCompositionHtml(composition?.series[0]?.values || [null, null, null, null], report.label)
     + (history ? presentation.clientBaseShareTableHtml(history.labels, history.series.map((series, index) => ({ ...presentation.clientBaseGroups[index], label: series.label, values: series.values }))) : "")
     + renderCharts(charts.filter(chart => !["partition", "partition-shares"].includes(chart.id)), options)
@@ -182,18 +182,19 @@ function renderVector(vector, report, options) {
   const sectionOptions = { ...options, help };
   const partitioned = vector.id === "v4" && vector.methodologyId === "partition-v1-36m";
   const overlapping = vector.id === "v4" && vector.methodologyId === "report-overlap-v1";
+  const partitionReport = vector.id === "v4" && vector.methodologyId === "report-partition-v1";
   const doctorV3 = vector.id === "v3" && (options.kind === "doctor" || (!options.kind && vector.windowPickerLabel === "Окно назначений"));
   const body = doctorV3 ? renderDoctorV3(vector, report, options)
-    : overlapping ? `<label class="client-base-window-picker">Период базы <select data-client-base-window>${vector.windows.map(window => `<option value="${esc(window.id)}">${esc(window.label)}</option>`).join("")}</select></label>`
+    : overlapping || partitionReport ? `<label class="client-base-window-picker">Период базы <select data-client-base-window>${vector.windows.map(window => `<option value="${esc(window.id)}">${esc(window.label)}</option>`).join("")}</select></label>`
     + vector.windows.map((window, index) => `<div data-client-base-window-panel="${esc(window.id)}"${index ? " hidden" : ""}>${window.sections.map(section => {
       if (section.title === "Клиентская база · сравнение врачей" && section.columns?.[3] === "Изменение базы") {
         return renderClientBaseComparison(section, sectionOptions);
       }
-      const history = section.charts?.find(chart => chart.id === "overlap-shares");
+      const history = section.charts?.find(chart => chart.id === (partitionReport ? "partition-shares" : "overlap-shares"));
       const charts = section.charts?.filter(chart => chart !== history && chart.id !== "specialization-base-history");
       if (section.title === "Динамика клиентской базы" && section.charts?.length && !charts.length) return "";
       return renderSections([{ ...section, charts }], sectionOptions)
-        + (history ? presentation.clientBaseShareTableHtml(history.labels, history.series.map(series => ({ ...presentation.overlappingClientBaseGroups.find(group => group.label === series.label), label: series.label, values: series.values }))) : "");
+        + (history ? presentation.clientBaseShareTableHtml(history.labels, history.series.map(series => ({ ...(partitionReport ? presentation.clientBaseGroups : presentation.overlappingClientBaseGroups).find(group => group.label === series.label), label: series.label, values: series.values }))) : "");
     }).join("")}</div>`).join("") + renderSpecializationBaseHistory(vector, report, sectionOptions) + renderDoctorBasePartitionHistory(vector, sectionOptions)
     + presentation.clientBaseDefinitionsHtml(vector.sections?.find(section => section.title === "Что означают группы?"))
     : partitioned ? renderClientBase(vector, report, sectionOptions)

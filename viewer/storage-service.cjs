@@ -81,6 +81,18 @@ function writeJson(filePath, value) {
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf8");
 }
 
+async function publishStagedDirectory(source, destination) {
+  // Windows can briefly lock freshly written files while antivirus scans them.
+  // Keep the atomic rename; never expose an incompletely copied directory.
+  for (let attempt = 0; ; attempt++) {
+    try { fs.renameSync(source, destination); return; }
+    catch (error) {
+      if (!["EPERM", "EACCES", "EBUSY"].includes(error.code) || attempt >= 5) throw error;
+      await new Promise(resolve => setTimeout(resolve, 50 * 2 ** attempt));
+    }
+  }
+}
+
 class ViewerStorageService {
   constructor({ configPath }) {
     this.configPath = configPath;
@@ -293,7 +305,7 @@ class ViewerStorageService {
         }
         if (!importedPages.length) throw new Error(`Для врача ${doctor.displayName} нет выбранных страниц`);
         fs.mkdirSync(path.dirname(releaseRoot), { recursive: true });
-        fs.renameSync(stagingRoot, releaseRoot);
+        await publishStagedDirectory(stagingRoot, releaseRoot);
       } catch (error) {
         if (fs.existsSync(stagingRoot)) fs.rmSync(stagingRoot, { recursive: true, force: true });
         throw error;
@@ -404,7 +416,7 @@ class ViewerStorageService {
         writeJson(path.join(metadataRoot, "index.json"), metadata.index);
       }
       fs.mkdirSync(path.dirname(generationRoot), { recursive: true });
-      fs.renameSync(generationStagingRoot, generationRoot);
+      await publishStagedDirectory(generationStagingRoot, generationRoot);
     } catch (error) {
       if (fs.existsSync(generationStagingRoot)) fs.rmSync(generationStagingRoot, { recursive: true, force: true });
       throw error;

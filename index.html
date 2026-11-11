@@ -6244,16 +6244,6 @@ function doctorPrimarySources(summary) {
     month: primarySourcesSummary(summary.current?.patients || [], summary.current != null, summary.current?.count != null) };
 }
 
-// Shared report thresholds are stored separately from scoring thresholds.
-const CLIENT_BASE_REPORT_DEFAULTS = { loyalVisits: 4, loyalM: 12, activeVisits: 4, activeM: 6, newRiskVisits: 2,
-  newRiskM: 6, sleepVisits: 4, sleepM: 6, lostVisits: 2, lostM: 12 };
-const clientBaseReportLimit = key => key.endsWith("M") ? 36 : 50;
-function clientBaseReportProfile(profile) {
-  return Object.fromEntries(Object.entries(CLIENT_BASE_REPORT_DEFAULTS).map(([key, fallback]) => {
-    const value = Number(profile?.clientBaseReport?.[key]);
-    return [key, Number.isInteger(value) && value >= 1 && value <= clientBaseReportLimit(key) ? value : fallback];
-  }));
-}
 function kbClientIdentity(client) {
   const id = String(client.patientId || "").trim().toLowerCase();
   const name = normFio(client.name || "");
@@ -6267,8 +6257,15 @@ function clientBaseActiveVisits(docId, monthKey, windowMonths) {
   return visits;
 }
 function reportClientBaseSummary(docId, monthKey, windowMonths = 12) {
-  const key = JSON.stringify([String(docId), String(monthKey), Number(windowMonths), "report-overlap-v1"]);
-  const calculate = () => computeKbSummary(docId, monthKey, windowMonths, clientBaseReportProfile(deptParams(docId)), true);
+  const profile = deptParams(docId);
+  const key = JSON.stringify([String(docId), String(monthKey), Number(windowMonths), "report-partition-v1", clientBasePartitionSettings(profile)]);
+  const calculate = () => {
+    const base = kbSummary(docId, monthKey, windowMonths);
+    const summary = partitionClientBase(base, profile);
+    if (summary) Object.defineProperty(summary, "clientRows", { configurable: true, enumerable: false,
+      get() { return partitionClientBase(base, profile).clientRows; } });
+    return summary;
+  };
   if (specializationCalculations?.reportBase) {
     const bases = specializationCalculations.reportBase;
     if (!bases.has(key)) bases.set(key, calculate());
@@ -6334,15 +6331,21 @@ function partitionClientBase(base, profile) {
       group = "newRisk";
     }
     seg[group]++;
-    return { ...client, groups: [group], partitioned: true, provisional: !validVisits || !validRecency };
+    return { ...client, loyal: group === "active" || group === "loyalSleep", groups: [group], partitioned: true, provisional: !validVisits || !validRecency };
   });
   const total = clientRows.length;
   const share = group => total ? seg[group] / total * 100 : null;
   const work = clientRows.filter(c => c.groups[0] === "newRisk" || c.groups[0] === "loyalSleep");
-  return { ...base, partition: t, seg, provisional, clientRows, total,
+  const sum = group => clientRows.filter(c => c.groups[0] === group).reduce((value, c) => value + (c.s || 0), 0);
+  return { ...base, methodologyId: "report-partition-v1", partition: t, seg, provisional, clientRows, total,
+    sourceWindowComplete: true, requiredWindowM: Number(base.window) || 36,
     groupAvailable: { active: true, loyalSleep: true, newRisk: true, lost: true },
     activeBasePct: share("active"), loyalSleepPct: share("loyalSleep"), newRiskPct: share("newRisk"), lostPct: share("lost"),
-    reactivationCandidates: work.length, reactivationSum: work.reduce((sum, c) => sum + c.s, 0) };
+    activeBase: seg.active, activeSum: sum("active"), sleepSum: sum("loyalSleep"), riskSum: sum("newRisk"), lostSum: sum("lost"),
+    loyalCount: seg.active + seg.loyalSleep, loyalPct: total ? (seg.active + seg.loyalSleep) / total * 100 : null,
+    riskShare: share("newRisk"), sleepRiskShare: total ? work.length / total * 100 : null,
+    revenueAtRisk: sum("loyalSleep") + sum("newRisk") + sum("lost"),
+    reactivationCandidates: work.length, reactivationSum: work.reduce((sum, c) => sum + (c.s || 0), 0) };
 }
 
 function adminClientBaseSummary(docId, monthKey) {
@@ -7080,7 +7083,7 @@ function dynMetricDefs(profile) {
   const B = (profile && profile.scoring && profile.scoring.benchmarks) || defaultBenchmarks();
   const pvM = (profile && profile.pervichkaM) || 3;
   const exTitle = (profile && profile.expertise && profile.expertise.title) || "экспертных услуг";
-  const baseThresholds = clientBaseThresholds(profile);
+  const baseThresholds = clientBasePartitionSettings(profile);
   const base = r => selectedClientBaseSummary(r, profile);
   return [
     { key: "sales", name: "Выручка", fmt: fmtMoney, get: r => r.econ.sales, target: B.revenue },
@@ -7100,8 +7103,8 @@ function dynMetricDefs(profile) {
     { key: "nazConv", name: "Конверсия назначений (1 мес)", fmt: fmtPct, get: r => r.cross.naz[1] ? r.cross.naz[1].totals.conv : null, target: B.nazConv },
     { key: "nazFocusAssigned", name: "Назначено по фокусам (1 мес)", fmt: v => fmtNum(v) + " шт.", get: r => r.cross.naz[1] && r.cross.naz[1].focus ? r.cross.naz[1].focus.assigned : null },
     { key: "nazFocusResult", name: "Выполнено + продано по фокусам (1 мес)", fmt: v => fmtNum(v) + " шт.", get: r => r.cross.naz[1] && r.cross.naz[1].focus ? r.cross.naz[1].focus.resultQ : null },
-    { key: "akb", name: `Активные (≥${fmtNum(baseThresholds.activeVisits)} виз. за ${fmtNum(baseThresholds.activeM)} мес.)`, fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb && kb.groupAvailable.active ? kb.seg.active : null; } },
-    { key: "lost", name: `Потерянные (1–2 виз., отсутствуют >${fmtNum(baseThresholds.lostM)} мес.)`, fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb && kb.groupAvailable.lost ? kb.seg.lost : null; }, lower: true },
+    { key: "akb", name: "Активные лояльные", fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb && kb.groupAvailable.active ? kb.seg.active : null; } },
+    { key: "lost", name: `Потерянные (отсутствуют >${fmtNum(baseThresholds.lostM)} мес.)`, fmt: v => fmtNum(v) + " чел.", get: r => { const kb = base(r); return kb && kb.groupAvailable.lost ? kb.seg.lost : null; }, lower: true },
     { key: "score", name: "Общий балл", fmt: v => fmtNum(v, 0), get: r => DB.settings.showScores && r.scores ? r.scores.total : null },
   ];
 }
@@ -7152,10 +7155,17 @@ function computeDoctorDynamics(docId, endMk) {
   return buildDynamics(
     calendarYearMonthKeys(endMk),
     endMk,
-    k => doctorHasDashboardData(docId, k) ? computeMetrics(docId, k) : null,
+    k => doctorHasDashboardData(docId, k) ? doctorReportMetrics(docId, k) : null,
     12,
     profileForDoctor(docId)
   );
+}
+
+function doctorReportMetrics(docId, monthKey) {
+  const result = computeMetrics(docId, monthKey);
+  if (!result) return null;
+  const primary = reportClientBaseSummary(docId, monthKey, 36);
+  return { ...result, akb: { ...result.akb, primary, primaryWin: 36 } };
 }
 
 /* Агрегат отделения за месяц — «виртуальный r» с теми же полями, что читают dynMetricDefs */
@@ -7187,6 +7197,7 @@ function aggregateDeptMonth(mk, deptFilter, subFilter = "all", doctorIds = null)
 }
 
 function mergeClientBaseSummaries(baseRows, expectedCount = baseRows.length) {
+  const partitioned = baseRows.length > 0 && baseRows.every(base => base.partition || base.methodologyId === "report-partition-v1");
   const clients = new Map();
   for (const kb of baseRows) {
     for (const c of kb.clientRows) {
@@ -7202,28 +7213,32 @@ function mergeClientBaseSummaries(baseRows, expectedCount = baseRows.length) {
     }
   }
   if (!baseRows.length) return null;
-  const groupNames = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+  const groupNames = partitioned ? ["active", "loyalSleep", "newRisk", "lost"] : ["loyal", "active", "newRisk", "loyalSleep", "lost"];
   const allDoctorsCovered = baseRows.length === expectedCount;
   const sameWindow = new Set(baseRows.map(kb => kb.window)).size === 1;
   const groupAvailable = Object.fromEntries(groupNames.map(group => [group, allDoctorsCovered && sameWindow && baseRows.every(kb => kb.groupAvailable && kb.groupAvailable[group])]));
-  const seg = { loyal: 0, active: 0, newRisk: 0, loyalSleep: 0, lost: 0, unknown: 0 };
+  const seg = Object.fromEntries(groupNames.map(group => [group, 0]));
+  if (!partitioned) seg.unknown = 0;
   let visits = 0, totalSum = 0, loyalCount = 0;
   for (const c of clients.values()) {
+    // В сводке приоритет у текущих отношений: активный пациент одного врача
+    // не становится потерянным из-за давнего визита к другому врачу.
+    if (partitioned) c.groups = [groupNames.find(group => c.groups.includes(group)) || "newRisk"];
     for (const group of (c.groups || [])) if (Object.prototype.hasOwnProperty.call(seg, group)) seg[group]++;
-    if (c.r == null) seg.unknown++;
+    if (c.r == null && !partitioned) seg.unknown = (seg.unknown || 0) + 1;
     visits += c.v || 0;
     totalSum += c.s || 0;
     if (c.loyal) loyalCount++;
   }
   for (const group of groupNames) if (!groupAvailable[group]) seg[group] = null;
-  seg.risk = seg.newRisk;
-  seg.sleep = seg.loyalSleep;
+  if (!partitioned) { seg.risk = seg.newRisk; seg.sleep = seg.loyalSleep; }
   const total = clients.size;
   const sourceWindowComplete = allDoctorsCovered && sameWindow && baseRows.every(kb => kb.sourceWindowComplete);
   const windows = [...new Set(baseRows.map(kb => Number(kb.window)).filter(Number.isFinite))].sort((a, b) => a - b);
   const clientRows = [...clients.values()];
   const atRiskRows = clientRows.filter(c => (c.groups || []).some(group => ["newRisk", "loyalSleep", "lost"].includes(group)));
   return {
+    ...(partitioned ? { methodologyId: "report-partition-v1" } : {}),
     total, seg, clientRows, visits, totalSum, loyalCount,
     loyalPct: groupAvailable.loyal && total ? loyalCount / total * 100 : null,
     activeBasePct: groupAvailable.active && total ? seg.active / total * 100 : null,
@@ -7356,12 +7371,12 @@ function aggregateDeptMonthRaw(mk, deptFilter, subFilter = "all", doctorIds = nu
     const complete = completeFor(key, r => Number.isFinite(numeratorFor(r)) && Number.isFinite(denominatorFor(r)));
     return complete && numerator != null && denominator > 0 ? numerator / denominator * scale : null;
   };
-  const uniqueWindow = win => mergeClientBaseSummaries(records.map(({ r }) => r.akb.wins[win]).filter(Boolean), records.length);
+  const uniqueWindow = win => mergeClientBaseSummaries(records.map(({ id }) => reportClientBaseSummary(id, mk, win)).filter(Boolean), records.length);
   const unique1 = uniqueWindow(1);
   const unique12 = uniqueWindow(12);
   const unique24 = uniqueWindow(24);
   const unique36 = uniqueWindow(36);
-  const primaryBase = mergeClientBaseSummaries(records.map(({ r }) => r.akb.primary).filter(Boolean), records.length);
+  const primaryBase = unique36;
   const sales = sum(r => r.econ.sales);
   const withRef = sum(r => r.econ.revenueWithRef);
   const refSum = sum(r => r.econ.refRevenue);
@@ -7606,7 +7621,8 @@ function adoptReportCalculations(prepared) {
   }
   const attachRows = (value, id, month, window) => {
     if (value) Object.defineProperty(value, "clientRows", { configurable: true, enumerable: false,
-      get() { return kbClientRows(id, month, window, value); } });
+      get() { return value.partition ? partitionClientBase(kbSummary(id, month, window), deptParams(id))?.clientRows || []
+        : kbClientRows(id, month, window, value); } });
   };
   for (const [key, value] of prepared.kbSummary) {
     const [id, month, window] = JSON.parse(key);
@@ -7890,6 +7906,7 @@ function queueReportChart(id, element, config) {
     "Возвращаемость первички за 3 месяца": ["Возвращаемость первички", "за 3 месяца"],
     "Возвращаемость первички за 6 месяцев": ["Возвращаемость первички", "за 6 месяцев"],
     "Активные пациенты": ["Активные", "пациенты"],
+    "Активные лояльные": ["Активные", "лояльные"],
     "Потерянные пациенты": ["Потерянные", "пациенты"],
     "Загрузка отделения за месяц": ["Загрузка отделения", "за месяц"],
     "К прошлому месяцу": ["К прошлому", "месяцу"],
@@ -7974,10 +7991,10 @@ function queueReportChart(id, element, config) {
     return table ? `<details class="chart-data"${combined ? " data-device-history-summary" : ""}><summary>Точные значения по месяцам</summary><div class="chart-data-scroll">${table}</div></details>` : "";
   }
   const clientBaseGroups = [
-    { key: "active", label: "Активные лояльные", color: "#16a34a", lowerBetter: false },
-    { key: "loyalSleep", label: "Лояльные спящие", color: "#94a3b8", lowerBetter: true },
-    { key: "newRisk", label: "Новые в риске", color: "#d97706", lowerBetter: true },
-    { key: "lost", label: "Потерянные", color: "#dc2626", lowerBetter: true },
+    { key: "active", label: "Активные лояльные", color: "#afe7e9", lowerBetter: false },
+    { key: "loyalSleep", label: "Лояльные спящие", color: "#64748b", lowerBetter: true },
+    { key: "newRisk", label: "Новые в риске", color: "#fbbf24", lowerBetter: true },
+    { key: "lost", label: "Потерянные", color: "#a80000", lowerBetter: true },
   ];
   const overlappingClientBaseGroups = [
     { key: "loyal", label: "Лояльные", color: "#2563eb", lowerBetter: false },
@@ -7988,14 +8005,13 @@ function queueReportChart(id, element, config) {
   ];
   function clientBaseDefinitionsHtml(definitions) {
     const rules = definitions ? (definitions.rows?.length ? `<ul>${definitions.rows.map(([label, rule]) => `<li><b>${escape(label)}:</b> ${escape(rule.endsWith(".") ? rule : rule + ".")}</li>`).join("")}</ul>` : "") : `<ul>
-      <li><b>Лояльные:</b> не менее 4 визитов, последний визит не более 12 месяцев назад.</li>
-      <li><b>Активные:</b> не менее 4 визитов за последние 6 месяцев.</li>
-      <li><b>Новые, риск:</b> от 1 до 2 визитов, последний визит более 6 месяцев назад.</li>
-      <li><b>Лояльные, спящие:</b> не менее 4 визитов, последний визит более 6 месяцев назад.</li>
-      <li><b>Потерянные:</b> от 1 до 2 визитов, последний визит более 12 месяцев назад.</li></ul>`;
+      <li><b>Активные лояльные:</b> достигли порога лояльности, последний визит в пределах срока активности.</li>
+      <li><b>Лояльные спящие:</b> достигли порога лояльности, последний визит за пределами срока активности.</li>
+      <li><b>Новые в риске:</b> не достигли порога лояльности, срок потери ещё не превышен.</li>
+      <li><b>Потерянные:</b> последний визит за пределами срока потери, с учётом настройки потери лояльных.</li></ul>`;
     return `<section class="client-base-table-note small muted" data-client-base-definitions><h3>Что означают группы?</h3>${rules}
       ${definitions?.note ? `<p>${escape(definitions.note)}</p>` : ""}
-      <p>Проценты считаются от общей клиентской базы. Группы могут пересекаться. Если порог превышает выбранный период, группа скрывается и ноль не подставляется. Для активных нужна точная выгрузка за ${definitions ? "период из настроек" : "6 месяцев"}.</p></section>`;
+      <p>Каждый пациент относится ровно к одной из четырёх групп. Проценты считаются от всей базы выбранного периода; сумма групп равна общей базе. Число визитов берётся из выбранной выгрузки, давность — с последнего визита. Пороги задаются в настройках специализации.</p></section>`;
   }
   const primarySourceGroups = ["Все рекомендации", "Интернет", "Агрегаторы", "Социальные сети", "Прочее"]
     .map((label, i) => ({ label, color: ["#16a34a", "#2563eb", "#7c3aed", "#d97706", "#94a3b8"][i] }));
@@ -8068,12 +8084,12 @@ function queueReportChart(id, element, config) {
       groups, title: "Источники первичных пациентов", missingText: "Для общей разбивки нужны данные по всем врачам выборки.",
     })}</div>`;
   }
-  function specializationPrimarySummaryHtml(rows, counts) {
+  function specializationPrimarySummaryHtml(rows, counts, { tableId = "tblSpecPrimary", totalLabel = null } = {}) {
     const lastRow = rows.at(-1);
-    const total = lastRow && /^Итого по (?:специализации|выборке)$/i.test(lastRow[0]) ? lastRow : null;
+    const total = lastRow && (lastRow[0] === totalLabel || /^Итого по (?:специализации|выборке)$/i.test(lastRow[0])) ? lastRow : null;
     const doctors = total ? rows.slice(0, -1) : rows;
     return `<div class="specialization-primary-summary${counts ? " has-sources" : ""}" data-specialization-primary-summary>
-      <table class="data specialization-primary-table" id="tblSpecPrimary"><thead><tr><th scope="col">Специалист</th><th scope="col" class="num">Первичных</th></tr></thead>
+      <table class="data specialization-primary-table" id="${escape(tableId)}"><thead><tr><th scope="col">Специалист</th><th scope="col" class="num">Первичных</th></tr></thead>
       <tbody>${doctors.map(([name, count]) => `<tr><td>${escape(name)}</td><td class="num">${escape(count)}</td></tr>`).join("")}</tbody>
       ${total ? `<tfoot><tr><th scope="row">${escape(total[0])}</th><td class="num">${escape(total[1])}</td></tr></tfoot>` : ""}</table>
       ${counts ? specializationPrimarySourcesHtml(counts) : ""}</div>`;
@@ -8153,24 +8169,24 @@ function cloudDoctorReport(doctorId, monthKey, comments) {
   const result = computeMetrics(doctorId, monthKey), profile = profileForDoctor(doctorId);
   const report = buildMobilePublicationPeriod(doctorId, monthKey, result,
     doctorHasDashboardData(doctorId, prevMonthKey(monthKey)) ? computeMetrics(doctorId, prevMonthKey(monthKey)) : null, comments, { includeDynamics: false });
-  const groups = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+  const groups = ["active", "loyalSleep", "newRisk", "lost"];
   Object.assign(report.vectors[3], {
-    methodologyId: "report-overlap-v1", scoreMethodologyId: "legacy-overlap-v1",
-    methodologyLabel: "Единые пять пересекающихся групп врача и специализации. Балл В4 использует сохранённые нормативы.",
-    detail: "Точное окно базы выбирается вручную. Для активных нужны визиты за срок из настроек специализации.",
+    methodologyId: "report-partition-v1", scoreMethodologyId: "legacy-overlap-v1",
+    methodologyLabel: "Единые четыре непересекающиеся группы во всех отчётах. Балл В4 использует сохранённые нормативы.",
+    detail: "Четыре группы рассчитываются по тем же правилам, что на графике динамики. По умолчанию выбрана база за 36 месяцев.",
     sections: [clientBaseDefinitionSection(profile), clientBasePartitionHistorySection(doctorId, monthKey)],
-    windows: [12, 6, 24, 36].map(window => {
+    windows: [36, 6, 12, 24].map(window => {
       const base = reportClientBaseSummary(doctorId, monthKey, window);
       const previous = reportClientBaseSummary(doctorId, prevMonthKey(monthKey), window);
       const series = adminClientBaseSeries(doctorId, monthKey, window);
       const visible = groups.filter(group => base?.groupAvailable[group]);
-      return { id: String(window), label: `${window} мес.`, period: `Точное окно ${window} месяцев`, methodologyId: "report-overlap-v1", sections: [{
+      return { id: String(window), label: `${window} мес.`, period: `Точное окно ${window} месяцев`, methodologyId: "report-partition-v1", sections: [{
         title: "Клиентская база", note: !base ? `Нет точной выгрузки за ${window} месяцев. Другой период не подставляется.`
-          : !base.groupAvailable.active ? `Неполные данные: для активных нужно выбрать окно не короче ${base.activeWindow} мес. и загрузить «Давность посещений» ровно за ${base.activeWindow} мес.` : "",
+          : "",
         metrics: [mobilePublicationMetric("Общая база", fmtNum(base?.total), previous && base ? mobilePublicationPercentChange(previous.total ? (base.total - previous.total) / previous.total * 100 : null) : "Нет данных за предыдущий месяц"),
           ...visible.map(group => mobilePublicationMetric(clientBaseGroupLabel(group), fmtPct(clientBaseGroupPct(base, group)), `${fmtNum(base.seg[group])} чел. · ${clientBaseShareMovement(clientBaseGroupPct(base, group), previous?.groupAvailable[group] ? clientBaseGroupPct(previous, group) : null)}`))],
         columns: ["Группа", "Пациенты", "Доля", "Условие"], rows: visible.map(group => [clientBaseGroupLabel(group), fmtNum(base.seg[group]), fmtPct(clientBaseGroupPct(base, group)), clientBaseGroupDescription(base, group)]),
-        charts: [mobilePublicationChart("overlap-shares", "Доли по месяцам", "line", series.months.map(monthLabel),
+        charts: [mobilePublicationChart("partition-shares", "Доли по месяцам", "line", series.months.map(monthLabel),
           groups.filter(group => series.bases.some(value => value?.groupAvailable[group])).map(group => ({ label: clientBaseGroupLabel(group), values: series.bases.map(value => value?.groupAvailable[group] ? clientBaseGroupPct(value, group) : null) })), "%")].filter(Boolean),
       }] };
     }),
@@ -8193,7 +8209,7 @@ function cloudDoctorReport(doctorId, monthKey, comments) {
     rows: [...primary.buckets.map(bucket => [bucket.visits === 3 ? "3 и более" : String(bucket.visits), fmtNum(bucket.count), fmtPct(bucket.share)]),
       ...(primary.unknownVisits ? [["Неполные данные", fmtNum(primary.unknownVisits), fmtPct(primary.patients.length ? primary.unknownVisits / primary.patients.length * 100 : null)]] : [])],
   });
-  report.dynamics = cloudReportDynamics(monthKey, key => doctorHasDashboardData(doctorId, key) ? computeMetrics(doctorId, key) : null,
+  report.dynamics = cloudReportDynamics(monthKey, key => doctorHasDashboardData(doctorId, key) ? doctorReportMetrics(doctorId, key) : null,
     profile, `doctor|${monthKey}|${doctorId}`);
   const scoreChart = report.dynamics?.charts.find(chart => chart.id === "scores");
   for (const vector of report.vectors) {
@@ -8302,7 +8318,7 @@ function cloudGroupReport(item, monthKey, comments, doctors) {
     total.q += group.q || 0; total.s += group.s || 0; revenueGroups.set(name, total);
   }
   const base = result.akb.primary;
-  const groups = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+  const groups = ["active", "loyalSleep", "newRisk", "lost"];
   const missing = Object.entries(result.coverage).filter(([, value]) => !value.complete).map(([key, value]) => `${key}: данные ${value.coveredDoctors} из ${value.expectedDoctors} врачей`);
   const monthlyTrafficRow = (label, { traffic }) => [label, fmtNum(traffic.visits), fmtNum(traffic.patients), fmtNum(traffic.freq, 2)];
   const vectorSections = [
@@ -8320,7 +8336,7 @@ function cloudGroupReport(item, monthKey, comments, doctors) {
       ...[1, 3].map(window => section(`Назначения · ${window} мес.`, [metric("Назначено", result.cross.naz[window]?.totals.assigned),
         metric("Выполнено + продано", result.cross.naz[window]?.totals.resultQ), metric("Конверсия", result.cross.naz[window]?.totals.conv, fmtPct)]))],
     [section("Клиентская база", [metric("Общая база", base?.total), metric("Активная база", base?.activeBasePct, fmtPct), metric("Потерянные", base?.lostPct, fmtPct)], {
-      note: "Сводная совместимая методика: группы могут пересекаться. При разных окнах или неполном покрытии доли не рассчитываются.",
+      note: "Четыре непересекающиеся группы. При неполном покрытии доли не рассчитываются.",
       columns: ["Группа", "Пациенты"], rows: groups.map(group => [clientBaseGroupLabel(group), fmtNum(base?.seg[group])]),
     })],
     [section("Лояльность", [metric("Расписание", result.loyalty.sched?.pct, fmtPct), metric("Собственная запись", result.loyalty.ownRec?.pct, fmtPct),
@@ -8337,7 +8353,7 @@ function cloudGroupReport(item, monthKey, comments, doctors) {
   const vectors = ["v1", "v2", "v3", "v4", "v5", "v6"].map((id, index) => ({ id, number: index + 1, title: VECTOR_META[id].name,
     score: Number.isFinite(result.vecAvg[id]) ? Math.round(result.vecAvg[id]) : null, delta: null, coverage: null, preliminary: false,
     detail: "Сводные показатели включённых врачей. Несопоставимые значения остаются незаданными.", sections: vectorSections[index] }));
-  vectors[3].methodologyId = "report-overlap-v1";
+  vectors[3].methodologyId = "report-partition-v1";
   vectors[3].sections = [clientBaseDefinitionsForDoctors(records.map(({ id }) => id))];
   if (specialization) {
     const history = specializationClientBaseHistory(monthKey, "all", "all", ids);
@@ -8345,11 +8361,11 @@ function cloudGroupReport(item, monthKey, comments, doctors) {
     vectors[3].sections.push({ title: "Динамика клиентской базы", charts: chart ? [chart] : [],
       note: chart ? "" : "Неполные данные: нет сопоставимых выгрузок «Давность посещений» за 36 месяцев." });
   }
-  vectors[3].windows = (specialization ? [36, 6, 12, 24] : [12, 6, 24, 36]).map(window => {
+  vectors[3].windows = [36, 6, 12, 24].map(window => {
     const bases = records.map(({id}) => ({ id, base: reportClientBaseSummary(id, monthKey, window), previous: reportClientBaseSummary(id, prevMonthKey(monthKey), window) }));
     const visible = groups.filter(group => bases.some(row => row.base?.groupAvailable[group]));
     return { id: String(window), label: `${window} мес.`, period: `Точное окно ${window} месяцев`, sections: [{ title: "Клиентская база · сравнение врачей",
-      note: "Единая методика с личным В4. Для активных нужна выгрузка за срок из настроек специализации.",
+      note: "Те же четыре группы, что в личном В4 и на графике динамики. Каждый пациент входит ровно в одну группу.",
       columns: ["Врач", "Период", "Общая база", "Изменение базы", ...visible.map(clientBaseGroupLabel)],
       rows: bases.map(({id, base, previous}) => [doctorName(id), `${window} мес.`, fmtNum(base?.total), mobilePublicationPercentChange(base && previous?.total ? (base.total - previous.total) / previous.total * 100 : null),
         ...visible.map(group => base?.groupAvailable[group] ? `${fmtNum(base.seg[group])} · ${fmtPct(clientBaseGroupPct(base, group))}` : "—")]),
@@ -8490,7 +8506,7 @@ const UI = {
   checkMonth: null,
   repMonth: null,
   repScope: "dept",
-  repKbWin: 12,
+  repKbWin: 36,
   cmp: [null, null, null],
   staffFilter: "",
   openGroups: {},
@@ -8499,7 +8515,7 @@ const UI = {
   setDoctor: null,
   pvSlice: 3,     // тогл первички: 3/6/12
   nazSlice: 1,    // тогл назначений: 1/3
-  kbWin: 12,      // точное окно врача: 6/12/24/36
+  kbWin: 36,      // по умолчанию та же трёхлетняя база, что на графике
   specializationKbWin: 36,
   clientSegment: "newRisk",
   showLabels: true, // цифры на графиках
@@ -9163,7 +9179,7 @@ function departmentMetricDefs() {
     { key: "refShare", label: "Доля перенаправлений от выручки", get: r => r && r.cross.crossShare, fmt: fmtPct, mode: "pp", goalKey: "crossShare", goalFmt: fmtPct },
     { key: "pv3", label: "Возвращаемость первички за 3 месяца", get: r => r && r.loyalty.pvSlices[3] ? r.loyalty.pvSlices[3].pct : null, fmt: fmtPct, mode: "pp", goalKey: "pervichka", goalFmt: fmtPct, goalPeriod: 3 },
     { key: "pv6", label: "Возвращаемость первички за 6 месяцев", get: r => r && r.loyalty.pvSlices[6] ? r.loyalty.pvSlices[6].pct : null, fmt: fmtPct, mode: "pp", goalKey: "pervichka", goalFmt: fmtPct, goalPeriod: 6 },
-    { key: "active", label: "Активные пациенты", get: r => r && r.akb.primary && r.akb.primary.groupAvailable.active ? r.akb.primary.seg.active : null, fmt: v => fmtNum(v), mode: "pct", goalKey: "akbShare", goalFmt: fmtPct, goalLabel: "доля активной базы", goalGet: r => r && r.akb.primary && r.akb.primary.groupAvailable.active ? r.akb.primary.activeBasePct : null },
+    { key: "active", label: "Активные лояльные", get: r => r && r.akb.primary && r.akb.primary.groupAvailable.active ? r.akb.primary.seg.active : null, fmt: v => fmtNum(v), mode: "pct", goalKey: "akbShare", goalFmt: fmtPct, goalLabel: "доля активной базы", goalGet: r => r && r.akb.primary && r.akb.primary.groupAvailable.active ? r.akb.primary.activeBasePct : null },
     { key: "lost", label: "Потерянные пациенты", get: r => r && r.akb.primary && r.akb.primary.groupAvailable.lost ? r.akb.primary.seg.lost : null, fmt: v => fmtNum(v), mode: "pct", lower: true, goalKey: "churn", goalFmt: fmtPct, goalLabel: "потерянные за 3 года", goalGet: r => { const kb = r && r.akb.primary; return kb && kb.groupAvailable.lost && kb.windows && kb.windows.length === 1 && kb.windows[0] >= 36 ? kb.lostPct : null; }, goalLower: true },
     { key: "sched", label: "Загрузка отделения за месяц", get: r => r && r.loyalty.sched ? r.loyalty.sched.pct : null, fmt: fmtPct, mode: "pp", goalKey: "schedLoad", goalFmt: fmtPct },
   ];
@@ -9300,9 +9316,11 @@ function renderDepartmentNow() {
   }
 
   const scoreRows = departmentDoctorRows(mk, UI.departmentFilter);
+  const primaryActivity = departmentPrimaryPatientsView(mk, UI.departmentFilter);
   let html = `<div class="notice blue"><b>${esc(scope)}</b>: расчетные профили — ${specs.map(esc).join(", ") || "не настроены"}. Стрелки сравнивают месяц с предыдущим календарным месяцем и со средним значением прошлых месяцев ${year} года.${goalProfile ? " Итоговое значение зелёное, если цель отделения выполнена, красное — если не выполнена; без сопоставимой цели цвет нейтральный." : " Для сводной по всем отделениям единая цель не применяется."}</div>`;
   html += aggregateCoverageHtml(current);
   html += doctorScoreLeaderboardHtml(scoreRows, mk, scope);
+  html += departmentPrimaryPatientsHtml(primaryActivity, mk, scope);
   html += '<div class="grid cols-4">' + defs.map(def => {
     const cur = def.get(current);
     const prev = def.get(previous);
@@ -9316,13 +9334,13 @@ function renderDepartmentNow() {
 
   const specRows = specs.map(spec => ({ spec, r: aggregateDeptMonth(mk, [spec]) })).filter(row => row.r);
   html += `<div class="card"><h2>Итоги профилей внутри отделения за ${monthLabel(mk)} <span class="spacer"></span>${copyBtn("copyTable", "tblDepartmentSpecs")}</h2>
-    <p class="small muted" style="margin-top:0">Пациенты объединяются по ID, а при его отсутствии — по нормализованному ФИО. Группы отражают отношения пациента с врачами и могут пересекаться. Пустая ячейка означает неполные данные, разные окна баз или временной порог больше окна выгрузки; ноль не подставляется.</p>
-    <div class="department-profiles-scroll"><table class="data department-profiles-table" id="tblDepartmentSpecs"><colgroup><col class="department-profile-name-col">${Array.from({ length: 13 }, () => '<col class="department-profile-value-col">').join("")}</colgroup><tr><th>Профиль</th><th class="num">Врачей</th><th class="num">Выручка</th><th class="num">С перенаправлениями</th><th class="num">Доля перенапр.</th><th class="num">Первичка 3 мес.</th><th class="num">Первичка 6 мес.</th><th class="num">Общая база</th><th class="num">Лояльные</th><th class="num">Активные</th><th class="num">Новые, риск</th><th class="num">Лояльные, спящие</th><th class="num">Потерянные</th><th class="num">Загрузка</th></tr>`;
+    <p class="small muted" style="margin-top:0">Пациенты объединяются по ID, а при его отсутствии — по нормализованному ФИО. Каждый пациент входит ровно в одну из четырёх групп. Если у разных врачей группы отличаются, приоритет: активные лояльные, лояльные спящие, новые в риске, потерянные. Пустая ячейка означает неполные данные или разные окна баз; ноль не подставляется.</p>
+    <div class="department-profiles-scroll"><table class="data department-profiles-table" id="tblDepartmentSpecs"><colgroup><col class="department-profile-name-col">${Array.from({ length: 12 }, () => '<col class="department-profile-value-col">').join("")}</colgroup><tr><th>Профиль</th><th class="num">Врачей</th><th class="num">Выручка</th><th class="num">С перенаправлениями</th><th class="num">Доля перенапр.</th><th class="num">Первичка 3 мес.</th><th class="num">Первичка 6 мес.</th><th class="num">Общая база</th><th class="num">Активные лояльные</th><th class="num">Лояльные спящие</th><th class="num">Новые в риске</th><th class="num">Потерянные</th><th class="num">Загрузка</th></tr>`;
   const currentKb = current && current.akb.primary;
-  html += `<tr class="department-total-row"><td><b>Итого по ${UI.departmentFilter === "all" ? "всем отделениям" : "отделению"}</b></td><td class="num"><b>${fmtNum(current.doctors)}</b></td><td class="num"><b>${fmtMoney(current.econ.sales)}</b></td><td class="num"><b>${fmtMoney(current.econ.revenueWithRef)}</b></td><td class="num"><b>${fmtPct(current.cross.crossShare)}</b></td><td class="num"><b>${current.loyalty.pvSlices[3] ? fmtPct(current.loyalty.pvSlices[3].pct) : "—"}</b></td><td class="num"><b>${current.loyalty.pvSlices[6] ? fmtPct(current.loyalty.pvSlices[6].pct) : "—"}</b></td><td class="num"><b>${currentKb ? fmtNum(currentKb.total) : "—"}</b></td><td class="num"><b>${currentKb ? clientBaseCountPctMarkup(currentKb, "loyal") : ""}</b></td><td class="num"><b>${currentKb ? clientBaseCountPctMarkup(currentKb, "active") : ""}</b></td><td class="num"><b>${currentKb ? clientBaseCountPctMarkup(currentKb, "newRisk") : ""}</b></td><td class="num"><b>${currentKb ? clientBaseCountPctMarkup(currentKb, "loyalSleep") : ""}</b></td><td class="num"><b>${currentKb ? clientBaseCountPctMarkup(currentKb, "lost") : ""}</b></td><td class="num"><b>${current.loyalty.sched ? fmtPct(current.loyalty.sched.pct) : "—"}</b></td></tr>`;
+  html += `<tr class="department-total-row"><td><b>Итого по ${UI.departmentFilter === "all" ? "всем отделениям" : "отделению"}</b></td><td class="num"><b>${fmtNum(current.doctors)}</b></td><td class="num"><b>${fmtMoney(current.econ.sales)}</b></td><td class="num"><b>${fmtMoney(current.econ.revenueWithRef)}</b></td><td class="num"><b>${fmtPct(current.cross.crossShare)}</b></td><td class="num"><b>${current.loyalty.pvSlices[3] ? fmtPct(current.loyalty.pvSlices[3].pct) : "—"}</b></td><td class="num"><b>${current.loyalty.pvSlices[6] ? fmtPct(current.loyalty.pvSlices[6].pct) : "—"}</b></td><td class="num"><b>${currentKb ? fmtNum(currentKb.total) : "—"}</b></td><td class="num"><b>${currentKb ? clientBaseCountPctMarkup(currentKb, "active") : ""}</b></td><td class="num"><b>${currentKb ? clientBaseCountPctMarkup(currentKb, "loyalSleep") : ""}</b></td><td class="num"><b>${currentKb ? clientBaseCountPctMarkup(currentKb, "newRisk") : ""}</b></td><td class="num"><b>${currentKb ? clientBaseCountPctMarkup(currentKb, "lost") : ""}</b></td><td class="num"><b>${current.loyalty.sched ? fmtPct(current.loyalty.sched.pct) : "—"}</b></td></tr>`;
   for (const row of specRows) {
     const r = row.r, kb = r && r.akb.primary;
-    html += `<tr><td><b>${esc(row.spec)}</b></td><td class="num">${r ? fmtNum(r.doctors) : "—"}</td><td class="num">${r ? fmtMoney(r.econ.sales) : "—"}</td><td class="num">${r ? fmtMoney(r.econ.revenueWithRef) : "—"}</td><td class="num">${r ? fmtPct(r.cross.crossShare) : "—"}</td><td class="num">${r && r.loyalty.pvSlices[3] ? fmtPct(r.loyalty.pvSlices[3].pct) : "—"}</td><td class="num">${r && r.loyalty.pvSlices[6] ? fmtPct(r.loyalty.pvSlices[6].pct) : "—"}</td><td class="num">${kb ? fmtNum(kb.total) : "—"}</td><td class="num">${kb ? clientBaseCountPctMarkup(kb, "loyal") : ""}</td><td class="num">${kb ? clientBaseCountPctMarkup(kb, "active") : ""}</td><td class="num">${kb ? clientBaseCountPctMarkup(kb, "newRisk") : ""}</td><td class="num">${kb ? clientBaseCountPctMarkup(kb, "loyalSleep") : ""}</td><td class="num">${kb ? clientBaseCountPctMarkup(kb, "lost") : ""}</td><td class="num">${r && r.loyalty.sched ? fmtPct(r.loyalty.sched.pct) : "—"}</td></tr>`;
+    html += `<tr><td><b>${esc(row.spec)}</b></td><td class="num">${r ? fmtNum(r.doctors) : "—"}</td><td class="num">${r ? fmtMoney(r.econ.sales) : "—"}</td><td class="num">${r ? fmtMoney(r.econ.revenueWithRef) : "—"}</td><td class="num">${r ? fmtPct(r.cross.crossShare) : "—"}</td><td class="num">${r && r.loyalty.pvSlices[3] ? fmtPct(r.loyalty.pvSlices[3].pct) : "—"}</td><td class="num">${r && r.loyalty.pvSlices[6] ? fmtPct(r.loyalty.pvSlices[6].pct) : "—"}</td><td class="num">${kb ? fmtNum(kb.total) : "—"}</td><td class="num">${kb ? clientBaseCountPctMarkup(kb, "active") : ""}</td><td class="num">${kb ? clientBaseCountPctMarkup(kb, "loyalSleep") : ""}</td><td class="num">${kb ? clientBaseCountPctMarkup(kb, "newRisk") : ""}</td><td class="num">${kb ? clientBaseCountPctMarkup(kb, "lost") : ""}</td><td class="num">${r && r.loyalty.sched ? fmtPct(r.loyalty.sched.pct) : "—"}</td></tr>`;
   }
   html += "</table></div></div>";
 
@@ -9337,6 +9355,7 @@ function renderDepartmentNow() {
 
   document.getElementById("departmentBody").innerHTML = html;
   renderDepartmentCharts(history, defs);
+  if (primaryActivity.primaryChart) renderSpecializationTrend(primaryActivity.primaryChart);
 }
 
 /* ================= СТРАНИЦА: СПЕЦИАЛИЗАЦИЯ ================= */
@@ -9356,12 +9375,44 @@ function deptRows(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilter) {
   return { rows, allIds: docIds };
 }
 
-function departmentDoctorRows(mk, departmentFilter = UI.departmentFilter) {
+function departmentDoctorIds(mk, departmentFilter = UI.departmentFilter) {
   const docIds = doctorsForScopeInMonth(mk, departmentFilter !== "all");
-  const filtered = departmentFilter === "all"
+  return departmentFilter === "all"
     ? docIds
     : docIds.filter(id => resolvedDepartmentName(id) === departmentFilter);
-  return filtered.map(id => ({ id, r: computeMetrics(id, mk) })).filter(x => x.r);
+}
+
+function departmentDoctorRows(mk, departmentFilter = UI.departmentFilter) {
+  return departmentDoctorIds(mk, departmentFilter).map(id => ({ id, r: computeMetrics(id, mk) })).filter(x => x.r);
+}
+
+function departmentPrimaryPatientsView(mk, departmentFilter = UI.departmentFilter) {
+  const months = calendarYearMonthKeys(mk);
+  const history = months.map(month => specializationActivityMonth(month, "all", "all", departmentDoctorIds(month, departmentFilter), []));
+  const primaryChart = mobilePublicationChart("department-primary", "Первичные пациенты по месяцам", "line", months.map(monthLabel), [
+    { label: "Первичные пациенты", color: "#2563eb", values: history.map(entry => entry?.primary.total ?? null) },
+    { label: "Из них с 4+ посещениями", color: "#16a34a", values: history.map(entry => entry?.primary.frequent ?? null),
+      pointNotes: history.map(entry => entry?.primary.share != null ? `${fmtPct(entry.primary.share)} от первичных` : "") },
+  ], "чел.");
+  return { current: history.at(-1), primaryChart,
+    totalLabel: departmentFilter === "all" ? "Итого по всем отделениям" : "Итого по отделению" };
+}
+
+function departmentPrimaryPatientsHtml(activity, mk, scopeLabel) {
+  const current = activity.current;
+  if (!current) return "";
+  const primary = current.primary;
+  const presentation = globalThis.klinvektReportPresentation;
+  const totalLabel = activity.totalLabel;
+  const counts = current.ids.map(id => [doctorName(id), fmtNum(primary.byDoctor[id])]);
+  counts.push([totalLabel, fmtNum(primary.total)]);
+  return `<section class="card" data-department-primary aria-label="Первичные пациенты отделения">
+    <h2>Первичные пациенты <span class="small muted">· ${esc(scopeLabel)} · ${monthLabel(mk)}</span><span class="spacer"></span>${copyBtn("copyTable", "tblDepartmentPrimary")}</h2>
+    ${primary.covered < current.ids.length ? `<p class="notice blue">Данные есть у ${primary.covered} из ${current.ids.length} врачей. Для общего итога и источников нужны корректные месячные отчёты «Пациенты по врачам» по всем врачам выбранного отделения. Пропуски показаны как «—».</p>` : ""}
+    ${presentation.specializationPrimarySummaryHtml(counts, primary.sourceCounts, { tableId: "tblDepartmentPrimary", totalLabel })}
+    ${activity.primaryChart ? specializationTrendHtml(activity.primaryChart) : '<p class="small muted">Для графика нужны сопоставимые месячные отчёты «Пациенты по врачам».</p>'}
+    ${presentation.reportHelpHtml(`<p>${SPECIALIZATION_PRIMARY_NOTE}</p><p>Состав врачей определяется отдельно для каждого месяца с учётом выбранного отделения. Отсутствующие месяцы и неполные данные не считаются нулём.</p>`)}
+  </section>`;
 }
 
 function doctorAverageScoreToMonth(docId, mk) {
@@ -9611,7 +9662,8 @@ function renderSpecializationTrend(spec) {
       scales: {
         ...(device ? { x: { offset: true, ticks: { autoSkip: false, maxRotation: 0,
           callback: index => spec.labels[index].replace(/^(\S{3})\S* \d{2}(\d{2})$/, "$1 $2") } } } : {}),
-        y: { beginAtZero: true, ticks: { callback: value => spec.unit === "₽" ? fmtMoney(value) : fmtNum(value) } },
+        y: { beginAtZero: true, ticks: { precision: spec.unit === "чел." ? 0 : undefined,
+          callback: value => spec.unit === "₽" ? fmtMoney(value) : fmtNum(value) } },
       },
       plugins: { legend: device ? { display: false } : { position: "bottom" },
         datalabels: device ? {
@@ -9803,7 +9855,7 @@ function renderDeptNow() {
   const withKb = bases.filter(x => x.kb);
   if (withKb.length) {
     const previousMonth = prevMonthKey(mk, 1);
-    const visibleGroups = presentation.overlappingClientBaseGroups.filter(group => withKb.some(x => x.kb.groupAvailable[group.key]));
+    const visibleGroups = presentation.clientBaseGroups.filter(group => withKb.some(x => x.kb.groupAvailable[group.key]));
     const averages = presentation.clientBaseAveragesHtml(visibleGroups.map(group => group.label),
       bases.map(({ kb }) => visibleGroups.map(group => clientBaseGroupPct(kb, group.key))));
     html += `<div class="card"><div class="client-base-heading"><h2>Клиентская база</h2>${averages}<div class="client-base-controls">${kbControls} ${copyBtn("copyTable", "tblRisk")}</div></div><table class="data" id="tblRisk"><tr><th>Специалист</th><th class="num">Период</th><th class="num">Общая база</th>${visibleGroups.map(group => `<th class="num">${esc(group.label)}</th>`).join("")}</tr>`;
@@ -9909,8 +9961,8 @@ function renderCompare(mk, rows) {
       { name: "Выполнено + продано по фокусам, шт.", fmt: r => { const nz = r.cross.naz[UI.nazSlice] || r.cross.naz[1] || r.cross.naz[3]; return nz && nz.focus ? fmtNum(nz.focus.resultQ) : "—"; }, num: r => { const nz = r.cross.naz[UI.nazSlice] || r.cross.naz[1] || r.cross.naz[3]; return nz && nz.focus ? nz.focus.resultQ : null; } },
     ] : []),
     { name: "Доля активных", fmt: (r, id) => baseShareMarkup(r, id, "activeBasePct"), num: (r, id) => exactBaseShare(r, id, "activeBasePct"), targetKey: "akbShare", targetFmt: fmtPct },
-    { name: "Доля «Новые, риск»", fmt: (r, id) => baseShareMarkup(r, id, "riskShare"), num: (r, id) => exactBaseShare(r, id, "riskShare"), targetKey: "riskShare", targetFmt: fmtPct, lower: true },
-    { name: `Потерянные (${goalProfile ? "до " + fmtNum(goalProfile.lostVisits, 0) + " виз., >" + fmtNum(goalProfile.lostM, 1) + " мес." : "порог специализации"})`, fmt: (r, id) => { const kb = comparisonKb(r, id); return kb && kb.groupAvailable.lost ? `${fmtNum(kb.seg.lost)} чел. (${fmtPct(kb.lostPct)})` : ""; }, num: (r, id) => { const kb = comparisonKb(r, id); return kb && kb.groupAvailable.lost ? kb.seg.lost : null; }, lower: true },
+    { name: "Доля «Новые в риске»", fmt: (r, id) => baseShareMarkup(r, id, "riskShare"), num: (r, id) => exactBaseShare(r, id, "riskShare"), targetKey: "riskShare", targetFmt: fmtPct, lower: true },
+    { name: "Потерянные · по правилам четырёх групп", fmt: (r, id) => { const kb = comparisonKb(r, id); return kb && kb.groupAvailable.lost ? `${fmtNum(kb.seg.lost)} чел. (${fmtPct(kb.lostPct)})` : ""; }, num: (r, id) => { const kb = comparisonKb(r, id); return kb && kb.groupAvailable.lost ? kb.seg.lost : null; }, lower: true },
     { name: "Потерянные за 3 года", fmt: r => r.akb.churn36 != null ? fmtPct(r.akb.churn36) : "—", num: r => r.akb.churn36, targetKey: "churn", targetFmt: fmtPct, lower: true },
     { name: "Средний рейтинг площадок", fmt: r => r.rep && r.rep.avgRating != null ? fmtNum(r.rep.avgRating, 2) + " ★" : "—", num: r => r.rep ? r.rep.avgRating : null, targetKey: "rating", targetFmt: v => fmtNum(v, 2) + " ★" },
     { name: "NPS", fmt: r => r.rep && r.rep.nps != null ? fmtPct(r.rep.nps) : "—", num: r => r.rep ? r.rep.nps : null, targetKey: "nps", targetFmt: fmtPct },
@@ -9948,12 +10000,12 @@ async function exportDeptXlsx() {
   const header = ["Специалист", "Отделение", "Специализация", "Общий балл", "Статус балла", "Полнота балла, %", "Выручка, ₽", "Выручка с перенаправл., ₽", "Выручка от перенаправлений, ₽", "Ср. чек пациента, ₽", "Ср. чек посещения, ₽",
     "Визиты", "Пациенты", "Частота", "Загрузка расписания, %", "Часы график", "Часы записано",
     `Возвращаемость первички (${UI.pvSlice} мес.), %`, "Собственных записей в 1С, шт", "Собственная запись в 1С, %", "Курсовое, %",
-    "Настройки клиентской базы", "Период базы, мес.", "Общая клиентская база", "Лояльные, чел.", "Лояльные, % от общей клиентской базы", "Активные, чел.", "Активные, % от общей клиентской базы", "Новые, риск, чел.", "Новые, риск, % от общей клиентской базы", "Лояльные, спящие, чел.", "Лояльные, спящие, % от общей клиентской базы", "Потерянные, чел.", "Потерянные, % от общей клиентской базы", "Экспертных позиций", "Конверсия назначений, %", "Доля выручки от перенаправлений, %",
+    "Настройки клиентской базы", "Период базы, мес.", "Общая клиентская база", "Активные лояльные, чел.", "Активные лояльные, % от общей клиентской базы", "Лояльные спящие, чел.", "Лояльные спящие, % от общей клиентской базы", "Новые в риске, чел.", "Новые в риске, % от общей клиентской базы", "Потерянные, чел.", "Потерянные, % от общей клиентской базы", "Экспертных позиций", "Конверсия назначений, %", "Доля выручки от перенаправлений, %",
     ...REPUTATION_PLATFORMS.flatMap(({ name }) => [`${name}: рейтинг`, `${name}: всего отзывов`]), "Всего отзывов на 4 площадках", "Средний рейтинг площадок", "NPS", "Новые отзывы за месяц"];
   const aoa = [["Сводная по векторам за " + monthLabel(mk)], [], header];
   const num = v => (v == null || isNaN(v)) ? null : Math.round(v * 100) / 100;
   for (const x of rows) {
-    const r = x.r, baseProfile = clientBaseReportProfile(deptParams(x.id)), kb = reportClientBaseSummary(x.id, mk, UI.specializationKbWin), pv = r.loyalty.pvSlices[UI.pvSlice], nz = r.cross.naz[UI.nazSlice];
+    const r = x.r, baseProfile = deptParams(x.id), kb = reportClientBaseSummary(x.id, mk, UI.specializationKbWin), pv = r.loyalty.pvSlices[UI.pvSlice], nz = r.cross.naz[UI.nazSlice];
     const groupValue = (group, value) => kb && kb.groupAvailable[group] ? value : null;
     aoa.push([
       doctorName(x.id), resolvedDepartmentName(x.id), resolvedSpecializationName(x.id) || "—",
@@ -9971,10 +10023,9 @@ async function exportDeptXlsx() {
       num(r.loyalty.courseIdx),
       clientBaseProfileDescription(baseProfile),
       kb ? kb.window : null, kb ? kb.total : null,
-      groupValue("loyal", kb && kb.seg.loyal), groupValue("loyal", num(kb && kb.loyalPct)),
       groupValue("active", kb && kb.seg.active), groupValue("active", num(kb && kb.activeBasePct)),
-      groupValue("newRisk", kb && kb.seg.newRisk), groupValue("newRisk", num(kb && kb.newRiskPct)),
       groupValue("loyalSleep", kb && kb.seg.loyalSleep), groupValue("loyalSleep", num(kb && kb.loyalSleepPct)),
+      groupValue("newRisk", kb && kb.seg.newRisk), groupValue("newRisk", num(kb && kb.newRiskPct)),
       groupValue("lost", kb && kb.seg.lost), groupValue("lost", num(kb && kb.lostPct)),
       r.product ? r.product.devicesUsed : null,
       nz && nz.totals.conv != null ? num(nz.totals.conv) : null,
@@ -10036,7 +10087,7 @@ function clientRowsForSegment(kb, segment) {
 }
 
 function clientBaseGroupLabel(group) {
-  return ({ loyal: "Лояльные", active: "Активные", newRisk: "Новые, риск", loyalSleep: "Лояльные, спящие", lost: "Потерянные" })[group] || group;
+  return adminClientBaseGroupLabel(group);
 }
 
 function clientBaseGroupPct(kb, group) {
@@ -10045,7 +10096,7 @@ function clientBaseGroupPct(kb, group) {
 }
 
 function clientBaseGroupDescription(kb, group) {
-  if (kb.partition) return adminClientBaseGroupDescription(kb.partition, group);
+  if (kb.partition) return adminClientBaseGroupDescription(kb.partition, group, kb.window);
   const t = kb.thresholds;
   return ({
     loyal: `не менее ${fmtNum(t.loyalVisits)} визитов; последний визит был не более ${fmtNum(t.loyalM)} мес. назад`,
@@ -10057,9 +10108,9 @@ function clientBaseGroupDescription(kb, group) {
 }
 
 function clientBaseDefinitionSection(profile) {
-  const holder = { thresholds: clientBaseThresholds(clientBaseReportProfile(profile)) };
+  const holder = { partition: clientBasePartitionSettings(profile), window: null };
   return { title: "Что означают группы?", columns: ["Группа", "Условие"],
-    rows: ["loyal", "active", "newRisk", "loyalSleep", "lost"].map(group => [clientBaseGroupLabel(group), clientBaseGroupDescription(holder, group)]) };
+    rows: ["active", "loyalSleep", "newRisk", "lost"].map(group => [clientBaseGroupLabel(group), clientBaseGroupDescription(holder, group)]) };
 }
 
 function clientBaseDefinitionsForDoctors(ids) {
@@ -10073,9 +10124,10 @@ function adminClientBaseGroupLabel(group) {
   return ({ active: "Активные лояльные", loyalSleep: "Лояльные спящие", newRisk: "Новые в риске", lost: "Потерянные" })[group] || group;
 }
 
-function adminClientBaseGroupDescription(t, group) {
-  const few = `от 1 до ${fmtNum(t.loyalVisits - 1)} визитов за 36 мес.`;
-  const loyal = `не менее ${fmtNum(t.loyalVisits)} визитов за 36 мес.`;
+function adminClientBaseGroupDescription(t, group, windowMonths = 36) {
+  const period = windowMonths == null ? "в выбранной выгрузке" : `за ${fmtNum(windowMonths)} мес.`;
+  const few = `от 1 до ${fmtNum(t.loyalVisits - 1)} визитов ${period}`;
+  const loyal = `не менее ${fmtNum(t.loyalVisits)} визитов ${period}`;
   return ({
     active: `${loyal}; последний визит не более ${fmtNum(t.activeM)} мес. назад`,
     loyalSleep: `${loyal}; последний визит более ${fmtNum(t.activeM)} мес. назад${t.lostAnyVisits ? `, но не более ${fmtNum(t.lostM)} мес.` : ""}`,
@@ -10123,13 +10175,13 @@ function adminClientBaseQualityDetailsHtml(series) {
     </table></div>${rows.length > 250 ? '<p class="small muted">Показаны первые 250 строк; полный список доступен в исходных выгрузках.</p>' : ""}</details>`;
 }
 
-function clientBaseProfileDescription(profile, groups = ["loyal", "active", "newRisk", "loyalSleep", "lost"]) {
-  const holder = { thresholds: clientBaseThresholds(profile) };
+function clientBaseProfileDescription(profile, groups = ["active", "loyalSleep", "newRisk", "lost"]) {
+  const holder = { partition: clientBasePartitionSettings(profile), window: null };
   return groups.map(group => `${clientBaseGroupLabel(group)} — ${clientBaseGroupDescription(holder, group)}`).join("; ");
 }
 
-function clientBaseProfileDescriptionMarkup(profile, groups = ["loyal", "active", "newRisk", "loyalSleep", "lost"]) {
-  const holder = { thresholds: clientBaseThresholds(profile) };
+function clientBaseProfileDescriptionMarkup(profile, groups = ["active", "loyalSleep", "newRisk", "lost"]) {
+  const holder = { partition: clientBasePartitionSettings(profile), window: null };
   return `<ul class="client-base-description-list">${groups.map(group => `<li><b>${esc(clientBaseGroupLabel(group))}:</b> ${esc(clientBaseGroupDescription(holder, group))}</li>`).join("")}</ul>`;
 }
 
@@ -10153,7 +10205,7 @@ function clientSegmentLimitMarkup(clients) {
 
 function viewerPatientRowsHtml(kb) {
   const partitioned = Boolean(kb.partition);
-  const groups = partitioned ? ["active", "loyalSleep", "newRisk", "lost"] : ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+  const groups = ["active", "loyalSleep", "newRisk", "lost"];
   const groupLabel = group => partitioned ? adminClientBaseGroupLabel(group) : clientBaseGroupLabel(group);
   const rows = [...(kb.clientRows || [])].sort((a, b) =>
     Number(b.s || 0) - Number(a.s || 0)
@@ -10203,14 +10255,14 @@ function viewerClientBaseHtml(target, periodKey) {
   const doctorId = String(target.doctorId);
   const kb = reportClientBaseSummary(doctorId, periodKey, UI.kbWin);
   if (!kb) return "";
-  return `<div class="viewer-client-base-register" data-viewer-client-base data-client-base-methodology="report-overlap-v1">
+  return `<div class="viewer-client-base-register" data-viewer-client-base data-client-base-methodology="report-partition-v1">
     ${viewerPatientRowsHtml(kb)}
   </div>`;
 }
 
 function setClientSegment(v) {
   const segment = String(v);
-  const allowed = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+  const allowed = ["active", "loyalSleep", "newRisk", "lost"];
   if (!allowed.includes(segment)) return;
   UI.clientSegment = segment;
 
@@ -11429,7 +11481,7 @@ function expandAppointmentDetails() {
 function adminClientBaseSeries(docId, endMk, windowMonths = 12) {
   const months = adminYearMonths(endMk);
   const bases = months.map(month => reportClientBaseSummary(docId, month, windowMonths));
-  const defs = [["loyal", "#2563eb"], ["active", "#16a34a"], ["loyalSleep", "#64748b"], ["newRisk", "#fbbf24"], ["lost", "#a80000"]];
+  const defs = [["active", "#afe7e9"], ["loyalSleep", "#64748b"], ["newRisk", "#fbbf24"], ["lost", "#a80000"]];
   return { months, bases, totals: bases.map(base => base ? base.total : null),
     datasets: defs.map(([key, color]) => ({ label: clientBaseGroupLabel(key), backgroundColor: color, borderWidth: 0,
       maxBarThickness: 32, data: bases.map(base => base ? base.seg[key] : null) })) };
@@ -11492,7 +11544,7 @@ function clientBaseShareMovement(current, previous) {
 function clientBaseShareHistoryHtml(series) {
   const presentation = globalThis.klinvektReportPresentation;
   const base = series.bases[series.bases.length - 1];
-  const groups = presentation.overlappingClientBaseGroups.filter(group => series.bases.some(base => base?.groupAvailable[group.key]));
+  const groups = presentation.clientBaseGroups.filter(group => series.bases.some(base => base?.groupAvailable[group.key]));
   return presentation.clientBaseShareTableHtml(series.months.map(monthLabel), groups.map(group => ({ ...group,
     values: series.bases.map(base => base?.groupAvailable[group.key] ? clientBaseGroupPct(base, group.key) : null) })));
 }
@@ -11516,10 +11568,10 @@ function primaryPatientsReportHtml(docId, monthKey, { registry = true } = {}) {
     `;
   if (registry) {
     html += `<div data-primary-patient-register>
-    <details class="primary-patients-details" open><summary>Первичные за ${esc(monthLabel(monthKey))} · ${fmtNum(current?.patients.length)}</summary>
+    <details class="primary-patients-details"><summary>Первичные за ${esc(monthLabel(monthKey))} · ${fmtNum(current?.patients.length)}</summary>
       <div class="primary-patients-scroll"><table class="data" id="tblPrimaryMonth"><thead><tr><th>ФИО пациента</th><th>Источник</th><th class="num">Посещений за месяц</th><th>Направлялся</th><th>Какие назначения</th></tr></thead><tbody>
       ${current ? current.patients.map(patient => `<tr><td>${esc(patient.name)}</td><td>${esc(patient.source || "Не указан")}</td><td class="num">${fmtNum(patient.visits)}</td><td>${primaryReferralText(patient.referral)}</td><td>${esc(primaryReferralItemsText(patient.referral) || "—")}</td></tr>`).join("") || '<tr><td colspan="5">Первичных пациентов в этом месяце нет.</td></tr>' : '<tr><td colspan="5">Загрузите месячный отчёт «Пациенты по врачам».</td></tr>'}</tbody></table></div></details>
-    <details class="primary-patients-details" open><summary>Все первичные за ${monthKey.slice(0, 4)} год · ${fmtNum(summary.patients.length)}</summary>
+    <details class="primary-patients-details"><summary>Все первичные за ${monthKey.slice(0, 4)} год · ${fmtNum(summary.patients.length)}</summary>
       <div class="primary-patients-scroll"><table class="data" id="tblPrimaryYear"><thead><tr><th>ФИО пациента</th><th>Источник</th><th>Первый месяц</th><th class="num">Посещений с первого месяца</th><th class="num">Выручка с первого месяца</th><th>Направлялся к другим специалистам</th></tr></thead><tbody>
       ${summary.patients.map(patient => `<tr><td>${esc(patient.name)}</td><td>${esc(patient.source || "Не указан")}</td><td>${esc(monthLabel(patient.firstMonth))}</td><td class="num">${patient.visits == null ? `${fmtNum(patient.observedVisits)} · неполные данные` : fmtNum(patient.visits)}</td><td class="num">${patient.revenue == null ? `${fmtMoney(patient.observedRevenue)} · неполные данные` : fmtMoney(patient.revenue)}</td><td>${primaryReferralText(patient.referral)}${patient.referral.status ? `<div class="small muted">${esc(primaryReferralItemsText(patient.referral))}</div>` : ""}</td></tr>`).join("") || '<tr><td colspan="6">Первичных пациентов в загруженных месяцах нет.</td></tr>'}</tbody></table></div></details></div>`;
   }
@@ -11685,7 +11737,7 @@ function clientBaseDynamics(docId, endMk, windowMonths, summary = kbSummary) {
   const prevKey = prevMonthKey(endMk, 1);
   const prev = summary(docId, prevKey, windowMonths);
   const year = endMk.slice(0, 4);
-  const groups = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+  const groups = ["active", "loyalSleep", "newRisk", "lost"];
   const months = calendarMonthKeys(`${year}-01`, endMk);
   const ytd = months
     .map(k => summary(docId, k, windowMonths))
@@ -11920,7 +11972,7 @@ function mobilePublicationPercentChange(value) {
 
 // Та же календарная база и среднее с начала года, что в metricHistoryMarkup().
 function mobilePublicationMetricHistory(doctorId, monthKey, getValue, mode, formatter, digits = 1, unit = "") {
-  const current = getValue(computeMetrics(doctorId, monthKey));
+  const current = getValue(computeMetrics(doctorId, monthKey), monthKey);
   const history = doctorMetricDynamics(doctorId, monthKey, getValue);
   const comparison = (label, baseline, value) => {
     const valid = Number.isFinite(current) && Number.isFinite(baseline) && (mode !== "relative" || baseline !== 0);
@@ -12212,10 +12264,10 @@ function mobilePublicationAppointmentSections(result, profile, windowMonths) {
   ];
 }
 
-function mobilePublicationClientWindows(result, profile) {
-  const groupOrder = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+function mobilePublicationClientWindows(result, profile, doctorId, monthKey) {
+  const groupOrder = ["active", "loyalSleep", "newRisk", "lost"];
   return (result.akb.availableWins || []).map(windowMonths => {
-    const base = result.akb.wins[windowMonths];
+    const base = reportClientBaseSummary(doctorId, monthKey, windowMonths);
     if (!base) return null;
     const rows = groupOrder.filter(group => base.groupAvailable[group]).map(group => [
       clientBaseGroupLabel(group),
@@ -12227,11 +12279,11 @@ function mobilePublicationClientWindows(result, profile) {
       id: String(windowMonths),
       label: Number(windowMonths) === 36 ? "3 года" : `${windowMonths} мес.`,
       period: `${periodStr(base.period)} · точное окно ${windowMonths} мес.`,
-      methodologyId: "legacy-overlap-v1",
+      methodologyId: "report-partition-v1",
       sections: [
         {
           title: "Объём базы",
-          note: "Только агрегаты. Группы могут пересекаться; персональный список пациентов исключён.",
+          note: "Каждый пациент относится ровно к одной из четырёх групп. Показаны только агрегаты.",
           metrics: [
             mobilePublicationMetric("Общая база", `${fmtNum(base.total)} чел.`, "уникальные пациенты"),
             mobilePublicationMetric("Визиты", fmtNum(base.visits), "за окно анализа"),
@@ -12246,7 +12298,7 @@ function mobilePublicationClientWindows(result, profile) {
           rows: rows.length ? rows : [["Нет доступных групп", "—", "—", "—"]],
           charts: [mobilePublicationChart("segments", "Группы клиентской базы", "bar", ["Общая база", ...groupOrder.filter(group => base.groupAvailable[group]).map(clientBaseGroupLabel)], [{
             label: "Пациенты", values: [base.total, ...groupOrder.filter(group => base.groupAvailable[group]).map(group => base.seg[group])],
-            colors: ["#2563eb", ...groupOrder.filter(group => base.groupAvailable[group]).map(group => ({ loyal: "#059669", active: "#16a34a", newRisk: "#d97706", loyalSleep: "#94a3b8", lost: "#dc2626" })[group])],
+            colors: ["#2563eb", ...groupOrder.filter(group => base.groupAvailable[group]).map(group => ({ active: "#afe7e9", loyalSleep: "#64748b", newRisk: "#fbbf24", lost: "#a80000" })[group])],
           }], "чел.")].filter(Boolean),
         },
       ],
@@ -12281,7 +12333,7 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
     .map(([name, item]) => [name, fmtNum(item.q), fmtMoney(item.s)]) : [];
   const coreExpertNames = new Set((profile.expertise.items || []).filter(item => item.core !== false).map(item => item.name));
   const unusedExpertNames = product ? [...coreExpertNames].filter(name => !product.expert[name]) : [...coreExpertNames];
-  const activeBase = selectedClientBaseSummary(result, profile);
+  const activeBase = reportClientBaseSummary(doctorId, monthKey, UI.kbWin);
   const loyalty = result.loyalty;
   const reputation = result.rep || {};
   const manualReputation = result.extras.man6 || {};
@@ -12296,7 +12348,7 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
     period: `Назначения · точное окно ${windowMonths} мес.`,
     sections: mobilePublicationAppointmentSections(result, profile, windowMonths),
   }));
-  const clientWindows = mobilePublicationClientWindows(result, profile);
+  const clientWindows = mobilePublicationClientWindows(result, profile, doctorId, monthKey);
   const primaryRows = (loyalty.slices || []).map(windowMonths => {
     const item = loyalty.pvSlices[windowMonths];
     return item ? [`${windowMonths} мес.`, fmtNum(item.first), fmtNum(item.ret), fmtNum(item.notRet), fmtPct(item.pct)] : null;
@@ -12368,10 +12420,10 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
     },
     {
       id: "v4", number: 4, title: VECTOR_META.v4.name, score: vectorScores.v4, delta: scoreDelta("v4"),
-      methodologyId: "legacy-overlap-v1",
+      methodologyId: "report-partition-v1",
       scoreMethodologyId: "legacy-overlap-v1",
-      methodologyLabel: "Мобильные группы используют сохранённые нормативы и выбранное окно. Фиксированные группы врача и специализации в Admin/Viewer рассчитываются отдельно.",
-      detail: "Сегменты клиентской базы по совместимой методике в доступных точных окнах — без списка пациентов.",
+      methodologyLabel: "Единые четыре группы в Админ, Viewer и мобильных отчётах. Балл В4 использует сохранённые нормативы.",
+      detail: "Четыре непересекающиеся группы клиентской базы в выбранном точном окне.",
       ...(clientWindows.length ? { windowPickerLabel: "Окно клиентской базы", windows: clientWindows } : { sections: [{ title: "Клиентская база", metrics: [mobilePublicationMetric("Данные", "Нет точной выгрузки клиентской базы")] }] }),
     },
     {
@@ -12463,7 +12515,7 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
         { id: "loyalty.frequency12", value: Number.isFinite(loyalty.freq12) ? loyalty.freq12 : null, unit: "ratio" },
         { id: "economy.sales", value: Number.isFinite(result.econ.sales) ? result.econ.sales : null, unit: "rub" },
         { id: "economy.averageClient", value: Number.isFinite(result.econ.avgClient) ? result.econ.avgClient : null, unit: "rub" },
-        { id: "clientBase.activeShare", value: activeBase && Number.isFinite(activeBase.activeBasePct) ? activeBase.activeBasePct : null, unit: "percent", methodologyId: "legacy-overlap-v1" },
+        { id: "clientBase.activeShare", value: activeBase && Number.isFinite(activeBase.activeBasePct) ? activeBase.activeBasePct : null, unit: "percent", methodologyId: "report-partition-v1" },
       ],
     },
     headlineMetrics: [
@@ -12471,7 +12523,7 @@ function buildMobilePublicationPeriod(doctorId, monthKey, result, previousResult
       withHistory({ label: "Загрузка расписания", value: fmtPct(loyalty.sched && loyalty.sched.pct), note: loyalty.sched ? `${minToHours(loyalty.sched.busyMin)} из ${minToHours(loyalty.sched.normaMin)} по графику` : "нет выгрузки" }, rr => rr.loyalty.sched?.pct ?? null, "pp", fmtPct),
       withHistory({ label: "Визитов на пациента за месяц", value: Number.isFinite(result.traffic.freq) ? fmtNum(result.traffic.freq, 2) : "—", note: Number.isFinite(result.traffic.visits) && Number.isFinite(result.traffic.patients) ? `${fmtNum(result.traffic.visits)} визитов / ${fmtNum(result.traffic.patients)} пациентов` : result.traffic.src }, rr => rr.traffic.freq, "absolute", value => fmtNum(value, 2), 2),
       withHistory({ label: "Визитов на пациента за 12 мес.", value: Number.isFinite(loyalty.freq12) ? fmtNum(loyalty.freq12, 2) : "—", note: "визиты / уникальные пациенты" }, rr => rr.loyalty.freq12, "absolute", value => fmtNum(value, 2), 2),
-      withHistory({ label: "Активная клиентская база", value: fmtPct(activeBase && activeBase.activeBasePct), note: activeBase ? `${fmtNum(activeBase.seg.active)} из ${fmtNum(activeBase.total)} · окно ${activeBase.window} мес.` : "нет точной выгрузки" }, rr => selectedClientBaseSummary(rr, profile)?.activeBasePct ?? null, "pp", fmtPct),
+      withHistory({ label: "Активная клиентская база", value: fmtPct(activeBase && activeBase.activeBasePct), note: activeBase ? `${fmtNum(activeBase.seg.active)} из ${fmtNum(activeBase.total)} · окно ${activeBase.window} мес.` : "нет точной выгрузки" }, (rr, key) => reportClientBaseSummary(doctorId, key, UI.kbWin)?.activeBasePct ?? null, "pp", fmtPct),
     ],
     vectors,
     goalsSource: doctorGoalsSource(doctorId),
@@ -12514,8 +12566,8 @@ function buildMobilePublication(doctorId, commentsByPeriod = {}) {
     security: { patientRegistryIncluded: false, rawExportsIncluded: false },
     methodologies: {
       score: "score-v1",
-      clientBase: "legacy-overlap-v1",
-      adminViewerClientBase: "report-overlap-v1",
+      clientBase: "report-partition-v1",
+      adminViewerClientBase: "report-partition-v1",
     },
     doctor: {
       id: String(doctorId),
@@ -13115,7 +13167,7 @@ function renderDoctorNow() {
   const partitionHistory = clientBasePartitionHistorySection(UI.docId, mk);
   const partitionChart = partitionHistory.charts[0];
   let clientBaseHelp = "";
-  html += `<div class="card vector-card" id="blkV4" data-vector-key="v4" data-client-base-methodology="report-overlap-v1" style="border-top-color:${VECTOR_META.v4.color}">
+  html += `<div class="card vector-card" id="blkV4" data-vector-key="v4" data-client-base-methodology="report-partition-v1" style="border-top-color:${VECTOR_META.v4.color}">
     <div class="vhead"><h3 class="mt0">Вектор 4. Работа с клиентской базой <span class="badge ${VECTOR_META.v4.cls}">${VECTOR_META.v4.tag}</span></h3>
     <span>${vecBadge("v4", r, docProfile)} ${blockBtn("blkV4")} ${segToggle("doctorKbWin", [6,12,24,36].map(v => ({v, label: v + " мес."})), UI.kbWin, "setKbWin")}</span></div>`;
   if (!kb) {
@@ -13125,7 +13177,7 @@ function renderDoctorNow() {
     const settingsScope = specializationName
       ? `специализации «${specializationName}»`
       : `отделения «${resolvedDepartmentName(UI.docId)}»`;
-    const groupOrder = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+    const groupOrder = ["active", "loyalSleep", "newRisk", "lost"];
     const segmentOptions = groupOrder
       .filter(group => kb.groupAvailable[group])
       .map(group => ({ v: group, label: `${clientBaseGroupLabel(group)} · ${fmtNum(kb.seg[group])}` }));
@@ -13133,7 +13185,7 @@ function renderDoctorNow() {
     const selectedClients = clientRowsForSegment(kb, UI.clientSegment);
     const kbDyn = clientBaseDynamics(UI.docId, mk, UI.kbWin, reportClientBaseSummary);
     const actionText = kb.reactivationCandidates
-      ? `Начните с группы «Новые, риск»${kb.groupAvailable.newRisk ? ` (${fmtNum(kb.seg.newRisk)})` : ""}, затем разберите лояльных спящих${kb.groupAvailable.loyalSleep ? ` (${fmtNum(kb.seg.loyalSleep)})` : ""}. Пациенты в списках отсортированы по исторической выручке.`
+      ? `Начните с группы «Новые в риске»${kb.groupAvailable.newRisk ? ` (${fmtNum(kb.seg.newRisk)})` : ""}, затем разберите лояльных спящих${kb.groupAvailable.loyalSleep ? ` (${fmtNum(kb.seg.loyalSleep)})` : ""}. Пациенты в списках отсортированы по исторической выручке.`
       : "Пациентов для реактивации сейчас нет.";
     const unavailableGroups = groupOrder.filter(group => !kb.groupAvailable[group]).map(clientBaseGroupLabel);
     const groupCards = groupOrder.filter(group => kb.groupAvailable[group]).map(group => {
@@ -13170,8 +13222,8 @@ function renderDoctorNow() {
     </div>
     ${clientBaseShareHistoryHtml(kbSeries)}
       <div class="kb-action-controls no-print">
-        ${kb.groupAvailable.newRisk && kb.seg.newRisk ? `<button class="btn mini primary" onclick="openClientSegment('newRisk')">Новые, риск · ${fmtNum(kb.seg.newRisk)}</button>` : ""}
-        ${kb.groupAvailable.loyalSleep && kb.seg.loyalSleep ? `<button class="btn mini" onclick="openClientSegment('loyalSleep')">Лояльные, спящие · ${fmtNum(kb.seg.loyalSleep)}</button>` : ""}
+        ${kb.groupAvailable.newRisk && kb.seg.newRisk ? `<button class="btn mini primary" onclick="openClientSegment('newRisk')">Новые в риске · ${fmtNum(kb.seg.newRisk)}</button>` : ""}
+        ${kb.groupAvailable.loyalSleep && kb.seg.loyalSleep ? `<button class="btn mini" onclick="openClientSegment('loyalSleep')">Лояльные спящие · ${fmtNum(kb.seg.loyalSleep)}</button>` : ""}
       </div>
     <div class="no-print" style="margin-top:12px"><details id="clientSegmentPatients" ${collapsibleListAttrs("clientSegmentPatients", false)}><summary class="collapsible-list-summary"><span>ПАЦИЕНТЫ ДЛЯ РАБОТЫ <span class="badge mut" id="clientSegmentPatientCount">${fmtNum(selectedClients.length)}</span></span><span class="collapse-hint"></span></summary>
       <div class="collapsible-list-body"><div class="vhead"><span class="small muted">Выберите сегмент базы</span>${segToggle("clientSegmentSeg", segmentOptions, UI.clientSegment, "setClientSegment")}</div>
@@ -13189,7 +13241,7 @@ function renderDoctorNow() {
       <ul>${partitionHistory.rows.map(([label, rule]) => `<li><b>${esc(label)}</b> — ${esc(rule)}.</li>`).join("")}</ul>
     </details></section>`;
   html += globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml(clientBaseDefinitionSection(deptParams(UI.docId)))
-    + (kb && !kb.groupAvailable.active ? `<p class="notice blue">Для активных нужно выбрать окно не короче ${kb.activeWindow} мес. и загрузить «Давность посещений» ровно за ${kb.activeWindow} мес.</p>` : "")
+    + (kb && !kb.groupAvailable.active ? `<p class="notice blue">Нет точной выгрузки клиентской базы за выбранный период.</p>` : "")
     + globalThis.klinvektReportPresentation.reportHelpHtml(clientBaseHelp) + '</div>';
 
   /* ---- В5 Лояльность ---- */
@@ -14442,7 +14494,7 @@ function buildDeptReport(mk, deptFilter = UI.deptFilter, subFilter = UI.subFilte
   /* Слайд 6: клиентская база */
   const withKb = rows.map(x => ({ ...x, kb: reportClientBaseSummary(x.id, mk, UI.repKbWin) })).filter(x => x.kb);
   if (withKb.length) {
-    const groupOrder = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+    const groupOrder = ["active", "loyalSleep", "newRisk", "lost"];
     const visibleGroups = groupOrder.filter(group => withKb.some(x => x.kb.groupAvailable[group]));
     html += `<div class="card slide" data-analytics-block-key="client-base"><h2>Клиентская база · ${sub}</h2><table class="data"><tr><th>Специалист</th><th class="num">Период</th><th class="num">Общая база</th>${visibleGroups.map(group => `<th class="num">${esc(clientBaseGroupLabel(group))}<br><span class="small muted">чел. · %</span></th>`).join("")}</tr>`;
     for (const x of withKb) {
@@ -14519,13 +14571,13 @@ function buildDoctorReport(docId, mk) {
 
   const reportKb = selectedClientBaseForReport(r, docId);
   if (reportKb) {
-    const groupOrder = ["loyal", "active", "newRisk", "loyalSleep", "lost"];
+    const groupOrder = ["active", "loyalSleep", "newRisk", "lost"];
     const visibleGroups = groupOrder.filter(group => reportKb.groupAvailable[group]);
     html += `<div class="card slide" data-analytics-block-key="client-base"><h2>Клиентская база · ${esc(doctorName(docId))} · ${fmtNum(reportKb.window)} мес.</h2>
       <table class="data"><tr><th>Группа</th><th class="num">Пациентов</th><th class="num">% от общей базы</th><th>Что означает группа</th></tr>
       <tr><td><b>Общая база</b></td><td class="num"><b>${fmtNum(reportKb.total)}</b></td><td class="num"></td><td>Фактическое количество уникальных пациентов в выгрузке за ${fmtNum(reportKb.window)} месяцев.</td></tr>
       ${visibleGroups.map(group => `<tr><td><b>${esc(clientBaseGroupLabel(group))}</b></td><td class="num">${fmtNum(reportKb.seg[group])}</td><td class="num">${fmtPct(clientBaseGroupPct(reportKb, group))}</td><td>${esc(clientBaseGroupDescription(reportKb, group))}.</td></tr>`).join("")}
-      </table><p class="small muted">Группы могут пересекаться: один пациент может входить сразу в несколько групп. Группы, временной порог которых больше ${fmtNum(reportKb.window)} месяцев, в этом отчёте не показаны и нулём не заменены.</p></div>`;
+      </table><p class="small muted">Каждый пациент относится ровно к одной из четырёх групп. Сумма групп равна общей клиентской базе.</p></div>`;
   }
 
   if (!reportKb) {
@@ -15088,31 +15140,19 @@ function renderSettings() {
 
   /* --- 1. Нормативы и подразделения --- */
   if (specializationName) {
-    const baseThresholds = clientBaseReportProfile(p);
     const partition = clientBasePartitionSettings(p);
-    const baseFields = [
-      ["loyal", "loyalVisits", "loyalM", "От", "Не более"],
-      ["active", "activeVisits", "activeM", "От", "За последние"],
-      ["newRisk", "newRiskVisits", "newRiskM", "До", "Более"],
-      ["loyalSleep", "sleepVisits", "sleepM", "От", "Более"],
-      ["lost", "lostVisits", "lostM", "До", "Более"],
-    ];
-    const field = (key, label, group) => `<label>${label} <input type="number" id="cb_report_${key}" min="1" max="${clientBaseReportLimit(key)}" step="1" value="${baseThresholds[key]}" aria-label="${esc(`${clientBaseGroupLabel(group)} · ${label} ${key.endsWith("M") ? "месяцев" : "визитов"}`)}"></label>`;
     html += `${pageBlockStart("settings.norm", `📐 Нормативы специализации: клиентская база, курсовое, первичка — «${esc(specializationName)}»`, { defaultOpen: false })}
-    <h3>Группы клиентской базы</h3><p class="small muted">Эти пороги применяются в отчётах врача и его специализации. Для активных загрузите «Давность посещений» за указанный срок. Для остальных групп срок отсчитывается с последнего визита.</p>
-    <table class="data wtable" data-client-base-report-settings><thead><tr><th>Группа</th><th>Визитов</th><th>Период, мес.</th></tr></thead><tbody>
-    ${baseFields.map(([group, visits, months, visitLabel, monthLabel]) => `<tr><th scope="row">${esc(clientBaseGroupLabel(group))}</th><td>${field(visits, visitLabel, group)}</td><td>${field(months, monthLabel, group)}</td></tr>`).join("")}</tbody></table>
-    ${globalThis.klinvektReportPresentation.clientBaseDefinitionsHtml(clientBaseDefinitionSection(p))}
-    <details class="kb-partition-history">
-      <summary><b>Четыре группы для графика В4 за 36 месяцев</b></summary>
-      <p class="small muted">Каждый пациент относится к одной из четырёх групп: активные лояльные, лояльные спящие, новые в риске, потерянные. Настройки применяются ко всем месяцам графика В4 врача.</p>
+    <h3>Четыре группы клиентской базы</h3>
+      <p class="small muted">Единые группы для карточек, таблиц, графиков и выгрузок врача, специализации и отделения. Каждый пациент относится ровно к одной группе. Число визитов берётся из выбранной выгрузки, срок отсчитывается с последнего визита. График динамики использует базу за 36 месяцев.</p>
+      <table class="data wtable" data-client-base-report-settings><thead><tr><th>Группа</th><th>Условие</th></tr></thead><tbody>
+        ${clientBaseDefinitionSection(p).rows.map(([label, rule]) => `<tr><th scope="row">${esc(label)}</th><td>${esc(rule)}</td></tr>`).join("")}
+      </tbody></table>
       <table class="data wtable"><tbody>
-        <tr><th scope="row"><label for="cb_loyalVisits">Порог лояльности, визитов за 36 месяцев</label></th><td><input type="number" id="cb_loyalVisits" min="2" max="50" step="1" value="${partition.loyalVisits}"></td></tr>
+        <tr><th scope="row"><label for="cb_loyalVisits">Порог лояльности, визитов в выбранной выгрузке</label></th><td><input type="number" id="cb_loyalVisits" min="2" max="50" step="1" value="${partition.loyalVisits}"></td></tr>
         <tr><th scope="row"><label for="cb_activeM">Срок активности, месяцев с последнего визита</label></th><td><input type="number" id="cb_activeM" min="1" max="36" step="1" value="${partition.activeM}"></td></tr>
         <tr><th scope="row"><label for="cb_lostM">Срок потери, месяцев с последнего визита</label></th><td><input type="number" id="cb_lostM" min="1" max="36" step="1" value="${partition.lostM}"></td></tr>
       </tbody></table>
       <label><input type="checkbox" id="cb_lostAnyVisits" ${partition.lostAnyVisits ? "checked" : ""}> Считать потерянными также лояльных после срока потери</label>
-    </details>
     <h3 style="margin:12px 0 6px">Остальные нормативы</h3>
     <table class="data wtable"><tr>
       <th class="num" title="Курсовое лечение: минимум визитов…">Курсовое: от, виз.</th>
@@ -15561,18 +15601,6 @@ function saveDeptBasics() {
     return;
   }
   const p = curSetProfile();
-  let reportThresholds = null;
-  if (document.getElementById("cb_report_loyalVisits")) {
-    reportThresholds = {};
-    for (const key of Object.keys(CLIENT_BASE_REPORT_DEFAULTS)) {
-      const value = Number(document.getElementById("cb_report_" + key)?.value);
-      if (!Number.isInteger(value) || value < 1 || value > clientBaseReportLimit(key)) {
-        toast("Задайте целые числа: от 1 до 50 визитов и от 1 до 36 месяцев.", true);
-        return;
-      }
-      reportThresholds[key] = value;
-    }
-  }
   let partition = null;
   if (document.getElementById("cb_loyalVisits")) {
     partition = {};
@@ -15599,7 +15627,6 @@ function saveDeptBasics() {
     }
   }
   Object.assign(p, values);
-  if (reportThresholds) p.clientBaseReport = reportThresholds;
   if (partition) p.clientBasePartition = partition;
   // Старые нормативы KPI и публикаций сохраняются в профиле без изменения.
   p.subdivisions = document.getElementById("np_subdivisions").value.split("\n").map(x => x.trim()).filter(Boolean);
