@@ -920,7 +920,7 @@ function departmentPrimaryPatientsHtml(activity, mk, scopeLabel) {
     ${primary.covered < current.ids.length ? `<p class="notice blue">Данные есть у ${primary.covered} из ${current.ids.length} врачей. Для общего итога и источников нужны корректные месячные отчёты «Пациенты по врачам» по всем врачам выбранного отделения. Пропуски показаны как «—».</p>` : ""}
     ${presentation.specializationPrimarySummaryHtml(counts, primary.sourceCounts, { tableId: "tblDepartmentPrimary", totalLabel })}
     ${activity.primaryChart ? specializationTrendHtml(activity.primaryChart) : '<p class="small muted">Для графика нужны сопоставимые месячные отчёты «Пациенты по врачам».</p>'}
-    ${presentation.reportHelpHtml(`<p>${SPECIALIZATION_PRIMARY_NOTE}</p><p>Состав врачей определяется отдельно для каждого месяца с учётом выбранного отделения. Отсутствующие месяцы и неполные данные не считаются нулём.</p>`)}
+    ${presentation.reportHelpHtml(`<p>${SPECIALIZATION_PRIMARY_NOTE} 4+ — первичные пациенты, посетившие врачей этой группы больше трёх раз за тот же месяц.</p><p>Состав врачей определяется отдельно для каждого месяца с учётом выбранного отделения. Отсутствующие месяцы и неполные данные не считаются нулём.</p>`)}
   </section>`;
 }
 
@@ -1300,21 +1300,24 @@ function renderDeptNow() {
 
   const activity = specializationActivityView(mk, UI.deptFilter === "all" ? null : deptProfile(UI.deptFilter), UI.deptFilter, UI.subFilter);
   const presentation = globalThis.klinvektReportPresentation;
-  const deviceCards = specializationDeviceCards(activity);
+  const deviceActivity = activity.current?.devices;
   const deviceCharts = presentation.splitDeviceHistoryCharts(activity.deviceCharts);
-  if (deviceCards.length) {
-    html += `<div class="card" data-specialization-device-month><h2>Аппараты за месяц <span class="small muted">${monthLabel(mk)}</span></h2>
-      ${presentation.deviceMonthCardsHtml(deviceCards, id => copyBtn("copyTable", id))}</div>`;
-  } else if (UI.deptFilter !== "all") {
-    // Для профилей без аппаратов сохраняется тепловая карта услуг.
+  // Тепловая карта аппаратов и услуг по специалистам выбранной специализации.
+  if (UI.deptFilter !== "all") {
     const fProfile = deptProfile(UI.deptFilter);
     const devs = (fProfile.expertise.items || []).map(d => d.name);
     const withVy = rows.filter(x => x.r.product);
     if (devs.length && withVy.length && fProfile.expertise.mode !== "none") {
       let maxQ = 1;
-      for (const x of withVy) for (const dv of devs) maxQ = Math.max(maxQ, x.r.product.expert[dv]?.q ?? 0);
-      html += `<div class="card"><h2>🔥 Тепловая карта: ${esc(fProfile.expertise.title)} <span class="small muted">(за месяц, шт.)</span> <span class="spacer"></span>${copyBtn("copyTable", "tblHeat")}</h2>
-        <div class="heatmap-scroll"><table class="data heatmap-table" id="tblHeat" style="--heat-table-min:${300 + devs.length * 150}px"><colgroup><col class="heatmap-specialist-col">${devs.map(() => '<col class="heatmap-focus-col">').join("")}<col class="heatmap-total-col"></colgroup><tr><th>Специалист</th>` + devs.map(d => `<th class="num heatmap-focus-heading">${esc(d)}</th>`).join("") + `<th class="num">Итого</th></tr>`;
+      if (!deviceActivity) for (const x of withVy) for (const dv of devs) maxQ = Math.max(maxQ, x.r.product.expert[dv]?.q ?? 0);
+      const { deviceHeatMaxima, deviceHeatCellHtml, deviceHeatLegendHtml } = presentation;
+      const maxima = deviceActivity ? deviceHeatMaxima(Object.values(deviceActivity.byDoctor).flat()) : null;
+      const deviceRevenue = deviceActivity ? deviceActivity.items.reduce((sum, item) => sum + item.s, 0) : null;
+      const deviceShare = totalSales > 0 && deviceRevenue != null ? deviceRevenue / totalSales * 100 : null;
+      const deviceHeading = deviceActivity ? "за месяц, шт. и ₽" : "за месяц, шт.";
+      html += `<div class="card"${deviceActivity ? " data-specialization-device-month" : ""}><h2>🔥 Тепловая карта: ${esc(fProfile.expertise.title)} <span class="small muted">(${deviceHeading})</span> <span class="spacer"></span>${copyBtn("copyTable", "tblHeat")}</h2>
+        ${deviceActivity ? `<p><b>Выручка по всем аппаратам</b> · ${fmtMoney(deviceRevenue)} <span class="small muted">· общая доля ${fmtPct(deviceShare)}</span></p>${deviceHeatLegendHtml()}` : ""}
+        <div class="heatmap-scroll"><table class="data heatmap-table" id="tblHeat" style="--heat-table-min:${300 + devs.length * 150}px"><colgroup><col class="heatmap-specialist-col">${devs.map(() => '<col class="heatmap-focus-col">').join("")}<col class="heatmap-total-col">${deviceActivity ? '<col class="heatmap-focus-col">' : ""}</colgroup><tr><th>Специалист</th>` + devs.map(d => `<th class="num heatmap-focus-heading">${esc(d)}</th>`).join("") + `<th class="num">Итого</th>${deviceActivity ? '<th class="num">Доля от выручки</th>' : ""}</tr>`;
       const devTotals = {};
       for (const x of withVy) {
         let rowTotal = 0;
@@ -1324,13 +1327,18 @@ function renderDeptNow() {
           rowTotal += q;
           devTotals[dv] = (devTotals[dv] || 0) + q;
           const alpha = q ? 0.15 + 0.7 * (q / maxQ) : 0;
-          html += `<td class="num heatmap-focus-cell"><div class="heat-cell" style="background:rgba(37,99,235,${alpha.toFixed(2)});color:${alpha > 0.5 ? "#fff" : "inherit"}">${q || "·"}</div></td>`;
+          html += `<td class="num heatmap-focus-cell">${deviceActivity
+            ? `<div class="heat-cell device-heat-holder">${deviceHeatCellHtml({ q, s: x.r.product.expert[dv]?.s ?? 0 }, maxima)}</div>`
+            : `<div class="heat-cell" style="background:rgba(37,99,235,${alpha.toFixed(2)});color:${alpha > 0.5 ? "#fff" : "inherit"}">${q || "·"}</div>`}</td>`;
         }
-        html += `<td class="num"><b>${rowTotal}</b></td></tr>`;
+        const doctorRevenue = deviceActivity?.byDoctor[x.id]?.reduce((sum, item) => sum + item.s, 0);
+        const doctorShare = doctorRevenue != null && x.r.econ.sales > 0 ? doctorRevenue / x.r.econ.sales * 100 : null;
+        html += `<td class="num">${deviceActivity ? deviceHeatCellHtml({ q: rowTotal, s: doctorRevenue }) : `<b>${rowTotal}</b>`}</td>${deviceActivity ? `<td class="num"><span class="device-heat-cell">${fmtPct(doctorShare)}</span></td>` : ""}</tr>`;
       }
       const countTotal = Object.values(devTotals).reduce((a, b) => a + b, 0);
-      html += '<tr><td><b>Итого по специализации</b></td>' + devs.map(dv => `<td class="num"><b>${devTotals[dv] || 0}</b></td>`).join("") +
-        `<td class="num"><b>${countTotal}</b></td></tr></table></div><p class="small muted">«·» по всем врачам — простаивающая позиция. Набор настраивается в профиле специализации.</p></div>`;
+      html += '<tr><td><b>Итого по специализации</b></td>' + devs.map(dv => `<td class="num">${deviceActivity ? deviceHeatCellHtml(deviceActivity.items[activity.names.indexOf(dv)]) : `<b>${devTotals[dv] || 0}</b>`}</td>`).join("") +
+        `<td class="num">${deviceActivity ? deviceHeatCellHtml({ q: countTotal, s: deviceRevenue }) : `<b>${countTotal}</b>`}</td>${deviceActivity ? `<td class="num"><span class="device-heat-cell">${fmtPct(deviceShare)}</span></td>` : ""}</tr>`;
+      html += `</table></div><p class="small muted">${deviceActivity ? SPECIALIZATION_DEVICE_NOTE : "«·» по всем врачам — простаивающая позиция. Набор настраивается в профиле специализации."}</p></div>`;
     }
   } else if (rows.some(x => x.r.product)) {
     html += `<div class="card"><p class="small muted" style="margin:0">🔥 Тепловая карта аппаратов/услуг доступна при выборе конкретной специализации в фильтре сверху — у каждой специализации свой набор отслеживаемых позиций.</p></div>`;
@@ -7664,7 +7672,7 @@ async function initApp() {
   switchTab("data");
   if (DESKTOP_API) {
     setTimeout(() => {
-      if (!fileImportInProgress) prepareSpecializationYear(monthKeysSorted().at(-1));
+      if (!fileImportInProgress) prepareAllReports().catch(error => console.warn("Report preparation:", error));
     }, 0);
   }
 }

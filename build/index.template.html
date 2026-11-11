@@ -30,6 +30,10 @@
   </div>
 </header>
 <main>
+<div id="reportPreparationStatus" class="notice blue report-preparation-status hidden" role="status" aria-live="polite">
+  <span id="reportPreparationLabel"></span>
+  <progress id="reportPreparationBar" aria-label="Подготовка готовых отчётов"></progress>
+</div>
 
 <section id="page-data" class="page">
   <details class="card page-block" id="dataImportCard" data-page-block="data.import" open>
@@ -40,6 +44,7 @@
     Поддерживаются отчёты: <b>выработка</b> и <b>возвращаемость пациентов и КБ</b> (по врачу),
     <b>возвращаемость первички</b>, <b>пациенты по врачам с источником и первичностью</b>, <b>простой сотрудников</b>, <b>собственная запись в 1С</b> (общие).
     Тип отчёта, врач и период определяются автоматически по содержимому — имена файлов не важны.
+    После загрузки приложение подготовит и сохранит готовые расчёты для быстрого открытия отчётов. Ход обработки показан ниже.
   </div>
   <div class="dropzone" id="dropzone">
     <div class="big">Перетащите сюда файлы, папку или ZIP-архив с выгрузками</div>

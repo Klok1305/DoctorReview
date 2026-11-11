@@ -126,7 +126,8 @@ function cloudDoctorReport(doctorId, monthKey, comments) {
 
 const SPECIALIZATION_BASE_TITLE = "Динамика с начала года · база за 36 месяцев";
 const SPECIALIZATION_DEVICE_TITLE = "Загрузка аппаратов";
-const SPECIALIZATION_PRIMARY_NOTE = "Из отчёта «Пациенты по врачам». В итоге пациент учитывается один раз по ФИО. 4+ — первичные пациенты, посетившие врачей этой группы больше трёх раз за тот же месяц.";
+const SPECIALIZATION_DEVICE_NOTE = "Доля рассчитана от собственной выручки. Аппараты берутся из настроек специализации.";
+const SPECIALIZATION_PRIMARY_NOTE = "Из отчёта «Пациенты по врачам». В итоге пациент учитывается один раз по ФИО.";
 
 function specializationActivityView(month, profile, filter, subFilter = "all", ids = null) {
   const names = specializationDeviceNames(profile);
@@ -146,8 +147,6 @@ function specializationActivityView(month, profile, filter, subFilter = "all", i
   }
   const primaryChart = mobilePublicationChart("specialization-primary", "Первичные пациенты по месяцам", "line", labels, [
     { label: "Первичные пациенты", color: "#2563eb", values: history.map(entry => entry?.primary.total ?? null) },
-    { label: "Из них с 4+ посещениями", color: "#16a34a", values: history.map(entry => entry?.primary.frequent ?? null),
-      pointNotes: history.map(entry => entry?.primary.share != null ? `${fmtPct(entry.primary.share)} от первичных` : "") },
   ], "чел.");
   return { names, months, history, current, deviceCharts, primaryChart };
 }

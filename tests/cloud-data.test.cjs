@@ -203,7 +203,7 @@ test("specialization charts January through the selected month using the 36-mont
   assert.equal(canvas.get("blkDeptDyn_base").options.plugins.title.text, annual.title);
 });
 
-test("specialization publishes device revenue and unique monthly primary patients with four or more visits", async () => {
+test("specialization publishes device revenue and a single unique monthly primary patient trend", async () => {
   const context = fixtureContext();
   vm.runInContext(`
     DB.doctors.d2.specialization = 'X';
@@ -243,8 +243,8 @@ test("specialization publishes device revenue and unique monthly primary patient
   const primary = report.vectors[4].sections.find(section => section.title === "Первичные пациенты");
   assert.deepEqual(Object.fromEntries(primary.rows), { "Доктор Первый": "1", "Доктор Второй": "—", "Итого по специализации": "—" });
   assert.deepEqual(primary.charts[0].series[0].values, [6, null, null]);
-  assert.deepEqual(primary.charts[0].series[1].values, [2, null, null]);
-  assert.deepEqual(primary.charts[0].series[1].pointNotes, ["33,3% от первичных", "", ""]);
+  assert.equal(primary.charts[0].series.length, 1);
+  assert.equal(primary.charts[0].series[0].label, "Первичные пациенты");
   assert.deepEqual(primary.charts[1].series[0].values, [null, null, null, null, null]);
   const january = publication.pages.find(page => page.kind === "specialization" && page.specialization === "X" && page.periodKey === "2026-01").report;
   const januaryPrimary = january.vectors[4].sections.find(section => section.title === "Первичные пациенты");
@@ -282,20 +282,20 @@ test("specialization publishes device revenue and unique monthly primary patient
   assert.equal((summary.match(/class="num period-best"/g) || []).length, 2, "both tied positive months are best and zero revenue stays neutral");
   assert.match(summary, /<tfoot>[\s\S]*6\s000 ₽<br><small class="muted">6 шт\.[\s\S]*0 ₽<br><small class="muted">0 шт\./);
   assert.match(html, /<title>Аппарат А · Январь 2026: [^<]+ · 3 шт\.<\/title>/);
-  assert.match(html, /33,3% от первичных/);
+  assert.doesNotMatch(html, /Из них с 4\+ посещениями|% от первичных/);
   assert.match(html, /Для общей разбивки нужны данные по всем врачам выборки/);
   let adminChart;
   context.chart = (_id, config) => { adminChart = config; };
   vm.runInContext("renderSpecializationTrend(specializationActivityView('2026-03', null, 'X').primaryChart)", context);
-  adminChart.data.datasets[1].data[2] = 0;
-  adminChart.data.datasets[1].pointNotes[2] = "0% от первичных";
+  assert.equal(adminChart.data.datasets.length, 1);
+  assert.deepEqual(Array.from(adminChart.data.datasets[0].data), [6, null, null]);
+  adminChart.data.datasets[0].data[2] = 0;
   const drawn = [];
   const ctx = { save() {}, restore() {}, strokeText() {}, measureText: value => ({ width: value.length * 6 }),
     fillText: (text, x, y) => drawn.push({ text, x, y }) };
   adminChart.plugins[0].afterDatasetsDraw({ ctx, width: 300, chartArea: { top: 20, bottom: 200 }, data: adminChart.data,
-    getSortedVisibleDatasetMetas: () => [0, 1].map(index => ({ index, data: [60, 110, 160].map(x => ({ x, y: 198 })) })) });
-  assert.deepEqual(drawn.map(label => label.text), ["6", "2 · 33,3%", "0 · 0%"]);
-  assert.ok(Math.abs(drawn[0].y - drawn[1].y) >= 12, "labels of coinciding points remain separate");
+    getSortedVisibleDatasetMetas: () => [{ index: 0, data: [60, 110, 160].map(x => ({ x, y: 198 })) }] });
+  assert.deepEqual(drawn.map(label => label.text), ["6", "0"]);
 });
 
 test("dismissed doctors are excluded from cloud credentials, pages and totals while Admin keeps their history", async () => {

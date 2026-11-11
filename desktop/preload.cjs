@@ -7,6 +7,7 @@ const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
 contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   initialize: () => invoke("app:initialize"),
   loadDatabaseMonths: monthKeys => invoke("database:load-months", { monthKeys }),
+  prepareReportYear: payload => invoke("reports:prepare-year", payload),
   listComments: payload => invoke("comments:list", payload),
   saveComment: payload => invoke("comments:save", payload),
   getCommentHistory: id => invoke("comments:history", id),

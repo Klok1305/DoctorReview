@@ -65,6 +65,9 @@ jobs:
       - name: Проверить вычисления отчётов вне основного потока
         run: pnpm run benchmark:reports
 
+      - name: Проверить сохранение готовых расчётов
+        run: pnpm run benchmark:prepared
+
       - name: Проверить задержку событий в фоновых операциях
         run: pnpm run benchmark:background
 

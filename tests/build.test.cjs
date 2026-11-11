@@ -8,6 +8,13 @@ const test = require("node:test");
 const root = path.resolve(__dirname, "..");
 const build = path.join(root, "build");
 
+test("packaged report preparation includes its calculation sources", () => {
+  const files = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).build.files;
+  for (const source of ["app-core.js", "app-parsers.js", "app-metrics.js", "report-worker.js"]) {
+    assert.ok(files.includes(`build/${source}`), `packaged report source is missing: ${source}`);
+  }
+});
+
 test("smoke diagnostics survive closed pipes without dialogs and report fatal failures once", () => {
   const vm = require("node:vm");
   const { EventEmitter } = require("node:events");
@@ -818,10 +825,10 @@ test("specialist summary removes the color legend and wraps long headers", () =>
   assert.match(ui, /<th class="num">Доля выручки<br>от перенаправлений<\/th>/);
 });
 
-test("specialization service heatmap gives every focus an equal-width column", () => {
+test("specialization device and service heatmap gives every focus an equal-width column", () => {
   const ui = fs.readFileSync(path.join(build, "app-ui.js"), "utf8");
   const css = fs.readFileSync(path.join(build, "app.css"), "utf8");
-  const heatmap = ui.match(/\/\/ Для профилей без аппаратов сохраняется тепловая карта услуг\.[\s\S]*?\/\/ Клиентская база:/);
+  const heatmap = ui.match(/\/\/ Тепловая карта аппаратов и услуг по специалистам выбранной специализации\.[\s\S]*?\/\/ Клиентская база:/);
 
   assert.ok(heatmap);
   assert.match(heatmap[0], /class="heatmap-scroll"/);

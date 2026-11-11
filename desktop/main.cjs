@@ -112,6 +112,7 @@ const cloudUploadResumeState = {};
 let database = null;
 const databaseWrites = new BackgroundTaskQueue({ maxQueued: 8 });
 const publicationTasks = new BackgroundTaskQueue({ maxQueued: 1 });
+const reportCalculationTasks = new BackgroundTaskQueue({ maxQueued: 24 });
 const activePublicationOperations = new Map();
 let backupService = null;
 let fileService = null;
@@ -494,6 +495,19 @@ function createWindow() {
             })()`
           : `(async () => {
               await new Promise(resolve => setTimeout(resolve, 1200));
+              // The fixture edits DB directly; persist each changed revision before exercising the desktop cache.
+              const smokeRenderPreparedReport = renderPreparedReport;
+              let smokePersistedRevision = -1;
+              renderPreparedReport = (tab, draw) => {
+                if (UI.reportEager || viewerReportDoctorScope || smokePersistedRevision === metricsCalculationRevision) {
+                  return smokeRenderPreparedReport(tab, draw);
+                }
+                return saveLocal().then(saved => {
+                  if (!saved) throw Error('Smoke fixture was not saved');
+                  smokePersistedRevision = metricsCalculationRevision;
+                  return smokeRenderPreparedReport(tab, draw);
+                });
+              };
               const optionalLibrariesDeferred = typeof XLSX === 'undefined' && typeof JSZip === 'undefined' && typeof html2canvas === 'undefined' && !window.jspdf;
               loadBundledLibrary('lib-xlsx', 'XLSX');
               const workerBook = XLSX.utils.book_new();
@@ -701,27 +715,27 @@ function createWindow() {
                 && !buildDepartmentReport('2026-02', 'Косметология').includes('reputation-honor-board')
                 && buildDepartmentReport('2026-02', 'Косметология').includes('42 шт.');
               const deviceMonth = document.querySelector('[data-specialization-device-month]');
-              const deviceCards = [...deviceMonth.querySelectorAll('[data-device-month-card]')];
-              const heatmapFocusWidths = deviceCards.map(card => Math.round(card.getBoundingClientRect().width));
-              const heatmapLayoutValid = deviceCards.length === 2 && heatmapFocusWidths.every(width => width > 250)
+              const heatmapFocusWidths = [...deviceMonth.querySelectorAll('.heatmap-focus-heading')]
+                .map(cell => Math.round(cell.getBoundingClientRect().width));
+              const heatmapCellWidths = [...deviceMonth.querySelectorAll('tr:nth-child(2) .heat-cell')]
+                .map(cell => Math.round(cell.getBoundingClientRect().width));
+              const heatmapLayoutValid = heatmapFocusWidths.length === 2 && heatmapCellWidths.length === 2
+                && Math.max(...heatmapFocusWidths) - Math.min(...heatmapFocusWidths) <= 2
+                && Math.max(...heatmapCellWidths) - Math.min(...heatmapCellWidths) <= 2
                 && deviceMonth.scrollWidth <= deviceMonth.clientWidth
-                && deviceCards.every(card => !card.querySelector('details').open);
-              const firstDevice = deviceCards[0];
-              firstDevice.querySelector('details').open = true;
-              const firstDeviceCells = [...firstDevice.querySelectorAll('tbody .device-heat-cell')];
-              const heatmapCellWidths = firstDeviceCells.map(cell => Math.round(cell.getBoundingClientRect().width));
-              const doctorDeviceCell = firstDeviceCells.find(cell => cell.textContent.includes(fmtMoney(1000)));
+                && !deviceMonth.querySelector('[data-device-month-card]');
+              const doctorDeviceCell = [...deviceMonth.querySelectorAll('.heatmap-focus-cell .device-heat-cell')]
+                .find(cell => cell.textContent.includes(fmtMoney(1000)));
               const deviceBars = [...doctorDeviceCell.querySelectorAll('.device-heat-fill')];
               if (deviceBars.map(bar => bar.style.width).join('|') !== '8.33%|8.33%'
                 || deviceBars.some(bar => getComputedStyle(bar).height !== '5px')
                 || getComputedStyle(doctorDeviceCell).fontWeight !== '400'
-                || getComputedStyle(doctorDeviceCell).fontSize !== '11px'
-                || deviceMonth.querySelector('.device-month-summary .device-heat-track')) throw Error('Invalid monthly device bars or typography');
-              firstDevice.querySelector('details').open = false;
+                || getComputedStyle(doctorDeviceCell).fontSize !== '11px') throw Error('Invalid monthly device bars or typography');
               const deviceHistory = document.querySelector('[data-specialization-device-history]');
-              if (!deviceHistory || deviceHistory.open || deviceCards.map(card => card.querySelector('h3').textContent).join('|') !== 'ЭхоКГ|Велоэргометрия'
-                || !firstDevice.querySelector('header').textContent.includes(fmtMoney(13000)) || !deviceCards[1].querySelector('header').textContent.includes(fmtMoney(4000))
-                || deviceMonth.textContent.includes(fmtMoney(17000)) || deviceMonth.textContent.includes('Доля от выручки')) {
+              if (!deviceHistory || deviceHistory.open
+                || [...deviceMonth.querySelectorAll('.heatmap-focus-heading')].map(cell => cell.textContent).join('|') !== 'ЭхоКГ|Велоэргометрия'
+                || !deviceMonth.textContent.includes(fmtMoney(13000)) || !deviceMonth.textContent.includes(fmtMoney(4000))
+                || !deviceMonth.textContent.includes(fmtMoney(17000)) || !deviceMonth.textContent.includes('Доля от выручки')) {
                 throw Error('Missing monthly device revenue or expandable device history');
               }
               deviceHistory.open = true;
@@ -740,8 +754,8 @@ function createWindow() {
               if (deviceTrendTitles.join('|') !== 'ЭхоКГ|Велоэргометрия'
                 || deviceTrend?.length !== 1 || deviceTrend[0].data[1] !== 13000 || deviceTrend[0].pointNotes[1] !== '13 шт.'
                 || labels?.formatter(13000, { dataset: deviceTrend[0], dataIndex: 1 }).join('|') !== fmtMoney(13000) + '|13 шт.'
-                || primaryTrend?.[0].data.join('|') !== '2|1' || primaryTrend?.[1].data.join('|') !== '1|0'
-                || primaryTrend[1].pointNotes[0] !== '50% от первичных') throw Error('Invalid device or primary patient trends');
+                || primaryTrend?.length !== 1 || primaryTrend[0].label !== 'Первичные пациенты'
+                || primaryTrend[0].data.join('|') !== '2|1') throw Error('Invalid device or primary patient trends');
               deviceHistory.open = false;
               const specializationFocusTable = document.getElementById('tblSpecializationFocus');
               const specializationFocusNames = specializationFocusTable
@@ -818,8 +832,18 @@ function createWindow() {
               UI.docMonth = '2026-02';
               UI.kbWin = 36;
               await switchTab('doctor');
-              if (!UI.reportTiming?.worker) throw Error('Report calculations did not use the browser Worker');
+              if (!UI.reportTiming?.worker) throw Error('Report calculations did not use background preparation');
               const reportWorkerTiming = { ...UI.reportTiming };
+              const coldReportTiming = { ...UI.reportTiming };
+              await smokeRenderPreparedReport('doctor', renderDoctorNow);
+              const warmReportTiming = { ...UI.reportTiming };
+              preparedSpecializationYears.clear();
+              await smokeRenderPreparedReport('doctor', renderDoctorNow);
+              const restoredReportTiming = { ...UI.reportTiming };
+              const persistedReportPreparationValid = warmReportTiming.backgroundMs === 0
+                && restoredReportTiming.persisted && restoredReportTiming.worker
+                && readySpecializationYear('2026').metrics.size > 0;
+              if (!persistedReportPreparationValid) throw Error('Prepared reports did not survive a cleared renderer cache');
               const chartsInitiallyPending = pendingReportCharts.size;
               await new Promise(resolve => setTimeout(resolve, 300));
               const fixedThreeYearBase = document.querySelector('#doctorKbWin') && UI.kbWin === 36;
@@ -1219,6 +1243,8 @@ function createWindow() {
                 headerUpdateControlsValid,
                 optionalLibrariesDeferred,
                 departmentPage,
+                persistedReportPreparationValid,
+                reportPreparationTiming: { cold: coldReportTiming, warm: warmReportTiming, restored: restoredReportTiming },
                 departmentCharts,
                 departmentTotalValid,
                 departmentYearHeadersValid,
@@ -1806,7 +1832,7 @@ function createWindow() {
           && result.rendererErrors.length === 0
           && (PDF_SMOKE_TEST || (result.pageBlockCollapseValid && result.exportSpacingValid && result.doctorGoalBlockOpens && result.headerUpdateControlsValid))
           && (PDF_SMOKE_TEST || (result.primaryReturnValuesValid && result.primaryPatientsValid && result.clientShareChartValid && result.viewerPrimaryPatientsValid && result.reputationReportsValid && result.reviewCountsValid && result.separateVectorChartsValid && result.departmentYearHeadersValid))
-          && (PDF_SMOKE_TEST || (result.xlsxWorkerValid && result.crossClientGoldenValid && result.departmentPage && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.specializationFocusBlockValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.viewerPatientRegisterValid && result.viewerChartsValid && result.viewerRatingsValid && result.doctorMetricSettings && result.commentWorkflowValid))
+          && (PDF_SMOKE_TEST || (result.xlsxWorkerValid && result.crossClientGoldenValid && result.departmentPage && result.persistedReportPreparationValid && result.departmentCharts && result.departmentTotalValid && result.reportLeaderboardsValid && result.specializationSummaryValid && result.specializationPrimaryReturnHeaderValid && result.specializationFocusBlockValid && result.heatmapLayoutValid && result.doctorHeaderMetricsValid && result.doctorHeaderLayoutValid && result.clientBaseDynamicsValid && result.clientBaseButtonsValid && result.doctorGoalsSummaryValid && result.appointmentTablesCollapseValid && result.doctorSemanticSectionsValid && result.doctorReferralAverageDynamicsValid && result.dynamicConclusionValid && result.mirrorRevenueChartValid && result.interdisciplinaryFocus && result.viewerPatientRegisterValid && result.viewerChartsValid && result.viewerRatingsValid && result.doctorMetricSettings && result.commentWorkflowValid))
           && (!PDF_SMOKE_TEST || (result.pdfSelectionDialogValid && result.pdfExport && result.pdfExport.saved === 1
             && result.pdfExport.chartImages >= 1 && result.pdfFiles.length === 1));
         result.status = passed ? "passed" : "failed";
@@ -1836,7 +1862,8 @@ async function runPublicationTask(event, operationId, task, payload) {
   const controller = new AbortController();
   activePublicationOperations.set(id, { controller, senderId: event.sender.id });
   try {
-    return await publicationTasks.run(task, payload, {
+    const queue = task === "report-year" ? reportCalculationTasks : publicationTasks;
+    return await queue.run(task, payload, {
       signal: controller.signal,
       onProgress: progress => {
         if (!event.sender.isDestroyed()) event.sender.send("background:progress", { operationId: id, ...progress });
@@ -1879,6 +1906,13 @@ function registerIpc() {
     if (!Array.isArray(input.monthKeys) || input.monthKeys.length > 24) throw new Error("Некорректный список месяцев");
     const selection = database.loadSnapshotSelection({ monthKeys: input.monthKeys });
     return { months: selection ? selection.months : {}, dataRevision: database.summary().dataRevision };
+  });
+  ipcMain.handle("reports:prepare-year", async (event, payload) => {
+    localAdminActor();
+    const input = ensureObject(payload, "подготовка отчётов");
+    if (!/^\d{4}$/.test(String(input.year))) throw new Error("Некорректный год отчётов");
+    await databaseWrites.idle();
+    return runPublicationTask(event, input.operationId, "report-year", { databasePath: database.databasePath, year: String(input.year) });
   });
   ipcMain.handle("comments:list", (_event, payload) => {
     localAdminActor();
@@ -2513,6 +2547,7 @@ if (!gotLock) {
 app.on("window-all-closed", () => app.quit());
 app.on("will-quit", () => {
   publicationTasks.close();
+  reportCalculationTasks.close();
   databaseWrites.close();
   try { if (database) database.close(); } catch (_) { /* best effort */ }
 });

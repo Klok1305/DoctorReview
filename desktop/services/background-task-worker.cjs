@@ -5,6 +5,9 @@ const progress = value => parentPort.postMessage({ type: "progress", progress: v
 
 async function execute() {
   const { task, payload } = workerData;
+  if (task === "report-year") {
+    return require("./report-calculation-service.cjs").preparePersistedReportYear(payload, progress);
+  }
   if (task === "database-save-mutation" || task === "database-save-snapshot") {
     const { DatabaseService } = require("./database.cjs");
     const database = new DatabaseService(payload.databasePath);

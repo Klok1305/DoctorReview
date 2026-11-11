@@ -904,6 +904,8 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .kb-trend.flat, .kb-trend.na { color: var(--muted); }
 .table-kpi-trend { margin-top: 2px; line-height: 1.1; }
 .table-kpi-trend .kb-trend { font-size: 10px; }
+.report-preparation-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.report-preparation-status progress { width: min(100%, 320px); margin-left: auto; }
 .heatmap-scroll { overflow-x: auto; }
 .heatmap-table {
   width: 100%;
@@ -930,6 +932,7 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
   border-radius: 5px;
 }
 .device-month-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 285px), 1fr)); align-items: start; gap: 10px; }
+.heat-cell.device-heat-holder { padding: 1px 0; }
 .device-month-card { min-width: 0; border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 10px; }
 .device-month-card > header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 5px 12px; }
 .device-month-card > header > h3 { margin: 0; overflow-wrap: anywhere; }
@@ -1443,6 +1446,10 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
   </div>
 </header>
 <main>
+<div id="reportPreparationStatus" class="notice blue report-preparation-status hidden" role="status" aria-live="polite">
+  <span id="reportPreparationLabel"></span>
+  <progress id="reportPreparationBar" aria-label="Подготовка готовых отчётов"></progress>
+</div>
 
 <section id="page-data" class="page">
   <details class="card page-block" id="dataImportCard" data-page-block="data.import" open>
@@ -1453,6 +1460,7 @@ footer.app-footer { text-align: center; color: var(--muted); font-size: 12px; pa
     Поддерживаются отчёты: <b>выработка</b> и <b>возвращаемость пациентов и КБ</b> (по врачу),
     <b>возвращаемость первички</b>, <b>пациенты по врачам с источником и первичностью</b>, <b>простой сотрудников</b>, <b>собственная запись в 1С</b> (общие).
     Тип отчёта, врач и период определяются автоматически по содержимому — имена файлов не важны.
+    После загрузки приложение подготовит и сохранит готовые расчёты для быстрого открытия отчётов. Ход обработки показан ниже.
   </div>
   <div class="dropzone" id="dropzone">
     <div class="big">Перетащите сюда файлы, папку или ZIP-архив с выгрузками</div>
@@ -3851,6 +3859,7 @@ async function withImportMutation(action) {
 function saveLocal(request = null) {
   const importRecords = Array.isArray(request) ? request : null;
   const options = !importRecords && request && typeof request === "object" ? request : null;
+  const previousCalculationRevision = typeof metricsCalculationRevision === "number" ? metricsCalculationRevision : null;
   if (typeof invalidateMetricsCache === "function") {
     const cacheChange = importRecords
       ? {
@@ -3863,6 +3872,7 @@ function saveLocal(request = null) {
   } else if (typeof clearMetricsCache === "function") {
     clearMetricsCache();
   }
+  if (typeof scheduleReportPreparation === "function" && previousCalculationRevision !== metricsCalculationRevision) scheduleReportPreparation();
   if (rendererImportMutation && importRecords == null) {
     rendererImportMutation.requested = true;
     return rendererImportMutation.promise;
@@ -5412,6 +5422,7 @@ function cancelFileImport() {
   if (!fileImportInProgress) return;
   fileImportCancelRequested = true;
   cancelXlsxParse();
+  if (typeof cancelSpecializationPreparation === "function") cancelSpecializationPreparation();
   const progress = document.getElementById("importProgress");
   if (progress) progress.textContent = "Останавливаем после текущего файла…";
 }
@@ -5453,6 +5464,7 @@ async function handleFiles(fileList, options = {}) {
     setFileImportProgress("");
     fileImportInProgress = false;
     fileImportCancelRequested = false;
+    renderAll();
   }
 }
 
@@ -5566,7 +5578,16 @@ async function handleFilesBatch(fileList, options = {}) {
       toast("Не удалось записать итог импорта: " + error.message, true);
     }
   }
-  if (ok && !fileImportCancelRequested && typeof prepareSpecializationYear === "function") {
+  if (ok && !fileImportCancelRequested && typeof prepareAllReports === "function") {
+    setFileImportProgress("Файлы сохранены. Готовим отчёты врачей, отделений и специализаций…");
+    await yieldImportEvents();
+    const prepared = await prepareAllReports(progress => {
+      const fraction = progress.stage === "ready" ? 1 : progress.stage === "save" ? 0.95
+        : progress.stage === "load" ? 0 : Math.min(0.9, progress.completed / Math.max(1, progress.total) * 0.9);
+      setFileImportProgress(reportPreparationMessage(progress, progress.year), progress.completedYears + fraction, progress.totalYears);
+    });
+    if (!prepared && !fileImportCancelRequested) toast("Файлы сохранены. Подготовку готовых отчётов повторим при открытии раздела.", true);
+  } else if (ok && !fileImportCancelRequested && typeof prepareSpecializationYear === "function") {
     const month = DB.months[UI.deptMonth] ? UI.deptMonth : monthKeysSorted().at(-1);
     if (month) {
       const label = `Готовим сводки специализаций за ${month.slice(0, 4)} год`;
@@ -6166,6 +6187,14 @@ function primaryPatientReferrals(docId, monthKey, patientName) {
   return { status: available && assignments.length ? true : complete ? false : null, assignments: available ? assignments : [] };
 }
 function doctorPrimaryPatients(docId, endMonth) {
+  const cache = specializationCalculations?.primaryPatients;
+  const key = JSON.stringify([String(docId), String(endMonth)]);
+  if (cache?.has(key)) return cache.get(key);
+  const result = computeDoctorPrimaryPatients(docId, endMonth);
+  cache?.set(key, result);
+  return result;
+}
+function computeDoctorPrimaryPatients(docId, endMonth) {
   const months = calendarYearMonthKeys(endMonth);
   const monthly = new Map(months.map(month => [month, primaryPatientMonth(docId, month)]));
   const rowsByMonth = new Map([...monthly].map(([month, data]) => [month, data ? primaryPatientRows(data.patients) : null]));
@@ -6352,6 +6381,11 @@ function adminClientBaseSummary(docId, monthKey) {
   // Короткое окно не содержит давно отсутствующих пациентов и не заменяет трёхлетнюю базу.
   const profile = deptParams(docId);
   const cacheKey = JSON.stringify([String(docId), String(monthKey), clientBasePartitionSettings(profile)]);
+  const prepared = specializationCalculations?.adminBase;
+  if (prepared) {
+    if (!prepared.has(cacheKey)) prepared.set(cacheKey, partitionClientBase(kbSummary(docId, monthKey, 36), profile));
+    return prepared.get(cacheKey);
+  }
   const cached = metricsCacheGet(_adminBaseCache, cacheKey, "adminBase");
   if (cached !== undefined) return cached;
   return metricsCacheSet(_adminBaseCache, cacheKey,
@@ -6438,6 +6472,11 @@ function kbSummary(docId, monthKey, win) {
     courseX: Number(profile.courseX) || 0,
   };
   const cacheKey = JSON.stringify([String(docId), String(monthKey), Number(win), profileKey]);
+  const prepared = specializationCalculations?.kbSummary;
+  if (prepared) {
+    if (!prepared.has(cacheKey)) prepared.set(cacheKey, computeKbSummary(docId, monthKey, win));
+    return prepared.get(cacheKey);
+  }
   const cached = metricsCacheGet(_kbSummaryCache, cacheKey, "kbSummary");
   if (cached !== undefined) return cached;
   const summary = computeKbSummary(docId, monthKey, win);
@@ -7537,6 +7576,8 @@ function reportWorkerSnapshot(source, ids) {
 function prepareSpecializationCalculations(year, onProgress = () => {}) {
   const months = monthKeysSorted();
   const yearMonths = months.filter(month => month.startsWith(year + "-"));
+  const previousDecember = `${Number(year) - 1}-12`;
+  const calculationMonths = months.includes(previousDecember) ? [previousDecember, ...yearMonths] : yearMonths;
   const filters = new Set(yearMonths.flatMap(month => deptListForMonth(month, doctorsInMonth(month))));
   const scopes = [["all", "all"]];
   for (const filter of filters) {
@@ -7544,17 +7585,23 @@ function prepareSpecializationCalculations(year, onProgress = () => {}) {
     for (const subdivision of deptProfile(filter).subdivisions || []) scopes.push([filter, subdivision]);
   }
   const windows = [6, 12, 24, 36];
-  const prepared = { metrics: new Map(), department: new Map(), reportBase: new Map(), basePoints: new Map(), activity: new Map() };
+  const prepared = { metrics: new Map(), department: new Map(), reportBase: new Map(), basePoints: new Map(), activity: new Map(),
+    kbSummary: new Map(), adminBase: new Map(), primaryPatients: new Map() };
+  const departmentScopes = [...new Map(["all", ...Object.keys(departmentGroups())]
+    .flatMap(name => { const filters = departmentSpecializations(name); return [filters, ...filters.map(filter => [filter])]; })
+    .map(filter => [JSON.stringify([...filter].sort()), filter])).values()];
   const deviceNames = new Map([...filters].map(filter => [filter, specializationDeviceNames(deptProfile(filter))]));
   if (!yearMonths.length) return prepared;
   specializationCalculations = prepared;
   preparedMetricsForRender = prepared.metrics;
   try {
-    onProgress(0, yearMonths.length);
-    for (const [index, month] of yearMonths.entries()) {
+    onProgress(0, calculationMonths.length);
+    for (const [index, month] of calculationMonths.entries()) {
       const previous = prevMonthKey(month);
       for (const id of doctorsInMonth(month)) {
         computeMetrics(id, month);
+        adminClientBaseSummary(id, month);
+        doctorPrimaryPatients(id, month);
         for (const window of windows) {
           reportClientBaseSummary(id, month, window);
           reportClientBaseSummary(id, previous, window);
@@ -7569,13 +7616,68 @@ function prepareSpecializationCalculations(year, onProgress = () => {}) {
           if (base) delete base.clientRows;
         }
       }
-      onProgress(index + 1, yearMonths.length);
+      for (const filter of departmentScopes) {
+        const totals = aggregateDeptMonth(month, filter);
+        specializationActivityMonth(month, "all", "all", scopeDoctorsInMonth(month, filter), []);
+        for (const base of [totals?.akb?.primary, ...Object.values(totals?.akb?.wins || {})]) {
+          if (base) delete base.clientRows;
+        }
+      }
+      onProgress(index + 1, calculationMonths.length);
     }
     return prepared;
   } finally {
     specializationCalculations = null;
     preparedMetricsForRender = null;
   }
+}
+
+function compactPreparedReportYear(prepared) {
+  const strip = base => { if (base) delete base.clientRows; };
+  for (const map of [prepared.kbSummary, prepared.adminBase, prepared.reportBase]) for (const base of map.values()) strip(base);
+  for (const result of prepared.metrics.values()) {
+    strip(result?.akb?.primary);
+    for (const base of Object.values(result?.akb?.wins || {})) strip(base);
+  }
+  for (const result of prepared.department.values()) {
+    strip(result?.akb?.primary);
+    for (const base of Object.values(result?.akb?.wins || {})) strip(base);
+  }
+  return prepared;
+}
+
+function hydratePreparedReportYear(prepared) {
+  const bind = (base, rows) => {
+    if (!base || Object.hasOwn(base, "clientRows")) return;
+    Object.defineProperty(base, "clientRows", { configurable: true, enumerable: false, get() {
+      const value = rows();
+      Object.defineProperty(base, "clientRows", { configurable: true, enumerable: false, value });
+      return value;
+    } });
+  };
+  const attach = (base, id, month, window) => bind(base, () => base.partition
+    ? partitionClientBase(kbSummary(id, month, window), deptParams(id))?.clientRows || []
+    : kbClientRows(id, month, window, base));
+  for (const name of ["kbSummary", "adminBase", "reportBase"]) for (const [key, base] of prepared[name] || []) {
+    const [id, month, window] = JSON.parse(key);
+    attach(base, id, month, name === "adminBase" ? 36 : window);
+  }
+  for (const [key, result] of prepared.metrics) {
+    const [id, month] = JSON.parse(key);
+    attach(result?.akb?.primary, id, month, result?.akb?.primary?.window);
+    for (const [window, base] of Object.entries(result?.akb?.wins || {})) attach(base, id, month, Number(window));
+  }
+  for (const [key, result] of prepared.department) {
+    const [month, filter, subFilter, ids] = JSON.parse(key);
+    let details;
+    const groupRows = window => {
+      details ||= aggregateDeptMonthRaw(month, filter, subFilter, ids);
+      return (window === "primary" ? details?.akb?.primary : details?.akb?.wins[window])?.clientRows || [];
+    };
+    bind(result?.akb?.primary, () => groupRows("primary"));
+    for (const [window, base] of Object.entries(result?.akb?.wins || {})) bind(base, () => groupRows(window));
+  }
+  return prepared;
 }
 
 function prepareReportCalculations(job) {
@@ -7666,6 +7768,114 @@ let reportTask = null, reportTaskNumber = 0;
 const preparedReportKeys = new Map();
 const preparedSpecializationYears = new Map();
 let specializationYearTask = null;
+const desktopReportYearTasks = new Map();
+let reportPreparationTimer = null;
+let reportPreparationStatusOwner = null;
+
+function reportPreparationMessage(progress, year) {
+  if (progress.stage === "load") return `Загружаем готовые отчёты за ${year} год…`;
+  if (progress.stage === "save") return `Сохраняем готовые отчёты за ${year} год…`;
+  if (progress.stage === "ready") return `Отчёты за ${year} год готовы`;
+  return `Готовим отчёты врачей, отделений и специализаций за ${year} год · ${progress.completed} из ${progress.total} месяцев`;
+}
+
+function setReportPreparationStatus(task, progress) {
+  const box = document.getElementById("reportPreparationStatus");
+  if (!box) return;
+  if (!progress) {
+    if (reportPreparationStatusOwner === task) { box.classList.add("hidden"); reportPreparationStatusOwner = null; }
+    return;
+  }
+  reportPreparationStatusOwner = task;
+  box.classList.remove("hidden");
+  const label = document.getElementById("reportPreparationLabel");
+  const bar = document.getElementById("reportPreparationBar");
+  if (label) label.textContent = reportPreparationMessage(progress, task.year);
+  if (bar) {
+    bar.max = Math.max(1, progress.total || 1);
+    bar.value = progress.completed || 0;
+  }
+}
+
+function prepareDesktopReportYear(month, onProgress) {
+  const year = month.slice(0, 4), revision = metricsCalculationRevision;
+  const ready = readySpecializationYear(year);
+  if (ready) return Promise.resolve(ready);
+  const existing = desktopReportYearTasks.get(year);
+  if (existing?.revision === revision) {
+    if (onProgress) { existing.listeners.add(onProgress); if (existing.progress) onProgress(existing.progress); }
+    return existing.promise;
+  }
+  existing?.finish({});
+  const task = { year, revision, operationId: crypto.randomUUID(), listeners: new Set(onProgress ? [onProgress] : []) };
+  desktopReportYearTasks.set(year, task);
+  task.promise = new Promise(resolve => {
+    let settled = false, unsubscribe;
+    task.finish = ({ prepared, error, fromCache }) => {
+      if (settled) return;
+      settled = true;
+      unsubscribe?.();
+      if (desktopReportYearTasks.get(year) === task) desktopReportYearTasks.delete(year);
+      setReportPreparationStatus(task, null);
+      if (!prepared) DESKTOP_API.cancelBackgroundOperation?.(task.operationId)?.catch(() => {});
+      if (error && error.name !== "AbortError" && error.name !== "ReportDataChangedError") console.warn("Report preparation:", error);
+      if (!prepared || revision !== metricsCalculationRevision) return resolve(null);
+      hydratePreparedReportYear(prepared);
+      preparedSpecializationYears.set(year, { revision, prepared, fromCache });
+      const selectedMonth = UI.tab === "doctor" ? UI.docMonth : UI.tab === "department" ? UI.departmentMonth
+        : UI.tab === "dept" ? UI.deptMonth : monthKeysSorted().at(-1);
+      const selectedYear = selectedMonth?.slice(0, 4);
+      while (preparedSpecializationYears.size > 2) {
+        const discard = [...preparedSpecializationYears.keys()].find(key => key !== year && key !== selectedYear)
+          || preparedSpecializationYears.keys().next().value;
+        preparedSpecializationYears.delete(discard);
+      }
+      resolve(prepared);
+    };
+    const progress = value => {
+      if (settled || revision !== metricsCalculationRevision) return;
+      task.progress = value;
+      setReportPreparationStatus(task, value);
+      for (const listener of task.listeners) listener(value);
+    };
+    progress({ stage: "load", completed: 0, total: 1, year });
+    unsubscribe = DESKTOP_API.onBackgroundProgress?.(value => {
+      if (value.operationId === task.operationId) progress(value);
+    });
+    (async () => {
+      // Allow normalization/settings saves to enter the serial database writer first.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      if (typeof desktopWriterPromise !== "undefined" && desktopWriterPromise) await desktopWriterPromise;
+      if (settled || revision !== metricsCalculationRevision) return task.finish({});
+      const result = await DESKTOP_API.prepareReportYear({ year, operationId: task.operationId });
+      if (result.dataRevision !== desktopDataRevision) return task.finish({});
+      task.finish(result);
+    })().catch(error => task.finish({ error }));
+  });
+  return task.promise;
+}
+
+async function prepareAllReports(onProgress) {
+  const revision = metricsCalculationRevision;
+  const latestMonths = [...new Map(monthKeysSorted().map(month => [month.slice(0, 4), month])).values()].reverse();
+  for (const [index, month] of latestMonths.entries()) {
+    if (revision !== metricsCalculationRevision || fileImportCancelRequested) return false;
+    const prepared = await prepareSpecializationYear(month, progress => onProgress?.({ ...progress, year: month.slice(0, 4),
+      completedYears: index, totalYears: latestMonths.length }));
+    if (!prepared && (DESKTOP_API?.prepareReportYear || typeof Worker === "function")) return false;
+  }
+  return revision === metricsCalculationRevision;
+}
+
+function scheduleReportPreparation() {
+  cancelSpecializationPreparation();
+  if (reportPreparationTimer) clearTimeout(reportPreparationTimer);
+  if (!DESKTOP_API?.prepareReportYear || typeof fileImportInProgress !== "undefined" && fileImportInProgress || UI.reportEager) return;
+  reportPreparationTimer = setTimeout(() => {
+    reportPreparationTimer = null;
+    prepareAllReports().catch(error => console.warn("Report preparation:", error));
+  }, 600);
+}
 
 function cancelReportPreparation() {
   reportTaskNumber++;
@@ -7753,10 +7963,12 @@ function readySpecializationYear(year) {
 
 function cancelSpecializationPreparation() {
   specializationYearTask?.finish({});
+  for (const task of [...desktopReportYearTasks.values()]) task.finish({});
 }
 
 function prepareSpecializationYear(month, onProgress) {
   if (!month) return Promise.resolve(null);
+  if (typeof DESKTOP_API !== "undefined" && DESKTOP_API?.prepareReportYear) return prepareDesktopReportYear(month, onProgress);
   const year = month.slice(0, 4), revision = metricsCalculationRevision;
   const ready = readySpecializationYear(year);
   if (ready) return Promise.resolve(ready);
@@ -7805,24 +8017,36 @@ function drawPreparedSpecialization(draw, prepared) {
   finally { specializationCalculations = previousCalculations; preparedMetricsForRender = previousMetrics; }
 }
 
-function renderPreparedSpecialization(draw) {
+function renderPreparedSpecialization(draw, tab = "dept") {
   if (viewerReportDoctorScope) return draw();
+  const body = document.getElementById(tab === "doctor" ? "doctorBody" : tab === "department" ? "departmentBody" : "deptBody");
+  if (typeof fileImportInProgress !== "undefined" && fileImportInProgress && !UI.reportEager) {
+    body.innerHTML = '<div class="card" role="status">Обрабатываются загруженные файлы. Отчёт откроется после завершения подготовки.</div>';
+    return false;
+  }
   const eager = UI.reportEager || typeof Worker !== "function";
+  const monthField = tab === "doctor" ? "docMonth" : tab === "department" ? "departmentMonth" : "deptMonth";
   const month = eager
-    ? (DB.months[UI.deptMonth] ? UI.deptMonth : monthKeysSorted().at(-1))
-    : reportCalculationJob("dept")?.month;
+    ? (DB.months[UI[monthField]] ? UI[monthField] : monthKeysSorted().at(-1))
+    : reportCalculationJob(tab)?.month;
   if (!month) return draw();
   const ready = readySpecializationYear(month.slice(0, 4));
-  if (ready || eager) return drawPreparedSpecialization(draw, ready);
-  const body = document.getElementById("deptBody");
-  body.innerHTML = '<div class="card" role="status">Подготавливаются сводки специализаций…</div>';
+  if (ready || eager) {
+    const started = performance.now();
+    const result = drawPreparedSpecialization(draw, ready);
+    UI.reportTiming = { tab, backgroundMs: 0, renderMs: performance.now() - started, worker: Boolean(ready),
+      persisted: preparedSpecializationYears.get(month.slice(0, 4))?.fromCache === true };
+    return result;
+  }
+  body.innerHTML = '<div class="card" role="status">Подготавливаются готовые отчёты…</div>';
   const number = reportTaskNumber, revision = metricsCalculationRevision, started = performance.now();
   return prepareSpecializationYear(month).then(prepared => {
     if (number !== reportTaskNumber) return false;
-    if (revision !== metricsCalculationRevision) return renderPreparedReport("dept", draw);
+    if (revision !== metricsCalculationRevision) return renderPreparedReport(tab, draw);
     const drawAt = performance.now();
     drawPreparedSpecialization(draw, prepared);
-    UI.reportTiming = { tab: "dept", backgroundMs: drawAt - started, renderMs: performance.now() - drawAt, worker: Boolean(prepared) };
+    UI.reportTiming = { tab, backgroundMs: drawAt - started, renderMs: performance.now() - drawAt, worker: Boolean(prepared),
+      persisted: preparedSpecializationYears.get(month.slice(0, 4))?.fromCache === true };
     return true;
   });
 }
@@ -7830,7 +8054,7 @@ function renderPreparedSpecialization(draw) {
 function renderPreparedReport(tab, draw) {
   cancelReportPreparation();
   if (!UI.reportEager) document.getElementById(tab === "doctor" ? "doctorBody" : tab === "department" ? "departmentBody" : "deptBody")?.removeAttribute?.("data-report-export");
-  if (tab === "dept") return renderPreparedSpecialization(draw);
+  if (tab === "dept" || typeof DESKTOP_API !== "undefined" && DESKTOP_API?.prepareReportYear) return renderPreparedSpecialization(draw, tab);
   if (UI.reportEager || typeof Worker !== "function") return draw();
   const job = reportCalculationJob(tab);
   if (!job) return draw();
@@ -8097,7 +8321,7 @@ function queueReportChart(id, element, config) {
   function reportHelpHtml(body, title = "Справка о расчётах") {
     return body ? `<details class="report-help" data-report-help><summary>${escape(title)}</summary><div class="report-help-body">${body}</div></details>` : "";
   }
-  const api = { tableHeaderLines, tableHeaderHtml, publishedDeviceMeasure, deviceMonthCardsHtml, splitDeviceHistoryCharts,
+  const api = { tableHeaderLines, tableHeaderHtml, publishedDeviceMeasure, deviceHeatMaxima, deviceHeatCellHtml, deviceHeatLegendHtml, deviceMonthCardsHtml, splitDeviceHistoryCharts,
     deviceHistoryTableHtml, deviceHistoryDetailsHtml,
     clientBaseGroups, overlappingClientBaseGroups, clientBaseDefinitionsHtml, primarySourceGroups, primarySourcesHtml, specializationSourceOrder, specializationPrimarySummaryHtml, periodValueStates,
     clientBaseShareTableHtml, clientBaseCompositionHtml, clientBaseShareCellHtml, clientBaseAveragesHtml, publishedReportCount, publishedClientBaseShare, reportHelpHtml };
@@ -8235,7 +8459,8 @@ function cloudDoctorReport(doctorId, monthKey, comments) {
 
 const SPECIALIZATION_BASE_TITLE = "Динамика с начала года · база за 36 месяцев";
 const SPECIALIZATION_DEVICE_TITLE = "Загрузка аппаратов";
-const SPECIALIZATION_PRIMARY_NOTE = "Из отчёта «Пациенты по врачам». В итоге пациент учитывается один раз по ФИО. 4+ — первичные пациенты, посетившие врачей этой группы больше трёх раз за тот же месяц.";
+const SPECIALIZATION_DEVICE_NOTE = "Доля рассчитана от собственной выручки. Аппараты берутся из настроек специализации.";
+const SPECIALIZATION_PRIMARY_NOTE = "Из отчёта «Пациенты по врачам». В итоге пациент учитывается один раз по ФИО.";
 
 function specializationActivityView(month, profile, filter, subFilter = "all", ids = null) {
   const names = specializationDeviceNames(profile);
@@ -8255,8 +8480,6 @@ function specializationActivityView(month, profile, filter, subFilter = "all", i
   }
   const primaryChart = mobilePublicationChart("specialization-primary", "Первичные пациенты по месяцам", "line", labels, [
     { label: "Первичные пациенты", color: "#2563eb", values: history.map(entry => entry?.primary.total ?? null) },
-    { label: "Из них с 4+ посещениями", color: "#16a34a", values: history.map(entry => entry?.primary.frequent ?? null),
-      pointNotes: history.map(entry => entry?.primary.share != null ? `${fmtPct(entry.primary.share)} от первичных` : "") },
   ], "чел.");
   return { names, months, history, current, deviceCharts, primaryChart };
 }
@@ -9411,7 +9634,7 @@ function departmentPrimaryPatientsHtml(activity, mk, scopeLabel) {
     ${primary.covered < current.ids.length ? `<p class="notice blue">Данные есть у ${primary.covered} из ${current.ids.length} врачей. Для общего итога и источников нужны корректные месячные отчёты «Пациенты по врачам» по всем врачам выбранного отделения. Пропуски показаны как «—».</p>` : ""}
     ${presentation.specializationPrimarySummaryHtml(counts, primary.sourceCounts, { tableId: "tblDepartmentPrimary", totalLabel })}
     ${activity.primaryChart ? specializationTrendHtml(activity.primaryChart) : '<p class="small muted">Для графика нужны сопоставимые месячные отчёты «Пациенты по врачам».</p>'}
-    ${presentation.reportHelpHtml(`<p>${SPECIALIZATION_PRIMARY_NOTE}</p><p>Состав врачей определяется отдельно для каждого месяца с учётом выбранного отделения. Отсутствующие месяцы и неполные данные не считаются нулём.</p>`)}
+    ${presentation.reportHelpHtml(`<p>${SPECIALIZATION_PRIMARY_NOTE} 4+ — первичные пациенты, посетившие врачей этой группы больше трёх раз за тот же месяц.</p><p>Состав врачей определяется отдельно для каждого месяца с учётом выбранного отделения. Отсутствующие месяцы и неполные данные не считаются нулём.</p>`)}
   </section>`;
 }
 
@@ -9791,21 +10014,24 @@ function renderDeptNow() {
 
   const activity = specializationActivityView(mk, UI.deptFilter === "all" ? null : deptProfile(UI.deptFilter), UI.deptFilter, UI.subFilter);
   const presentation = globalThis.klinvektReportPresentation;
-  const deviceCards = specializationDeviceCards(activity);
+  const deviceActivity = activity.current?.devices;
   const deviceCharts = presentation.splitDeviceHistoryCharts(activity.deviceCharts);
-  if (deviceCards.length) {
-    html += `<div class="card" data-specialization-device-month><h2>Аппараты за месяц <span class="small muted">${monthLabel(mk)}</span></h2>
-      ${presentation.deviceMonthCardsHtml(deviceCards, id => copyBtn("copyTable", id))}</div>`;
-  } else if (UI.deptFilter !== "all") {
-    // Для профилей без аппаратов сохраняется тепловая карта услуг.
+  // Тепловая карта аппаратов и услуг по специалистам выбранной специализации.
+  if (UI.deptFilter !== "all") {
     const fProfile = deptProfile(UI.deptFilter);
     const devs = (fProfile.expertise.items || []).map(d => d.name);
     const withVy = rows.filter(x => x.r.product);
     if (devs.length && withVy.length && fProfile.expertise.mode !== "none") {
       let maxQ = 1;
-      for (const x of withVy) for (const dv of devs) maxQ = Math.max(maxQ, x.r.product.expert[dv]?.q ?? 0);
-      html += `<div class="card"><h2>🔥 Тепловая карта: ${esc(fProfile.expertise.title)} <span class="small muted">(за месяц, шт.)</span> <span class="spacer"></span>${copyBtn("copyTable", "tblHeat")}</h2>
-        <div class="heatmap-scroll"><table class="data heatmap-table" id="tblHeat" style="--heat-table-min:${300 + devs.length * 150}px"><colgroup><col class="heatmap-specialist-col">${devs.map(() => '<col class="heatmap-focus-col">').join("")}<col class="heatmap-total-col"></colgroup><tr><th>Специалист</th>` + devs.map(d => `<th class="num heatmap-focus-heading">${esc(d)}</th>`).join("") + `<th class="num">Итого</th></tr>`;
+      if (!deviceActivity) for (const x of withVy) for (const dv of devs) maxQ = Math.max(maxQ, x.r.product.expert[dv]?.q ?? 0);
+      const { deviceHeatMaxima, deviceHeatCellHtml, deviceHeatLegendHtml } = presentation;
+      const maxima = deviceActivity ? deviceHeatMaxima(Object.values(deviceActivity.byDoctor).flat()) : null;
+      const deviceRevenue = deviceActivity ? deviceActivity.items.reduce((sum, item) => sum + item.s, 0) : null;
+      const deviceShare = totalSales > 0 && deviceRevenue != null ? deviceRevenue / totalSales * 100 : null;
+      const deviceHeading = deviceActivity ? "за месяц, шт. и ₽" : "за месяц, шт.";
+      html += `<div class="card"${deviceActivity ? " data-specialization-device-month" : ""}><h2>🔥 Тепловая карта: ${esc(fProfile.expertise.title)} <span class="small muted">(${deviceHeading})</span> <span class="spacer"></span>${copyBtn("copyTable", "tblHeat")}</h2>
+        ${deviceActivity ? `<p><b>Выручка по всем аппаратам</b> · ${fmtMoney(deviceRevenue)} <span class="small muted">· общая доля ${fmtPct(deviceShare)}</span></p>${deviceHeatLegendHtml()}` : ""}
+        <div class="heatmap-scroll"><table class="data heatmap-table" id="tblHeat" style="--heat-table-min:${300 + devs.length * 150}px"><colgroup><col class="heatmap-specialist-col">${devs.map(() => '<col class="heatmap-focus-col">').join("")}<col class="heatmap-total-col">${deviceActivity ? '<col class="heatmap-focus-col">' : ""}</colgroup><tr><th>Специалист</th>` + devs.map(d => `<th class="num heatmap-focus-heading">${esc(d)}</th>`).join("") + `<th class="num">Итого</th>${deviceActivity ? '<th class="num">Доля от выручки</th>' : ""}</tr>`;
       const devTotals = {};
       for (const x of withVy) {
         let rowTotal = 0;
@@ -9815,13 +10041,18 @@ function renderDeptNow() {
           rowTotal += q;
           devTotals[dv] = (devTotals[dv] || 0) + q;
           const alpha = q ? 0.15 + 0.7 * (q / maxQ) : 0;
-          html += `<td class="num heatmap-focus-cell"><div class="heat-cell" style="background:rgba(37,99,235,${alpha.toFixed(2)});color:${alpha > 0.5 ? "#fff" : "inherit"}">${q || "·"}</div></td>`;
+          html += `<td class="num heatmap-focus-cell">${deviceActivity
+            ? `<div class="heat-cell device-heat-holder">${deviceHeatCellHtml({ q, s: x.r.product.expert[dv]?.s ?? 0 }, maxima)}</div>`
+            : `<div class="heat-cell" style="background:rgba(37,99,235,${alpha.toFixed(2)});color:${alpha > 0.5 ? "#fff" : "inherit"}">${q || "·"}</div>`}</td>`;
         }
-        html += `<td class="num"><b>${rowTotal}</b></td></tr>`;
+        const doctorRevenue = deviceActivity?.byDoctor[x.id]?.reduce((sum, item) => sum + item.s, 0);
+        const doctorShare = doctorRevenue != null && x.r.econ.sales > 0 ? doctorRevenue / x.r.econ.sales * 100 : null;
+        html += `<td class="num">${deviceActivity ? deviceHeatCellHtml({ q: rowTotal, s: doctorRevenue }) : `<b>${rowTotal}</b>`}</td>${deviceActivity ? `<td class="num"><span class="device-heat-cell">${fmtPct(doctorShare)}</span></td>` : ""}</tr>`;
       }
       const countTotal = Object.values(devTotals).reduce((a, b) => a + b, 0);
-      html += '<tr><td><b>Итого по специализации</b></td>' + devs.map(dv => `<td class="num"><b>${devTotals[dv] || 0}</b></td>`).join("") +
-        `<td class="num"><b>${countTotal}</b></td></tr></table></div><p class="small muted">«·» по всем врачам — простаивающая позиция. Набор настраивается в профиле специализации.</p></div>`;
+      html += '<tr><td><b>Итого по специализации</b></td>' + devs.map(dv => `<td class="num">${deviceActivity ? deviceHeatCellHtml(deviceActivity.items[activity.names.indexOf(dv)]) : `<b>${devTotals[dv] || 0}</b>`}</td>`).join("") +
+        `<td class="num">${deviceActivity ? deviceHeatCellHtml({ q: countTotal, s: deviceRevenue }) : `<b>${countTotal}</b>`}</td>${deviceActivity ? `<td class="num"><span class="device-heat-cell">${fmtPct(deviceShare)}</span></td>` : ""}</tr>`;
+      html += `</table></div><p class="small muted">${deviceActivity ? SPECIALIZATION_DEVICE_NOTE : "«·» по всем врачам — простаивающая позиция. Набор настраивается в профиле специализации."}</p></div>`;
     }
   } else if (rows.some(x => x.r.product)) {
     html += `<div class="card"><p class="small muted" style="margin:0">🔥 Тепловая карта аппаратов/услуг доступна при выборе конкретной специализации в фильтре сверху — у каждой специализации свой набор отслеживаемых позиций.</p></div>`;
@@ -16155,7 +16386,7 @@ async function initApp() {
   switchTab("data");
   if (DESKTOP_API) {
     setTimeout(() => {
-      if (!fileImportInProgress) prepareSpecializationYear(monthKeysSorted().at(-1));
+      if (!fileImportInProgress) prepareAllReports().catch(error => console.warn("Report preparation:", error));
     }, 0);
   }
 }

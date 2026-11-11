@@ -895,6 +895,8 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
 .kb-trend.flat, .kb-trend.na { color: var(--muted); }
 .table-kpi-trend { margin-top: 2px; line-height: 1.1; }
 .table-kpi-trend .kb-trend { font-size: 10px; }
+.report-preparation-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.report-preparation-status progress { width: min(100%, 320px); margin-left: auto; }
 .heatmap-scroll { overflow-x: auto; }
 .heatmap-table {
   width: 100%;
@@ -921,6 +923,7 @@ label.fld > span { display: block; color: var(--muted); margin-bottom: 3px; }
   border-radius: 5px;
 }
 .device-month-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 285px), 1fr)); align-items: start; gap: 10px; }
+.heat-cell.device-heat-holder { padding: 1px 0; }
 .device-month-card { min-width: 0; border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 10px; }
 .device-month-card > header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 5px 12px; }
 .device-month-card > header > h3 { margin: 0; overflow-wrap: anywhere; }

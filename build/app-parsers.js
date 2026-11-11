@@ -1101,6 +1101,7 @@ function cancelFileImport() {
   if (!fileImportInProgress) return;
   fileImportCancelRequested = true;
   cancelXlsxParse();
+  if (typeof cancelSpecializationPreparation === "function") cancelSpecializationPreparation();
   const progress = document.getElementById("importProgress");
   if (progress) progress.textContent = "Останавливаем после текущего файла…";
 }
@@ -1142,6 +1143,7 @@ async function handleFiles(fileList, options = {}) {
     setFileImportProgress("");
     fileImportInProgress = false;
     fileImportCancelRequested = false;
+    renderAll();
   }
 }
 
@@ -1255,7 +1257,16 @@ async function handleFilesBatch(fileList, options = {}) {
       toast("Не удалось записать итог импорта: " + error.message, true);
     }
   }
-  if (ok && !fileImportCancelRequested && typeof prepareSpecializationYear === "function") {
+  if (ok && !fileImportCancelRequested && typeof prepareAllReports === "function") {
+    setFileImportProgress("Файлы сохранены. Готовим отчёты врачей, отделений и специализаций…");
+    await yieldImportEvents();
+    const prepared = await prepareAllReports(progress => {
+      const fraction = progress.stage === "ready" ? 1 : progress.stage === "save" ? 0.95
+        : progress.stage === "load" ? 0 : Math.min(0.9, progress.completed / Math.max(1, progress.total) * 0.9);
+      setFileImportProgress(reportPreparationMessage(progress, progress.year), progress.completedYears + fraction, progress.totalYears);
+    });
+    if (!prepared && !fileImportCancelRequested) toast("Файлы сохранены. Подготовку готовых отчётов повторим при открытии раздела.", true);
+  } else if (ok && !fileImportCancelRequested && typeof prepareSpecializationYear === "function") {
     const month = DB.months[UI.deptMonth] ? UI.deptMonth : monthKeysSorted().at(-1);
     if (month) {
       const label = `Готовим сводки специализаций за ${month.slice(0, 4)} год`;

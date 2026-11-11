@@ -575,6 +575,14 @@ function primaryPatientReferrals(docId, monthKey, patientName) {
   return { status: available && assignments.length ? true : complete ? false : null, assignments: available ? assignments : [] };
 }
 function doctorPrimaryPatients(docId, endMonth) {
+  const cache = specializationCalculations?.primaryPatients;
+  const key = JSON.stringify([String(docId), String(endMonth)]);
+  if (cache?.has(key)) return cache.get(key);
+  const result = computeDoctorPrimaryPatients(docId, endMonth);
+  cache?.set(key, result);
+  return result;
+}
+function computeDoctorPrimaryPatients(docId, endMonth) {
   const months = calendarYearMonthKeys(endMonth);
   const monthly = new Map(months.map(month => [month, primaryPatientMonth(docId, month)]));
   const rowsByMonth = new Map([...monthly].map(([month, data]) => [month, data ? primaryPatientRows(data.patients) : null]));
@@ -761,6 +769,11 @@ function adminClientBaseSummary(docId, monthKey) {
   // Короткое окно не содержит давно отсутствующих пациентов и не заменяет трёхлетнюю базу.
   const profile = deptParams(docId);
   const cacheKey = JSON.stringify([String(docId), String(monthKey), clientBasePartitionSettings(profile)]);
+  const prepared = specializationCalculations?.adminBase;
+  if (prepared) {
+    if (!prepared.has(cacheKey)) prepared.set(cacheKey, partitionClientBase(kbSummary(docId, monthKey, 36), profile));
+    return prepared.get(cacheKey);
+  }
   const cached = metricsCacheGet(_adminBaseCache, cacheKey, "adminBase");
   if (cached !== undefined) return cached;
   return metricsCacheSet(_adminBaseCache, cacheKey,
@@ -847,6 +860,11 @@ function kbSummary(docId, monthKey, win) {
     courseX: Number(profile.courseX) || 0,
   };
   const cacheKey = JSON.stringify([String(docId), String(monthKey), Number(win), profileKey]);
+  const prepared = specializationCalculations?.kbSummary;
+  if (prepared) {
+    if (!prepared.has(cacheKey)) prepared.set(cacheKey, computeKbSummary(docId, monthKey, win));
+    return prepared.get(cacheKey);
+  }
   const cached = metricsCacheGet(_kbSummaryCache, cacheKey, "kbSummary");
   if (cached !== undefined) return cached;
   const summary = computeKbSummary(docId, monthKey, win);

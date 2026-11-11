@@ -1655,6 +1655,7 @@ async function withImportMutation(action) {
 function saveLocal(request = null) {
   const importRecords = Array.isArray(request) ? request : null;
   const options = !importRecords && request && typeof request === "object" ? request : null;
+  const previousCalculationRevision = typeof metricsCalculationRevision === "number" ? metricsCalculationRevision : null;
   if (typeof invalidateMetricsCache === "function") {
     const cacheChange = importRecords
       ? {
@@ -1667,6 +1668,7 @@ function saveLocal(request = null) {
   } else if (typeof clearMetricsCache === "function") {
     clearMetricsCache();
   }
+  if (typeof scheduleReportPreparation === "function" && previousCalculationRevision !== metricsCalculationRevision) scheduleReportPreparation();
   if (rendererImportMutation && importRecords == null) {
     rendererImportMutation.requested = true;
     return rendererImportMutation.promise;
